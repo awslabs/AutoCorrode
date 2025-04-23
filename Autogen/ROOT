@@ -2,7 +2,7 @@ session Autogen = HOL +
   options [document = pdf, document_output = "output"]
   sessions
     Misc
-    Optics
+    Lenses_And_Other_Optics
   theories [document=false]
     AutoCommon
     AutoLens

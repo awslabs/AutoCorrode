@@ -9,7 +9,7 @@ session Micro_Rust_Examples = HOL +
     Micro_Rust_Runtime
     Micro_Rust_Interfaces
     Crush
-    Optics
+    Lenses_And_Other_Optics
     Byte_Level_Encoding
   theories
     Basic_Micro_Rust

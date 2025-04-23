@@ -3,7 +3,7 @@
 
 (*<*)
 theory AutoLens
-  imports AutoCommon "Optics.Optics" "HOL-Library.Datatype_Records"
+  imports AutoCommon "Lenses_And_Other_Optics.Lenses_And_Other_Optics" "HOL-Library.Datatype_Records"
 begin
 (*>*)
 

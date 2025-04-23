@@ -10,7 +10,7 @@ theory Share_Map
     Shareable_Value
     Tree_Shares
     Data_Structures.RedBlackTree_Extensional
-    Optics.Optics
+    Lenses_And_Other_Optics.Lenses_And_Other_Optics
 begin
 (*>*)
 

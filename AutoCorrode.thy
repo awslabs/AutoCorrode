@@ -15,7 +15,7 @@ theory AutoCorrode
     "Micro_Rust_Runtime.Micro_Rust_Runtime"
     "Micro_Rust_Std_Lib.Micro_Rust_Std_Lib"
     "Misc.Misc"
-    "Optics.Optics"
+    "Lenses_And_Other_Optics.Lenses_And_Other_Optics"
     "Separation_Lenses.Separation_Lenses"
     "Shallow_Micro_Rust.Shallow_Micro_Rust"
     "Shallow_Separation_Logic.Shallow_Separation_Logic"

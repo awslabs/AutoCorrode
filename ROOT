@@ -15,7 +15,7 @@ session AutoCorrode = HOL +
     "Micro_Rust_Runtime"
     "Micro_Rust_Std_Lib"
     "Misc"
-    "Optics"
+    "Lenses_And_Other_Optics"
     "Separation_Lenses"
     "Shallow_Micro_Rust"
     "Shallow_Separation_Logic"

@@ -9,7 +9,7 @@ theory Micro_Rust_Shallow_Embedding
     Prompts_And_Responses
     "HOL-Library.Datatype_Records"
     Autogen.Autogen
-    Optics.Optics
+    Lenses_And_Other_Optics.Lenses_And_Other_Optics
     Tuple
   keywords
     "notation_nano_rust"

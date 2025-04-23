@@ -3,7 +3,7 @@
 
 (*<*)
 theory Byte_Parser
-  imports Optics.Optics Byte_Encoding_Word_Nat Focus_Parser
+  imports Lenses_And_Other_Optics.Lenses_And_Other_Optics Byte_Encoding_Word_Nat Focus_Parser
     "Word_Lib.Hex_Words" "HOL-Library.Datatype_Records"
 begin
 (*>*)

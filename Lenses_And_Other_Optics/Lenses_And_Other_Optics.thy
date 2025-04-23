@@ -2,7 +2,7 @@
    SPDX-License-Identifier: MIT *)
 
 (*<*)
-theory Optics
+theory Lenses_And_Other_Optics
   imports 
     "Prism" 
     "Lens" 

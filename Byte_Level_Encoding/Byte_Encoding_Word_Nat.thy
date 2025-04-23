@@ -3,7 +3,7 @@
 
 (*<*)
 theory Byte_Encoding_Word_Nat
-  imports "HOL-Library.Word" Optics.Optics "HOL-Library.Code_Target_Numeral" Misc.Array
+  imports "HOL-Library.Word" Lenses_And_Other_Optics.Lenses_And_Other_Optics "HOL-Library.Code_Target_Numeral" Misc.Array
 begin
 (*>*)
 

@@ -6,7 +6,7 @@ session Shallow_Micro_Rust = HOL +
     Micro_Rust_Parsing_Frontend
     Autogen
     Misc
-    Optics
+    Lenses_And_Other_Optics
   theories
     Basic_Case_Expression
     Core_Syntax

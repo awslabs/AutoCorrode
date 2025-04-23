@@ -3,7 +3,7 @@
 
 theory SLens
   imports 
-    Optics.Lens
+    Lenses_And_Other_Optics.Lens
     Shallow_Separation_Logic.Separation_Algebra 
 begin
 

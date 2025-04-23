@@ -1,4 +1,4 @@
-session Optics = HOL +
+session Lenses_And_Other_Optics = HOL +
   description "Optics (Lenses, Prisms, Foci)"
   options [document = pdf, document_output = "output"]
   sessions
@@ -16,6 +16,6 @@ session Optics = HOL +
     Result_Optics
     Vector_Optics
   theories [document=false]
-    Optics
+    Lenses_And_Other_Optics
   document_files
     "root.tex"

@@ -3,7 +3,7 @@
 
 (*<*)
 theory Focus_Parser
-  imports Optics.Focus Optics.List_Optics Optics.Array_Optics
+  imports Lenses_And_Other_Optics.Focus Lenses_And_Other_Optics.List_Optics Lenses_And_Other_Optics.Array_Optics
 begin
 (*>*)
 

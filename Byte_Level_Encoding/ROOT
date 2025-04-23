@@ -5,7 +5,7 @@ session Byte_Level_Encoding = HOL +
     "HOL-Eisbach"
     "HOL-Library"
     "Word_Lib"
-    Optics
+    Lenses_And_Other_Optics
     Misc
   theories
     Byte_Encoding_Word_Nat

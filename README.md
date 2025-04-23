@@ -53,7 +53,7 @@ Separation lenses facilitate the extension of locale interpretations from smalle
 
 Concretely, a separation lens is an axiomatization of the projection of product separation algebra onto one of its factors. The axioms are strong enough to enable the extension of µRust programs and their separation logic specifications and proofs along separation lenses.
 
-### Optics
+### Lenses_And_Other_Optics
 
 This session defines and elaborates the concepts of lenses, prisms and foci. Foci are used in AutoCorrode as an axiomatization of the relation between the 'raw' values in a monomorphic store, and the interpretations of those raw values in concrete types.
 

@@ -3,7 +3,7 @@
 
 (*<*)
 theory Global_Store
-  imports Optics.Optics Misc.Array Misc.Vector
+  imports Lenses_And_Other_Optics.Lenses_And_Other_Optics Misc.Array Misc.Vector
       Core_Expression Result_Type (* Range_Type *)
 begin
 (*>*)
