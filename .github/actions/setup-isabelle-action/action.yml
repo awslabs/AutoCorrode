@@ -1,0 +1,33 @@
+# Composite action to setup Isabelle
+# NOTE: Needs to be run under the makarius/isabelle:Isabelle2025 container
+name: Setup Isabelle
+description: 'Setup Isabelle: checkout the AFP, set environment variables, cache heap images'
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout AFP
+      uses: actions/checkout@v3
+      with:
+        repository: isabelle-prover/mirror-afp-2025
+        path: afp
+
+    - name: Set afp component base
+      shell: bash
+      run: |
+        echo "AFP_COMPONENT_BASE=afp/thys" >> $GITHUB_ENV
+
+    - name: Set isabelle home 
+      shell: bash
+      run: |
+        echo "$(/home/isabelle/Isabelle/bin/isabelle getenv ISABELLE_HOME)" >> $GITHUB_ENV
+
+    - name: Set isabelle home user
+      shell: bash
+      run: |
+        echo "$($ISABELLE_HOME/bin/isabelle getenv ISABELLE_HOME_USER)" >> $GITHUB_ENV
+
+    - name: Cache heap images
+      uses: actions/cache@v3
+      with:
+        path: ${{ env.ISABELLE_HOME_USER }}/heaps/
+        key: heap-images-${{ github.ref_name }}

@@ -20,27 +20,10 @@ jobs:
       - name: Checkout AutoCorrode
         uses: actions/checkout@v3
       
-      - name: Checkout AFP
-        uses: actions/checkout@v3
-        with:
-          repository: isabelle-prover/mirror-afp-2025
-          path: afp
-
-      - name: Set isabelle home 
-        run: |
-          echo "$(/home/isabelle/Isabelle/bin/isabelle getenv ISABELLE_HOME)" >> $GITHUB_ENV
-
-      - name: Set isabelle home user
-        run: |
-          echo "$($ISABELLE_HOME/bin/isabelle getenv ISABELLE_HOME_USER)" >> $GITHUB_ENV
-
-      - name: Cache heap images
-        uses: actions/cache@v3
-        with:
-          path: ${{ env.ISABELLE_HOME_USER }}/heaps/
-          key: heap-images-${{ github.ref_name }}
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
 
       # Build with HTML documentation, to make sure we can deploy to pages on merge
       - name: Build AutoCorrode
         run: |
-          $ISABELLE_HOME/bin/isabelle build -v -d . -o browser_info -d afp/thys/Word_Lib AutoCorrode
+          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info -d $AFP_COMPONENT_BASE/Word_Lib AutoCorrode
