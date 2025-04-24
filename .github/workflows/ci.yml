@@ -21,3 +21,20 @@ jobs:
     steps:
     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
     - uses: gaurav-nelson/github-action-markdown-link-check@3c3b66f1f7d0900e37b71eca45b63ea9eedfce31 # v1.0.17
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025
+      options: --user root
+
+    steps:
+      - name: Checkout AutoCorrode
+        uses: actions/checkout@v3
+
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
+
+      # Build with HTML documentation, to make sure we can deploy to pages on merge
+      - name: Build AutoCorrode
+        run: |
+          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info -d $AFP_COMPONENT_BASE/Word_Lib AutoCorrode

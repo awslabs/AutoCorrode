@@ -11,17 +11,17 @@ runs:
         repository: isabelle-prover/mirror-afp-2025
         path: afp
 
-    - name: Set afp component base
+    - name: Set AFP component base
       shell: bash
       run: |
         echo "AFP_COMPONENT_BASE=afp/thys" >> $GITHUB_ENV
 
-    - name: Set isabelle home 
+    - name: Set Isabelle home
       shell: bash
       run: |
         echo "$(/home/isabelle/Isabelle/bin/isabelle getenv ISABELLE_HOME)" >> $GITHUB_ENV
 
-    - name: Set isabelle home user
+    - name: Set Isabelle home user
       shell: bash
       run: |
         echo "$($ISABELLE_HOME/bin/isabelle getenv ISABELLE_HOME_USER)" >> $GITHUB_ENV
