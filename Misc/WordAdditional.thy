@@ -270,17 +270,17 @@ using assms
 
 lemma word_div_mul_bound:
     fixes a b c :: \<open>'l::{len} word\<close>
-  assumes \<open>a < b\<close>
+  assumes \<open>a \<le> b\<close>
       and \<open>i < unat ((b - a) div c)\<close>
     shows \<open>i * unat c < 2^LENGTH('l)\<close>
 using assms by (metis div_lt'' le_eq_less_or_eq le_unat_uoi word_of_nat_less)
 
 lemma word_div_mul_bound':
     fixes a b c :: \<open>'l::{len} word\<close>
-  assumes \<open>a < b\<close>
+  assumes \<open>a \<le> b\<close>
       and \<open>i \<le> unat ((b - a) div c)\<close>
     shows \<open>i * unat c < 2^LENGTH('l)\<close>
-using assms by (metis div_lt' le_eq_less_or_eq word_div_mul_bound word_le_nat_alt)
+using assms by (metis div_lt' le_eq_less_or_eq word_div_mul_bound word_le_less_eq)
 
 lemma le_unat_uoi':
     fixes z :: \<open>'a::{len} word\<close>
