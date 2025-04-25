@@ -1,4 +1,6 @@
-![CI](https://github.com/awslabs/AutoCorrode/actions/workflows/ci.yml/badge.svg) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![CI](https://github.com/awslabs/AutoCorrode/actions/workflows/ci.yml/badge.svg)
+![Docs](https://github.com/awslabs/AutoCorrode/actions/workflows/cd.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 # AutoCorrode
 
