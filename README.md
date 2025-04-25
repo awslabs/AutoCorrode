@@ -10,6 +10,10 @@ AutoCorrode gets its name as the little rusty brother of the independent C verif
 
 The [Showcase.thy](Micro_Rust_Examples/Showcase.thy) file provides a small tour of AutoCorrode's basic concepts and features. It defines several (simple) functions in µRust, defines contracts for them, then uses the provided automation to verify that the functions satisfy their contracts.
 
+## Browsing the source
+
+An HTML rendering of the AutoCorrode source code is available [here](https://awslabs.github.io/AutoCorrode/AutoCorrode.html).
+
 ## Setup
 
 AutoCorrode requires Isabelle2025, which can be downloaded [here](https://isabelle.in.tum.de/website-Isabelle2025/). Set `ISABELLE_HOME` to the directory containing the `isabelle` binary.
