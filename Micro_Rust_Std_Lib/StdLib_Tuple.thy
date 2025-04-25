@@ -7,13 +7,8 @@ theory StdLib_Tuple
 begin
 (*>*)
 
-primrec zipWithNil :: "'a list \<Rightarrow> 'b list \<Rightarrow> ('a \<times> 'b \<times> tnil) list" where
-"zipWithNil xs [] = []" |
-zipWithNil_Cons: "zipWithNil xs (y # ys) =
-  (case xs of [] \<Rightarrow> [] | z # zs \<Rightarrow> (z, y, TNil) # zipWithNil zs ys)"
-
 definition list_zip :: \<open>'a list \<Rightarrow> 'b list \<Rightarrow> ('s, ('a \<times> 'b \<times> tnil) list, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
-  \<open>list_zip \<equiv> lift_fun2 zipWithNil\<close>
+  \<open>list_zip \<equiv> lift_fun2 (map2 (\<lambda>x y. (x, y, TNil)))\<close>
 
 (*<*)
 end
