@@ -42,7 +42,7 @@ jobs:
       - name: Upload documentation as pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.ISABELLE_HOME_USER}}/browser_info/Unsorted/AutoCorrode
+          path: ${{ env.ISABELLE_HOME_USER}}/browser_info
 
   # Single deploy job since we're just deploying
   deploy:
