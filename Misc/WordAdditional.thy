@@ -288,6 +288,52 @@ lemma le_unat_uoi':
     shows \<open>unat (word_of_nat y::'a word) = y\<close>
 using assms by (meson le_unat_uoi less_or_eq_imp_le)
 
+lemma image_word_of_nat_atLeastLessThan:
+  assumes \<open>a < 2 ^ LENGTH('a::len)\<close> and \<open>b < 2 ^ LENGTH('a)\<close>
+  shows \<open>word_of_nat ` {a..<b} = {word_of_nat a::'a word..<word_of_nat b}\<close>
+proof -
+  have \<open>\<exists>v\<in>{a..<b}. w = word_of_nat v\<close>
+    if \<open>word_of_nat a \<le> w\<close> and \<open>w < word_of_nat b\<close> for w :: \<open>'a word\<close>
+    using that assms by (metis atLeastLessThan_iff const_le_unat unat_less_helper unat_of_nat_len word_nat_cases)
+  then show ?thesis
+    using assms
+    by (auto simp: image_iff of_nat_word_less_eq_iff of_nat_word_less_iff take_bit_nat_eq_self)
+qed 
+
+lemma image_word_of_nat_atLeastAtMost:
+  assumes \<open>a < 2 ^ LENGTH('a::len)\<close> and \<open>b < 2 ^ LENGTH('a)\<close>
+  shows \<open>word_of_nat ` {a..b} = {word_of_nat a::'a word..word_of_nat b}\<close>
+proof -
+  have \<open>\<exists>v\<in>{a..b}. w = word_of_nat v\<close>
+    if \<open>word_of_nat a \<le> w\<close> and \<open>w \<le> word_of_nat b\<close> for w :: \<open>'a word\<close>
+    using that assms by (metis atLeastAtMost_iff unat_of_nat_len word_unat.Rep_inverse word_unat_less_le)
+  then show ?thesis
+    using assms
+    by (auto simp: image_iff of_nat_word_less_eq_iff of_nat_word_less_iff take_bit_nat_eq_self)
+qed 
+
+lemma image_unat_atLeastLessThan:
+  \<open>unat ` {a..<b} = {unat a..<unat b}\<close>
+proof
+  show \<open>unat ` {a..<b} \<subseteq> {unat a..<unat b}\<close>
+    using unat_arith_simps(2) word_less_eq_iff_unsigned by fastforce
+  have \<open>\<And>x. unat a \<le> x \<Longrightarrow> x < unat b \<Longrightarrow> word_of_nat x \<in> {a..<b}\<close>
+    by (simp add: le_unat_uoi' word_le_nat_alt word_of_nat_less)
+  then show \<open>{unat a..<unat b} \<subseteq> unat ` {a..<b}\<close>
+    by (metis (no_types, opaque_lifting) atLeastLessThan_iff imageI le_unat_uoi' subsetI)
+qed
+
+lemma image_unat_atLeastAtMost:
+  \<open>unat ` {a..b} = {unat a..unat b}\<close>
+proof
+  show \<open>unat ` {a..b} \<subseteq> {unat a..unat b}\<close>
+    using unat_arith_simps(2) word_less_eq_iff_unsigned by fastforce
+  have \<open> \<And>x. unat a \<le> x \<Longrightarrow> x \<le> unat b \<Longrightarrow> word_of_nat x \<in> {a..b}\<close>
+    by (simp add: le_unat_uoi word_le_nat_alt word_of_nat_le)
+  then show \<open>{unat a..unat b} \<subseteq> unat ` {a..b}\<close>
+    by (metis (no_types, opaque_lifting) atLeastAtMost_iff imageI le_unat_uoi subsetI)
+qed
+
 lemma nonoverflow_range:
     fixes a b :: \<open>'a::{len} word\<close>
   assumes \<open>a \<le> a + b\<close>
