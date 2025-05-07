@@ -524,7 +524,7 @@ begin
 
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 8)
-    done \<comment>\<open>10 was enough!\<close>
+    done \<comment>\<open>8 was enough!\<close>
 
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 7)
