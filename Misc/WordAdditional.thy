@@ -268,6 +268,13 @@ using assms
   apply (subst of_nat_inverse; force)
   done
 
+lemma unat_word_of_nat64_less:
+    fixes w :: \<open>64 word\<close>
+  assumes \<open>unat w < m\<close>
+      and \<open>m < 2^64\<close>
+    shows \<open>w < word_of_nat m\<close>
+  by (metis assms len32 len_bit0 numeral_Bit0_eq_double unat_less_iff)
+
 lemma word_div_mul_bound:
     fixes a b c :: \<open>'l::{len} word\<close>
   assumes \<open>a \<le> b\<close>
