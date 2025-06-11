@@ -134,17 +134,24 @@ struct
     |> simpset_map (Context.proof_of ctxt)
     |> URustContractSimps.map)
 
+  fun extract_contract_components ctxt t =
+    List.map
+      (rewrite_rule ctxt @{thms Let_def function_contract.sel}
+         #> simplify ctxt #> (fn t => t RS meta_eq_to_obj_eq))
+      [ (eta_expand t) RS @{thm meta_cong[where f=\<open>function_contract_pre\<close>]},
+        (eta_expand t) RS @{thm meta_cong[where f=\<open>function_contract_post\<close>]},
+        (eta_expand t) RS @{thm meta_cong[where f=\<open>function_contract_abort\<close>]} ]
+
   fun crush_register_contract_attrib (del : bool) = Thm.declaration_attribute (fn t => fn ctxt =>
-    let val t' = rewrite_rule (Context.proof_of ctxt) [@{thm Let_def}] t in ctxt |> (
+    let val t' = extract_contract_components (Context.proof_of ctxt) t in
     if del then
-      unregister_contracts [t']
-      #> Named_Theorems.del_thm @{named_theorems "crush_contract_defs"} t
-      #> Named_Theorems.del_thm @{named_theorems "no_atp"} t
+         unregister_contracts t' ctxt
+      |> List.foldl (op o) I (List.map (Named_Theorems.del_thm @{named_theorems "crush_contract_defs"}) t')
+      |> List.foldl (op o) I (List.map (Named_Theorems.del_thm @{named_theorems "no_atp"}) t')
     else
-      register_contracts [t']
-      #> Named_Theorems.add_thm @{named_theorems "crush_contract_defs"} t
-      #> Named_Theorems.add_thm @{named_theorems "no_atp"} t
-    )
+      register_contracts t' ctxt
+      |> List.foldl (op o) I (List.map (Named_Theorems.add_thm @{named_theorems "crush_contract_defs"}) t')
+      |> List.foldl (op o) I (List.map (Named_Theorems.add_thm @{named_theorems "no_atp"}) t')
     end
   )
 
@@ -173,7 +180,7 @@ struct
 
   val crush_branch_base_simps_early_unfold : Proof.context -> int -> tactic = fn ctxt =>
     let val early_simps = Named_Theorems.get ctxt @{named_theorems crush_early_simps}
-      val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}      
+      val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}
     in
       if Config.get ctxt Crush_Config.enable_base_simps_early_unfold then
         safe_unfold_tac' ctxt congs early_simps
@@ -263,8 +270,12 @@ struct
     fun TIME_IT msg = time_and_report ctxt msg (Config.get ctxt Crush_Config.time_calls)
     val specs = TIME_IT "crush_branch_call_init_get_specs" (fn _ => crush_get_specs ctxt with_schematics eager)
     val unfold_contract_tac = TIME "crush_branch_call_intro_find_contract" unfold_contract_tac
+
+    val contract_simps = Named_Theorems.get ctxt @{named_theorems "crush_contract_defs"}
     val confirm_no_abort_tac = TIME "crush_branch_call_confirm_no_abort" (
-           (SOLVED' (TRY o unfold_contract_tac THEN' safe_asm_simp_tac (ctxt addsimps @{thms Let_def}))) ORELSE'
+           (SOLVED' (resolve_tac ctxt contract_simps
+             ORELSE' (TRY o unfold_contract_tac THEN' safe_asm_simp_tac (ctxt addsimps @{thms Let_def}))))
+            ORELSE'
            (LOG ("Failed to show that " ^ func_name ^ " has trivial abort-postcondition") THEN' K no_tac))
 
     val post_call_simp = TIME "crush_branch_post_call_simp" (TIME_IT "crush_branch_call_init_post_call_simp"
