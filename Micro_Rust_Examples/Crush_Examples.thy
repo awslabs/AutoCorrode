@@ -190,6 +190,13 @@ begin
     apply (crush_base_step simp prems add: Some_Ex_def)  \<comment>\<open>Introducing existential for Q ?x\<close>
     apply (rule PQ)
     done
+
+  text\<open>\<^verbatim>\<open>simp prems/concls\<close> should automatically eta expand definitions:\<close>
+  definition not_eta_expanded where \<open>not_eta_expanded \<equiv> \<lambda>x f. f x\<close>  
+  lemma \<open>\<And>foo. not_eta_expanded f t \<longlongrightarrow> foo\<close>
+    apply (crush_base simp prems add: not_eta_expanded_def) 
+    oops
+
 end
 
 text\<open>There is also \<^verbatim>\<open>simp concls add: ...\<close> for unfolding pure or spatial \<^emph>\<open>conclusions\<close>. In contrast
