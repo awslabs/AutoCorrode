@@ -173,17 +173,23 @@ struct
 
   val crush_branch_base_simps_early_unfold : Proof.context -> int -> tactic = fn ctxt =>
     let val early_simps = Named_Theorems.get ctxt @{named_theorems crush_early_simps}
-      val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}
+      val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}      
     in
-      safe_unfold_tac' ctxt congs early_simps
+      if Config.get ctxt Crush_Config.enable_base_simps_early_unfold then
+        safe_unfold_tac' ctxt congs early_simps
+      else
+        K no_tac
     end
 
   val crush_branch_base_detect_aentails_contradiction: Proof.context -> int -> tactic = fn ctxt =>
-    IF' Separation_Logic_Tactics.is_entailment (
-      let val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"} in
-      CHANGED_PROP o (safe_simp_no_asm_only_tac' ctxt congs @{thms asepconj_bot_zero asepconj_bot_zero2})
-      THEN' TRY o resolve_tac ctxt @{thms bot_aentails_all} end
-    )
+    if Config.get ctxt Crush_Config.enable_base_simps_detect_aentails_contradiction then
+      IF' Separation_Logic_Tactics.is_entailment (
+        let val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"} in
+        CHANGED_PROP o (safe_simp_no_asm_only_tac' ctxt congs @{thms asepconj_bot_zero asepconj_bot_zero2})
+        THEN' TRY o resolve_tac ctxt @{thms bot_aentails_all} end
+      )
+    else
+      K no_tac
 
   val crush_branch_base_simps_tac : Proof.context -> int -> tactic = fn ctxt =>
     let val crush_intros = Named_Theorems.get ctxt @{named_theorems crush_intros}
