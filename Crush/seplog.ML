@@ -1476,10 +1476,10 @@ struct
      #> Conv.changed_conv
 
   fun aentails_simp_prems_conv (thms : thm list) : Proof.context -> conv =
-     (aentails_prems_concls_conv (thms |> force_meta_eqs |> Conv.rewrs_conv |> maybe_prop_conv |> K) (K Conv.all_conv))
+     (aentails_prems_concls_conv (thms |> force_meta_eqs |> eta_expands |> Conv.rewrs_conv |> maybe_prop_conv |> K) (K Conv.all_conv))
      #> Conv.changed_conv
   fun aentails_simp_concls_conv (thms : thm list) : Proof.context -> conv =
-     (aentails_prems_concls_conv (K Conv.all_conv) (thms |> force_meta_eqs |> Conv.rewrs_conv |> maybe_prop_conv |> K))
+     (aentails_prems_concls_conv (K Conv.all_conv) (thms |> force_meta_eqs |> eta_expands |> Conv.rewrs_conv |> maybe_prop_conv |> K))
      #> Conv.changed_conv
 
   fun simp_prems_tac (thms : thm list) (ctxt : Proof.context) : int -> tactic =
