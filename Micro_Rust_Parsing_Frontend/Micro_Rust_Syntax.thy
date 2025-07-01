@@ -278,6 +278,10 @@ syntax
     ("_._" [99,1000]100)
   "_urust_index" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("_/ '[_']" [100,0]100)
+  \<comment> \<open>Path identifiers (e.g. \<^verbatim>\<open>Foo::Bar\<close>), with the \<^verbatim>\<open>string_token\<close> containing the full path.
+      We will add parse AST transformations to construct these below.\<close>
+  "_urust_path_string_identifier" :: \<open>string_token \<Rightarrow> urust_identifier\<close>
+    ("URUST'_PATH'_STRING'_IDENTIFIER _")
 
   \<comment>\<open>Other control flow constructs.  TODO: \<^verbatim>\<open>for\<close> loops should accept patterns?\<close>
   "_urust_for_loop"
@@ -416,6 +420,15 @@ We temporarily interpret \<^text>\<open>longid\<close> as atomic callables to ge
 then use a manual parse AST translation to break the \<^text>\<open>longid\<close> into its parts and reinterpret
 calls as structure method calls.\<close>
 
+experiment
+  notes [[syntax_ast_trace]]
+begin
+\<comment> \<open>Currently, field indexing does not yet fit in our grammar\<close>
+(*
+term\<open>\<guillemotleft>foo.bar.boo.far\<guillemotright>\<close>
+*)
+end
+
 nonterminal urust_temporary_long_identifier
 syntax
   \<comment>\<open>Mark those as temporary to indicate that semantics definitions need not deal with it.
@@ -433,10 +446,18 @@ It is immediately removed after parsing.\<close>
   "_urust_temporary_identifier_long" :: \<open>urust_temporary_long_identifier \<Rightarrow> urust\<close>
     ("_" [0]1000)
 
+experiment
+  notes [[syntax_ast_trace]]
+begin
+\<comment> \<open>At this point it fits, but we just get \<^verbatim>\<open>foo.bar.boo.far\<close> - the splitting is not yet being done\<close>
+(*
+term\<open>\<guillemotleft>foo.bar.boo.far\<guillemotright>\<close>
+*)
+end
+
 text\<open>First, we register a parse AST translation splitting long IDs at dots (".") and emitting them
 as an anonymous \<^ML>\<open>Ast.Appl\<close>, with one \<^text>\<open>urust_identifier\<close> argument per component.\<close>
-parse_ast_translation\<open>
-let
+ML\<open>
   fun split_at_dots str = let
      val scan_to_dot = (Scan.repeat (Scan.unless ($$ ".") (Scan.one Symbol.not_eof)))
      val skip_over_dot = ($$ ".") || Scan.succeed ""
@@ -445,22 +466,34 @@ let
              (Scan.repeat (Scan.unless (Scan.one Symbol.is_eof) extract_part)) in
      fst (splitter (Symbol.explode str))
    end
-  \<comment>\<open>ML representations of the relevant Nano Rust grammar productions\<close>
+
+  val split_long_identifier = Ast.pretty_ast #> Pretty.string_of #> split_at_dots
+
   fun ast_urust_identifier_id str =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [Ast.Variable str]
-  fun ast_urust_identifier ast =
-     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier\<close>) [ast]
-  fun ast_urust_field_access func obj  =
-     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_field_access\<close>) [obj, func]
+\<close>
+
+parse_ast_translation\<open>
+let
+  \<comment>\<open>ML representations of the relevant Nano Rust grammar productions\<close>
   \<comment>\<open>This does currently only work for long identifiers of the form \<^text>\<open>id.id\<close>.\<close>
   fun break_long_identifier [long_id] =
-     let val parts = long_id |> Ast.pretty_ast |> Pretty.string_of |> split_at_dots
+     let val parts = long_id |> split_long_identifier
          val parts_as_ids = map (ast_urust_identifier_id) parts
      in Ast.Appl parts_as_ids end
 in
   [(\<^syntax_const>\<open>_urust_temporary_long_id\<close>, K break_long_identifier)]
 end
 \<close>
+
+experiment
+  notes [[syntax_ast_trace]]
+begin
+\<comment> \<open>At this point it fits, but we just get \<^verbatim>\<open>foo.bar.boo.far\<close> - the splitting is not yet being done\<close>
+(*
+term\<open>\<guillemotleft>foo.bar.boo.far\<guillemotright>\<close>
+*)
+end
 
 text\<open>Next, we go through all temporary grammar productions using long IDs and adjust them according to the
 intended meaning of the "." operator in the respective context. For example, where a long identifier is used
@@ -470,18 +503,30 @@ it should be converted into a method invocation.
 Note that since parse AST translations are called bottom-up, by the time the parse AST translations below
 are called, long IDs have already been converted into anynomous AST applications, which gives us easy
 access to the components of the long ID.\<close>
-parse_ast_translation\<open>
-let
-  fun debug_result str res =
-     (* writeln ("parse AST translation for temporary long " ^ str ^ ", result "
-              ^ (Pretty.string_of (Ast.pretty_ast res))) *)
-     ()
+ML\<open>
   fun ast_urust_identifier ast =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier\<close>) [ast]
   fun ast_urust_field_access func obj  =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_field_access\<close>) [obj, func]
   fun ast_urust_callable_struct func obj  =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_callable_struct\<close>) [obj, func]
+
+  fun long_id_struct_access_into_callable head projections =
+     let val (body, method) = split_last projections
+         val obj = fold ast_urust_field_access body head
+         val res = ast_urust_callable_struct method obj
+     in res end
+
+  fun long_id_field_access_into_urust head projections =
+     let val res = fold ast_urust_field_access projections head
+     in res end
+\<close>
+parse_ast_translation\<open>
+let
+  fun debug_result str res = (*
+      writeln ("parse AST translation for temporary long " ^ str ^ ", result "
+              ^ (Pretty.string_of (Ast.pretty_ast res))) *)
+      ()
 
   fun convert_temporary_identifier_long [Ast.Appl (head :: projections)] =
      let val head = ast_urust_identifier head
@@ -498,14 +543,12 @@ let
      in res end
 
   fun convert_temporary_callable_struct_long [head, Ast.Appl projections] =
-     let val (body, method) = split_last projections
-         val obj = fold ast_urust_field_access body head
-         val res = ast_urust_callable_struct method obj
+     let val res = long_id_struct_access_into_callable head projections
          val _ = debug_result "callable struct" res
      in res end
 
   fun convert_temporary_field_access_long [head, Ast.Appl projections] =
-     let val res = fold ast_urust_field_access projections head
+     let val res = long_id_field_access_into_urust head projections
          val _ = debug_result "field access" res
      in res end
 in
@@ -515,6 +558,130 @@ in
    (\<^syntax_const>\<open>_urust_temporary_field_access_long\<close>,    K convert_temporary_field_access_long) ]
 end
 \<close>
+
+subsection\<open>Interpreting path identifiers\<close>
+
+nonterminal path_identifier \<comment> \<open>An identifier of the form \<^verbatim>\<open>foo::bar\<close>\<close>
+nonterminal path_identifier_long \<comment> \<open>An identifier of the form \<^verbatim>\<open>foo::bar.boo\<close>\<close>
+
+syntax
+  "_path_builder_two_id" :: \<open>id \<Rightarrow> id \<Rightarrow> path_identifier\<close>
+    ("_':': _"[0,0]1000)
+  "_path_builder_more" :: \<open>id \<Rightarrow> path_identifier \<Rightarrow> path_identifier\<close>
+    ("_':': _"[0,1000]1000)
+  \<comment> \<open>We will transform \<^verbatim>\<open>_urust_temporary_path_identifier\<close> into \<^verbatim>\<open>_urust_path_string_identifier\<close>,
+     where the string token contains the string representation of the \<^verbatim>\<open>path_identifier\<close> argument\<close>
+  "_urust_temporary_path_identifier" :: \<open>path_identifier \<Rightarrow> urust_identifier\<close>
+    ("_")
+
+  \<comment> \<open>Unfortunately, we need to do a bit more work to support \<^verbatim>\<open>foo::bar.boo\<close>. The \<^verbatim>\<open>bar.boo\<close> is
+      a \<^verbatim>\<open>longid\<close> that is the last argument of the implicit list of type \<^verbatim>\<open>path_identifier_long\<close>.\<close>
+  "_path_builder_two_longid" :: \<open>id \<Rightarrow> longid \<Rightarrow> path_identifier_long\<close>
+    ("_':': _"[0,0]1000)
+  "_path_builder_more_longid" :: \<open>id \<Rightarrow> path_identifier_long \<Rightarrow> path_identifier_long\<close>
+    ("_':': _"[0,1000]1000)
+  \<comment> \<open>Such \<^emph>\<open>long\<close> paths are not \<^verbatim>\<open>urust_identifier\<close>s: they indicate method or field accesses
+      of a path. In other words, \<^verbatim>\<open>foo::bar.boo\<close> must be parsed as \<^verbatim>\<open>(foo::bar).boo\<close>. We
+      add temporary clauses to the \<^verbatim>\<open>urust_callable\<close> and \<^verbatim>\<open>urust\<close> grammar, and remove them
+      with parse AST translations.\<close>
+  "_urust_temporary_path_identifier_long_method" :: \<open>path_identifier_long \<Rightarrow> urust_callable\<close>
+    ("_")
+  "_urust_temporary_path_identifier_long_field" :: \<open>path_identifier_long \<Rightarrow> urust\<close>
+    ("_")
+
+text\<open>When the AST is initially built, we get a \<^verbatim>\<open>_urust_temporary_path_identifier\<close> with a
+\<^verbatim>\<open>path_identifier\<close> argument. We will convert that argument to a \<^verbatim>\<open>string_token\<close>, which makes it
+easier to parse that in a later stage to a term. That means we must turn the
+\<^verbatim>\<open>_urust_temporary_path_identifier\<close> into a \<^verbatim>\<open>_urust_path_string_identifier\<close>\<close>
+parse_ast_translation\<open>
+  let
+    fun path_arg_to_rust_name
+        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_id\<close>, Ast.Variable secondlast, Ast.Variable last]) =
+            secondlast ^ "::" ^ last
+      | path_arg_to_rust_name
+        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_more\<close>, Ast.Variable head, tail]) =
+            head ^ "::" ^ path_arg_to_rust_name tail;
+    fun path_translator grammar_el ctx args =
+      let
+        val rust_name = path_arg_to_rust_name (hd args);
+      in
+        Ast.mk_appl (Ast.Constant grammar_el) [Ast.Constant rust_name]
+      end;
+  in [
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier\<close>, path_translator \<^syntax_const>\<open>_urust_path_string_identifier\<close>)
+  ]end
+\<close>
+
+text\<open>We take the same approach for \<^verbatim>\<open>_urust_temporary_path_identifier_long_{field,method}\<close>, but now
+need to split the last identifier at the dots. Unfortunately, we cannot rely on AST parse
+translations possibly happening again and taking care of things, but need to manually invoke the
+same steps done for splitting longid's.\<close>
+parse_ast_translation\<open>
+  let
+    \<comment> \<open>Split \<^verbatim>\<open>foo.bar.zoo\<close> into \<^verbatim>\<open>("foo", ["bar", "zoo"])\<close>\<close>
+    fun split_longid longid_el =
+      let
+        val parts = split_long_identifier longid_el
+      in
+        (hd parts, tl parts)
+      end;
+
+    \<comment> \<open>Split the \<^verbatim>\<open>_path_builder\<close> syntax representation of \<^verbatim>\<open>foo::bar.zoo.far\<close> into \<^verbatim>\<open>("foo::bar", ["zoo", "far"])\<close>\<close>
+    fun split_path_n_field 
+      (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_longid\<close>, Ast.Variable secondlast, last]) =
+        let 
+          val (tailhead, tailtail) = split_longid last
+        in
+          (secondlast ^ "::" ^ tailhead, tailtail)
+        end
+      | split_path_n_field
+        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_more_longid\<close>, Ast.Variable head, tail]) =
+        let
+          val (path, field) = split_path_n_field tail
+        in
+          (head ^ "::" ^ path, field)
+        end;
+
+    \<comment> \<open>Convert a string \<^verbatim>\<open>"foo::bar"\<close> into a uRust grammar entry\<close>
+    fun urust_path_string_to_identifier arg =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_path_string_identifier\<close>) [Ast.Constant arg];
+
+    \<comment> \<open>Convert the argument of syntax type \<^verbatim>\<open>_path_identifier_long\<close> into its path string and
+        field/method accesses, then use the \<^verbatim>\<open>ast_joiner\<close> argument to turn it into a urust grammar
+        entry. The 'syntax type' of \<^verbatim>\<open>ast_joiner\<close> is \<^verbatim>\<open>urust \<rightarrow> urust_identifier list \<rightarrow> urust\<close>.\<close>
+    fun path_translator (ast_joiner: Ast.ast -> Ast.ast list -> Ast.ast) ctx [arg] =
+      let
+        val (path, field) = split_path_n_field arg
+      in
+        ast_joiner
+          (path |> urust_path_string_to_identifier |> ast_urust_identifier)
+          (field |> map ast_urust_identifier_id)
+      end;
+  in [
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close>,  path_translator long_id_field_access_into_urust),
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close>, path_translator long_id_struct_access_into_callable)
+  ] end
+\<close>
+
+(* At this point, parsing returns 'abstract' objects -- only after e.g. shallowly
+embedding them, do we get actual HOL terms. The below \<^verbatim>\<open>experiment\<close>
+nevertheless uses \<^verbatim>\<open>term\<close> to check what parsing produces,
+which is useful for debugging purposes.
+
+Of course, these calls fail, so they must be commented out when building. They
+could come in handy when making changes to the uRust syntax in the future. *)
+(*
+experiment
+  notes [[syntax_ast_trace]]
+begin
+term\<open>\<guillemotleft>foo.bar.boo.far\<guillemotright>\<close>
+term\<open>\<guillemotleft>foo.bar.boo(3)\<guillemotright>\<close>
+term\<open>\<guillemotleft>(foo).bar.boo\<guillemotright>\<close>
+term\<open>\<guillemotleft>foo::bar\<guillemotright>\<close>
+term\<open>\<guillemotleft>foo::bar::zoo.boo.far\<guillemotright>\<close>
+term\<open>\<guillemotleft>foo::bar.boo(3)\<guillemotright>\<close>
+end
+*)
 
 (*<*)
 end

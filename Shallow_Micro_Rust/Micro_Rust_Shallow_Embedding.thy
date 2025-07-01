@@ -27,19 +27,13 @@ to the category of HOL terms.\<close>
 subsection\<open>Custom identifiers and identifier remapping\<close>
 
 text\<open>The in-built syntax category \<^verbatim>\<open>id\<close> of HOL identifiers does not encompass qualified
-Rust names such as \<^verbatim>\<open>Foo::Bar\<close>. To still be able to use those in Micro Rust, we add a custom
-command to register them as keywords in Isabelle's lexer, and add them to \<^verbatim>\<open>urust_identifier\<close> so
-they can be used in Micro Rust expressions.
+Rust names such as \<^verbatim>\<open>Foo::Bar\<close>. To still be able to use those in Micro Rust, the abstract syntax
+parser for uRust outputs these as \<^verbatim>\<open>urust_path_string_identifier\<close> entries. We just have
+to add a way to parse these as HOL terms.
 
-Upon shallow embedding of Micro Rust into HOL, the custom identifiers will be interpreted as a
-specified HOL constant which may have the same or a different name \<^emph>\<open>in HOL\<close>. More generally,
-we also allow the registration of a Micro-Rust-to-HOL name change for those identifiers which do fall
-under the \<^verbatim>\<open>id\<close> syntax category.
-
-We distinguish two remapping contexts: Literals and function expressions. The
-command \<^text>\<open>notation_nano_rust\<close> registers a name remapping for identifiers used as literals,
-while \<^text>\<open>notation_nano_rust_expression\<close> registers a name remapping for identifiers used as
-functions.\<close>
+For general \<^verbatim>\<open>id\<close>s, we introduce an intermediate \<^verbatim>\<open>_urust_identifier_id_const\<close>. This allows us
+to register Micro-Rust-to-HOL name changes for those identifiers which \<^emph>\<open>do\<close> fall
+under the \<^verbatim>\<open>id\<close> syntax category.\<close>
 
 syntax
   "_urust_identifier_id_const" :: \<open>id \<Rightarrow> logic\<close> ("URUST'_CONST _")
@@ -53,21 +47,112 @@ in
 end
 \<close>
 
+text\<open>Entries marked \<^verbatim>\<open>_shallow_unparsed_path_string\<close> are waiting to be resolved by a parse
+translation to a proper HOL term, by looking up the string token in a map.\<close>
+syntax
+  "_shallow_unparsed_path_string" :: \<open>string_token \<Rightarrow> logic\<close>
+    ("URUST'_SHALLOW'_UNPARSED'_PATH'_STRING _")
+
+text\<open>Define the map in which Rust path literals (\<^verbatim>\<open>Foo::Bar\<close>) will be looked up in.\<close>
+ML\<open>
+  structure RustPathResolution = Generic_Data
+  (
+    type T = string Symtab.table;
+    val empty = Symtab.empty;
+    val merge = Symtab.merge (op =);
+  );
+
+  fun add_rust_path_resolution key value =
+    Symtab.insert (op =) (key, value) |>
+    RustPathResolution.map;
+
+  fun get_rust_path_resolution key =
+    RustPathResolution.get #> (fn tab => Symtab.lookup tab key)
+\<close>
+
+text\<open>Add the parse translation which will perform the lookup.\<close>
+parse_translation\<open>
+  let
+    fun internal_path_translator ctx [Term.Const (rust_name, the_typ)] =
+      let
+        val rust_resolution = ctx |> Context.Proof |> get_rust_path_resolution rust_name
+      in
+        case rust_resolution of
+            SOME term_name =>
+            \<comment> \<open>Note that we cannot have a term map, at least not a naive one, since at this point
+                generics still need to be unified.\<close>
+            Term.Const (term_name, the_typ)
+          | NONE =>
+            \<comment> \<open>In the \<^verbatim>\<open>NONE\<close> case, this will output a somewhat nice error message of the form
+              \<^verbatim>\<open>Foo::Bar constant not found\<close>\<close>
+              Term.Const (rust_name, the_typ)
+      end;
+  in [
+    (\<^syntax_const>\<open>_shallow_unparsed_path_string\<close>, internal_path_translator)
+  ] end
+\<close>
+
+ML\<open>
+\<comment> \<open>Replace \<^verbatim>\<open>pattern\<close> by \<^verbatim>\<open>replacement\<close> in \<^verbatim>\<open>original\<close>.\<close>
+fun replace_string (pattern: string) (replacement: string) (original: string)  =
+    let
+        val original_size = String.size original
+        val pattern_size = String.size pattern
+        
+        fun loop start acc =
+            if start > original_size - pattern_size
+            then String.concat (List.rev (String.extract(original, start, NONE) :: acc))
+            else if String.substring(original, start, pattern_size) = pattern
+            then loop (start + pattern_size) (replacement :: acc)
+            else loop (start + 1)
+                 (String.str(String.sub(original, start)) :: acc)
+    in
+        if pattern_size = 0 orelse original_size = 0
+        then original
+        else loop 0 []
+    end;
+
+replace_string "Hello" "Hi" "Hello, world! Hello, universe!" ;
+
+replace_string "::" "_" "a::b::c";
+
+replace_string  "one" "1" "one two one two";
+\<close>
+
+text\<open>Core helper that registers \<^verbatim>\<open>nano_rust_name\<close> as notation for \<^verbatim>\<open>hol_name\<close> in uRust. There are
+three cases:
+1. \<^verbatim>\<open>nano_rust_name\<close> falls in the \<^verbatim>\<open>id\<close> syntax category. We only add a simple \<^verbatim>\<open>translations\<close> macro.
+2. \<^verbatim>\<open>nano_rust_name\<close> is a path identifier (\<^verbatim>\<open>Foo::Bar\<close>). We just have to register them as a  \<^verbatim>\<open>RustPathResolution\<close>
+3. \<^verbatim>\<open>nano_rust_name\<close> contains other special characters (e.g. \<^verbatim>\<open>fatal!\<close>). We need to add a syntax entry and a \<^verbatim>\<open>translations\<close> step.
+\<close>
 ML\<open>
    fun notation_nano_rust ty (hol_name, nano_rust_name) = let
      (* If the Nano Rust name is an identifier, we only need to register a translation
         rule which converts it into the respective HOL identifier.
 
         If the Nano Rust name is not an identifier, for example `Foo::Bar`, then we
-        need to first register it as a keyword + custom grammar production for Micro Rust. *)
+        insert it into the `RustPathResolution` map. *)
 
      (* Ordinary identifier *)
      fun simple_hol_notation_nano_rust ty hol_name nano_rust_name thy: local_theory = (
         let val translation_in = "_shallow_identifier_as_" ^ ty ^ "(URUST_CONST " ^ " " ^ nano_rust_name ^ ")"
             val translation_out = "CONST " ^ hol_name
             val translation = Syntax.Parse_Rule (("logic",translation_in), ("logic",translation_out)) in
-        thy |> (Local_Theory.background_theory (Isar_Cmd.translations true [translation]))
+        thy |> Local_Theory.translations_cmd true [translation]
      end)
+
+     val remove_colons = String.translate (fn #":" => "" | c => String.str c)
+     val is_path_notation = remove_colons #> Symbol_Pos.is_identifier 
+
+     (* Path notation *)
+     fun custom_path_notation_nano_rust hol_identifier nano_rust_name thy: local_theory =
+        let
+          \<comment> \<open>TODO: the calls to \<^verbatim>\<open>replace_string\<close> are for backwards compatibility. Remove them?\<close>
+          val actual_name = nano_rust_name |> replace_string "'_" "_" |> replace_string "':" ":"
+        in
+          thy |> Local_Theory.declaration {pervasive=false, syntax=false, pos=Position.none}
+          (K (add_rust_path_resolution actual_name hol_identifier))
+        end
 
      fun remove_dots long_identifier =
            (long_identifier |> String.explode |> filter (fn c : char => (c <> #".")) |> String.implode)
@@ -80,11 +165,13 @@ ML\<open>
             val translation_out = "CONST " ^ hol_identifier
             val translation = Syntax.Parse_Rule (("logic",translation_in), ("logic",translation_out)) in
         thy |> Local_Theory.syntax_cmd true mode [(syntax_constant, "urust_identifier", Mixfix.mixfix nano_rust_name)]
-            |> (Local_Theory.background_theory (Isar_Cmd.translations true [translation]))
+            |> Local_Theory.translations_cmd true [translation]
      end)
   in
     if Symbol_Pos.is_identifier nano_rust_name then
       simple_hol_notation_nano_rust ty hol_name nano_rust_name
+    else if is_path_notation nano_rust_name then
+      custom_path_notation_nano_rust hol_name nano_rust_name
     else
       custom_hol_notation_nano_rust ty hol_name nano_rust_name
   end
@@ -196,6 +283,11 @@ end
 
 
 translations
+  "_shallow_identifier_as_function (_urust_path_string_identifier s)" \<rightharpoonup> "_shallow_unparsed_path_string s"
+  "_shallow_identifier_as_literal (_urust_path_string_identifier s)" \<rightharpoonup> "_shallow_unparsed_path_string s"
+  "_shallow_identifier_as_field (_urust_path_string_identifier s)" \<rightharpoonup> "_shallow_unparsed_path_string s"
+
+translations
   \<comment>\<open>The shallow embedding of a HOL term is the corresponding literal\<close>
   "_shallow(_urust_literal f)"
     \<rightharpoonup> "CONST literal f"
@@ -296,6 +388,7 @@ translations
   "_shallow (_urust_unsafe_block t)"
     \<rightharpoonup> "_shallow t"
 
+  \<comment> \<open>TODO: Can we not have one case that handles all this? See also \<^url>\<open>https://github.com/awslabs/AutoCorrode/issues/29\<close>\<close>
   "_shallow (_urust_funcall_with_args (_urust_callable_id id) args)"
     \<rightharpoonup> "_urust_shallow_fun_with_args (_shallow_identifier_as_function id) (_shallow args)"
   "_shallow (_urust_funcall_with_args (_urust_antiquotation emb) args)"
@@ -1196,6 +1289,63 @@ term \<open>\<lbrakk> 0x2f0_u64 \<rbrakk>\<close>
 term \<open>\<lbrakk> 0_usize \<rbrakk>\<close>
 term \<open>\<lbrakk> 1_usize \<rbrakk>\<close>
 term \<open>\<lbrakk> 0xffffffff0_usize \<rbrakk>\<close>
+
+end
+
+\<comment> \<open>Rust path expressions test\<close>
+experiment
+  notes [[syntax_ast_trace]]
+begin
+
+term\<open>3 :: 64 word\<close>
+
+definition number_42 :: nat where \<open>number_42 \<equiv> 42\<close>
+
+notation_nano_rust number_42 ("foo::bar::test1")
+notation_nano_rust number_42 ("foo::bar::test2")
+notation_nano_rust True ("foo::bar::test3")
+
+definition \<open>the_record \<equiv> make_testrec 1 False\<close>
+
+notation_nano_rust the_record ("the::record")
+
+term\<open>\<lbrakk>the::record\<rbrakk>\<close>
+term\<open>\<lbrakk>(the::record).field1\<rbrakk>\<close>
+term\<open>\<lbrakk>the::record.field1\<rbrakk>\<close>
+
+term\<open>(1, 2)\<close>
+
+term\<open>\<lbrakk> foo::bar::test1 \<rbrakk>\<close>
+term\<open>\<lbrakk> foo::bar:: test2 \<rbrakk>\<close>
+term\<open>\<lbrakk> foo:: bar::test3 \<rbrakk>\<close>
+
+datatype test =
+    Test1
+  | Test2
+
+notation_nano_rust test.Test1 ("test'::Test_1")
+notation_nano_rust test.Test2 ("test::Test'_2")
+
+definition plus_two :: \<open>'l::len word \<Rightarrow> 'l word\<close> where \<open>plus_two n \<equiv> n + 2\<close>
+definition \<open>plus_two_lift \<equiv> lift_fun1 plus_two\<close>
+
+notation_nano_rust plus_two_lift ("plus2::lifted")
+
+definition three :: \<open>64 word\<close> where \<open>three = 3\<close>
+
+term\<open>\<lbrakk> test::Test_1 \<rbrakk>\<close>
+
+term\<open>\<lbrakk>plus2::lifted(three)\<rbrakk>\<close>
+term\<open>\<lbrakk>plus_two_lift(three)\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let arg = test::Test_1;
+  let fun = plus2::lifted;
+  match arg {
+    test::Test_1 \<Rightarrow> fun(three),
+    test::Test_2 \<Rightarrow> plus2::lifted(three)
+  }
+\<rbrakk>\<close>
 
 end
 
