@@ -65,6 +65,10 @@ sig
  val force_meta_eq : thm -> thm
  val force_meta_eqs : thm list -> thm list
 
+ \<comment>\<open>Eta expand definitional theorem so there's no toplevel \<^verbatim>\<open>\<lambda>x. _\<close> on the RHS\<close>
+ val eta_expand: thm -> thm 
+ val eta_expands: thm list -> thm list  
+
  val intro_tac : thm list -> Proof.context -> int -> tactic
  val elim_tac : thm list -> Proof.context -> int -> tactic
 
@@ -424,6 +428,20 @@ struct
   fun force_meta_eq (t : thm): thm = t RS eq_reflection handle THM _ => t
   val force_meta_eqs : thm list -> thm list = List.map force_meta_eq
 
+  fun eta_expand thm =
+    let
+      val num_abs = thm 
+        |> Thm.prop_of 
+        |> Logic.dest_equals 
+        |> snd 
+        |> Term.strip_abs 
+        |> fst 
+        |> length      
+    in
+      funpow num_abs (fn t => t RS @{thm meta_fun_cong}) thm
+    end
+  val eta_expands : thm list -> thm list = List.map eta_expand
+
   fun filter_to_conv (f : cterm -> bool) : conv = fn t =>
      if f t then Conv.all_conv t else Conv.no_conv t
 
@@ -532,6 +550,9 @@ local
 
   val _ = Theory.setup (Attrib.setup @{binding "meta_all_intro"}
                        (Thm.rule_attribute [] (K Thm.forall_intr_vars) |> Scan.succeed) "")
+
+  val _ = Theory.setup (Attrib.setup @{binding "unabs_def"}
+                       (Thm.rule_attribute [] (K Crush_Base.eta_expand) |> Scan.succeed) "")
 
   fun all_intro ctxt thm = 
      let val ctxt = Context.proof_of ctxt

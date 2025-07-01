@@ -190,6 +190,13 @@ begin
     apply (crush_base_step simp prems add: Some_Ex_def)  \<comment>\<open>Introducing existential for Q ?x\<close>
     apply (rule PQ)
     done
+
+  text\<open>\<^verbatim>\<open>simp prems/concls\<close> should automatically eta expand definitions:\<close>
+  definition not_eta_expanded where \<open>not_eta_expanded \<equiv> \<lambda>x f. f x\<close>  
+  lemma \<open>\<And>foo. not_eta_expanded f t \<longlongrightarrow> foo\<close>
+    apply (crush_base simp prems add: not_eta_expanded_def) 
+    oops
+
 end
 
 text\<open>There is also \<^verbatim>\<open>simp concls add: ...\<close> for unfolding pure or spatial \<^emph>\<open>conclusions\<close>. In contrast
@@ -647,6 +654,27 @@ begin
                                   goal |> Syntax.pretty_term ctxt] |> Pretty.writeln
         in not (Separation_Logic_Tactics.is_entailment goal) end\<close>)
     oops
+end
+
+paragraph\<open>Case splitting\<close>
+
+experiment
+begin
+lemma \<open>(case y of Some t \<Rightarrow> True | None \<Rightarrow> True) \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> \<lbrakk> match x { Some(y) \<Rightarrow> f(), None \<Rightarrow> g() } \<rbrakk> \<beta> \<gamma> \<delta>\<close>
+  \<comment>\<open>You could use the following, but that would aggressively split \<^verbatim>\<open>option\<close> everywhere.\<close>
+  apply (crush_base split!: option.splits)
+  \<comment>\<open>\<^verbatim>\<open> 1. \<And>x2 x2a. x = Some x2 \<Longrightarrow> y = Some x2a \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> (call f) \<beta> \<gamma> \<delta>
+        2. \<And>x2. x = Some x2 \<Longrightarrow> y = None \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> (call f) \<beta> \<gamma> \<delta>
+        3. \<And>x2. x = None \<Longrightarrow> y = Some x2 \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> (call g) \<beta> \<gamma> \<delta>
+        4. x = None \<Longrightarrow> y = None \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> (call g) \<beta> \<gamma> \<delta>\<close>\<close>
+  oops
+
+lemma \<open>(case y of Some t \<Rightarrow> True | None \<Rightarrow> True) \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> \<lbrakk> match x { None \<Rightarrow> f(), Some(y) \<Rightarrow> g() } \<rbrakk> \<beta> \<gamma> \<delta>\<close>
+  \<comment>\<open>If you instead want to split only micro rust expressions, use \<^verbatim>\<open>wp split: ...\<close>\<close> 
+  apply (crush_base wp split: option.splits)
+  \<comment>\<open>\<^verbatim>\<open> 1. \<And>x2. case y of None \<Rightarrow> True | _ \<Rightarrow> True \<Longrightarrow> x = Some x2 \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> (call g) \<beta> \<gamma> \<delta>
+        2. case y of None \<Rightarrow> True | _ \<Rightarrow> True \<Longrightarrow> x = None \<Longrightarrow> \<alpha> \<longlongrightarrow> \<W>\<P> \<Gamma> (call f) \<beta> \<gamma> \<delta>\<close>\<close>
+  oops
 end
 
 paragraph\<open>Logging \<^verbatim>\<open>crush\<close>\<close>

@@ -29,6 +29,7 @@ ML\<open>
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_concls_simps"}      "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_rules"}    "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_drules"}   "" #> snd |> Named_Target.theory_map)
+   val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_wp_split_simps"}    "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_crules"}   "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_asepconj_simp"}     "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_specs_eager"}       "" #> snd |> Named_Target.theory_map)

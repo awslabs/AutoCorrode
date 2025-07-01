@@ -38,6 +38,10 @@ sig
      of assertions.\<close>
   val dest_asepconj_multi_mapped : term -> (term * term)
 
+  val specialize_split_rule_to_wp_single: Proof.context -> thm -> thm
+  val specialize_split_rule_to_wp: Proof.context -> thm list -> thm list
+  val specialize_split_rule_to_wp_attribute : attribute
+
   \<comment> \<open>Basic transformation tactics for separating entailments\<close>
 
   \<comment> \<open>Rotate the components of separating conjunction appearing in a goal's assumptions\<close>
@@ -367,6 +371,18 @@ end
 structure Separation_Logic_Tactics : SEPARATION_LOGIC_TACTICS =
 struct
 
+  fun specialize_split_rule_to_wp_single ctxt t =
+     Rule_Insts.of_rule ctxt ([SOME "\<lambda>e. _ \<longlongrightarrow> \<W>\<P> _ e _ _ _"], []) [] t
+     handle ERROR _ =>
+       ([Pretty.str "Theorem ", Syntax.pretty_term ctxt (Thm.prop_of t),
+        Pretty.str " not of the expected format. Ignoring."] |> Pretty.block |>
+        Pretty.string_of |> Output.warning; t)
+
+  fun specialize_split_rule_to_wp ctxt = List.map (specialize_split_rule_to_wp_single ctxt)
+
+  val specialize_split_rule_to_wp_attribute =
+     Thm.rule_attribute [] (fn context => specialize_split_rule_to_wp_single (Context.proof_of context))
+
   val aentails_prem_cong : thm = @{lemma \<open>\<phi> = \<phi>' \<Longrightarrow> \<phi> \<longlongrightarrow> \<xi> \<Longrightarrow> \<phi>' \<longlongrightarrow> \<xi>\<close> by simp}
   val aentails_concl_cong: thm = @{lemma \<open>\<phi> = \<phi>' \<Longrightarrow> \<xi> \<longlongrightarrow> \<phi> \<Longrightarrow> \<xi> \<longlongrightarrow> \<phi>'\<close> by simp}
 
@@ -379,9 +395,9 @@ struct
   val aentails_rule_core0 : thm = @{lemma \<open>\<alpha> \<longlongrightarrow> \<beta> \<Longrightarrow> \<phi> \<longlongrightarrow> \<alpha> \<Longrightarrow> \<phi> \<longlongrightarrow> \<beta>\<close>
     by (blast intro: aentails_intro asepconj_mono2)}
 
-  val aentails_crule_core : thm = @{thm asepconj_mono4} 
-  val aentails_crule_coreL : thm = @{thm asepconj_mono6} 
-  val aentails_crule_coreR : thm = @{thm asepconj_mono7} 
+  val aentails_crule_core : thm = @{thm asepconj_mono4}
+  val aentails_crule_coreL : thm = @{thm asepconj_mono6}
+  val aentails_crule_coreR : thm = @{thm asepconj_mono7}
 
   (* Some lemmas *)
   exception SeparationLogic of string
@@ -604,21 +620,21 @@ struct
    \<comment> \<open>Automated/assisted discharge of \<^verbatim>\<open>ucincl\<close> conditions.\<close>
    exception LOOKUP of string
 
-   fun lookup_thm_core ctxt thm_name = 
+   fun lookup_thm_core ctxt thm_name =
      let val thm_opt = Facts.lookup (Context.Proof ctxt)
                                     (Proof_Context.facts_of ctxt)
                                     thm_name in
         case thm_opt of
             SOME thm => thm |> #thms |> List.hd
           | _ => raise LOOKUP thm_name
-        end      
+        end
 
    fun lookup_thm ctxt thm_name =
     let val thm_name_local = "local." ^ thm_name in
       lookup_thm_core ctxt thm_name_local
     end
 
-   fun get_global_const_name ctxt name = 
+   fun get_global_const_name ctxt name =
      name |> Syntax.read_term ctxt |> Term.head_of |> Term.dest_Const |> fst
 
    fun get_local_const_name _ name = "local." ^ name
@@ -644,7 +660,7 @@ struct
        val body_schematics = Term.add_var_names body [] |> List.map fst
        val contract_schematics = Term.add_var_names contract [] |> List.map fst
    in
-     List.exists (member (op =) body_schematics #> not) contract_schematics 
+     List.exists (member (op =) body_schematics #> not) contract_schematics
    end
 
   val dest_spec_fun_str =
@@ -986,7 +1002,7 @@ struct
     (asepconj_pick_conv ctxt (i+1) i) then_conv (Conv.rewr_conv (@{thm asepconj_comm} RS eq_reflection))
   \<comment>\<open>Convenience wrapper inferring the number \<^verbatim>\<open>n\<close> of separating components.\<close>
   fun asepconj_joinfirst_conv' ctxt i: conv = fn ct =>
-    let val n = ct |> Thm.term_of |> split_asepconj |> length in 
+    let val n = ct |> Thm.term_of |> split_asepconj |> length in
     asepconj_joinfirst_conv ctxt n i ct end
 
   fun aentails_joinfirst_assm_conv ctxt n i: conv = aentails_conv' (asepconj_joinfirst_conv ctxt n i) Conv.all_conv ctxt
@@ -1128,7 +1144,7 @@ struct
   val aentails_float_points_to_raw_concls_tac = aentails_pick_concls_tac'' is_points_to_raw
   val aentails_float_points_to_concls_tac'     = aentails_pick_concls_tac' is_points_to
   val aentails_float_points_to_raw_concls_tac' = aentails_pick_concls_tac' is_points_to_raw
-                                                        
+
   val aentails_float_multi_assms_tac  = aentails_pick_assms_tac''  is_asepconj_multi
   val aentails_float_multi_concls_tac = aentails_pick_concls_tac'' is_asepconj_multi
 
@@ -1200,7 +1216,7 @@ struct
      ))
      THEN_LAST (TRY o (aentails_normalize_assoc_concls_tac ctxt))
 
-  fun aentails_float_crule_tac (thm : thm) (ctxt : Proof.context) = 
+  fun aentails_float_crule_tac (thm : thm) (ctxt : Proof.context) =
            aentails_float_rule_concls_tac thm ctxt
      THEN' aentails_float_drule_assms_tac thm ctxt
 
@@ -1209,7 +1225,7 @@ struct
      THEN' (
          resolve_tac ctxt [aentails_crule_core OF [thm],
                            aentails_crule_coreL OF [thm],
-                           aentails_crule_coreR OF [thm], thm] 
+                           aentails_crule_coreR OF [thm], thm]
             handle THM _ => K no_tac
      ))
      THEN_LAST (TRY o (aentails_normalize_assoc_concls_tac ctxt))
@@ -1476,10 +1492,10 @@ struct
      #> Conv.changed_conv
 
   fun aentails_simp_prems_conv (thms : thm list) : Proof.context -> conv =
-     (aentails_prems_concls_conv (thms |> force_meta_eqs |> Conv.rewrs_conv |> maybe_prop_conv |> K) (K Conv.all_conv))
+     (aentails_prems_concls_conv (thms |> force_meta_eqs |> eta_expands |> Conv.rewrs_conv |> maybe_prop_conv |> K) (K Conv.all_conv))
      #> Conv.changed_conv
   fun aentails_simp_concls_conv (thms : thm list) : Proof.context -> conv =
-     (aentails_prems_concls_conv (K Conv.all_conv) (thms |> force_meta_eqs |> Conv.rewrs_conv |> maybe_prop_conv |> K))
+     (aentails_prems_concls_conv (K Conv.all_conv) (thms |> force_meta_eqs |> eta_expands |> Conv.rewrs_conv |> maybe_prop_conv |> K))
      #> Conv.changed_conv
 
   fun simp_prems_tac (thms : thm list) (ctxt : Proof.context) : int -> tactic =
@@ -1505,14 +1521,17 @@ struct
     eresolve_tac ctxt @{thms apure_entailsR0_revE}
 
   fun aentails_wp_ssa_normalize_tac (ctxt : Proof.context) : int -> tactic =
-    let 
+    let
       val micro_rust_simps = Named_Theorems.get ctxt @{named_theorems "micro_rust_simps"}
       val micro_rust_ssa = Named_Theorems.get ctxt @{named_theorems "micro_rust_ssa"}
     in
-      aentails_wp_rewrite_tac @{thm MICRO_RUST_SSA_CONTROL_def[symmetric]} ctxt
-      THEN' (TRY o safe_simp_only_tac ctxt micro_rust_simps)
-      THEN' (TRY o safe_simp_only_tac ctxt micro_rust_ssa)
-      THEN' (TRY o safe_simp_only_tac ctxt @{thms MICRO_RUST_SSA_CONTROL_def})
+      CONVERSION (
+     Conv.bottom_conv (K (Conv.try_conv (
+                  (Conv.rewr_conv @{thm MICRO_RUST_SSA_CONTROL_def[symmetric]})
+        then_conv (Conv.try_conv (Conv.rewrs_conv (micro_rust_ssa |> force_meta_eqs)))
+     ))) ctxt
+     then_conv Conv.bottom_conv (K (
+         Conv.try_conv (Conv.rewr_conv @{thm MICRO_RUST_SSA_CONTROL_def}))) ctxt)
       THEN' (TRY o safe_simp_only_tac ctxt micro_rust_simps)
     end
 
@@ -1596,5 +1615,8 @@ local
 
   val _ = Theory.setup (Method.setup @{binding "micro_rust_ssa_wp_normalize"}
           (Scan.succeed (SIMPLE_METHOD' o Separation_Logic_Tactics.aentails_wp_ssa_normalize_tac)) "")
+
+  val _ = Theory.setup (Attrib.setup @{binding "wp_split"}
+                       (Separation_Logic_Tactics.specialize_split_rule_to_wp_attribute |> Scan.succeed) "")
 
 in end

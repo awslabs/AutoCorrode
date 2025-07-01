@@ -39,7 +39,7 @@ struct
 
   \<comment>\<open>Safe saturating unfolding of pure premises\<close>
   fun sat_unfold_tac (ts : thm list) (ctxt : Proof.context) : int -> tactic =
-    let val ts_meta = force_meta_eqs ts
+    let val ts_meta = ts |> force_meta_eqs |> eta_expands
         val ts_elims = pure_eq_thms_to_unfold_elim ts_meta in
       elim_tac ts_elims ctxt
     end

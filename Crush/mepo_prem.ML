@@ -33,6 +33,8 @@ sig
  (* reverse the action of ignore_tac_idxs_xxx *)
  val unignore_tac : Proof.context -> int -> tactic
 
+ val matching_prems : Proof.context -> thm -> (term -> bool) -> int -> int list
+
  val relevant_prems_core : Proof.context -> int ->
     relevance_fudge option -> term -> (int * term) list -> (int * term) list
 
@@ -56,6 +58,22 @@ end;
 
 structure MePo_Prem: MEPO_PREM =
 struct
+
+  fun enumerate ls =
+    let
+      fun aux _ acc [] = List.rev acc
+        | aux base acc (x :: xs) = aux (base + 1) ((base, x) :: acc) xs
+    in
+      aux 0 [] ls
+    end
+
+  fun matching_prems (_: Proof.context) (thm: thm) (prem_filter: term -> bool) i =
+    let
+      val subgoal = Thm.cprem_of thm i |> Thm.term_of
+      val prems = Logic.strip_imp_prems subgoal
+    in
+      prems |> enumerate |> filter (snd #> prem_filter) |> map fst
+    end
 
   val ignore_tac0 : Proof.context -> int -> tactic = fn ctxt =>
     DETERM o (eresolve_tac ctxt [@{thm IGNORE_imp_ignoreE}])
@@ -189,11 +207,20 @@ fun add_pconst_to_table (s, p) = Symtab.map_default (s, [p]) (insert ptype_eq p)
    more or less as if they were built-in but add their axiomatization at the end. *)
 val set_consts = [\<^const_name>\<open>Collect\<close>, \<^const_name>\<open>Set.member\<close>]
 
+val ignore_consts = [\<^const_name>\<open>ASSUMPTION\<close>]
+
+fun mepo_keep_premise_filter t = (case t of 
+   \<^Const_>\<open>Trueprop for t1\<close> => mepo_keep_premise_filter t1
+ | \<^Const_>\<open>ASSUMPTION for _\<close> => true
+ | _ => false)
+
 fun add_pconsts_in_term thy =
   let
     fun do_const const (x as (s, _)) ts =
       if member (op =) set_consts s then
         fold (do_term false) ts
+      else if member (op =) ignore_consts s then
+        I
       else
         (not (is_irrelevant_const s) ? add_pconst_to_table (rich_pconst thy const x))
         #> fold (do_term false) ts
@@ -255,6 +282,7 @@ fun pconsts_in_fact thy t =
     []
 
 fun pair_consts_fact' thy term_of_fact fact =
+  if mepo_keep_premise_filter (fact |> term_of_fact) then NONE else
   (case fact |> term_of_fact |> pconsts_in_fact thy of
     [] => NONE
   | consts => SOME ((fact, consts), NONE))
@@ -517,14 +545,6 @@ fun relevance_filter_generic ctxt thres0 decay max_facts (term_of_fact: 'a -> te
        relevance_filter' ctxt thres0 decay max_facts fudge facts concl_t)
   end
 
-  fun enumerate ls =
-    let
-      fun aux _ acc [] = List.rev acc
-        | aux base acc (x :: xs) = aux (base + 1) ((base, x) :: acc) xs
-    in
-      aux 0 [] ls
-    end
-
   fun subst_abs_constify v b = subst_bound (v |> apfst wrap_bound_name |> Const, b);
 
   fun dest_abs_constify t =
@@ -582,11 +602,15 @@ fun relevance_filter_generic ctxt thres0 decay max_facts (term_of_fact: 'a -> te
       aux a b [] exclude
     end
 
+  fun sorted_union (a : int list) (b : int list) : int list = a @ b |> sort int_ord
+
   fun irrelevant_prems_in_goal ctxt max_facts fudge i thm =
     let
       val (nprems, relevant_prems_idxs) = relevant_prems_in_goal ctxt max_facts fudge i thm
+      val force_relevant_idxs = matching_prems ctxt thm mepo_keep_premise_filter i
+      val all_relevant_prems = sorted_union relevant_prems_idxs force_relevant_idxs
     in
-      (nprems, upto_without 0 (nprems - 1) relevant_prems_idxs)
+      (nprems, upto_without 0 (nprems - 1) all_relevant_prems)
     end
     handle THM _ => (0, [])
 

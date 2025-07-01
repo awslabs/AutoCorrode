@@ -57,10 +57,15 @@ sig
 
   val enable_branch_safe : bool Config.T
   val enable_branch_clarsimp : bool Config.T
+  val enable_branch_clarsimp_warn_at_success : bool Config.T
+  val enable_branch_clarsimp_stop_at_success : bool Config.T
   val enable_branch_filtered_clarsimp : bool Config.T
   val enable_branch_reduced_clarsimp : bool Config.T
   val enable_schematics : bool Config.T
   val enable_branch_split : bool Config.T
+
+  val enable_base_simps_detect_aentails_contradiction : bool Config.T
+  val enable_base_simps_early_unfold : bool Config.T
 
   val enable_urust_split_branch : bool Config.T
   val enable_urust_determine_branch : bool Config.T
@@ -118,6 +123,8 @@ struct
 
   val enable_branch_safe = Attrib.setup_config_bool @{binding "use_safe"} (K true)
   val enable_branch_clarsimp = Attrib.setup_config_bool @{binding "crush_use_clarsimp"} (K true)
+  val enable_branch_clarsimp_stop_at_success = Attrib.setup_config_bool @{binding "crush_stop_at_full_blown_clarsimp"} (K false)
+  val enable_branch_clarsimp_warn_at_success = Attrib.setup_config_bool @{binding "crush_warn_at_full_blown_clarsimp"} (K true)
   (* TODO: Consider enabling this by default *)
   val enable_branch_filtered_clarsimp = Attrib.setup_config_bool @{binding "crush_use_filtered_clarsimp"} (K false)
   (* TODO: Consider enabling this by default *)
@@ -142,6 +149,9 @@ struct
   val step_time_bound_ms = Attrib.setup_config_int @{binding "crush_time_step_bound_ms"} (K 10000)
 
   val fail_on_bad_schematic = Attrib.setup_config_bool @{binding "crush_fail_on_bad_schematic"} (K true)
+
+  val enable_base_simps_early_unfold = Attrib.setup_config_bool @{binding "crush_enable_early_unfold"} (K true)
+  val enable_base_simps_detect_aentails_contradiction = Attrib.setup_config_bool @{binding "crush_enable_contradiction_detection"} (K true)
 
   val relevance_filter_max_facts = Attrib.setup_config_int @{binding "crush_relevance_filter_max_facts"} (K 20)
 

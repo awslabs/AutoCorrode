@@ -20,6 +20,9 @@ sig
   val LOG : Proof.context -> bool -> string -> tactic -> tactic
   val LOG' : Proof.context -> bool -> string -> (int -> tactic) -> (int -> tactic)
 
+  val DEBUG_BEFORE_AFTER : (thm -> thm -> unit) -> tactic -> tactic
+  val DEBUG_BEFORE_AFTER' : (term -> term option -> unit) -> (int -> tactic) -> (int -> tactic)
+
   val LOG_pos : Proof.context -> Position.T -> bool -> string -> logger -> tactic -> tactic
   val LOG_pos' : Proof.context -> Position.T -> bool -> string -> logger -> (int -> tactic) -> (int -> tactic)
 
@@ -41,6 +44,10 @@ sig
 
   (* Tactic printing a string but doing nothing else *)
   val log_tac : string -> tactic
+
+  (* all_tac, but allows to run an arbitrary function on the goal
+     state, e.g. for printing *)
+  val all_tac': (term -> unit) -> int -> tactic
 
   (* Guard method by goal predicate *)
   val guard_method : (Proof.context -> term -> bool) -> Method.method -> Method.method
@@ -89,7 +96,23 @@ struct
 
   val log_tac : string -> tactic = fn msg => fn st =>
     ((msg |> tracing); Seq.single st)
- 
+
+  val all_tac' : (term -> unit) -> int -> tactic = fn f =>
+    SUBGOAL (fn (goal, _) => ((f goal); all_tac))
+
+  fun DEBUG_BEFORE_AFTER (f: thm -> thm -> unit) (tac : tactic) st =
+     Seq.map (fn st' => (f st st'; st')) (tac st)
+  
+  fun DEBUG_BEFORE_AFTER' (f: term -> term option -> unit) (tac: int -> tactic) (i: int) =
+     DEBUG_BEFORE_AFTER (fn st => fn st' => let
+       val goal_old = Thm.prem_of st i
+       val goal_new = 
+          if Thm.nprems_of st' < Thm.nprems_of st then NONE else
+          SOME (Thm.prem_of st' i)
+     in
+       f goal_old goal_new
+     end) (tac i)
+
   val time_to_str = fn t => (t |> #elapsed |> Time.fmt 6) ^ "s"
 
   fun LOG_pos (ctxt : Proof.context) (pos : Position.T) (enable : bool) 

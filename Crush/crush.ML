@@ -150,6 +150,13 @@ struct
 
   val get_urust_contract_simpset = Context.Proof #> URustContractSimps.get
 
+  val crush_register_wp_split_attrib = Thm.declaration_attribute (fn t => fn ctxt =>
+    let val t' = Separation_Logic_Tactics.specialize_split_rule_to_wp_single
+                   (Context.proof_of ctxt) t
+    in ctxt |> Named_Theorems.add_thm @{named_theorems "crush_wp_split_simps"} t'
+    end
+  )  
+
   val simp_focus_basic_tac : Proof.context -> int -> tactic = fn ctxt =>
     let val focus_intros =
       Named_Theorems.get ctxt @{named_theorems focus_intros} @
@@ -173,17 +180,23 @@ struct
 
   val crush_branch_base_simps_early_unfold : Proof.context -> int -> tactic = fn ctxt =>
     let val early_simps = Named_Theorems.get ctxt @{named_theorems crush_early_simps}
-      val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}
+      val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}      
     in
-      safe_unfold_tac' ctxt congs early_simps
+      if Config.get ctxt Crush_Config.enable_base_simps_early_unfold then
+        safe_unfold_tac' ctxt congs early_simps
+      else
+        K no_tac
     end
 
   val crush_branch_base_detect_aentails_contradiction: Proof.context -> int -> tactic = fn ctxt =>
-    IF' Separation_Logic_Tactics.is_entailment (
-      let val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"} in
-      CHANGED_PROP o (safe_simp_no_asm_only_tac' ctxt congs @{thms asepconj_bot_zero asepconj_bot_zero2})
-      THEN' TRY o resolve_tac ctxt @{thms bot_aentails_all} end
-    )
+    if Config.get ctxt Crush_Config.enable_base_simps_detect_aentails_contradiction then
+      IF' Separation_Logic_Tactics.is_entailment (
+        let val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"} in
+        CHANGED_PROP o (safe_simp_no_asm_only_tac' ctxt congs @{thms asepconj_bot_zero asepconj_bot_zero2})
+        THEN' TRY o resolve_tac ctxt @{thms bot_aentails_all} end
+      )
+    else
+      K no_tac
 
   val crush_branch_base_simps_tac : Proof.context -> int -> tactic = fn ctxt =>
     let val crush_intros = Named_Theorems.get ctxt @{named_theorems crush_intros}
@@ -219,9 +232,12 @@ struct
 
   val crush_branch_wp_case_split_tac_core : Proof.context -> int -> tactic = fn ctxt =>
     if not (Config.get ctxt Crush_Config.enable_urust_split_branch) then K no_tac else
-    let val wp_intros = Named_Theorems.get ctxt @{named_theorems micro_rust_wp_case_splits}
+    let val wp_split_intros = Named_Theorems.get ctxt @{named_theorems micro_rust_wp_case_splits}
+      val wp_split_simps = Named_Theorems.get ctxt @{named_theorems crush_wp_split_simps}
+        |> force_meta_eqs
     in
-      intro_tac wp_intros ctxt
+      intro_tac wp_split_intros ctxt ORELSE' 
+      CONVERSION (Conv.params_conv ~1 (fn _ => (Conv.concl_conv ~1 (prop_conv (Conv.rewrs_conv wp_split_simps)))) ctxt)
     end
 
   val crush_branch_wp_case_split_tac : Proof.context -> int -> tactic = fn ctxt =>
@@ -392,9 +408,33 @@ struct
     end
 
   val crush_branch_clarsimp_fallback_tac = fn ctxt =>
-   if Config.get ctxt Crush_Config.enable_branch_clarsimp then
-     CHANGED_PROP o clarsimp_tac ctxt
-   else K no_tac
+   let fun log_before_after old_goal new_goal_opt =
+      (let val old_txt = 
+             [Pretty.str "Needed to apply full-blown clarsimp to progress the following pure goal:", Pretty.brk 1,
+              Syntax.pretty_term ctxt old_goal, Pretty.fbrk] in
+       if Config.get ctxt Crush_Config.enable_branch_clarsimp_stop_at_success then
+         ((old_txt @ [Pretty.fbrk, Pretty.str "Aborting as requested by `crush_stop_at_full_blown_clarsimp` option"]
+          |> Pretty.block |> Pretty.string_of |> Output.warning);
+          raise SMART "Stopping after successful clarsimp -- consider debugging why MePo-filtered clarsimp didn't work!")
+       else if old_goal |> Separation_Logic_Tactics.is_entailment |> not
+         andalso Config.get ctxt Crush_Config.enable_branch_clarsimp_warn_at_success then 
+         let 
+           val new_txt = case new_goal_opt of 
+              NONE => [Pretty.str "Goal was solved"]
+            | SOME new_goal => [Pretty.str "New goal: ", Pretty.fbrk,
+                                Syntax.pretty_term ctxt new_goal]
+         in
+           old_txt @ new_txt @ 
+            [Pretty.fbrk, Pretty.str "Consider debugging why MePo-filtered clarsimp is not successful here.", Pretty.fbrk,
+             Pretty.str "If you want to stop `crush` at this point, set `crush_stop_at_full_blown_clarsimp=true` and `crush_do_big_steps=false`"]
+           |> Pretty.block |> Pretty.string_of |> Output.warning
+         end
+      else () end)
+   in
+     if Config.get ctxt Crush_Config.enable_branch_clarsimp then
+       DEBUG_BEFORE_AFTER' log_before_after (CHANGED_PROP o clarsimp_tac ctxt)
+     else K no_tac
+   end
 
   val crush_branch_misc_tac : Proof.context -> int -> tactic = fn ctxt =>
              intro_tac @{thms mset_sub_drop_nth word_unat_lt} ctxt
@@ -731,6 +771,7 @@ struct
      make_del_parser "intro"     @{named_theorems crush_intros} \<^here>,
      make_add_parser "specs"     @{named_theorems crush_specs} \<^here>,
      make_del_parser "specs"     @{named_theorems crush_specs} \<^here>,
+     make_attrib_parser (Args.$$$ "wp" -- Args.$$$ "split") \<^here> (K crush_register_wp_split_attrib),
      make_attrib_parser (Args.$$$ "contracts" -- Args.add) \<^here> (K (crush_register_contract_attrib false)),
      make_attrib_parser (Args.$$$ "contracts" -- Args.del) \<^here> (K (crush_register_contract_attrib true)),
      make_add_parser "cong"     @{named_theorems crush_cong} \<^here>,

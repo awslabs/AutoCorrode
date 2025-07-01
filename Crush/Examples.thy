@@ -646,6 +646,19 @@ lemma
   irrelevant premises:\<close>
   apply (tactic \<open>MePo_Prem.drop_irrelevant_prems_tac @{context} 2 1\<close>)
   oops
+
+\<comment>\<open>The MePo filter never drops premises wrapped as \<^verbatim>\<open>ASSUMPTION\<close>:\<close>
+lemma 
+  assumes \<open>x < 42\<close>
+      and \<open>ASSUMPTION (g (g (f t0)) = s0)\<close>
+      and \<open>g (f t1) = s1\<close>
+      and \<open>x + y < 10*z\<close>
+    shows \<open>10*z < 20\<close>
+  using assms apply -
+  \<comment>\<open>Keeps \<^verbatim>\<open>(g (g (f t0)) = s0)\<close> which would otherwise have been thrown out.\<close>
+  apply (tactic \<open>MePo_Prem.ignore_irrelevant_prems_tac @{context} 2 1\<close>)
+  oops
+
 end
 
 subsubsection\<open>Conversions\<close>
