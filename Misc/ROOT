@@ -12,6 +12,8 @@ session Misc = HOL +
     Debug_Logging
     ListAdditional
     MultisetAdditional
+    Remove_Enum_Discriminate_Elims
+    Result
     SetAdditional
     Undefined
     Vector

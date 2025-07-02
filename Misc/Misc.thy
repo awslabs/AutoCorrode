@@ -9,6 +9,7 @@ theory Misc
     Debug_Logging
     ListAdditional
     MultisetAdditional
+    Remove_Enum_Discriminate_Elims
     Result
     SetAdditional
     Undefined
