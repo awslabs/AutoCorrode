@@ -12,10 +12,10 @@ section \<open>Some facts on multiset arithmetic\<close>
 subsection\<open>Some notation for multiset mapping\<close>
 
 syntax
-  "_mset_from_mapped_list" :: \<open>logic \<Rightarrow> pttrn \<Rightarrow> logic \<Rightarrow> logic\<close> ("{# _ \<Colon> _ \<leftarrow> _ #}")
-  "_mset_from_mapped_mset" :: \<open>logic \<Rightarrow> pttrn \<Rightarrow> logic \<Rightarrow> logic\<close> ("{# _ . _ \<leftarrow> _ #}")
-  "_mset_from_anon_mapped_list" :: \<open>logic \<Rightarrow> logic \<Rightarrow> logic\<close> ("{# _ \<Colon> _ #}")
-  "_mset_from_anon_mapped_mset" :: \<open>logic \<Rightarrow> logic \<Rightarrow> logic\<close> ("{# _ . _ #}")
+  "_mset_from_mapped_list" :: \<open>logic \<Rightarrow> pttrn \<Rightarrow> logic \<Rightarrow> logic\<close> (\<open>(\<open>indent=3\<close>{# _/ \<Colon> (_/ \<leftarrow> _) #})\<close>)
+  "_mset_from_mapped_mset" :: \<open>logic \<Rightarrow> pttrn \<Rightarrow> logic \<Rightarrow> logic\<close> (\<open>(\<open>indent=3\<close>{# _/ . (_/ \<leftarrow> _) #})\<close>)
+  "_mset_from_anon_mapped_list" :: \<open>logic \<Rightarrow> logic \<Rightarrow> logic\<close> (\<open>(\<open>indent=3\<close>{# _/ \<Colon> _ #})\<close>)
+  "_mset_from_anon_mapped_mset" :: \<open>logic \<Rightarrow> logic \<Rightarrow> logic\<close> (\<open>(\<open>indent=3\<close>{# _/ . _ #})\<close>)
 translations
   "_mset_from_mapped_list entry var lst"      \<rightleftharpoons>
     "(CONST Multiset.image_mset) (\<lambda>var. entry) ((CONST Multiset.mset) lst)"
