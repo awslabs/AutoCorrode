@@ -417,6 +417,34 @@ lemma list_update_id':
     shows \<open>x [i := t] = x\<close>
 using assms and list_update_id by auto
 
+lemma drop_last_butlast_facts:
+  fixes xs :: \<open>'a list\<close> and i :: nat
+  assumes idx: \<open>i < List.length xs\<close> and \<open>distinct xs\<close>
+  shows \<open>drop i xs \<noteq> []\<close>
+    and \<open>last xs = last (drop i xs)\<close>
+    and \<open>Set.insert (last xs) (set (List.drop i (butlast xs))) = set (List.drop i xs)\<close>
+    and \<open>last xs \<notin> set (List.drop i (butlast xs))\<close>
+proof -
+  from assms show \<open>drop i xs \<noteq> []\<close>
+    by auto
+  moreover from idx show \<open>last xs = last (drop i xs)\<close>
+    by simp
+  moreover from idx append_butlast_last_id[OF \<open>drop i xs \<noteq> []\<close>]
+    show \<open>Set.insert (last xs) (set (List.drop i (butlast xs))) = set (List.drop i xs)\<close>
+    by (simp add: drop_butlast flip: last_drop)
+     (subst (3) append_butlast_last_id[of \<open>List.drop i xs\<close>, symmetric]; simp)
+  ultimately show \<open>last xs \<notin> set (List.drop i (butlast xs))\<close>
+    by (metis append_butlast_last_id assms(2) distinct_butlast
+        drop.simps(1) in_set_dropD not_distinct_conv_prefix)
+qed
+
+lemma last_butlast_facts:
+  fixes xs :: \<open>'a list\<close> and i :: nat
+  assumes \<open>distinct xs\<close> and \<open>xs \<noteq> []\<close>
+  shows \<open>set (butlast xs) = set xs - { last xs }\<close>
+    and \<open>last xs \<in> set xs\<close>
+  using assms(2) drop_last_butlast_facts[where i=0, OF _ assms(1)] by auto
+
 (*<*)
 end
 (*>*)

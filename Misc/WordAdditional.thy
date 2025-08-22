@@ -305,7 +305,7 @@ proof -
   then show ?thesis
     using assms
     by (auto simp: image_iff of_nat_word_less_eq_iff of_nat_word_less_iff take_bit_nat_eq_self)
-qed 
+qed
 
 lemma image_word_of_nat_atLeastAtMost:
   assumes \<open>a < 2 ^ LENGTH('a::len)\<close> and \<open>b < 2 ^ LENGTH('a)\<close>
@@ -317,7 +317,7 @@ proof -
   then show ?thesis
     using assms
     by (auto simp: image_iff of_nat_word_less_eq_iff of_nat_word_less_iff take_bit_nat_eq_self)
-qed 
+qed
 
 lemma image_unat_atLeastLessThan:
   \<open>unat ` {a..<b} = {unat a..<unat b}\<close>
@@ -478,6 +478,12 @@ using assms by (simp add: neg_mask_add t2n_mask_eq_if) (metis (no_types, lifting
 
 abbreviation word64_of_nat :: \<open>nat \<Rightarrow> 64 word\<close> where
   \<open>word64_of_nat \<equiv> word_of_nat\<close>
+
+lemma word64_div_mono:
+    fixes x y z :: \<open>64 word\<close>
+  assumes \<open>x \<le> y\<close>
+    shows \<open>x div z \<le> y div z\<close>
+  using assms by (simp add: div_le_mono unat_div word_le_nat_alt)
 
 end
 (*>*)
