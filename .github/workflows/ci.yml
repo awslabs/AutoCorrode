@@ -38,3 +38,30 @@ jobs:
       - name: Build AutoCorrode
         run: |
           $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info -d $AFP_COMPONENT_BASE/Word_Lib AutoCorrode
+  iq:
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025
+      options: --user root
+
+    steps:
+      - name: Checkout AutoCorrode
+        uses: actions/checkout@v3
+
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
+
+      - name: Setup dependencies for I/Q build
+        run: |
+          apt install -y make
+          echo "ISABELLE_HOME=/home/isabelle/Isabelle" >> $GITHUB_ENV
+          echo "JAVA_HOME=/home/isabelle/Isabelle/contrib/jdk-21.0.6/x86_64-linux/" >> $GITHUB_ENV
+          echo "PATH=/home/isabelle/Isabelle/contrib/jdk-21.0.6/x86_64-linux/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Build I/Q plugin
+        run: |
+          make -C iq
+
+      - name: Install I/Q plugin
+        run: |
+          make -C iq install
