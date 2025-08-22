@@ -1,5 +1,6 @@
 
-The files `crush/mepo_prem.ML` and `Misc/Data_Structures/BraunTrees.thy`
+The files `crush/mepo_prem.ML`, `Misc/Data_Structures/BraunTrees.thy`,
+`iq/Isar_Explore.thy`, and `iq/src/Extended_Query_Operation.scala`
 contain derivatives of Isabelle source files. These files are licensed
 under the terms of the Isabelle Copyright Notice, reproduced below.
 

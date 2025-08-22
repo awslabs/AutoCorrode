@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!DOCTYPE DOCKABLES SYSTEM "dockables.dtd">
+
+<DOCKABLES>
+	<DOCKABLE NAME="mcp-dockable" MOVABLE="TRUE">
+		new IQLogDockable(view, position);
+	</DOCKABLE>
+	<DOCKABLE NAME="sledgehammer-dockable" MOVABLE="TRUE">
+		new IQExploreDockable(view, position);
+	</DOCKABLE>
+	<DOCKABLE NAME="pide-dump-dockable" MOVABLE="TRUE">
+		new IQDumpPIDEDockable(view, position);
+	</DOCKABLE>
+</DOCKABLES>

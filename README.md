@@ -12,6 +12,11 @@ AutoCorrode gets its name as the little rusty brother of the independent C verif
 
 The [Showcase.thy](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Micro_Rust_Examples.Showcase.html) file provides a small tour of AutoCorrode's basic concepts and features. It defines several (simple) functions in µRust, defines contracts for them, then uses the provided automation to verify that the functions satisfy their contracts.
 
+## I/Q
+
+[I/Q](iq) -- short for Isabelle/Q -- is an experimental Isabelle/jEdit plugin exposing proof editing/exploration capabilities as an MCP server. Its purpose is to enable MCP-capable AI agents such as [Amazon Q](https://aws.amazon.com/q/) to autonomously
+or collaboratively conduct interactive theorem proving using Isabelle. See [iq](iq) for more information.
+
 ## Browsing the source
 
 An HTML rendering of the AutoCorrode source code is available [here](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/AutoCorrode.html).
