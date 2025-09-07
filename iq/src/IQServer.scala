@@ -320,25 +320,29 @@ class IQServer(port: Int = 8765) {
             IQCommunicationLogger.logCommunication(s"${getTimestamp()} [RECV] $line")
           }
 
-          val response = processRequest(line)
-          Output.writeln(s"I/Q Server: Sending response of length ${response.length} chars")
-          if (response.length > 10000) {
-            Output.writeln(s"I/Q Server: Large response preview: ${response.take(200)}...${response.takeRight(200)}")
+          processRequest(line) match {
+            case Some(response) =>
+              Output.writeln(s"I/Q Server: Sending response of length ${response.length} chars")
+              if (response.length > 10000) {
+                Output.writeln(s"I/Q Server: Large response preview: ${response.take(200)}...${response.takeRight(200)}")
+              }
+
+              // Log outgoing response if logging is enabled
+              if (IQCommunicationLogger.isLoggingEnabled) {
+                IQCommunicationLogger.logCommunication(s"${getTimestamp()} [SEND] $response")
+              }
+
+              // Send response with detailed logging
+              val responseBytes = (response + "\n").getBytes("UTF-8")
+              Output.writeln(s"I/Q Server: About to send ${responseBytes.length} bytes")
+
+              writer.println(response)
+              writer.flush() // Ensure response is sent immediately
+
+              Output.writeln(s"I/Q Server: Response sent and flushed (${responseBytes.length} bytes)")
+            case None =>
+              Output.writeln(s"I/Q Server: No response needed (notification)")
           }
-
-          // Log outgoing response if logging is enabled
-          if (IQCommunicationLogger.isLoggingEnabled) {
-            IQCommunicationLogger.logCommunication(s"${getTimestamp()} [SEND] $response")
-          }
-
-          // Send response with detailed logging
-          val responseBytes = (response + "\n").getBytes("UTF-8")
-          Output.writeln(s"I/Q Server: About to send ${responseBytes.length} bytes")
-
-          writer.println(response)
-          writer.flush() // Ensure response is sent immediately
-
-          Output.writeln(s"I/Q Server: Response sent and flushed (${responseBytes.length} bytes)")
 
           // Verify the writer is still valid
           if (writer.checkError()) {
@@ -369,35 +373,72 @@ class IQServer(port: Int = 8765) {
   }
 
   /**
-   * Processes a JSON-RPC request and generates a response.
+   * Processes a JSON-RPC request and generates an optional response.
    *
    * Parses the request, extracts the method and ID, and dispatches to the appropriate handler.
+   * Returns None for notifications (no response needed), Some(response) for requests.
    *
    * @param requestLine The JSON-RPC request string
-   * @return A JSON-RPC response string
+   * @return Some(response) for requests, None for notifications
    */
-  private def processRequest(requestLine: String): String = {
+  private def processRequest(requestLine: String): Option[String] = {
     try {
       Output.writeln(s"I/Q Server: Processing request: $requestLine")
 
       val json = JSON.parse(requestLine)
       val (method, id) = extractMethodAndId(json)
 
-      Output.writeln(s"I/Q Server: Parsed method='$method', id='$id'")
+      Output.writeln(s"I/Q Server: Parsed method='$method', id=$id")
 
-      method match {
-        case "initialize" => createInitializeResponse(id)
-        case "tools/list" => createToolsListResponse(id)
-        case "tools/call" => handleToolCallFromJson(json, id)
-        case _ =>
-          Output.writeln(s"I/Q Server: Unknown method '$method'")
-          createErrorResponse(Some(id), -32601, s"Method not found: $method")
+      id match {
+        case Some(requestId) =>
+          method match {
+            case "initialize" => Some(createInitializeResponse(requestId))
+            case "tools/list" => Some(createToolsListResponse(requestId))
+            case "tools/call" => Some(handleToolCallFromJson(json, requestId))
+            case _ =>
+              Output.writeln(s"I/Q Server: Unknown method '$method'")
+              Some(createErrorResponse(Some(requestId), -32601, s"Method not found: $method"))
+          }
+        /* From https://www.jsonrpc.org/specification:
+         *  "A Notification is a Request object without an "id" member.
+         * A Request object that is a Notification signifies the Client's lack
+         * of interest in the corresponding Response object, and as such no
+         * Response object needs to be returned to the client.
+         * The Server MUST NOT reply to a Notification, including those that
+         * are within a batch request."
+         */
+        case None =>
+          method match {
+            case m if m.startsWith("notifications/") =>
+              Output.writeln(s"I/Q Server: Handling notification '$method'")
+              handleNotification(method, json)
+              None // No response for notifications
+            case _ =>
+              Output.writeln(s"I/Q Server: Ignoring unknown notification '$method'")
+              None // No response for notifications
+          }
       }
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error processing request: ${ex.getMessage}")
         ex.printStackTrace()
-        createErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}")
+        Some(createErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}"))
+    }
+  }
+
+  /**
+   * Handles JSON-RPC notifications (messages without id that don't expect responses).
+   *
+   * @param method The notification method name
+   * @param json The parsed JSON notification
+   */
+  private def handleNotification(method: String, json: JSON.T): Unit = {
+    method match {
+      case "notifications/initialized" =>
+        Output.writeln("I/Q Server: Client initialization complete")
+      case _ =>
+        Output.writeln(s"I/Q Server: Unknown notification method: $method")
     }
   }
 
@@ -405,9 +446,9 @@ class IQServer(port: Int = 8765) {
    * Extracts the method and ID from a JSON-RPC request.
    *
    * @param json The parsed JSON-RPC request
-   * @return A tuple containing (method, id)
+   * @return A tuple containing (method, id) where id is None for notifications
    */
-  private def extractMethodAndId(json: JSON.T): (String, String) = {
+  private def extractMethodAndId(json: JSON.T): (String, Option[String]) = {
     json match {
       case JSON.Object(obj) =>
         val method = obj.get("method") match {
@@ -417,17 +458,17 @@ class IQServer(port: Int = 8765) {
         }
 
         val id = obj.get("id") match {
-          case Some(s: String) => s
-          case Some(n: Number) => n.toString
-          case Some(other) => other.toString
-          case None => ""
+          case Some(s: String) => Some(s)
+          case Some(n: Number) => Some(n.toString)
+          case Some(other) => Some(other.toString)
+          case None => None
         }
 
         (method, id)
 
       case _ =>
         Output.writeln(s"I/Q Server: JSON is not an object: $json")
-        ("", "")
+        ("", None)
     }
   }
 

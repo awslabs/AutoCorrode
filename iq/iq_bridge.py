@@ -74,6 +74,9 @@ class MCPBridgeWithReconnect:
         """Forward request to Isabelle server with automatic reconnection."""
         method = request.get('method', 'unknown')
 
+        # Check if this is a notification (no 'id' field)
+        is_notification = 'id' not in request
+
         # Ensure we have a connection
         if not self.ensure_connection():
             self.log(f"Cannot establish connection - cannot forward {method}")
@@ -84,6 +87,12 @@ class MCPBridgeWithReconnect:
             request_str = json.dumps(request)
             self.isabelle_socket.send((request_str + "\n").encode())
 
+            # For notifications, don't wait for response
+            if is_notification:
+                self.log(f"Forwarded notification {method} (no response expected)")
+                return None
+
+            # For requests, wait for response
             # Read response as bytes first
             response_bytes = b""
 
@@ -156,6 +165,7 @@ class MCPBridgeWithReconnect:
                     request = json.loads(line)
                     method = request.get("method", "unknown")
                     request_id = request.get("id")
+                    is_notification = 'id' not in request
 
                     # Forward to Isabelle server (with automatic reconnection)
                     response = self.forward_to_isabelle(request)
@@ -164,12 +174,15 @@ class MCPBridgeWithReconnect:
                         # Ensure response has correct ID
                         response["id"] = request_id
 
-                        # Send response back to Amazon Q
+                        # Send response back to client
                         response_str = json.dumps(response)
                         print(response_str, flush=True)
                         self.log(f"Response sent for {method}")
+                    elif is_notification:
+                        # No response expected for notifications
+                        self.log(f"Notification {method} processed (no response)")
                     else:
-                        # Send error if forwarding failed
+                        # Send error if forwarding failed for a request
                         error_response = self.create_error_response(
                             request_id, -32603, f"Failed to forward {method} to Isabelle server"
                         )
