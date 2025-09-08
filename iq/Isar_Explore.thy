@@ -27,7 +27,7 @@ fun register {name, pri} f =
              (fn run => fn state =>
           let
             fun output_result s = Output.result [(Markup.instanceN, instance)] [s];
-            val status m = YXML.output_markup_only #> output_result;
+            val status = YXML.output_markup_only #> output_result;
             val writeln_result = Markup.markup Markup.writeln #> output_result
             val report_error = Markup.markup Markup.error #> output_result
             val report_exn = Runtime.exn_message #> report_error
@@ -39,7 +39,7 @@ fun register {name, pri} f =
             val _ = OS.Process.sleep (Time.fromMilliseconds 100)
             fun main () =
               f {state = state, args = args, output_result = output_result,
-                 writeln_result = writeln_result, instance=instance, exec_id=exec_id})
+                 writeln_result = writeln_result, instance=instance, exec_id=exec_id}
             val _ =
               (case Exn.capture_body (run main) of
                 Exn.Res () => ()
