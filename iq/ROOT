@@ -1,0 +1,4 @@
+session iq = HOL +
+  theories [document=false]
+    iq
+    Isar_Explore

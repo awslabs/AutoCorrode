@@ -8,6 +8,7 @@ theory AutoCorrode
     "Byte_Level_Encoding.Byte_Level_Encoding"
     "Crush.Crush"
     "Data_Structures.Data_Structures"
+    "iq.iq"
     "Micro_Rust_Examples.Micro_Rust_Examples"
     "Micro_Rust_Interfaces.Micro_Rust_Interfaces"
     "Micro_Rust_Interfaces_Core.Micro_Rust_Interfaces_Core"
