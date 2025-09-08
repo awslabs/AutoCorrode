@@ -46,7 +46,7 @@ object IQUtils {
    * @param partialPath The partial file path to match (e.g., "Foo/Bar.thy")
    * @return Either the full file path if exactly one match, or an error message
    */
-  def autoCompleteFilePath(partialPath: String): Either[String, String] = {
+  def autoCompleteFilePath(partialPath: String, trackedOnly: Boolean = true, allowNonexisting: Boolean = false): Either[String, String] = {
     try {
       // Get all tracked files
       val trackedFiles = getAllTrackedFiles()
@@ -64,10 +64,22 @@ object IQUtils {
         pathWithoutExt.endsWith(partialPathNoExt)
       }.values.toList
 
-      matches.size match {
-        case 0 => Left(s"No file found matching '$partialPath'")
-        case 1 => Right(matches.head)
-        case _ => Left(s"Multiple files found matching '$partialPath': ${matches.mkString(", ")}")
+      val resultPath = matches.size match {
+        case 0 =>
+          if (trackedOnly) {
+            return Left(s"No file found matching '$partialPath'")
+          } else {
+            partialPath  // Just return the original path
+          }
+        case 1 => matches.head
+        case _ => return Left(s"Multiple files found matching '$partialPath': ${matches.mkString(", ")}")
+      }
+
+      // Check if file exists (only if allowNonexisting is false)
+      if (!allowNonexisting && !new java.io.File(resultPath).exists()) {
+        Left(s"File does not exist: $resultPath")
+      } else {
+        Right(resultPath)
       }
     } catch {
       case ex: Exception => Left(s"Error during file path auto-completion: ${ex.getMessage}")
@@ -123,7 +135,7 @@ object IQUtils {
   /**
    * Finds the offset of a substring within a multiline string.
    * Handles Unicode characters properly by normalizing both strings and mapping positions back.
-   * 
+   *
    * Relaxation: When input and output string start with exactly the same number of spaces,
    * TRIM those spaces from both input and output, and then proceed as before.
    * Do NOT trim spaces if their number is different.
@@ -138,8 +150,8 @@ object IQUtils {
     // Check if we can apply the leading space relaxation
     val textLeadingSpaces = countLeadingSpaces(text)
     val substringLeadingSpaces = countLeadingSpaces(substring)
-    
-    val (searchText, searchSubstring, offsetAdjustment) = 
+
+    val (searchText, searchSubstring, offsetAdjustment) =
       if (textLeadingSpaces > 0 && textLeadingSpaces == substringLeadingSpaces) {
         // Apply relaxation: trim the same number of leading spaces from both
         val trimmedText = text.substring(textLeadingSpaces)

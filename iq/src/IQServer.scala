@@ -677,7 +677,7 @@ class IQServer(port: Int = 8765) {
             ),
             "create_if_missing" -> Map(
               "type" -> "boolean",
-              "description" -> "Create file if it doesn't exist (default: true)"
+              "description" -> "Create file if it doesn't exist (default: false)"
             ),
             "view" -> Map(
               "type" -> "boolean",
@@ -1886,15 +1886,16 @@ class IQServer(port: Int = 8765) {
   }
 
   private def handleOpenFile(params: Map[String, Any], id: String): String = {
+    val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
+
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
-        IQUtils.autoCompleteFilePath(path.trim) match {
+        IQUtils.autoCompleteFilePath(path.trim, trackedOnly = false, allowNonexisting = createIfMissing) match {
           case Right(fullPath) => fullPath
           case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
         }
       case _ => return createErrorResponse(Some(id), -32602, "path parameter is required")
     }
-    val createIfMissing = params.getOrElse("create_if_missing", "true").toString.toBoolean
     val view = params.getOrElse("view", "true").toString.toBoolean
 
     Output.writeln(s"I/Q Server: Opening file: $filePath, create_if_missing: $createIfMissing, view: $view")
