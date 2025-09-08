@@ -497,6 +497,7 @@ class IQServer(port: Int = 8765) {
         case "read_file" => handleReadTheoryFile(params, id)
         case "write_file" => handleWriteTheoryFile(params, id)
         case "explore" => handleExplore(params, id)
+        case "save_file" => handleSaveFile(params, id)
         case _ =>
           Output.writeln(s"I/Q Server: Unknown tool name: '$toolName'")
           createErrorResponse(Some(id), -32601, s"Unknown tool: $toolName")
@@ -882,6 +883,19 @@ class IQServer(port: Int = 8765) {
           ),
           "required" -> List("query", "command_selection"),
           "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "save_file",
+        "description" -> "Save files in Isabelle/jEdit. If path is provided, saves that specific file (if open and modified). If no path provided, saves all modified files.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "Optional path to specific file to save. If not provided, saves all modified files."
+            )
+          )
         )
       )
     )
@@ -2881,6 +2895,93 @@ end"""
           "results" -> "",
           "message" -> s"Failed to execute exploration: ${ex.getMessage}"
         )
+    }
+  }
+
+  /**
+   * Handles the save_file tool request.
+   *
+   * Saves files in Isabelle/jEdit. If path is provided, saves that specific file (if open and modified).
+   * If no path provided, saves all modified files.
+   *
+   * @param params The tool parameters
+   * @param id The request ID
+   * @return A JSON-RPC response string
+   */
+  private def handleSaveFile(params: Map[String, Any], id: String): String = {
+    try {
+      Output.writeln(s"I/Q Server: Starting handleSaveFile with params: $params")
+
+      val pathOpt = params.get("path").map(_.toString.trim).filter(_.nonEmpty)
+
+      pathOpt match {
+        case Some(path) =>
+          // Save specific file
+          val filePath = IQUtils.autoCompleteFilePath(path, trackedOnly = false, allowNonexisting = false) match {
+            case Right(fullPath) => fullPath
+            case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+          }
+
+          // Try to find the buffer for this file
+          getBufferModel(filePath) match {
+            case Some((_, buffer_model)) =>
+              val buffer = buffer_model.buffer
+              val savedFiles = if (buffer.isDirty()) {
+                GUI_Thread.now {
+                  buffer.save(null, null)
+                }
+                Output.writeln(s"I/Q Server: Saved file: $filePath")
+                List(filePath)
+              } else {
+                Output.writeln(s"I/Q Server: File not modified, no save needed: $filePath")
+                List.empty[String]
+              }
+
+              val responseData = Map(
+                "jsonrpc" -> "2.0",
+                "id" -> id,
+                "result" -> Map("saved_files" -> savedFiles)
+              )
+              JSON.Format(responseData)
+
+            case None =>
+              Output.writeln(s"I/Q Server: File exists but not open in jEdit, no action needed: $filePath")
+              val responseData = Map(
+                "jsonrpc" -> "2.0",
+                "id" -> id,
+                "result" -> Map("saved_files" -> List.empty[String])
+              )
+              JSON.Format(responseData)
+          }
+
+        case None =>
+          // Save all modified files
+          val savedFiles = GUI_Thread.now {
+            val views = jEdit.getViews()
+            val allBuffers = views.flatMap(_.getBuffers()).distinct
+            val modifiedBuffers = allBuffers.filter(_.isDirty())
+
+            modifiedBuffers.foreach { buffer =>
+              buffer.save(null, null)
+              Output.writeln(s"I/Q Server: Saved modified file: ${buffer.getPath()}")
+            }
+
+            modifiedBuffers.map(_.getPath()).toList
+          }
+
+          val responseData = Map(
+            "jsonrpc" -> "2.0",
+            "id" -> id,
+            "result" -> Map("saved_files" -> savedFiles)
+          )
+          JSON.Format(responseData)
+      }
+
+    } catch {
+      case ex: Exception =>
+        Output.writeln(s"I/Q Server: Save file error: ${ex.getMessage}")
+        ex.printStackTrace()
+        createErrorResponse(Some(id), -32603, s"Save file error: ${ex.getMessage}")
     }
   }
 }
