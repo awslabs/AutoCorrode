@@ -448,7 +448,7 @@ class IQServer(port: Int = 8765) {
    * @param json The parsed JSON-RPC request
    * @return A tuple containing (method, id) where id is None for notifications
    */
-  private def extractMethodAndId(json: JSON.T): (String, Option[String]) = {
+  private def extractMethodAndId(json: JSON.T): (String, Option[Any]) = {
     json match {
       case JSON.Object(obj) =>
         val method = obj.get("method") match {
@@ -457,12 +457,9 @@ class IQServer(port: Int = 8765) {
           case None => ""
         }
 
-        val id = obj.get("id") match {
-          case Some(s: String) => Some(s)
-          case Some(n: Number) => Some(n.toString)
-          case Some(other) => Some(other.toString)
-          case None => None
-        }
+        // Preserve request ID, whatever type it may have
+        // (None, Some(String), Some(Int), Some(Double), ...)
+        val id = obj.get("id")
 
         (method, id)
 
@@ -481,7 +478,7 @@ class IQServer(port: Int = 8765) {
    * @param id The request ID
    * @return A JSON-RPC response string
    */
-  private def handleToolCallFromJson(json: JSON.T, id: String): String = {
+  private def handleToolCallFromJson(json: JSON.T, id: Any): String = {
     try {
       Output.writeln(s"I/Q Server: Raw JSON for tool call: $json")
 
@@ -568,11 +565,11 @@ class IQServer(port: Int = 8765) {
    * @param id The request ID
    * @return A JSON-RPC response string
    */
-  private def createInitializeResponse(id: String): String = {
+  private def createInitializeResponse(id: Any): String = {
     val timestamp = java.time.Instant.now().toString
     val responseData = Map(
       "jsonrpc" -> "2.0",
-      "id" -> (if (id.nonEmpty) id else null),
+      "id" -> id,
       "result" -> Map(
         "protocolVersion" -> "2024-11-05",
         "capabilities" -> Map(
@@ -597,7 +594,7 @@ class IQServer(port: Int = 8765) {
    * @param id The request ID
    * @return A JSON-RPC response string containing the list of available tools
    */
-  private def createToolsListResponse(id: String): String = {
+  private def createToolsListResponse(id: Any): String = {
     val tools = List(
       Map(
         "name" -> "list_files",
@@ -902,7 +899,7 @@ class IQServer(port: Int = 8765) {
 
     val responseData = Map(
       "jsonrpc" -> "2.0",
-      "id" -> (if (id.nonEmpty) id else null),
+      "id" -> id,
       "result" -> Map(
         "tools" -> tools
       )
@@ -920,7 +917,7 @@ class IQServer(port: Int = 8765) {
    * @param id The request ID
    * @return A JSON-RPC response string containing the list of files
    */
-  private def handleListFiles(params: Map[String, Any], id: String): String = {
+  private def handleListFiles(params: Map[String, Any], id: Any): String = {
     try {
       Output.writeln(s"I/Q Server: Starting handleListFiles with params: $params")
 
@@ -1054,7 +1051,7 @@ class IQServer(port: Int = 8765) {
 
       val responseData = Map(
         "jsonrpc" -> "2.0",
-        "id" -> (if (id.nonEmpty) id else null),
+        "id" -> id,
         "result" -> Map(
           "files" -> sortedFiles,
           "total_count" -> sortedFiles.length,
@@ -1340,7 +1337,7 @@ class IQServer(port: Int = 8765) {
     Left((commandsData, summary))
   }
 
-  private def handleGetCommand(params: Map[String, Any], id: String): String = {
+  private def handleGetCommand(params: Map[String, Any], id: Any): String = {
     Output.writeln("handleGetCommand")
     try {
       val (commandsData, summary) = handleGetCommandCore(params) match {
@@ -1589,7 +1586,7 @@ class IQServer(port: Int = 8765) {
     }
   }
 
-  private def handleGetDocumentInfo(params: Map[String, Any], id: String): String = {
+  private def handleGetDocumentInfo(params: Map[String, Any], id: Any): String = {
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
         IQUtils.autoCompleteFilePath(path.trim) match {
@@ -1652,7 +1649,7 @@ class IQServer(port: Int = 8765) {
       case Some(info) =>
         val responseData = Map(
           "jsonrpc" -> "2.0",
-          "id" -> (if (id.nonEmpty) id else null),
+          "id" -> id,
           "result" -> info
         )
         JSON.Format(responseData)
@@ -1940,7 +1937,7 @@ class IQServer(port: Int = 8765) {
     Some(result.toMap)
   }
 
-  private def handleOpenFile(params: Map[String, Any], id: String): String = {
+  private def handleOpenFile(params: Map[String, Any], id: Any): String = {
     val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
 
     val filePath = params.getOrElse("path", "").toString match {
@@ -1969,7 +1966,7 @@ class IQServer(port: Int = 8765) {
 
       val responseData = Map(
         "jsonrpc" -> "2.0",
-        "id" -> (if (id.nonEmpty) id else null),
+        "id" -> id,
         "result" -> Map(
           "path" -> result("path"),
           "created" -> result("created").toBoolean,
@@ -1986,7 +1983,7 @@ class IQServer(port: Int = 8765) {
     }
   }
 
-  private def handleCreateFile(params: Map[String, Any], id: String): String = {
+  private def handleCreateFile(params: Map[String, Any], id: Any): String = {
     val filePath = params.getOrElse("path", "").toString
     val content = params.getOrElse("content", "").toString
     val overwriteIfExists = params.getOrElse("overwrite_if_exists", "false").toString.toBoolean
@@ -2009,7 +2006,7 @@ class IQServer(port: Int = 8765) {
 
       val responseData = Map(
         "jsonrpc" -> "2.0",
-        "id" -> (if (id.nonEmpty) id else null),
+        "id" -> id,
         "result" -> Map(
           "path" -> result("path"),
           "created" -> result("created").toBoolean,
@@ -2027,7 +2024,7 @@ class IQServer(port: Int = 8765) {
     }
   }
 
-  private def handleReadTheoryFile(params: Map[String, Any], id: String): String = {
+  private def handleReadTheoryFile(params: Map[String, Any], id: Any): String = {
     try {
       val filePath = params.getOrElse("path", "").toString match {
         case path if path.trim.nonEmpty =>
@@ -2101,7 +2098,7 @@ class IQServer(port: Int = 8765) {
     }
   }
 
-  private def handleWriteTheoryFile(params: Map[String, Any], id: String): String = {
+  private def handleWriteTheoryFile(params: Map[String, Any], id: Any): String = {
     // Parameter extraction
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
@@ -2496,7 +2493,7 @@ end"""
     Some(matches)
   }
 
-  private def createErrorResponse(id: Option[String], code: Int, message: String): String = {
+  private def createErrorResponse(id: Option[Any], code: Int, message: String): String = {
     val responseData = Map(
       "jsonrpc" -> "2.0",
       "id" -> id.orNull,
@@ -2517,7 +2514,7 @@ end"""
    * @param id The request ID
    * @return A JSON-RPC response string
    */
-  private def handleExplore(params: Map[String, Any], id: String): String = {
+  private def handleExplore(params: Map[String, Any], id: Any): String = {
     try {
       // Extract parameters
       val target = params.get("command_selection").map(_.toString).getOrElse("")
@@ -2908,7 +2905,7 @@ end"""
    * @param id The request ID
    * @return A JSON-RPC response string
    */
-  private def handleSaveFile(params: Map[String, Any], id: String): String = {
+  private def handleSaveFile(params: Map[String, Any], id: Any): String = {
     try {
       Output.writeln(s"I/Q Server: Starting handleSaveFile with params: $params")
 
