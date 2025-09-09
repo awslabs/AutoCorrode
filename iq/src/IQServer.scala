@@ -481,7 +481,8 @@ class IQServer(port: Int = 8765) {
    * @return Wrapped result data
    */
   private def wrapToolCallResult(result: Map[String, Any]): Map[String, Any] = {
-    result
+    val serializedJson = JSON.Format(result)
+    Map("content" -> List(Map("type" -> "text", "text" -> serializedJson)))
   }
 
   /**
