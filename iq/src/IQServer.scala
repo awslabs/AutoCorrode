@@ -352,7 +352,7 @@ class IQServer(port: Int = 8765) {
           }
         } catch {
           case ex: Exception =>
-            val errorResponse = createErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}")
+            val errorResponse = formatErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}")
             writer.println(errorResponse)
         }
       }
@@ -392,13 +392,18 @@ class IQServer(port: Int = 8765) {
 
       id match {
         case Some(requestId) =>
-          method match {
-            case "initialize" => Some(createInitializeResponse(requestId))
-            case "tools/list" => Some(createToolsListResponse(requestId))
-            case "tools/call" => Some(handleToolCallFromJson(json, requestId))
+          val result = method match {
+            case "initialize" => createInitializeResult()
+            case "tools/list" => createToolsListResult()
+            case "tools/call" => handleToolCallFromJson(json)
             case _ =>
               Output.writeln(s"I/Q Server: Unknown method '$method'")
-              Some(createErrorResponse(Some(requestId), -32601, s"Method not found: $method"))
+              Left(s"Method not found: $method")
+          }
+
+          result match {
+            case Right(data) => Some(formatSuccessResponse(requestId, data))
+            case Left(error) => Some(formatErrorResponse(Some(requestId), -32601, error))
           }
         /* From https://www.jsonrpc.org/specification:
          *  "A Notification is a Request object without an "id" member.
@@ -423,7 +428,7 @@ class IQServer(port: Int = 8765) {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error processing request: ${ex.getMessage}")
         ex.printStackTrace()
-        Some(createErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}"))
+        Some(formatErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}"))
     }
   }
 
@@ -470,40 +475,51 @@ class IQServer(port: Int = 8765) {
   }
 
   /**
+   * Wraps tool call results for JSON-RPC response.
+   *
+   * @param result The result data from a tool handler
+   * @return Wrapped result data
+   */
+  private def wrapToolCallResult(result: Map[String, Any]): Map[String, Any] = {
+    result
+  }
+
+  /**
    * Handles a tools/call request.
    *
    * Extracts the tool name and parameters from the request and dispatches to the appropriate handler.
    *
    * @param json The parsed JSON-RPC request
-   * @param id The request ID
-   * @return A JSON-RPC response string
+   * @return Either error message or result data
    */
-  private def handleToolCallFromJson(json: JSON.T, id: Any): String = {
+  private def handleToolCallFromJson(json: JSON.T): Either[String, Map[String, Any]] = {
     try {
       Output.writeln(s"I/Q Server: Raw JSON for tool call: $json")
 
       val (toolName, params) = extractToolAndParams(json)
       Output.writeln(s"I/Q Server: Extracted tool='$toolName', params=$params")
 
-      toolName match {
-        case "list_files" => handleListFiles(params, id)
-        case "get_command_info" => handleGetCommand(params, id)
-        case "get_document_info" => handleGetDocumentInfo(params, id)
-        case "open_file" => handleOpenFile(params, id)
-        case "create_file" => handleCreateFile(params, id)
-        case "read_file" => handleReadTheoryFile(params, id)
-        case "write_file" => handleWriteTheoryFile(params, id)
-        case "explore" => handleExplore(params, id)
-        case "save_file" => handleSaveFile(params, id)
+      val result = toolName match {
+        case "list_files" => handleListFiles(params)
+        case "get_command_info" => handleGetCommand(params)
+        case "get_document_info" => handleGetDocumentInfo(params)
+        case "open_file" => handleOpenFile(params)
+        case "create_file" => handleCreateFile(params)
+        case "read_file" => handleReadTheoryFile(params)
+        case "write_file" => handleWriteTheoryFile(params)
+        case "explore" => handleExplore(params)
+        case "save_file" => handleSaveFile(params)
         case _ =>
           Output.writeln(s"I/Q Server: Unknown tool name: '$toolName'")
-          createErrorResponse(Some(id), -32601, s"Unknown tool: $toolName")
+          Left(s"Unknown tool: $toolName")
       }
+
+      result.map(wrapToolCallResult)
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Tool execution error: ${ex.getMessage}")
         ex.printStackTrace()
-        createErrorResponse(Some(id), -32603, s"Tool execution error: ${ex.getMessage}")
+        Left(s"Tool execution error: ${ex.getMessage}")
     }
   }
 
@@ -557,44 +573,68 @@ class IQServer(port: Int = 8765) {
   }
 
   /**
-   * Creates a response for the initialize method.
-   *
-   * The initialize method is called by clients to establish a connection and
-   * negotiate capabilities.
+   * Formats a successful JSON-RPC response.
    *
    * @param id The request ID
+   * @param result The result data
    * @return A JSON-RPC response string
    */
-  private def createInitializeResponse(id: Any): String = {
-    val timestamp = java.time.Instant.now().toString
+  private def formatSuccessResponse(id: Any, result: Map[String, Any]): String = {
     val responseData = Map(
       "jsonrpc" -> "2.0",
       "id" -> id,
-      "result" -> Map(
-        "protocolVersion" -> "2024-11-05",
-        "capabilities" -> Map(
-          "tools" -> Map.empty[String, Any],
-          "resources" -> Map.empty[String, Any]
-        ),
-        "serverInfo" -> Map(
-          "name" -> "isabelle-mcp-server",
-          "version" -> s"1.0.0-restored-$timestamp"
-        )
+      "result" -> result
+    )
+    JSON.Format(responseData)
+  }
+
+  /**
+   * Formats an error JSON-RPC response.
+   *
+   * @param id The request ID (can be None for parse errors)
+   * @param code The error code
+   * @param message The error message
+   * @return A JSON-RPC response string
+   */
+  private def formatErrorResponse(id: Option[Any], code: Int, message: String): String = {
+    val responseData = Map(
+      "jsonrpc" -> "2.0",
+      "id" -> id.orNull,
+      "error" -> Map(
+        "code" -> code,
+        "message" -> message
       )
     )
     JSON.Format(responseData)
   }
 
   /**
-   * Creates a response for the tools/list method.
+   * Creates result data for the initialize method.
    *
-   * The tools/list method is called by clients to discover available tools
-   * and their input schemas.
-   *
-   * @param id The request ID
-   * @return A JSON-RPC response string containing the list of available tools
+   * @return Either error message or result data
    */
-  private def createToolsListResponse(id: Any): String = {
+  private def createInitializeResult(): Either[String, Map[String, Any]] = {
+    val timestamp = java.time.Instant.now().toString
+    val result = Map(
+      "protocolVersion" -> "2024-11-05",
+      "capabilities" -> Map(
+        "tools" -> Map.empty[String, Any],
+        "resources" -> Map.empty[String, Any]
+      ),
+      "serverInfo" -> Map(
+        "name" -> "isabelle-mcp-server",
+        "version" -> s"1.0.0-restored-$timestamp"
+      )
+    )
+    Right(result)
+  }
+
+  /**
+   * Creates result data for the tools/list method.
+   *
+   * @return Either error message or result data
+   */
+  private def createToolsListResult(): Either[String, Map[String, Any]] = {
     val tools = List(
       Map(
         "name" -> "list_files",
@@ -897,14 +937,8 @@ class IQServer(port: Int = 8765) {
       )
     )
 
-    val responseData = Map(
-      "jsonrpc" -> "2.0",
-      "id" -> id,
-      "result" -> Map(
-        "tools" -> tools
-      )
-    )
-    JSON.Format(responseData)
+    val result = Map("tools" -> tools)
+    Right(result)
   }
 
   /**
@@ -914,10 +948,9 @@ class IQServer(port: Int = 8765) {
    * Supports filtering by open status and theory status, and sorting by various criteria.
    *
    * @param params The tool parameters
-   * @param id The request ID
-   * @return A JSON-RPC response string containing the list of files
+   * @return Either error message or result data
    */
-  private def handleListFiles(params: Map[String, Any], id: Any): String = {
+  private def handleListFiles(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     try {
       Output.writeln(s"I/Q Server: Starting handleListFiles with params: $params")
 
@@ -1049,24 +1082,20 @@ class IQServer(port: Int = 8765) {
 
       Output.writeln(s"I/Q Server: Final sorted files count: ${sortedFiles.length}")
 
-      val responseData = Map(
-        "jsonrpc" -> "2.0",
-        "id" -> id,
-        "result" -> Map(
-          "files" -> sortedFiles,
-          "total_count" -> sortedFiles.length,
-          "open_count" -> sortedFiles.count(f => f("is_open").asInstanceOf[Boolean]),
-          "theory_count" -> sortedFiles.count(f => f("is_theory").asInstanceOf[Boolean])
-        )
+      val result = Map(
+        "files" -> sortedFiles,
+        "total_count" -> sortedFiles.length,
+        "open_count" -> sortedFiles.count(f => f("is_open").asInstanceOf[Boolean]),
+        "theory_count" -> sortedFiles.count(f => f("is_theory").asInstanceOf[Boolean])
       )
 
       Output.writeln(s"I/Q Server: Returning response with ${sortedFiles.length} files")
-      JSON.Format(responseData)
+      Right(result)
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error listing files: ${ex.getMessage}")
         ex.printStackTrace()
-        createErrorResponse(Some(id), -32603, s"Error listing files: ${ex.getMessage}")
+        Left(s"Error listing files: ${ex.getMessage}")
     }
   }
 
@@ -1337,12 +1366,12 @@ class IQServer(port: Int = 8765) {
     Left((commandsData, summary))
   }
 
-  private def handleGetCommand(params: Map[String, Any], id: Any): String = {
+  private def handleGetCommand(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     Output.writeln("handleGetCommand")
     try {
       val (commandsData, summary) = handleGetCommandCore(params) match {
         case Left (c,s) => (c,s)
-        case Right (err) => return createErrorResponse(Some(id), -32603, s"handleGetCommandCore failed with error: $err")
+        case Right (err) => return Left(s"handleGetCommandCore failed with error: $err")
       }
 
       // Check include_results parameter (default: false)
@@ -1351,23 +1380,18 @@ class IQServer(port: Int = 8765) {
         case _ => false
       }
 
-      val responseData = Map(
-        "jsonrpc" -> "2.0",
-        "id" -> id,
-        "result" -> Map(
-          "content" -> commandsData,
-          "summary" -> summary
-        )
+      val result = Map(
+        "content" -> commandsData,
+        "summary" -> summary
       )
 
       if (includeResults) {
         // Original behavior: include results in response
-        val jsonResponse = JSON.Format(responseData)
-        Output.writeln(s"I/Q Server: Generated command response with ${commandsData.length} commands, length ${jsonResponse.length} chars")
-        jsonResponse
+        Output.writeln(s"I/Q Server: Generated command response with ${commandsData.length} commands")
+        Right(result)
       } else {
         // New behavior: write full results to temp file and return trimmed response
-        val fullJsonResponse = JSON.Format(responseData)
+        val fullJsonResponse = JSON.Format(Map("result" -> result))
 
         // Create temporary file and write full response
         val tempFile = Files.createTempFile("iq_command_results_", ".json")
@@ -1378,27 +1402,22 @@ class IQServer(port: Int = 8765) {
           command - "results_text"
         }
 
-        val trimmedResponseData = Map(
-          "jsonrpc" -> "2.0",
-          "id" -> id,
-          "result" -> Map(
-            "content" -> trimmedCommandsData,
-            "summary" -> summary,
-            "full_results_file" -> tempFile.toString
-          )
+        val trimmedResult = Map(
+          "content" -> trimmedCommandsData,
+          "summary" -> summary,
+          "full_results_file" -> tempFile.toString
         )
 
-        val trimmedJsonResponse = JSON.Format(trimmedResponseData)
         Output.writeln(s"I/Q Server: Generated trimmed command response with ${commandsData.length} commands, full results written to ${tempFile.toString}")
-        trimmedJsonResponse
+        Right(trimmedResult)
       }
     } catch {
       case ex: RuntimeException =>
-        createErrorResponse(Some(id), -32603, ex.getMessage)
+        Left(ex.getMessage)
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Unexpected error in handleGetCommand: ${ex.getMessage}")
         ex.printStackTrace()
-        createErrorResponse(Some(id), -32603, s"Internal error: ${ex.getMessage}")
+        Left(s"Internal error: ${ex.getMessage}")
     }
   }
 
@@ -1586,14 +1605,14 @@ class IQServer(port: Int = 8765) {
     }
   }
 
-  private def handleGetDocumentInfo(params: Map[String, Any], id: Any): String = {
+  private def handleGetDocumentInfo(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
         IQUtils.autoCompleteFilePath(path.trim) match {
           case Right(fullPath) => fullPath
-          case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+          case Left(errorMsg) => return Left(errorMsg)
         }
-      case _ => return createErrorResponse(Some(id), -32602, "Missing required parameter: path")
+      case _ => return Left("Missing required parameter: path")
     }
 
     val includeErrors = params.get("include_errors") match {
@@ -1634,7 +1653,7 @@ class IQServer(port: Int = 8765) {
     if (waitUntilProcessed) {
       val model = GUI_Thread.now { getFileContentAndModel(filePath) } match {
         case (Some(_), Some(model)) => model
-        case _ => return createErrorResponse(Some(id), -32603, s"Could not get document information for file: $filePath")
+        case _ => return Left(s"Could not get document information for file: $filePath")
       }
 
       Output.writeln(s"I/Q Server: Requesting theory completion for: ${model.node_name}")
@@ -1646,15 +1665,8 @@ class IQServer(port: Int = 8765) {
     }
 
     documentInfo match {
-      case Some(info) =>
-        val responseData = Map(
-          "jsonrpc" -> "2.0",
-          "id" -> id,
-          "result" -> info
-        )
-        JSON.Format(responseData)
-      case None =>
-        createErrorResponse(Some(id), -32603, s"Could not get document information for file: $filePath")
+      case Some(info) => Right(info)
+      case None => Left(s"Could not get document information for file: $filePath")
     }
   }
 
@@ -1937,16 +1949,16 @@ class IQServer(port: Int = 8765) {
     Some(result.toMap)
   }
 
-  private def handleOpenFile(params: Map[String, Any], id: Any): String = {
+  private def handleOpenFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
 
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
         IQUtils.autoCompleteFilePath(path.trim, trackedOnly = false, allowNonexisting = createIfMissing) match {
           case Right(fullPath) => fullPath
-          case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+          case Left(errorMsg) => return Left(errorMsg)
         }
-      case _ => return createErrorResponse(Some(id), -32602, "path parameter is required")
+      case _ => return Left("path parameter is required")
     }
     val view = params.getOrElse("view", "true").toString.toBoolean
 
@@ -1964,26 +1976,22 @@ class IQServer(port: Int = 8765) {
       // TODO: How do we make sure we don't return to the caller before
       // the file has been opened?
 
-      val responseData = Map(
-        "jsonrpc" -> "2.0",
-        "id" -> id,
-        "result" -> Map(
-          "path" -> result("path"),
-          "created" -> result("created").toBoolean,
-          "opened" -> result("opened").toBoolean,
-          "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
-          "message" -> "File opened successfully"
-        )
+      val response = Map(
+        "path" -> result("path"),
+        "created" -> result("created").toBoolean,
+        "opened" -> result("opened").toBoolean,
+        "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
+        "message" -> "File opened successfully"
       )
-      JSON.Format(responseData)
+      Right(response)
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error in handleOpenFile: ${ex.getMessage}")
-        createErrorResponse(Some(id), -32603, s"Error opening file: ${ex.getMessage}")
+        Left(s"Error opening file: ${ex.getMessage}")
     }
   }
 
-  private def handleCreateFile(params: Map[String, Any], id: Any): String = {
+  private def handleCreateFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     val filePath = params.getOrElse("path", "").toString
     val content = params.getOrElse("content", "").toString
     val overwriteIfExists = params.getOrElse("overwrite_if_exists", "false").toString.toBoolean
@@ -1992,7 +2000,7 @@ class IQServer(port: Int = 8765) {
     Output.writeln(s"I/Q Server: Creating file: $filePath, overwrite_if_exists: $overwriteIfExists, view: $view")
 
     if (filePath.isEmpty) {
-      return createErrorResponse(Some(id), -32602, "path parameter is required")
+      return Left("path parameter is required")
     }
 
     try {
@@ -2004,35 +2012,31 @@ class IQServer(port: Int = 8765) {
         }
       }
 
-      val responseData = Map(
-        "jsonrpc" -> "2.0",
-        "id" -> id,
-        "result" -> Map(
-          "path" -> result("path"),
-          "created" -> result("created").toBoolean,
-          "overwritten" -> result("overwritten").toBoolean,
-          "opened" -> result("opened").toBoolean,
-          "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
-          "message" -> "File created successfully"
-        )
+      val response = Map(
+        "path" -> result("path"),
+        "created" -> result("created").toBoolean,
+        "overwritten" -> result("overwritten").toBoolean,
+        "opened" -> result("opened").toBoolean,
+        "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
+        "message" -> "File created successfully"
       )
-      JSON.Format(responseData)
+      Right(response)
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error in handleCreateFile: ${ex.getMessage}")
-        createErrorResponse(Some(id), -32603, s"Error creating file: ${ex.getMessage}")
+        Left(s"Error creating file: ${ex.getMessage}")
     }
   }
 
-  private def handleReadTheoryFile(params: Map[String, Any], id: Any): String = {
+  private def handleReadTheoryFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     try {
       val filePath = params.getOrElse("path", "").toString match {
         case path if path.trim.nonEmpty =>
           IQUtils.autoCompleteFilePath(path.trim) match {
             case Right(fullPath) => fullPath
-            case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+            case Left(errorMsg) => return Left(errorMsg)
           }
-        case _ => return createErrorResponse(Some(id), -32602, "path parameter is required")
+        case _ => return Left("path parameter is required")
       }
 
       Output.writeln(s"I/Q Server: Params $params")
@@ -2075,38 +2079,31 @@ class IQServer(port: Int = 8765) {
               GUI_Thread.now {
                 searchTheoryFile(filePath, pattern, contextLines)
               }
-            case _ => return createErrorResponse(Some(id), -32603, s"`pattern` argument mandatory for mode 'Pattern'")
+            case _ => return Left("`pattern` argument mandatory for mode 'Pattern'")
           }
-        case _ => return createErrorResponse(Some(id), -32603, s"Unknown mode")
+        case _ => return Left("Unknown mode")
       }
 
       result match {
-        case Some(content) =>
-          val responseData = Map(
-            "jsonrpc" -> "2.0",
-            "id" -> id,
-            "result" -> Map("content" -> content)
-          )
-          JSON.Format(responseData)
-        case None =>
-          createErrorResponse(Some(id), -32603, s"Failed to read theory file: $filePath")
+        case Some(content) => Right(Map("content" -> content))
+        case None => Left(s"Failed to read theory file: $filePath")
       }
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error in handleReadTheoryFile: ${ex.getMessage}")
-        createErrorResponse(Some(id), -32603, s"Error reading theory file: ${ex.getMessage}")
+        Left(s"Error reading theory file: ${ex.getMessage}")
     }
   }
 
-  private def handleWriteTheoryFile(params: Map[String, Any], id: Any): String = {
+  private def handleWriteTheoryFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     // Parameter extraction
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
         IQUtils.autoCompleteFilePath(path.trim) match {
           case Right(fullPath) => fullPath
-          case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+          case Left(errorMsg) => return Left(errorMsg)
         }
-      case _ => return createErrorResponse(Some(id), -32602, "path parameter is required")
+      case _ => return Left("path parameter is required")
     }
 
     val waitUntilProcessed = params.get("wait_until_processed") match {
@@ -2116,7 +2113,7 @@ class IQServer(port: Int = 8765) {
 
     val command = params.getOrElse("command", "").toString
     if (command.isEmpty) {
-      return createErrorResponse(Some(id), -32602, "command parameter is required")
+      return Left("command parameter is required")
     }
 
     val timeoutMs = params.get("timeout") match {
@@ -2133,24 +2130,24 @@ class IQServer(port: Int = 8765) {
     // We currently require that the file is opened in jEdit
     val (content, buffer_model) = getBufferModel(filePath) match {
       case Some (content, model) => (content, model)
-      case _ => return createErrorResponse(Some(id), -32602, s"$filePath is not opened in jEdit")
+      case _ => return Left(s"$filePath is not opened in jEdit")
     }
 
     val (startOffset, endOffset, text): (Int, Int, String) = command match {
       case "line" =>
         val new_str: String = params.get("new_str") match {
           case Some(s: String) => s
-          case _ => return createErrorResponse(Some(id), -32602, "new_str parameter is required for command 'str_replace'")
+          case _ => return Left("new_str parameter is required for command 'str_replace'")
         }
 
         val startLine: Int = params.get("start_line") match {
           case Some(line: Int) => line
-          case _ => return createErrorResponse(Some(id), -32602, "start_line parameter is required for command 'line'")
+          case _ => return Left("start_line parameter is required for command 'line'")
         }
 
         val endLine: Int = params.get("end_line") match {
           case Some(line: Int) => line
-          case _ => return createErrorResponse(Some(id), -32602, "end_line parameter is required for command 'line'")
+          case _ => return Left("end_line parameter is required for command 'line'")
         }
 
         val startOffset = lineNumberToOffset(content, startLine)
@@ -2161,22 +2158,22 @@ class IQServer(port: Int = 8765) {
       case "str_replace" =>
         val old_str: String = params.get("old_str") match {
           case Some(s: String) => s
-          case _ => return createErrorResponse(Some(id), -32602, "old_str parameter is required for command 'str_replace'")
+          case _ => return Left("old_str parameter is required for command 'str_replace'")
         }
 
         val new_str: String = params.get("new_str") match {
           case Some(s: String) => s
-          case _ => return createErrorResponse(Some(id), -32602, "new_str parameter is required for command 'str_replace'")
+          case _ => return Left("new_str parameter is required for command 'str_replace'")
         }
 
         val startOffset = IQUtils.findUniqueSubstringOffset(content, old_str) match {
           case Right(offset) => offset
           case Left(IQUtils.SubstringNotFound) =>
-            return createErrorResponse(Some(id), -32602, s"Substring not found: '$old_str'")
+            return Left(s"Substring not found: '$old_str'")
           case Left(IQUtils.SubstringNotUnique) =>
-            return createErrorResponse(Some(id), -32602, s"Substring appears multiple times: '$old_str'")
+            return Left(s"Substring appears multiple times: '$old_str'")
           case Left(IQUtils.SubstringEmpty) =>
-            return createErrorResponse(Some(id), -32602, "old_str parameter cannot be empty")
+            return Left("old_str parameter cannot be empty")
         }
 
         val endOffset = startOffset + old_str.length
@@ -2186,18 +2183,18 @@ class IQServer(port: Int = 8765) {
       case "insert" =>
         val new_str: String = params.get("new_str") match {
           case Some(s: String) => s
-          case _ => return createErrorResponse(Some(id), -32602, "new_str parameter is required for command 'insert'")
+          case _ => return Left("new_str parameter is required for command 'insert'")
         }
 
         val insertLine: Int = params.get("insert_line") match {
           case Some(line: Int) => line
-          case _ => return createErrorResponse(Some(id), -32602, "insert_line parameter is required for command 'insert'")
+          case _ => return Left("insert_line parameter is required for command 'insert'")
         }
 
         val startOffset = lineNumberToOffset(content, insertLine + 1) // +1 because we insert _after_ the line
         (startOffset, startOffset, new_str)
 
-      case _ => return createErrorResponse(Some(id), -32602, s"command $command not implemented")
+      case _ => return Left(s"command $command not implemented")
     }
 
     Output.writeln(s"I/Q Server: Writing to theory file: $filePath (waitUntilProcessed: $waitUntilProcessed, timeout: ${timeoutMs.getOrElse(0)}ms)")
@@ -2230,15 +2227,10 @@ class IQServer(port: Int = 8765) {
     // Call get_command internally
     val (commands, summary) = handleGetCommandCore(getCommandParams.toMap) match {
       case Left (c,s) => (c,s)
-      case Right (err) => return createErrorResponse(Some(id), -32602, f"handleGetCommandCore failed with $err")
+      case Right (err) => return Left(f"handleGetCommandCore failed with $err")
     }
 
-    val responseData = Map(
-      "jsonrpc" -> "2.0",
-      "id" -> id,
-      "result" -> Map("commands" -> commands, "summary" -> summary)
-    )
-    JSON.Format(responseData)
+    Right(Map("commands" -> commands, "summary" -> summary))
   }
 
   private def openFileCommon(filePath: String, createIfMissing: Boolean, inView: Boolean): Map[String, String] = {
@@ -2493,17 +2485,7 @@ end"""
     Some(matches)
   }
 
-  private def createErrorResponse(id: Option[Any], code: Int, message: String): String = {
-    val responseData = Map(
-      "jsonrpc" -> "2.0",
-      "id" -> id.orNull,
-      "error" -> Map(
-        "code" -> code,
-        "message" -> message
-      )
-    )
-    JSON.Format(responseData)
-  }
+
 
   /**
    * Handles the explore tool request.
@@ -2511,10 +2493,9 @@ end"""
    * Applies Isabelle exploration queries to commands, similar to I/Q Explore functionality.
    *
    * @param params The tool parameters
-   * @param id The request ID
-   * @return A JSON-RPC response string
+   * @return Either error message or result data
    */
-  private def handleExplore(params: Map[String, Any], id: Any): String = {
+  private def handleExplore(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     try {
       // Extract parameters
       val target = params.get("command_selection").map(_.toString).getOrElse("")
@@ -2523,22 +2504,22 @@ end"""
 
       // Validate required parameters - arguments required except for sledgehammer
       if (target.isEmpty || query.isEmpty) {
-        return createErrorResponse(Some(id), -32602, "Missing required parameters: target, query")
+        return Left("Missing required parameters: target, query")
       }
 
       // Arguments are required for proof and find_theorems, optional for sledgehammer
       if (arguments.isEmpty && (query == "proof" || query == "find_theorems")) {
-        return createErrorResponse(Some(id), -32602, s"Arguments are required for query type '$query'")
+        return Left(s"Arguments are required for query type '$query'")
       }
 
       // Validate target type
       if (!List("current", "file_offset", "file_pattern").contains(target)) {
-        return createErrorResponse(Some(id), -32602, s"Invalid target: $target. Must be 'current', 'file_offset', or 'file_pattern'")
+        return Left(s"Invalid target: $target. Must be 'current', 'file_offset', or 'file_pattern'")
       }
 
       // Validate query type
       if (!List("proof", "sledgehammer", "find_theorems").contains(query)) {
-        return createErrorResponse(Some(id), -32602, s"Invalid query: $query. Must be 'proof', 'sledgehammer', or 'find_theorems'")
+        return Left(s"Invalid query: $query. Must be 'proof', 'sledgehammer', or 'find_theorems'")
       }
 
       // Extract file-related parameters for file_offset and file_pattern targets
@@ -2546,7 +2527,7 @@ end"""
         case Some(path) if path.trim.nonEmpty =>
           IQUtils.autoCompleteFilePath(path.trim) match {
             case Right(fullPath) => Some(fullPath)
-            case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+            case Left(errorMsg) => return Left(errorMsg)
           }
         case Some(_) => None
         case None => None
@@ -2562,11 +2543,11 @@ end"""
       target match {
         case "file_offset" =>
           if (filePath.isEmpty || offset.isEmpty) {
-            return createErrorResponse(Some(id), -32602, "file_offset target requires path and offset parameters")
+            return Left("file_offset target requires path and offset parameters")
           }
         case "file_pattern" =>
           if (filePath.isEmpty || pattern.isEmpty) {
-            return createErrorResponse(Some(id), -32602, "file_pattern target requires path and pattern parameters")
+            return Left("file_pattern target requires path and pattern parameters")
           }
         case _ => // current target needs no additional parameters
       }
@@ -2574,19 +2555,13 @@ end"""
       // Execute the exploration
       val result = executeExploration(target, filePath, offset, pattern, query, arguments)
 
-      // Create response
-      val responseData = Map(
-        "jsonrpc" -> "2.0",
-        "id" -> id,
-        "result" -> result
-      )
-      JSON.Format(responseData)
+      Right(result)
 
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error in handleExplore: ${ex.getMessage}")
         ex.printStackTrace()
-        createErrorResponse(Some(id), -32603, s"Internal error: ${ex.getMessage}")
+        Left(s"Internal error: ${ex.getMessage}")
     }
   }
 
@@ -2902,10 +2877,9 @@ end"""
    * If no path provided, saves all modified files.
    *
    * @param params The tool parameters
-   * @param id The request ID
-   * @return A JSON-RPC response string
+   * @return Either error message or result data
    */
-  private def handleSaveFile(params: Map[String, Any], id: Any): String = {
+  private def handleSaveFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     try {
       Output.writeln(s"I/Q Server: Starting handleSaveFile with params: $params")
 
@@ -2916,7 +2890,7 @@ end"""
           // Save specific file
           val filePath = IQUtils.autoCompleteFilePath(path, trackedOnly = false, allowNonexisting = false) match {
             case Right(fullPath) => fullPath
-            case Left(errorMsg) => return createErrorResponse(Some(id), -32602, errorMsg)
+            case Left(errorMsg) => return Left(errorMsg)
           }
 
           // Try to find the buffer for this file
@@ -2934,21 +2908,11 @@ end"""
                 List.empty[String]
               }
 
-              val responseData = Map(
-                "jsonrpc" -> "2.0",
-                "id" -> id,
-                "result" -> Map("saved_files" -> savedFiles)
-              )
-              JSON.Format(responseData)
+              Right(Map("saved_files" -> savedFiles))
 
             case None =>
               Output.writeln(s"I/Q Server: File exists but not open in jEdit, no action needed: $filePath")
-              val responseData = Map(
-                "jsonrpc" -> "2.0",
-                "id" -> id,
-                "result" -> Map("saved_files" -> List.empty[String])
-              )
-              JSON.Format(responseData)
+              Right(Map("saved_files" -> List.empty[String]))
           }
 
         case None =>
@@ -2966,19 +2930,14 @@ end"""
             modifiedBuffers.map(_.getPath()).toList
           }
 
-          val responseData = Map(
-            "jsonrpc" -> "2.0",
-            "id" -> id,
-            "result" -> Map("saved_files" -> savedFiles)
-          )
-          JSON.Format(responseData)
+          Right(Map("saved_files" -> savedFiles))
       }
 
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Save file error: ${ex.getMessage}")
         ex.printStackTrace()
-        createErrorResponse(Some(id), -32603, s"Save file error: ${ex.getMessage}")
+        Left(s"Save file error: ${ex.getMessage}")
     }
   }
 }
