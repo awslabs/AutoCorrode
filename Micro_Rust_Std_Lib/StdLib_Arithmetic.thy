@@ -108,6 +108,55 @@ lemma div_ceil_spec [crush_specs]:
   shows \<open>\<Gamma> ; div_ceil x y \<Turnstile>\<^sub>F div_ceil_contract x y\<close>
 by (crush_boot f: div_ceil_def contract: div_ceil_contract_def) (crush_base simp add: div_ceil_pure_def)
 
+section\<open>\<^verbatim>\<open>NonZeroU64\<close>\<close>
+
+typedef nonzero_u64 = \<open>{ w::64 word. w \<noteq> 0 }\<close>
+  morphisms nonzero_u64_project nonzero_u64_inject
+proof -
+  have \<open>1 \<in> { w::64 word. w \<noteq> 0 }\<close>
+    by simp
+  from this show ?thesis
+    by blast
+qed
+
+setup_lifting type_definition_nonzero_u64
+
+lift_definition nonzerou64_new_core :: \<open>64 word \<Rightarrow> nonzero_u64 option\<close> is
+  \<open>\<lambda>(n::64 word). if n = 0 then None else Some n\<close> by simp
+
+definition nonzerou64_new :: \<open>64 word \<Rightarrow> ('machine, nonzero_u64 option, 'abort, 'i, 'o) function_body\<close> where
+  \<open>nonzerou64_new n \<equiv> FunctionBody (if n = 0 then literal None else literal (Some (nonzero_u64_inject n)))\<close>
+notation_nano_rust_function nonzerou64_new ("NonZeroU64::new")
+
+definition nonzerou64_new_contract :: \<open>64 word \<Rightarrow>
+      ('machine::{sepalg}, nonzero_u64 option, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>nonzerou64_new_contract n \<equiv>
+     let pre  = \<top>;
+         post = \<lambda>res. \<langle>res = nonzerou64_new_core n\<rangle>
+      in make_function_contract pre post\<close>
+ucincl_auto nonzerou64_new_contract
+
+lemma nonzerou64_new_spec [crush_specs]:
+  shows \<open>\<Gamma> ; nonzerou64_new n \<Turnstile>\<^sub>F nonzerou64_new_contract n\<close>
+by (crush_boot f: nonzerou64_new_def contract: nonzerou64_new_contract_def) (crush_base simp add: nonzerou64_new_core_def)
+
+definition nonzerou64_get :: \<open>nonzero_u64 \<Rightarrow> ('machine, 64 word, 'abort, 'i, 'o) function_body\<close> where
+  \<open>nonzerou64_get self \<equiv> FunctionBody (literal (nonzero_u64_project self))\<close>
+
+definition nonzerou64_get_contract :: \<open>nonzero_u64 \<Rightarrow> ('machine::{sepalg}, 64 word, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>nonzerou64_get_contract nz \<equiv>
+     let pre  = \<top>;
+         post = \<lambda>res. \<langle>res = nonzero_u64_project nz\<rangle>
+      in make_function_contract pre post\<close>
+ucincl_auto nonzerou64_get_contract
+
+lemma nonzero_u64_get_spec [crush_specs]:
+  shows \<open>\<Gamma> ; nonzerou64_get nz \<Turnstile>\<^sub>F nonzerou64_get_contract nz\<close>
+  apply (crush_boot f: nonzerou64_get_def contract: nonzerou64_get_contract_def)
+  apply (cases nz)
+  apply (simp add: aentails_refl asepconj_False_True(2) asepconj_UNIV_idempotent wp_literalI)
+  done
+
 (*<*)
 end
 (*>*)
