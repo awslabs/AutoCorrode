@@ -36,20 +36,14 @@ definition any :: \<open>('s, 'v, 'abort, 'i prompt, 'o prompt_output) iterator 
      }
    \<rbrakk>\<close>
 
-context reference
-begin
-
-definition count :: \<open>('s, 'a, 'abort, 'i prompt, 'o prompt_output) iterator \<Rightarrow>
+definition count :: \<open>('s, 'v, 'abort, 'i prompt, 'o prompt_output) iterator \<Rightarrow>
       ('s, 64 word, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>count self \<equiv> FunctionBody \<lbrakk>
-     let mut count = 0_usize;
-
-     for x in self {
-       count = (*count) + 1;
-     };
-
-     *count
+    \<llangle>of_nat \<circ> length \<circ> iterator_thunks\<rrangle>\<^sub>1(self)
    \<rbrakk>\<close>
+
+context reference
+begin
 
 definition iter_mut ::
   \<open>('a, 'b, 'v list) ref \<Rightarrow> ('s, ('s, ('a, 'b, 'v) ref, 'abort, 'i prompt, 'o prompt_output) iterator, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
