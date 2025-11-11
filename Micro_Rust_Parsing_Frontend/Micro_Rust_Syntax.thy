@@ -297,14 +297,27 @@ syntax
   "_urust_if_let_else" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) } else { (_) }" [100,20,0,0]11)
 
-  "_urust_match"  :: "[urust, urust_match_branches] \<Rightarrow> urust"  ("match (_) {/ _/ }" [20, 10]20)
+  \<comment> \<open>We distinguish two types of matches. The first is the usual \<^verbatim>\<open>case\<close> on datatypes.
+      The second is more of a C-style \<^verbatim>\<open>switch\<close> statement via a match. It is hard to distinguish
+      these at first parsing time. Instead, we distinguish them via a \<^emph>\<open>parse AST translation\<close>. The
+      distinguishing property (on the AST level) is that the \<^verbatim>\<open>switch\<close>-style matches must contain
+      only numeral, other and \<^verbatim>\<open>id\<close> clauses, while the \<^verbatim>\<open>case\<close> style matches cannot contain numeral
+      clauses.
+     We add two syntax clauses which this AST translation will insert, which will then be used
+      as a handle for further translations of the syntax tree later on.\<close>
+  "_urust_match_case" :: "[urust, urust_match_branches] \<Rightarrow> urust"   ("match'_case (_) {/ _/ }" [20, 10]20)
+  "_urust_match_switch" :: "[urust, urust_match_branches] \<Rightarrow> urust"   ("match'_switch (_) {/ _/ }" [20, 10]20)
+  \<comment> \<open>This is \<^verbatim>\<open>temporary\<close> since we will disambiguate between two styles of matches\<close>
+  "_urust_temporary_match"  :: "[urust, urust_match_branches] \<Rightarrow> urust"  ("match (_) {/ _/ }" [20, 10]20)
   "_urust_match1" :: "[urust_match_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
   "_urust_match2" :: "[urust_match_branches, urust_match_branches] \<Rightarrow> urust_match_branches"  ("_/, _" [21, 20]20)
 
-  \<comment>\<open>Basic case patterns, restricted to constructor identifiers followed by a potentially empty list of argument identifiers\<close>
+  \<comment>\<open>Basic case patterns, restricted to constructor identifiers followed by a potentially empty list of argument identifiers, and numerals\<close>
   "_urust_match_pattern_other" :: \<open>urust_match_pattern\<close>
     ("'_")
   "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern\<close>
+    ("_" [1000]100)
+  "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_match_pattern\<close>
     ("_" [1000]100)
   "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern_args \<Rightarrow> urust_match_pattern\<close>
     ("_ '(_')"[1000,100]100)
@@ -663,6 +676,60 @@ parse_ast_translation\<open>
   ] end
 \<close>
 
+text\<open>Now we add an AST translation that converts \<^verbatim>\<open>_urust_temporary_match\<close> to the appropriate type
+of match, i.e. \<^verbatim>\<open>match_case\<close> or \<^verbatim>\<open>match_select\<close>s.\<close>
+parse_ast_translation\<open>
+  let
+    \<comment> \<open>Get the head constants of an AST node\<close>
+    fun pattern_ast_to_head_const (Ast.Appl (Ast.Constant c :: tl)) = c
+      | pattern_ast_to_head_const (Ast.Constant c) = c
+
+    \<comment> \<open>Get the list of patterns from a \<^verbatim>\<open>_urust_match2\<close> node in the AST\<close>
+    fun branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match2\<close>, left, right]) =
+          branches_ast_to_pattern_list left @ branches_ast_to_pattern_list right
+      | branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1\<close>, clause, _]) =
+          [pattern_ast_to_head_const clause]
+
+    \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_case\<close>?\<close>
+    fun pat_is_match_case pat = pat <> \<^syntax_const>\<open>_urust_match_pattern_num_const\<close>
+
+    \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_switch\<close>?\<close>
+    fun pat_is_match_switch pat =
+      (pat = \<^syntax_const>\<open>_urust_match_pattern_num_const\<close>)
+      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>)
+      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_other\<close>)
+
+    \<comment> \<open>Replace a \<^verbatim>\<open>_urust_temporary_match\<close> AST node with arguments \<^verbatim>\<open>[arg, branches]\<close> with the
+        appropriate match AST node\<close>
+    fun match_selector ctx [arg, branches] =
+      let
+        val patterns = branches_ast_to_pattern_list branches
+        val is_match_case = patterns |> List.all pat_is_match_case
+        val is_match_select = patterns |> List.all pat_is_match_switch
+        val new_hd = (
+          \<comment> \<open>Note that we default to \<^verbatim>\<open>is_match_case\<close>! If you explicitly want your match to be
+              parsed as a switch statement, use \<^verbatim>\<open>match_switch {...}\<close>\<close>
+          if is_match_case then \<^syntax_const>\<open>_urust_match_case\<close>
+          else (if is_match_select then \<^syntax_const>\<open>_urust_match_switch\<close>
+          else
+            \<comment> \<open>User wrote down a mixed 'illegal' match. We thus do not know how to change the
+               AST in a meaningful way, and keep it as is.
+               The problem is now that this will give a very poor error message, so add some logging\<close>
+            let
+              val _ = writeln "Error: detected match with mixed numeral and constructors" 
+            in
+              \<^syntax_const>\<open>_urust_temporary_match\<close>
+            end
+          )
+        )
+      in
+        Ast.mk_appl (Ast.Constant new_hd) [arg, branches]
+      end
+  in [
+    (\<^syntax_const>\<open>_urust_temporary_match\<close>, match_selector)
+  ] end
+\<close>
+
 (* At this point, parsing returns 'abstract' objects -- only after e.g. shallowly
 embedding them, do we get actual HOL terms. The below \<^verbatim>\<open>experiment\<close>
 nevertheless uses \<^verbatim>\<open>term\<close> to check what parsing produces,
@@ -680,6 +747,11 @@ term\<open>\<guillemotleft>(foo).bar.boo\<guillemotright>\<close>
 term\<open>\<guillemotleft>foo::bar\<guillemotright>\<close>
 term\<open>\<guillemotleft>foo::bar::zoo.boo.far\<guillemotright>\<close>
 term\<open>\<guillemotleft>foo::bar.boo(3)\<guillemotright>\<close>
+term\<open>\<guillemotleft>match 3 {
+a \<Rightarrow> 2,
+b(a) \<Rightarrow> 6,
+_ \<Rightarrow> 7
+}\<guillemotright>\<close>
 end
 *)
 

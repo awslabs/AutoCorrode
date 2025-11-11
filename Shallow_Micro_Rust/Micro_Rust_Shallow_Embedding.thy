@@ -615,7 +615,7 @@ translations
   "_shallow (_urust_if_let_else ptrn exp this that )"
     \<rightharpoonup> "_urust_shallow_if_let_else (_shallow_match_pattern ptrn) (_shallow exp) (_shallow this) (_shallow that)"
 
-  "_shallow (_urust_match exp branches)"
+  "_shallow (_urust_match_case exp branches)"
     \<rightharpoonup> "_urust_shallow_match (_shallow exp) (_shallow_match_branches branches)"
 
   "_shallow_match_branches (_urust_match1 pattern exp)"
@@ -625,6 +625,8 @@ translations
 
   "_shallow_match_pattern _urust_match_pattern_other"
     \<rightharpoonup> "_urust_shallow_match_pattern_other"
+  "_shallow_match_pattern (_urust_match_pattern_num_const num)"
+    \<rightharpoonup> "_urust_shallow_match_pattern_num_const num"
   "_shallow_match_pattern (_urust_match_pattern_constr_no_args id)"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_no_args (_shallow_identifier_as_literal id)"
   "_shallow_match_pattern (_urust_match_pattern_constr_with_args id args)"
@@ -639,6 +641,9 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_arg_id id"
   "_shallow_match_arg _urust_match_pattern_arg_dummy"
     \<rightharpoonup> "_urust_shallow_match_pattern_arg_dummy"
+
+  "_shallow (_urust_match_switch exp branches)"
+    \<rightharpoonup> "_urust_shallow_switch (_shallow exp) (_shallow_match_branches branches)"
 
   "_shallow (_urust_for_loop x iter body)"
     \<rightharpoonup> "_urust_shallow_for_loop (_shallow_let_pattern x) (_shallow iter) (_shallow body)"
@@ -1332,6 +1337,7 @@ definition \<open>plus_two_lift \<equiv> lift_fun1 plus_two\<close>
 notation_nano_rust plus_two_lift ("plus2::lifted")
 
 definition three :: \<open>64 word\<close> where \<open>three = 3\<close>
+notation_nano_rust three ("number::three")
 
 term\<open>\<lbrakk> test::Test_1 \<rbrakk>\<close>
 
@@ -1344,6 +1350,25 @@ term\<open>\<lbrakk>
   match arg {
     test::Test_1 \<Rightarrow> fun(three),
     test::Test_2 \<Rightarrow> plus2::lifted(three)
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let x = 5;
+  match x {
+    2 \<Rightarrow> False,
+    number::three \<Rightarrow> False,
+    _ \<Rightarrow> True
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let x = 5;
+\<comment> \<open>\<^verbatim>\<open>match_switch\<close> forces interpretation of this \<^verbatim>\<open>match\<close> clause as a \<^verbatim>\<open>switch\<close>\<close>
+  match_switch x {
+    2 \<Rightarrow> False,
+    number::three \<Rightarrow> False,
+    _ \<Rightarrow> True
   }
 \<rbrakk>\<close>
 
