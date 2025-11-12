@@ -319,6 +319,10 @@ syntax
     ("_" [1000]100)
   "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_match_pattern\<close>
     ("_" [1000]100)
+  "_urust_match_pattern_zero" :: \<open>urust_match_pattern\<close>
+    ("0")
+  "_urust_match_pattern_one" :: \<open>urust_match_pattern\<close>
+    ("1")
   "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern_args \<Rightarrow> urust_match_pattern\<close>
     ("_ '(_')"[1000,100]100)
   "_urust_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_match_pattern_arg\<close>
@@ -691,13 +695,18 @@ parse_ast_translation\<open>
           [pattern_ast_to_head_const clause]
 
     \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_case\<close>?\<close>
-    fun pat_is_match_case pat = pat <> \<^syntax_const>\<open>_urust_match_pattern_num_const\<close>
+    fun pat_is_match_case pat =
+      pat <> \<^syntax_const>\<open>_urust_match_pattern_num_const\<close> andalso
+      pat <> \<^syntax_const>\<open>_urust_match_pattern_zero\<close> andalso
+      pat <> \<^syntax_const>\<open>_urust_match_pattern_one\<close>
 
     \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_switch\<close>?\<close>
     fun pat_is_match_switch pat =
       (pat = \<^syntax_const>\<open>_urust_match_pattern_num_const\<close>)
       orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>)
       orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_other\<close>)
+      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_zero\<close>)
+      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_one\<close>)
 
     \<comment> \<open>Replace a \<^verbatim>\<open>_urust_temporary_match\<close> AST node with arguments \<^verbatim>\<open>[arg, branches]\<close> with the
         appropriate match AST node\<close>
@@ -749,7 +758,9 @@ term\<open>\<guillemotleft>foo::bar::zoo.boo.far\<guillemotright>\<close>
 term\<open>\<guillemotleft>foo::bar.boo(3)\<guillemotright>\<close>
 term\<open>\<guillemotleft>match 3 {
 a \<Rightarrow> 2,
-b(a) \<Rightarrow> 6,
+2 \<Rightarrow> 6,
+0 \<Rightarrow> 7,
+1 \<Rightarrow> 8,
 _ \<Rightarrow> 7
 }\<guillemotright>\<close>
 end

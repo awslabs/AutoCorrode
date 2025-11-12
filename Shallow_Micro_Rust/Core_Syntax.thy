@@ -176,6 +176,10 @@ syntax
     ("'_")
   "_urust_shallow_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_shallow_match_pattern\<close>
     ("_")
+  "_urust_shallow_match_pattern_zero" :: \<open>urust_shallow_match_pattern\<close>
+    ("0")
+  "_urust_shallow_match_pattern_one" :: \<open>urust_shallow_match_pattern\<close>
+    ("1")
   "_urust_shallow_match_pattern_constr_no_args" :: \<open>logic \<Rightarrow> urust_shallow_match_pattern\<close>
     ("\<guillemotleft>_\<guillemotright>")
   "_urust_shallow_match_pattern_constr_with_args" :: \<open>logic \<Rightarrow> urust_shallow_match_pattern_args \<Rightarrow> urust_shallow_match_pattern\<close>
@@ -553,6 +557,10 @@ translations
     \<rightharpoonup> "_case_num_pattern_const id"
   "_urust_shallow_switch_convert_pattern (_urust_shallow_match_pattern_num_const num)"
     \<rightharpoonup> "_case_num_pattern_numeral num"
+  "_urust_shallow_switch_convert_pattern (_urust_shallow_match_pattern_zero)"
+    \<rightharpoonup> "_case_num_pattern_zero"
+  "_urust_shallow_switch_convert_pattern (_urust_shallow_match_pattern_one)"
+    \<rightharpoonup> "_case_num_pattern_one"
 
 \<comment>\<open>todo: add print translation for this so the case expressions remain readable\<close>
 parse_translation\<open>
@@ -912,6 +920,8 @@ term\<open>
     3 \<Rightarrow> \<up>True,
     5 \<Rightarrow> \<up>True,
     \<guillemotleft>twentyfive\<guillemotright> \<Rightarrow> \<up>True,
+    0 \<Rightarrow> \<up>True,
+    1 \<Rightarrow> \<up>True,
     _ \<Rightarrow> \<up>False
   \<rbrace>
 \<close>

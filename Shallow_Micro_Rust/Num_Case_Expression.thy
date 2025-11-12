@@ -46,6 +46,11 @@ syntax
     ("'_")
   "_case_num_pattern_numeral" :: \<open>num_const \<Rightarrow> case_num_pattern\<close>
     ("_" 100)
+  \<comment> \<open>Turns out we need special branches to support matching on 0 and 1, since these are notations of their own\<close>
+  "_case_num_pattern_zero" :: \<open>case_num_pattern\<close>
+    ("0")
+  "_case_num_pattern_one" :: \<open>case_num_pattern\<close>
+    ("1")
   \<comment> \<open>Note: cannot take \<^verbatim>\<open>logic\<close> arguments, because that will conflict with the \<^verbatim>\<open>_\<close> defined above\<close>
   "_case_num_pattern_const" :: \<open>id \<Rightarrow> case_num_pattern\<close>
     ("_" 100)
@@ -80,6 +85,10 @@ translations
     "CONST Cons left right"
   "_case_num1 _case_num_pattern_other result" \<rightharpoonup>
     "CONST Pair (CONST None) result"
+  "_case_num1 (_case_num_pattern_zero) result" \<rightharpoonup>
+    "CONST Pair (CONST Some 0) result"
+  "_case_num1 (_case_num_pattern_one) result" \<rightharpoonup>
+    "CONST Pair (CONST Some 1) result"
   "_case_num1 (_case_num_pattern_numeral num) result" \<rightharpoonup>
     "CONST Pair (CONST Some (_Numeral num)) result"
   "_case_num1 (_case_num_pattern_const c) result" \<rightharpoonup>
@@ -95,6 +104,8 @@ term\<open>ncase (4 :: nat) of
   3 \<Rightarrow> True
 | 4 \<Rightarrow> False
 | twentyfive \<Rightarrow> False
+| 0 \<Rightarrow> False
+| 1 \<Rightarrow> False
 | _ \<Rightarrow> True\<close>
 \<comment> \<open>Prints as: 
 \<^term>\<open>ncase_selector [(Some 3, True), (Some 4, False), (Some twentyfive, False), (None, True)] 4\<close>\<close>
@@ -103,6 +114,8 @@ term\<open>ncase_fun of
   3 \<Rightarrow> True
 | 4 \<Rightarrow> False
 | twentyfive \<Rightarrow> False
+| 0 \<Rightarrow> False
+| 1 \<Rightarrow> False
 | _ \<Rightarrow> True\<close>
 \<comment> \<open>Prints as: 
 \<^term>\<open>ncase_selector [(Some 3, True), (Some 4, False), (Some twentyfive, False), (None, True)]\<close>\<close>
@@ -144,6 +157,8 @@ term\<open>ncase (4 :: nat) of
   3 \<Rightarrow> True
 | 4 \<Rightarrow> False
 | twentyfive \<Rightarrow> True
+| 0 \<Rightarrow> False
+| 1 \<Rightarrow> False
 | _ \<Rightarrow> True\<close>
 \<comment> \<open>Prints as:
 \<^term>\<open>ncase 4 of 3 \<Rightarrow> True | 4 \<Rightarrow> False | twentyfive \<Rightarrow> True | _ \<Rightarrow> True\<close>\<close>
@@ -152,6 +167,8 @@ term\<open>ncase_fun of
   3 \<Rightarrow> True
 | 4 \<Rightarrow> False
 | twentyfive \<Rightarrow> False
+| 0 \<Rightarrow> False
+| 1 \<Rightarrow> False
 | _ \<Rightarrow> True\<close>
 \<comment> \<open>Prints as: 
 \<^term>\<open>ncase_fun of 3 \<Rightarrow> True | 4 \<Rightarrow> False | twentyfive \<Rightarrow> False | _ \<Rightarrow> True\<close>\<close>
@@ -161,6 +178,8 @@ lemma test1:
   shows \<open>(ncase (4 :: nat) of
           3 \<Rightarrow> True
         | 4 \<Rightarrow> False
+        | 1 \<Rightarrow> True
+        | 0 \<Rightarrow> False
         | _ \<Rightarrow> True) = False\<close>
   \<comment> \<open>Using @{thm ncase_def} will just get rid of the pretty syntax\<close>
   apply (simp add: ncase_def)
@@ -171,6 +190,8 @@ lemma test2:
   shows \<open>(ncase (4 :: nat) of
           4 \<Rightarrow> False
         | 3 \<Rightarrow> True
+        | 0 \<Rightarrow> False
+        | 1 \<Rightarrow> False
         | _ \<Rightarrow> True) = False\<close>
   \<comment> \<open>Using @{thm ncase_simps} will get rid of the syntax and simplify as expected\<close>
   by (simp add: ncase_simps)

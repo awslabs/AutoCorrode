@@ -627,6 +627,10 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_other"
   "_shallow_match_pattern (_urust_match_pattern_num_const num)"
     \<rightharpoonup> "_urust_shallow_match_pattern_num_const num"
+  "_shallow_match_pattern (_urust_match_pattern_zero)"
+    \<rightharpoonup> "_urust_shallow_match_pattern_zero"
+  "_shallow_match_pattern (_urust_match_pattern_one)"
+    \<rightharpoonup> "_urust_shallow_match_pattern_one"
   "_shallow_match_pattern (_urust_match_pattern_constr_no_args id)"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_no_args (_shallow_identifier_as_literal id)"
   "_shallow_match_pattern (_urust_match_pattern_constr_with_args id args)"
@@ -1358,6 +1362,8 @@ term\<open>\<lbrakk>
   match x {
     2 \<Rightarrow> False,
     number::three \<Rightarrow> False,
+    0 \<Rightarrow> False,
+    1 \<Rightarrow> False,
     _ \<Rightarrow> True
   }
 \<rbrakk>\<close>
@@ -1366,7 +1372,6 @@ term\<open>\<lbrakk>
   let x = 5;
 \<comment> \<open>\<^verbatim>\<open>match_switch\<close> forces interpretation of this \<^verbatim>\<open>match\<close> clause as a \<^verbatim>\<open>switch\<close>\<close>
   match_switch x {
-    2 \<Rightarrow> False,
     number::three \<Rightarrow> False,
     _ \<Rightarrow> True
   }
