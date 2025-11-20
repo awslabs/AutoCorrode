@@ -2,7 +2,6 @@
 theory Num_Case_Expression
   imports
     Main
-    Misc.WordAdditional
 begin
 (*>*)
 
