@@ -3,6 +3,7 @@
 
 theory Shallow_Separation_Logic
   imports
+    Adequacy
     Apartness
     Assertion_Language
     Assertion_Triple

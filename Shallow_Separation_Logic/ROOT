@@ -5,6 +5,7 @@ session Shallow_Separation_Logic = HOL +
     "HOL-Library"
     Shallow_Micro_Rust
   theories
+    Adequacy
     Apartness
     Assertion_Language
     Assertion_Triple
