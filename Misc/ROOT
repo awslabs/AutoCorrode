@@ -9,6 +9,7 @@ session Misc = HOL +
   theories
     Array
     Bitfields
+    Code_Assertion
     Debug_Logging
     ListAdditional
     MultisetAdditional
@@ -20,5 +21,6 @@ session Misc = HOL +
     Word_Cast_Simplifier
   theories [document=false]
     Misc
+    Code_Assertion_Ex
   document_files
     "root.tex"
