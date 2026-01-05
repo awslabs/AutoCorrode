@@ -94,13 +94,7 @@ qed
 
 lemma wp_sstriple_iff:
   shows \<open>(\<Gamma> ; \<phi> \<turnstile> e \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>) \<longleftrightarrow> (\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>)\<close>
-proof -
-  from afunctor_representability_iff[OF sstriple_is_representable] have
-     \<open>(\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>) \<longleftrightarrow> sstriple_functor \<Gamma> e \<psi> \<rho> \<theta> \<phi>\<close>
-    by (force simp add: wp_def)
-  from this show ?thesis
-    unfolding sstriple_functor_def by simp
-qed
+  by (simp add: sstriple_wp_iff)
 
 corollary wp_to_sstriple:
   assumes \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>\<close>

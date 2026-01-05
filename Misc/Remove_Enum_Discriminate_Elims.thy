@@ -24,7 +24,7 @@ ML\<open>
     Classical.rep_cs #> #safeEs #>
     Item_Net.content #> List.map #1;
 
-  \<comment> \<open>Some wrappers for use with \<^verbatim>\<open>@{theory}\<close> and \<^verbatim>\<open>@{context}\<close>}\<close>
+  \<comment> \<open>Some wrappers for use with \<^verbatim>\<open>@{theory}\<close> and \<^verbatim>\<open>@{context}\<close>\<close>
   val safe_elims_of_thy = Context.Theory #> safe_elims_of;
   val safe_elims_of_ctx = Context.Proof #> safe_elims_of;
 

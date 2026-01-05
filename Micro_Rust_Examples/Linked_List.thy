@@ -91,6 +91,7 @@ fun ll_points_to ::
          \<star> (ll_points_to ds next_ref_opt remainder))
   \<close>
 
+(*TODO: not used; delete?*)
 lemma ll_points_to_None:
   shows \<open>ll_points_to ds None rem = \<langle>ds = []\<rangle> \<star> \<langle>rem = None\<rangle>\<close>
   by (cases ds; clarsimp simp add: asepconj_simp apure_def)
@@ -136,7 +137,7 @@ lemma reverse_unlink_spec[crush_specs]:
     )\<close> and \<tau>=\<open>\<lambda>_.\<langle>False\<rangle>\<close>
     in wp_raw_for_loop_framedI'
   \<close>)
-  apply (fastcrush_base simp add: ll_points_to_None Many_More.drop_Suc_nth)
+  apply (fastcrush_base simp add: Many_More.drop_Suc_nth) 
   apply (fastcrush_base split!: option.splits simp add: take_suc_rev')
   done
 
