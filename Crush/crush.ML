@@ -209,6 +209,7 @@ struct
       #> LOG' ctxt  (Config.get ctxt Crush_Config.log_base_simps) msg
     in
               NOTE "crush_base_simps_schematic" (instantiate_schematic_from_equality ctxt)
+      ORELSE' NOTE "crush_base_simps_unused_quantifier" (remove_unneeded_meta_quantification ctxt)
       ORELSE' NOTE "crush_base_simps_assumption" (assm_tac ctxt)
       ORELSE' NOTE "crush_base_simps_intro"  (intro_tac crush_intros ctxt)
       ORELSE' NOTE "crush_base_simps_unfold" (crush_branch_base_simps_early_unfold ctxt)

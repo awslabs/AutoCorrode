@@ -366,6 +366,7 @@ begin
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
+    apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     done
 end
 
@@ -499,6 +500,7 @@ begin
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
+    apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     done
 end
 
@@ -530,12 +532,12 @@ begin
     oops \<comment>\<open>5 not enough\<close>
 
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
-    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 8)
-    done \<comment>\<open>8 was enough!\<close>
+    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 9)
+    done \<comment>\<open>9 was enough!\<close>
 
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
-    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 7)
-    oops \<comment>\<open>7 not enough\<close>
+    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 8)
+    oops \<comment>\<open>8 not enough\<close>
 
   \<comment>\<open>So we need exactly 8 steps. In this example, we could of course have found out more quickly
   by the 'copy-paste-method', but it does not scale as well.\<close>
@@ -1007,6 +1009,7 @@ lemma
   step
   step
   step
+  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1350,7 +1353,7 @@ proof (crush_boot f: test_record3_zero_field_def contract: test_record3_zero_fie
 qed
 
 definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
-  \<open>test_record3_zeroize ptr \<equiv> FunctionBody \<lbrakk>
+  \<open>test_record3_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
      ptr.test_record3_zero_field(0);
      ptr.test_record3_zero_field(1);
      ptr.test_record3_zero_field(2);
@@ -1372,7 +1375,7 @@ definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarro
      ptr.test_record3_zero_field(18);
      ptr.test_record3_zero_field(19);
      *(ptr.rest)
-  \<rbrakk>\<close>
+  )\<rbrakk>\<close>
 
 definition test_record3_zeroize_contract ::
    \<open>('a, 'b, test_record3) ref \<Rightarrow> 'b \<Rightarrow> test_record3 \<Rightarrow> ('s, int, 'abort) function_contract\<close>

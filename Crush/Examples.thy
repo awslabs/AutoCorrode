@@ -7,6 +7,23 @@ begin
 
 section\<open>Examples for custom tactics and helper functions\<close>
 
+subsection\<open>Miscellaneous\<close>
+
+subsubsection\<open>Remove unnecessary universal quantification\<close>
+
+lemma \<open>\<And>t x y z. P z\<close>
+  (* \<And>t x y z. P x z *)
+  apply (tactic \<open>CONVERSION (remove_unneeded_meta_quantification_conv @{context}) 1\<close>)
+  (* Trying again will fail *)
+  (* apply (tactic \<open>CONVERSION (remove_unused_meta_quantifications) 1\<close>) *)
+  oops
+
+lemma \<open>\<And>t x y z. P x z\<close>
+  (* \<And>t x y z. P x z *)
+  apply (tactic \<open>remove_unneeded_meta_quantification @{context} 1\<close>)
+  (* \<And>x z. P x z *)
+  oops
+
 subsection\<open>Separation logic\<close>
 
 subsubsection\<open>Normalizing associativity of separating conjunctions\<close>
