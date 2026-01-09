@@ -99,6 +99,21 @@ lemma focus_focused_view_dropE[focus_elims]:
     shows R
   using assms by simp
 
+lemma focus_is_view_modified_dropE[focus_elims]:
+  assumes \<open>focus_is_view l (focus_modify l op x) y\<close>
+      and \<open>R\<close>
+    shows R
+using assms by (metis focus_laws_update(2) focus_modify_def' focus_raw_view_modify'I option.collapse
+  option.simps(1))
+
+lemma points_to_localizesE[focus_elims]:
+  assumes \<open>points_to_localizes r b v\<close>
+     and \<open>is_valid_ref_for r (gref_can_store (unwrap_focused r)) \<Longrightarrow> focus_view (get_focus r) b = Some v \<Longrightarrow> R\<close>
+   shows R
+  using assms by simp
+
+declare remdups_rl[focus_elims2]
+
 ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
  update_contract modify_raw_contract modify_contract dereference_contract
  ro_dereference_contract reference_contract

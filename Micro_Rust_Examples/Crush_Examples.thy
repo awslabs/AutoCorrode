@@ -1010,6 +1010,16 @@ lemma
   step
   step
   step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1261,7 +1271,6 @@ lemma write_foo_read_bar_spec':
   step
   step
   step
-  step
   done
 
 text\<open>Clear many structure fields, return another:\<close>
@@ -1362,11 +1371,11 @@ definition test_record2_zeroize_contract ::
 ucincl_auto test_record2_zeroize_contract
 
 lemma test_record2_zeroize_contract_spec:
-  notes focus_compose_view_dropE[focus_elims]
   shows \<open>\<Gamma>; test_record2_zeroize ptr \<Turnstile>\<^sub>F test_record2_zeroize_contract ptr g v\<close>
   apply (crush_boot f: test_record2_zeroize_def contract: test_record2_zeroize_contract_def)
   using [[crush_time_steps]]
-  apply\<tau> (crush_base)
+  apply\<tau> (crush_base stepwise)
+  step *
   show_timelogs
   done
 
@@ -1382,7 +1391,7 @@ definition test_record3_zero_field_contract ::
   where [crush_contracts]: \<open>test_record3_zero_field_contract r i g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v \<star> \<langle>i < 20\<rangle> in
      let zero_ith_pure :: test_record3 \<Rightarrow> test_record3 = (\<lambda>t. t \<lparr> data := array_update (data t) (unat i) 0 \<rparr> ) in
-     let post = \<lambda>_. (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(zero_ith_pure v)) in
+     let post = \<lambda>_. r \<mapsto> \<langle>\<top>\<rangle> zero_ith_pure\<sqdot>(g\<down>v) in
       make_function_contract pre post\<close>
 ucincl_auto test_record3_zero_field_contract
 
@@ -1401,6 +1410,46 @@ qed
 
 definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>test_record3_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
+     ptr.test_record3_zero_field(0);
+     ptr.test_record3_zero_field(1);
+     ptr.test_record3_zero_field(2);
+     ptr.test_record3_zero_field(3);
+     ptr.test_record3_zero_field(4);
+     ptr.test_record3_zero_field(5);
+     ptr.test_record3_zero_field(6);
+     ptr.test_record3_zero_field(7);
+     ptr.test_record3_zero_field(8);
+     ptr.test_record3_zero_field(9);
+     ptr.test_record3_zero_field(10);
+     ptr.test_record3_zero_field(11);
+     ptr.test_record3_zero_field(12);
+     ptr.test_record3_zero_field(13);
+     ptr.test_record3_zero_field(14);
+     ptr.test_record3_zero_field(15);
+     ptr.test_record3_zero_field(16);
+     ptr.test_record3_zero_field(17);
+     ptr.test_record3_zero_field(18);
+     ptr.test_record3_zero_field(19);
+     ptr.test_record3_zero_field(0);
+     ptr.test_record3_zero_field(1);
+     ptr.test_record3_zero_field(2);
+     ptr.test_record3_zero_field(3);
+     ptr.test_record3_zero_field(4);
+     ptr.test_record3_zero_field(5);
+     ptr.test_record3_zero_field(6);
+     ptr.test_record3_zero_field(7);
+     ptr.test_record3_zero_field(8);
+     ptr.test_record3_zero_field(9);
+     ptr.test_record3_zero_field(10);
+     ptr.test_record3_zero_field(11);
+     ptr.test_record3_zero_field(12);
+     ptr.test_record3_zero_field(13);
+     ptr.test_record3_zero_field(14);
+     ptr.test_record3_zero_field(15);
+     ptr.test_record3_zero_field(16);
+     ptr.test_record3_zero_field(17);
+     ptr.test_record3_zero_field(18);
+     ptr.test_record3_zero_field(19);
      ptr.test_record3_zero_field(0);
      ptr.test_record3_zero_field(1);
      ptr.test_record3_zero_field(2);
@@ -1469,10 +1518,19 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   }
   note eq = this[simplified]
   show ?case
-  \<comment>\<open>We see a linear built-up of premises here, which may cause performance problems in larger examples.\<close>
-    using [[crush_time_instantiation, crush_time_steps, crush_time_log_instantiation, crush_log_toplevel,
-    crush_timing_threshold=1, crush_time_base_simps]]
-  apply\<tau> (time force "crush" \<open>crush_base\<close>)
+  \<comment>\<open>TODO: This proof gets slower over time. Investigate\<close>
+    apply\<tau> (crush_base stepwise)
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step *
   show_timelogs
   apply (simp add: eq)
   done
