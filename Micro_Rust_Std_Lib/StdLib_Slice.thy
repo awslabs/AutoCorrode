@@ -149,19 +149,15 @@ definition slice_index_range :: \<open>('a, 'b, 'v list) ref \<Rightarrow> 'w::{
 
 definition list_index_range_contract :: \<open>'t list \<Rightarrow> 'w::{len} word range \<Rightarrow> ('s, 't list, 'abort) function_contract\<close> where
   [crush_contracts]: \<open>list_index_range_contract xs r \<equiv>
-     let pre  = \<langle>unat (end r) \<le> length xs\<rangle>;
-         post = \<lambda>res.
-                  if start r \<ge> end r then
-                    \<langle>res = []\<rangle>
-                  else
-                    \<langle>res = List.take (unat (end r - start r)) (List.drop (unat (start r)) xs)\<rangle>
+     let pre  = \<langle>unat (end r) \<le> length xs \<and> start r \<le> end r\<rangle>;
+         post = \<lambda>res. \<langle>res = List.take (unat (end r - start r)) (List.drop (unat (start r)) xs)\<rangle>
       in make_function_contract pre post\<close>
 ucincl_auto list_index_range_contract
 
 lemma list_index_range_spec [crush_specs]:
   shows \<open>\<Gamma> ; list_index_range xs r \<Turnstile>\<^sub>F list_index_range_contract xs r\<close>
-by (crush_boot f: list_index_range_def contract: list_index_range_contract_def)
-     (crush_base split!: range.splits)
+  by (crush_boot f: list_index_range_def contract: list_index_range_contract_def)
+     (crush_base split!: range.splits; simp)
 
 adhoc_overloading index_const \<rightleftharpoons>
   slice_index

@@ -69,13 +69,13 @@ definition vector_index :: \<open>('a, 'l::{len}) vector \<Rightarrow> 'w::{len}
 
 definition list_index_range :: \<open>'a list \<Rightarrow> 'w::{len} word range \<Rightarrow> ('s,'a list, 'abort, 'i, 'o) function_body\<close> where
   \<open>list_index_range xs rng \<equiv> FunctionBody (
-    if start rng \<ge> end rng then
-      literal []
+    if start rng > end rng then
+      abort DanglingPointer
+    else if unat (end rng) > length xs then
+      abort DanglingPointer
     else
-      if unat (end rng) \<le> length xs then
-        literal (take (unat ((end rng) - (start rng))) (drop (unat (start rng)) xs))
-      else
-        abort DanglingPointer)\<close>
+      literal (take (unat ((end rng) - (start rng))) (drop (unat (start rng)) xs)))
+\<close>
 
 definition array_index_range :: \<open>('a, 'l::{len}) array \<Rightarrow> 'w::{len} word range \<Rightarrow>
       ('s, 'a list, 'abort, 'i, 'o) function_body\<close> where
