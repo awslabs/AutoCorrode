@@ -81,6 +81,9 @@ sig
   val crush_branch_aentails_drule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_crule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_rule_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_cond_drule_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_cond_rule_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_cond_crule_tac : Proof.context -> int -> tactic
   val crush_branch_focus_tac : Proof.context -> int -> tactic
   val crush_branch_unfold_concls_tac : Proof.context -> int -> tactic
   val crush_branch_schematics_tac : Proof.context -> (int -> tactic) -> int -> tactic
@@ -462,11 +465,20 @@ struct
   val crush_branch_intro_pure_aentails_tac : Proof.context -> int -> tactic = fn ctxt =>
     Separation_Logic_Tactics.ucincl_discharge_tac ctxt (intro_tac @{thms apure_entailsR0} ctxt)
 
+  val crush_branch_aentails_cond_drule_tac =
+     fn ctxt => Separation_Logic_Tactics.aentails_cond_drule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_drules}) ctxt
+
+  val crush_branch_aentails_cond_crule_tac =
+     fn ctxt => Separation_Logic_Tactics.aentails_cond_crule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_crules}) ctxt
+
   val crush_branch_aentails_drule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_drule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_drules}) ctxt
 
   val crush_branch_aentails_crule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_crule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_crules}) ctxt
+
+  val crush_branch_aentails_cond_rule_tac =
+     fn ctxt => Separation_Logic_Tactics.aentails_cond_rule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_rules}) ctxt
 
   val crush_branch_aentails_rule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_rule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_rules}) ctxt
@@ -520,8 +532,11 @@ struct
             ("aentails_cancel_tac"     , \<^here>, (fn _ => crush_branch_aentails_cancel_tac ctxt)),
             ("unfold_prems_tac"        , \<^here>, (fn _ => crush_branch_unfold_prems_tac ctxt)),
             ("aentails_core_tac"       , \<^here>, (fn _ => crush_branch_aentails_core_tac ctxt)),
+            ("aentails_cond_drule_tac" , \<^here>, (fn _ => crush_branch_aentails_cond_drule_tac ctxt)),
             ("aentails_drule_tac"      , \<^here>, (fn _ => crush_branch_aentails_drule_tac ctxt)),
+            ("aentails_cond_crule_tac" , \<^here>, (fn _ => crush_branch_aentails_cond_crule_tac ctxt)),
             ("aentails_crule_tac"      , \<^here>, (fn _ => crush_branch_aentails_crule_tac ctxt)),
+            ("aentails_cond_rule_tac"  , \<^here>, (fn _ => crush_branch_aentails_cond_rule_tac ctxt)),
             ("aentails_rule_tac"       , \<^here>, (fn _ => crush_branch_aentails_rule_tac ctxt)),
             ("focus_tac"               , \<^here>, (fn _ => crush_branch_focus_tac ctxt)),
             ("unfold_concls_tac"       , \<^here>, (fn _ => crush_branch_unfold_concls_tac ctxt)),
@@ -748,12 +763,18 @@ struct
                      make_log_parser "ucincl"   Crush_Config.log_ucincl]
 
   val add_del_parsers = [
+     make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "drule") @{named_theorems crush_aentails_cond_drules} \<^here>,
+     make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "drule") @{named_theorems crush_aentails_cond_drules} \<^here>,
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "drule") @{named_theorems crush_aentails_drules} \<^here>,
      make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "drule") @{named_theorems crush_aentails_drules} \<^here>,
+     make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "crule") @{named_theorems crush_aentails_cond_crules} \<^here>,
+     make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "crule") @{named_theorems crush_aentails_cond_crules} \<^here>,
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "crule") @{named_theorems crush_aentails_crules} \<^here>,
      make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "crule") @{named_theorems crush_aentails_crules} \<^here>,
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "rule")  @{named_theorems crush_aentails_rules}  \<^here>,
      make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "rule")  @{named_theorems crush_aentails_rules}  \<^here>,
+     make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "rule")  @{named_theorems crush_aentails_cond_rules}  \<^here>,
+     make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "rule")  @{named_theorems crush_aentails_cond_rules}  \<^here>,
      simp_parser \<^here>,
      make_add_parser' (Args.$$$ "simp" -- Args.$$$ "prems")   @{named_theorems crush_prems_simps} \<^here>,
      make_del_parser' (Args.$$$ "simp" -- Args.$$$ "prems")   @{named_theorems crush_prems_simps} \<^here>,
