@@ -1020,6 +1020,13 @@ lemma
   step
   step
   step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1271,12 +1278,33 @@ lemma write_foo_read_bar_spec':
   step
   step
   step
+  step
   done
 
 text\<open>Clear many structure fields, return another:\<close>
 
 definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>test_record2_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
+     ptr.f0 = 3;
+     ptr.f1 = 3;
+     ptr.f2 = 3;
+     ptr.f3 = 3;
+     ptr.f4 = 3;
+     ptr.f5 = 3;
+     ptr.f6 = 3;
+     ptr.f7 = 3;
+     ptr.f8 = 3;
+     ptr.f9 = 3;
+     ptr.f10 = 3;
+     ptr.f11 = 3;
+     ptr.f12 = 3;
+     ptr.f13 = 3;
+     ptr.f14 = 3;
+     ptr.f15 = 3;
+     ptr.f16 = 3;
+     ptr.f17 = 3;
+     ptr.f18 = 3;
+     ptr.f19 = 3;
      ptr.f0 = 2;
      ptr.f1 = 2;
      ptr.f2 = 2;
@@ -1373,7 +1401,7 @@ ucincl_auto test_record2_zeroize_contract
 lemma test_record2_zeroize_contract_spec:
   shows \<open>\<Gamma>; test_record2_zeroize ptr \<Turnstile>\<^sub>F test_record2_zeroize_contract ptr g v\<close>
   apply (crush_boot f: test_record2_zeroize_def contract: test_record2_zeroize_contract_def)
-  using [[crush_time_steps]]
+  using [[crush_time_steps, crush_time_base_simps]]
   apply\<tau> (crush_base stepwise)
   step *
   show_timelogs
@@ -1519,7 +1547,7 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   note eq = this[simplified]
   show ?case
   \<comment>\<open>TODO: This proof gets slower over time. Investigate\<close>
-    apply\<tau> (crush_base stepwise)
+  apply\<tau> (crush_base stepwise)
   step 100
   step 100
   step 100

@@ -211,6 +211,7 @@ struct
               NOTE "crush_base_simps_schematic" (instantiate_schematic_from_equality ctxt)
       ORELSE' NOTE "crush_base_simps_unused_quantifier" (remove_unneeded_meta_quantification ctxt)
       ORELSE' NOTE "crush_base_simps_assumption" (assm_tac ctxt)
+      ORELSE' NOTE "crush_base_simps_remove_duplicates" (remove_duplicate_pure_premises ctxt)
       ORELSE' NOTE "crush_base_simps_subst_bound" (Hypsubst.bound_hyp_subst_tac ctxt)
       ORELSE' NOTE "crush_base_simps_intro"  (intro_tac crush_intros ctxt)
       ORELSE' NOTE "crush_base_simps_unfold" (crush_branch_base_simps_early_unfold ctxt)

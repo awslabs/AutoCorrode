@@ -136,10 +136,12 @@ sig
  val instantiate_schematic_from_pure_equality: Proof.context -> int -> tactic
  val instantiate_schematic_from_hol_equality: Proof.context -> int -> tactic
 
-  (* remove unnecessary toplevel quantifications *)
-  val remove_unneeded_meta_quantification_conv: Proof.context -> conv
-  val remove_unneeded_meta_quantification: Proof.context -> int -> tactic
+ (* remove unnecessary toplevel quantifications *)
+ val remove_unneeded_meta_quantification_conv: Proof.context -> conv
+ val remove_unneeded_meta_quantification: Proof.context -> int -> tactic
 
+ (* remove duplicates pure premises *)
+ val remove_duplicate_pure_premises: Proof.context -> int -> tactic
 end;
 
 structure Crush_Base: CRUSH_BASE =
@@ -221,6 +223,28 @@ struct
 
   val thin_tac_idxs = fn ctxt => fn js =>
      EVERY' (List.map (thin_tac_idx ctxt) (rev js))
+
+  fun remove_duplicate_pure_premises ctxt i st =
+  let
+    val prop = Thm.prop_of st;
+    val nprems = Thm.nprems_of st;
+  in
+    if i > nprems then no_tac st
+    else
+      let
+        val goal = Logic.nth_prem (i, prop);
+        val prems = Logic.strip_assums_hyp goal;
+        val (_, dups) =
+          fold_index (fn (idx, t) => fn (tab, dups) =>
+            if Termtab.defined tab t
+            then (tab, idx :: dups)
+            else (Termtab.update (t, ()) tab, dups))
+          prems (Termtab.empty, []);
+      in
+        if null dups then no_tac st
+        else EVERY' (map (thin_tac_idx ctxt) dups) i st
+      end
+  end;
 
   fun context_tactic_to_context_tactic (t: Proof.context -> tactic) : context_tactic =
       fn (ctxt, thm) => (t ctxt thm |> Seq.make_results |> Seq.map_result (fn thm' => (ctxt, thm')))

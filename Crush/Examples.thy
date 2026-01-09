@@ -9,6 +9,22 @@ section\<open>Examples for custom tactics and helper functions\<close>
 
 subsection\<open>Miscellaneous\<close>
 
+subsubsection\<open>Remove duplicate premises\<close>
+
+lemma
+  assumes \<open>P x\<close>
+      and \<open>Q y\<close>
+      and \<open>P z\<close>
+      and \<open>P x\<close>
+      and \<open>Q z\<close>
+      and \<open>Q y\<close>
+      and \<open>Q y\<close>
+    shows T
+  using assms apply -
+  apply (tactic \<open>remove_duplicate_pure_premises @{context} 1\<close>)
+  (* This should drop 'P x' and 'Q y' at positions 3, 5, and 6, respectively (0-based) *)
+  oops
+
 subsubsection\<open>Remove unnecessary universal quantification\<close>
 
 lemma \<open>\<And>t x y z. P z\<close>

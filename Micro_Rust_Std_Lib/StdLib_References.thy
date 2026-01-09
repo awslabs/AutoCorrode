@@ -112,8 +112,6 @@ lemma points_to_localizesE[focus_elims]:
    shows R
   using assms by simp
 
-declare remdups_rl[focus_elims2]
-
 ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
  update_contract modify_raw_contract modify_contract dereference_contract
  ro_dereference_contract reference_contract
