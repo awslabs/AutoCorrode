@@ -1000,6 +1000,13 @@ lemma
   step
   step
   step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1195,6 +1202,10 @@ lemma write_foo_read_bar_spec':
   apply (crush_boot f: write_foo_read_bar_def contract: write_foo_read_bar_contract_def)
   using [[crush_log_toplevel]]
   apply (crush_base stepwise)
+  step
+  step
+  step
+  step
   step
   step
   step

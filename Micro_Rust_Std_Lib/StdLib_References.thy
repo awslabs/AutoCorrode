@@ -80,6 +80,8 @@ corollary modify_spec [crush_specs]:
   done
 
 lemma update_spec [crush_specs]:
+  notes wp_cong[crush_cong del]
+    and wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; update_fun r v \<Turnstile>\<^sub>F update_contract r g0 v0 v\<close>
   by (crush_boot f: update_fun_def contract: update_contract_def) crush_base
 

@@ -809,6 +809,8 @@ next
 qed
 
 lemma memset_phys_spec[raw_tagged_pmem_spec_specs]:
+  notes wp_cong[crush_cong del]
+    and wp_cong'[crush_cong del]
   shows \<open>\<Gamma>; memset_tagged_phys pa l b \<Turnstile>\<^sub>F raw_tagged_pmem_defs.memset_tagged_phys_contract pa l tag b\<close>
   apply (crush_boot f: memset_tagged_phys_def contract: raw_tagged_pmem_defs.memset_tagged_phys_contract_def)
   apply (clarsimp simp add: range_to_aligned_blocks_block_range)

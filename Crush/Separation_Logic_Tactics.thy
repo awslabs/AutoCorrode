@@ -268,5 +268,16 @@ declare awand_pure_false        [crush_asepconj_simp]
 
 declare refl[crush_intros add]
 
+lemma wp_cong[crush_cong]:
+  assumes \<open>\<phi> = \<phi>'\<close>
+      and \<open>e = e'\<close>
+    shows \<open>(\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>) \<longleftrightarrow> (\<phi>' \<longlongrightarrow> \<W>\<P> \<Gamma> e' \<psi> \<rho> \<theta>)\<close>
+using assms by auto
+
+lemma wp_cong'[crush_cong]:
+  assumes \<open>\<phi> = \<phi>'\<close>
+    shows \<open>(\<phi> \<Zsurj> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>) = (\<phi>' \<Zsurj> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>)\<close>
+using assms by auto
+
 end
 (*>*)

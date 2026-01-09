@@ -174,6 +174,8 @@ lemma [ucincl_intros]:
 
 lemma update_raw_fun_spec:
   notes mset_upt [simp del]
+    wp_cong[crush_cong del]
+    wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; update_raw_fun r g \<Turnstile>\<^sub>F reference_defs.update_raw_contract points_to_raw' gref_can_store r g0 g\<close>
 proof -
   let ?pr = \<open>Global_Store.address r\<close>
@@ -197,6 +199,9 @@ qed
 
 lemma dereference_raw_fun_spec:
   notes mset_upt [simp del]
+    reference_defs.points_to_raw_def[simp add]
+    and wp_cong[crush_cong del]
+    and wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; dereference_raw_fun r \<Turnstile>\<^sub>F reference_defs.dereference_raw_contract points_to_raw' r sh g\<close>
 proof -
   let ?pr = \<open>Global_Store.address r\<close>
