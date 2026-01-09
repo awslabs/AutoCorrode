@@ -7,6 +7,9 @@ theory StdLib_Iterators
 begin
 (*>*)
 
+\<comment>\<open>Force one-by-one unrolling of loops\<close>
+declare raw_for_loop_unroll_once_cong[crush_cong]
+
 definition find ::
   \<open>('s, 'v, 'abort, 'i prompt, 'o prompt_output) iterator \<Rightarrow>
    ('v \<Rightarrow> ('s, bool, 'abort, 'i prompt, 'o prompt_output) function_body) \<Rightarrow>

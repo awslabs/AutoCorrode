@@ -33,6 +33,23 @@ lemma raw_for_loop_cons [micro_rust_simps]:
   shows \<open>raw_for_loop (x#xs) body = (body x; raw_for_loop xs body)\<close>
   by (auto simp add: raw_for_loop_def micro_rust_simps)
 
+\<comment>\<open>Use this to unroll one loop iteration at a time when dealing with a loop with a large
+   number of iterations.\<close>
+lemma raw_for_loop_standard_unroll_once_simp:
+  shows \<open>raw_for_loop (list.map word64_of_nat [n..<m]) body =
+         (if n < m then
+                   (body (word64_of_nat n); raw_for_loop (list.map word64_of_nat [(Suc n)..<m]) body)
+                else
+                   skip)\<close> 
+  by (simp add: raw_for_loop_cons raw_for_loop_nil upt_rec)
+
+lemma urust_sequence_cong:
+  assumes \<open>e = e'\<close>
+  shows \<open>(e; f) = (e'; f)\<close>
+  using assms by simp
+
+lemmas raw_for_loop_unroll_once_cong = urust_sequence_cong[where f=\<open>raw_for_loop _ _\<close>]
+
 section\<open>Simplification rules for static loops\<close>
 
 lemma iterator_make_iterator_from_list [simp]:
