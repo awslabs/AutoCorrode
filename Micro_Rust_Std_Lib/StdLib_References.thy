@@ -210,6 +210,31 @@ declare update_spec[crush_specs, crush_specs_eager]
 declare dereference_spec[crush_specs, crush_specs_eager]
 declare ro_dereference_spec[crush_specs, crush_specs_eager]
 
+definition transpose :: \<open>('a, 'b, 't option) ro_ref \<Rightarrow>
+      ('s, ('a, 'b, 't) ro_ref option, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+  \<open>transpose self \<equiv> FunctionBody \<lbrakk>
+     match *self {
+       None    \<Rightarrow> None,
+       Some(_) \<Rightarrow> Some(\<epsilon>\<open>\<up>focus_focused option_focus self\<close>)
+     }
+   \<rbrakk>\<close>
+
+definition transpose_contract :: \<open>(('a, 'b) ro_gref, 'b, 't option) focused \<Rightarrow> 'b \<Rightarrow> _ \<Rightarrow> ('s, (('a, 'b) ro_gref, 'b, 't) focused option, 'abort) function_contract\<close> where
+  [crush_contracts]: \<open>transpose_contract ro_ref g v_opt \<equiv>
+    let ref = unsafe_ref_from_ro_ref ro_ref;
+        pre  = ref \<mapsto> \<langle>\<top>\<rangle> g\<down>v_opt;
+        post = \<lambda>ro_ref'. \<langle>ro_ref' = map_option (\<lambda>_. ro_ref_from_ref (focus_reference option_focus ref)) v_opt\<rangle>
+                         \<star> ref \<mapsto> \<langle>\<top>\<rangle> g\<down>v_opt
+     in make_function_contract pre post\<close>
+
+ucincl_auto transpose_contract 
+
+lemma transpose_spec[crush_specs]:
+  shows \<open>\<Gamma> ; transpose ro_ref \<Turnstile>\<^sub>F transpose_contract ro_ref g v_opt\<close>
+  by (crush_boot f: transpose_def contract: transpose_contract_def)
+     (crush_base simp add: ro_ref_from_ref_def unsafe_ref_from_ro_ref_def 
+        intro!: focused.expand split!: ro_gref.splits option.splits)
+
 end
 
 named_theorems ref_prisms_validity
