@@ -166,10 +166,12 @@ struct
       Named_Theorems.get ctxt @{named_theorems micro_rust_record_intros}
     val focus_rules = Named_Theorems.get ctxt @{named_theorems focus_rules}
     val focus_elims  = Named_Theorems.get ctxt @{named_theorems focus_elims}
+    val focus_elims2  = Named_Theorems.get ctxt @{named_theorems focus_elims2}
     in fn i =>
       REPEAT1(        intro_tac focus_intros ctxt i
                ORELSE resolve_tac ctxt focus_rules i
-               ORELSE elim_tac  focus_elims  ctxt i)
+               ORELSE elim_tac  focus_elims  ctxt i
+               ORELSE ((eresolve_tac ctxt focus_elims2 THEN' assm_tac ctxt) i))
     end
 
   val crush_base_unfold_contract_tac : Proof.context -> int -> tactic = fn ctxt =>
