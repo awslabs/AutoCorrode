@@ -14,6 +14,61 @@ adhoc_overloading store_dereference_const \<rightleftharpoons>
   dereference_fun
   ro_dereference_fun
 
+named_theorems crush_points_to_crules
+named_theorems crush_points_to_cond_rules
+named_theorems crush_points_to_cond_drules
+named_theorems crush_points_to_cond_crules
+
+declare points_to_aentails [crush_points_to_crules]
+
+(* Custom rules for working with the points-to predicates.
+ *
+ * Those are currently only gathered in the above named theorem lists,
+ * but not applied by crush by default. *)
+lemma points_to_aentails_crule[crush_aentails_cond_crules]:
+  shows \<open>r \<mapsto>\<langle>sh\<rangle> g0\<down>v0 
+         [
+           \<langle>g0 = g1\<rangle> \<star> \<langle>v0 = v1\<rangle> \<star> \<langle>points_to_localizes r g1 v1\<rangle>
+         ]\<longlongrightarrow>\<^sub>s[
+           \<langle>points_to_localizes r g0 v0\<rangle>
+         ] 
+         r \<mapsto>\<langle>sh\<rangle> g1\<down>v1\<close>
+  unfolding aentails_conditional_crule_strong_def
+  by (crush_base simp add: points_to_def)
+
+lemma points_to_aentails_crule_focusedL[crush_points_to_cond_crules]:
+  shows \<open>focus_reference f r \<mapsto>\<langle>sh\<rangle> g1\<down>v1
+         [
+            \<langle>g0 = g1\<rangle> 
+            \<star> \<langle>focus_view f v0 = Some v1\<rangle> 
+            \<star> \<langle>points_to_localizes r g0 v0\<rangle>
+         ]\<longlongrightarrow>\<^sub>s[
+            \<langle>points_to_localizes (focus_reference f r) g1 v1\<rangle>
+         ]
+         r \<mapsto>\<langle>sh\<rangle> g0\<down>v0\<close>
+  unfolding aentails_conditional_crule_strong_def
+  by (crush_base simp add: points_to_def)
+
+lemma points_to_aentails_crule_focusedR[crush_aentails_cond_crules]:
+  shows \<open>r \<mapsto>\<langle>sh\<rangle> g0\<down>v0 
+         [
+           \<langle>g0 = g1\<rangle>
+            \<star> \<langle>focus_view f v0 = Some v1\<rangle>
+            \<star> \<langle>points_to_localizes (focus_reference f r) g1 v1\<rangle>
+         ]\<longlongrightarrow>\<^sub>s[
+           \<langle>points_to_localizes r g0 v0\<rangle>
+         ] 
+         focus_reference f r \<mapsto>\<langle>sh\<rangle> g1\<down>v1\<close>
+  unfolding aentails_conditional_crule_strong_def
+  by (crush_base simp add: points_to_def)
+
+(*
+declare crush_points_to_crules[crush_aentails_crules]
+declare crush_points_to_cond_rules[crush_aentails_cond_rules]
+declare crush_points_to_cond_drules[crush_aentails_cond_drules]
+declare crush_points_to_cond_crules[crush_aentails_cond_crules]
+*)
+
 lemma points_to_split:
   assumes \<open>sh = sh1+sh2\<close>
       and \<open>sh1 \<sharp> sh2\<close>
@@ -28,8 +83,17 @@ using assms
 
 lemma points_to_combine:
   shows \<open>r \<mapsto>\<langle>sh1\<rangle> g1\<down>v1 \<star> r \<mapsto>\<langle>sh2\<rangle> g2\<down>v2 \<longlongrightarrow> r \<mapsto>\<langle>sh1+sh2\<rangle> g1\<down>v1 \<star> \<langle>g1 = g2\<rangle> \<star> \<langle>v1 = v2\<rangle>\<close>
-  by (crush_base simp add: points_to_def seplog drule add: points_to_raw_combine)
-    (clarsimp simp add: plus_share_def sup.commute intro!: aentails_refl_eq)
+  apply (crush_base simp [prems, concls] add: points_to_def seplog drule add: points_to_raw_combine)
+  apply (simp add: aentails_def plus_share_def sup_aci(1))
+  done
+
+\<comment>\<open>This elimination rule is useful in the next proof were many redundant
+\<^verbatim>\<open>is_valid_focus\<close> instances for composed foci accrue.\<close>
+lemma focus_compose_valid_dropE[focus_elims]:
+  assumes \<open>is_valid_ref_for (focus_reference r l) P\<close>
+      and \<open>R\<close>
+    shows \<open>R\<close>
+  using assms by simp
 
 ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
  update_contract modify_raw_contract modify_contract dereference_contract
@@ -75,7 +139,8 @@ lemma gref_points_to_implies_can_store_specific[focus_elims]:
 
 corollary modify_spec [crush_specs]:
   shows \<open>\<Gamma> ; modify_fun r f \<Turnstile>\<^sub>F modify_contract r g0 v0 f\<close>
-  apply (crush_boot f: modify_fun_def contract: modify_contract_def simp: points_to_def)
+  apply (crush_boot f: modify_fun_def contract: modify_contract_def
+    simp:(* points_to_modified_def *) points_to_def)
   apply (crush_base simp add: is_valid_ref_for_def)
   done
 
@@ -83,7 +148,9 @@ lemma update_spec [crush_specs]:
   notes wp_cong[crush_cong del]
     and wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; update_fun r v \<Turnstile>\<^sub>F update_contract r g0 v0 v\<close>
-  by (crush_boot f: update_fun_def contract: update_contract_def) crush_base
+  apply (crush_boot f: update_fun_def contract: update_contract_def)
+  apply (crush_base)
+  done
 
 lemma dereference_spec [crush_specs]:
   shows \<open>\<Gamma> ; dereference_fun r \<Turnstile>\<^sub>F dereference_contract r sh g v\<close>
@@ -199,6 +266,10 @@ definition ref_test_contract where
      make_function_contract pre post\<close>
 ucincl_auto ref_test_contract
 
+
+declare [[show_variants]]
+
+thm crush_specs
 lemma ref_test_spec:
   shows \<open>\<Gamma>; ref_test \<Turnstile>\<^sub>F ref_test_contract\<close>
   apply (crush_boot f: ref_test_def contract: ref_test_contract_def)
