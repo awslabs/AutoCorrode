@@ -218,6 +218,7 @@ struct
   fun REPEAT_SMART (ctxt : Proof.context) (log : logger) (aggressive : bool) (m : logger -> tactic) : tactic = let
 
      fun debug lvl = if lvl <= (Config.get ctxt Crush_Config.debug_level)  then tracing else K ()
+     val prioritize_changed_goals = Config.get ctxt Crush_Config.prioritize_changed_goals
      val m = if Config.get ctxt Crush_Config.do_big_steps then DWELL o m else m
      val gas = Config.get ctxt Crush_Config.gas
 
@@ -296,7 +297,10 @@ struct
                  (* Add inserted subgoals to worklist *)
                  val is'  = insert_goals_adjust_idxs n_new_goals is
                  (* Add changed subgoals to worklist *)
-                 val is'' = (range_of_nats_base 1 (n_new_goals+1)) @ changed @ is'
+                 val is'' = if prioritize_changed_goals then
+                               changed @ (range_of_nats_base 1 (n_new_goals+1)) @ is'
+                            else
+                               (range_of_nats_base 1 (n_new_goals+1)) @ changed @ is'
 
                  val _ = "Goals before: "     ^ (nprems_old |> Int.toString) |> debug 1
                  val _ = "Goals after: "      ^ (nprems_new |> Int.toString) |> debug 1
