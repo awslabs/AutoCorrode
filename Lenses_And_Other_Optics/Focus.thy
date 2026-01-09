@@ -1050,9 +1050,10 @@ lemma focus_compose_view_dropE:
     shows \<open>R\<close>
 using assms by simp
 
-lemma focus_is_view_elim:
+lemma focus_is_view_elim[focus_elims2]:
   assumes \<open>focus_is_view l (focus_modify l op x) y\<close>
-      and \<open>\<And>y'. focus_is_view l x y' \<Longrightarrow> y = op y' \<Longrightarrow> R\<close>
+      and \<open>focus_is_view l x y'\<close>
+      and \<open>y = op y' \<Longrightarrow> R\<close>
     shows R
 using assms by (metis focus_laws_update(2) focus_modify_def' focus_raw_view_modify'I option.collapse
   option.simps(1))
