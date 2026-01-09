@@ -1256,12 +1256,58 @@ lemma write_foo_read_bar_spec':
   step
   step
   step
+  step
+  step
+  step
+  step
+  step
+  step
   done
 
 text\<open>Clear many structure fields, return another:\<close>
 
 definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
-  \<open>test_record2_zeroize ptr \<equiv> FunctionBody \<lbrakk>
+  \<open>test_record2_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
+     ptr.f0 = 2;
+     ptr.f1 = 2;
+     ptr.f2 = 2;
+     ptr.f3 = 2;
+     ptr.f4 = 2;
+     ptr.f5 = 2;
+     ptr.f6 = 2;
+     ptr.f7 = 2;
+     ptr.f8 = 2;
+     ptr.f9 = 2;
+     ptr.f10 = 2;
+     ptr.f11 = 2;
+     ptr.f12 = 2;
+     ptr.f13 = 2;
+     ptr.f14 = 2;
+     ptr.f15 = 2;
+     ptr.f16 = 2;
+     ptr.f17 = 2;
+     ptr.f18 = 2;
+     ptr.f19 = 2;
+     ptr.f0 = 1;
+     ptr.f1 = 1;
+     ptr.f2 = 1;
+     ptr.f3 = 1;
+     ptr.f4 = 1;
+     ptr.f5 = 1;
+     ptr.f6 = 1;
+     ptr.f7 = 1;
+     ptr.f8 = 1;
+     ptr.f9 = 1;
+     ptr.f10 = 1;
+     ptr.f11 = 1;
+     ptr.f12 = 1;
+     ptr.f13 = 1;
+     ptr.f14 = 1;
+     ptr.f15 = 1;
+     ptr.f16 = 1;
+     ptr.f17 = 1;
+     ptr.f18 = 1;
+     ptr.f19 = 1;
      ptr.f0 = 0;
      ptr.f1 = 0;
      ptr.f2 = 0;
@@ -1283,7 +1329,7 @@ definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarro
      ptr.f18 = 0;
      ptr.f19 = 0;
      *(ptr.f20)
-  \<rbrakk>\<close>
+  )\<rbrakk>\<close>
 
 definition test_record2_zeroize_contract ::
    \<open>('a, 'b, test_record2) ref \<Rightarrow> 'b \<Rightarrow> test_record2 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
@@ -1316,6 +1362,7 @@ definition test_record2_zeroize_contract ::
 ucincl_auto test_record2_zeroize_contract
 
 lemma test_record2_zeroize_contract_spec:
+  notes focus_compose_view_dropE[focus_elims]
   shows \<open>\<Gamma>; test_record2_zeroize ptr \<Turnstile>\<^sub>F test_record2_zeroize_contract ptr g v\<close>
   apply (crush_boot f: test_record2_zeroize_def contract: test_record2_zeroize_contract_def)
   using [[crush_time_steps]]

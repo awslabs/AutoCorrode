@@ -1029,7 +1029,7 @@ lemma focus_raw_view_update'I[focus_rules]:
     shows \<open>focus_is_view l (focus_update l y s) t'\<close>
 using assms by (simp add: focus_laws_update)
 
-lemma focus_compose_is_view[focus_intros]:
+lemma focus_compose_is_viewI[focus_intros]:
   assumes \<open>focus_is_view f0 x y\<close>
       and \<open>focus_is_view f1 y z\<close>
     shows \<open>focus_is_view (f0 \<diamondop> f1) x z\<close>
@@ -1043,8 +1043,7 @@ lemma focus_is_view_modify_partial[focus_intros]:
 using assms by transfer (simp add: focus_raw_compose_components(2) focus_raw_laws_update(1)
   focus_raw_modify_def)
 
-text\<open>Make this \<^verbatim>\<open>focus_elim\<close> to avoid build-up of redundant hypotheses?\<close>
-lemma focus_compose_view_dropE:
+lemma focus_compose_view_dropE[focus_elims]:
   assumes \<open>focus_is_view (f0 \<diamondop> f1) (focus_modify f2 op x) y\<close>
       and \<open>R\<close>
     shows \<open>R\<close>

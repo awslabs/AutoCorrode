@@ -535,6 +535,7 @@ struct
          val branches = [
             ("base_simps_tac"          , \<^here>, (fn _ => crush_branch_base_simps_tac ctxt)),
             ("destruct_tac"            , \<^here>, (fn _ => crush_branch_destruct_tac ctxt)),
+            ("focus_tac"               , \<^here>, (fn _ => crush_branch_focus_tac ctxt)),
             ("wp_intros_tac"           , \<^here>, (fn _ => crush_branch_wp_intros_tac ctxt)),
             ("urust_determine_branch"  , \<^here>, (fn _ => crush_branch_determine_branch ctxt)),
             ("call_tac (no schematics)", \<^here>, (fn _ => crush_branch_call_tac ctxt false unfold_contract_tac)),
@@ -547,7 +548,6 @@ struct
             ("aentails_crule_tac"      , \<^here>, (fn _ => crush_branch_aentails_crule_tac ctxt)),
             ("aentails_cond_rule_tac"  , \<^here>, (fn _ => crush_branch_aentails_cond_rule_tac ctxt)),
             ("aentails_rule_tac"       , \<^here>, (fn _ => crush_branch_aentails_rule_tac ctxt)),
-            ("focus_tac"               , \<^here>, (fn _ => crush_branch_focus_tac ctxt)),
             ("unfold_concls_tac"       , \<^here>, (fn _ => crush_branch_unfold_concls_tac ctxt)),
             ("schematics_tac"          , \<^here>, (fn _ => crush_branch_schematics_tac ctxt unfold_contract_tac)),
             ("intro_pure_aentails_tac" , \<^here>, (fn _ => crush_branch_intro_pure_aentails_tac ctxt)),

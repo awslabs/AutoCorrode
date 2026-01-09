@@ -87,12 +87,16 @@ lemma points_to_combine:
   apply (simp add: aentails_def plus_share_def sup_aci(1))
   done
 
-\<comment>\<open>This elimination rule is useful in the next proof were many redundant
-\<^verbatim>\<open>is_valid_focus\<close> instances for composed foci accrue.\<close>
 lemma focus_compose_valid_dropE[focus_elims]:
   assumes \<open>is_valid_ref_for (focus_reference r l) P\<close>
       and \<open>R\<close>
     shows \<open>R\<close>
+  using assms by simp
+
+lemma focus_focused_view_dropE[focus_elims]:
+  assumes \<open>focus_is_view (\<integral>(focus_focused f r)) x y\<close>
+      and R
+    shows R
   using assms by simp
 
 ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
@@ -139,8 +143,7 @@ lemma gref_points_to_implies_can_store_specific[focus_elims]:
 
 corollary modify_spec [crush_specs]:
   shows \<open>\<Gamma> ; modify_fun r f \<Turnstile>\<^sub>F modify_contract r g0 v0 f\<close>
-  apply (crush_boot f: modify_fun_def contract: modify_contract_def
-    simp:(* points_to_modified_def *) points_to_def)
+  apply (crush_boot f: modify_fun_def contract: modify_contract_def simp: points_to_def)
   apply (crush_base simp add: is_valid_ref_for_def)
   done
 
@@ -148,9 +151,7 @@ lemma update_spec [crush_specs]:
   notes wp_cong[crush_cong del]
     and wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; update_fun r v \<Turnstile>\<^sub>F update_contract r g0 v0 v\<close>
-  apply (crush_boot f: update_fun_def contract: update_contract_def)
-  apply (crush_base)
-  done
+  by (crush_boot f: update_fun_def contract: update_contract_def) crush_base
 
 lemma dereference_spec [crush_specs]:
   shows \<open>\<Gamma> ; dereference_fun r \<Turnstile>\<^sub>F dereference_contract r sh g v\<close>
@@ -266,10 +267,6 @@ definition ref_test_contract where
      make_function_contract pre post\<close>
 ucincl_auto ref_test_contract
 
-
-declare [[show_variants]]
-
-thm crush_specs
 lemma ref_test_spec:
   shows \<open>\<Gamma>; ref_test \<Turnstile>\<^sub>F ref_test_contract\<close>
   apply (crush_boot f: ref_test_def contract: ref_test_contract_def)
