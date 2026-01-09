@@ -1538,15 +1538,25 @@ struct
                   (aentails_float_match ctxt (is_cancellable_pair ctxt)))
            THEN' (resolve_tac ctxt @{thms aentails_refl asepconj_mono asepconj_mono5 aentails_cancel_r})
 
+  val aentails_cancel_legacy_points_to : Proof.context -> int -> tactic = fn ctxt => 
+     if not (Config.get ctxt Crush_Config.enable_legacy_points_to_tactics) then
+       K no_tac
+     else
+     let
+     fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
+                  #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_cancel) msg in
+              NOTE "aentails_cancel_tac_points_to" (aentails_cancel_points_to_tac ctxt)
+      ORELSE' NOTE "aentails_cancel_tac_points_to_raw" (aentails_cancel_points_to_raw_tac ctxt)
+      ORELSE' NOTE "aentails_cancel_tac_raw_with_typed" (aentails_cancel_points_to_raw_with_typed_tac ctxt)
+      ORELSE' NOTE "aentails_cancel_tac_split_points_to" (aentails_split_points_to_assms_tac ctxt)
+     end
+
   val aentails_cancel_tac : Proof.context -> int -> tactic = fn ctxt => let
      fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
                   #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_cancel) msg in
             NOTE "aentails_cancel_tac_core" (aentails_cancel_core_tac ctxt)
     ORELSE' NOTE "aentails_cancel_tac_multi" (aentails_cancel_multi_tac ctxt)
-    ORELSE' NOTE "aentails_cancel_tac_points_to" (aentails_cancel_points_to_tac ctxt)
-    ORELSE' NOTE "aentails_cancel_tac_points_to_raw" (aentails_cancel_points_to_raw_tac ctxt)
-    ORELSE' NOTE "aentails_cancel_tac_raw_with_typed" (aentails_cancel_points_to_raw_with_typed_tac ctxt)
-    ORELSE' NOTE "aentails_cancel_tac_split_points_to" (aentails_split_points_to_assms_tac ctxt)
+    ORELSE' NOTE "aentails_cancel_legacy_points_to" (aentails_cancel_legacy_points_to ctxt)
     end
 
   val filter_metavariables = List.filter (fn x =>

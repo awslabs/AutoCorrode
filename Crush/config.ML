@@ -67,6 +67,11 @@ sig
   val enable_base_simps_detect_aentails_contradiction : bool Config.T
   val enable_base_simps_early_unfold : bool Config.T
 
+  (* This option enables/disables custom automation for points-to in crush.
+     Ultimately, this should be removed, and all reasoning about points-to
+     expressed in terms of suitable rules/drules/crules. *)
+  val enable_legacy_points_to_tactics: bool Config.T
+
   val enable_urust_split_branch : bool Config.T
   val enable_urust_determine_branch : bool Config.T
 
@@ -83,7 +88,7 @@ sig
   val relevance_filter_max_facts : int Config.T
 
   val crush_simp_trace_enable : bool Config.T
-  
+
   val crush_force_inline : bool Config.T
   val fail_on_bad_schematic : bool Config.T
 
@@ -159,5 +164,7 @@ struct
 
   val simp_general_implies_prems = Attrib.setup_config_bool @{binding "crush_simp_general_implies_prems"} (K false)
   val simp_general_implies_concls = Attrib.setup_config_bool @{binding "crush_simp_general_implies_concls"} (K false)
+
+  val enable_legacy_points_to_tactics = Attrib.setup_config_bool @{binding "crush_enable_legacy_points_to_tactic"} (K true)
 
 end;
