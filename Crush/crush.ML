@@ -84,6 +84,7 @@ sig
   val crush_branch_aentails_cond_drule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_cond_rule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_cond_crule_tac : Proof.context -> int -> tactic
+  val crush_branch_focus_core_tac : Proof.context -> int -> tactic
   val crush_branch_focus_tac : Proof.context -> int -> tactic
   val crush_branch_unfold_concls_tac : Proof.context -> int -> tactic
   val crush_branch_schematics_tac : Proof.context -> (int -> tactic) -> int -> tactic
@@ -159,20 +160,6 @@ struct
     in ctxt |> Named_Theorems.add_thm @{named_theorems "crush_wp_split_simps"} t'
     end
   )  
-
-  val simp_focus_basic_tac : Proof.context -> int -> tactic = fn ctxt =>
-    let val focus_intros =
-      Named_Theorems.get ctxt @{named_theorems focus_intros} @
-      Named_Theorems.get ctxt @{named_theorems micro_rust_record_intros}
-    val focus_rules = Named_Theorems.get ctxt @{named_theorems focus_rules}
-    val focus_elims  = Named_Theorems.get ctxt @{named_theorems focus_elims}
-    val focus_elims2  = Named_Theorems.get ctxt @{named_theorems focus_elims2}
-    in fn i =>
-      REPEAT1(        intro_tac focus_intros ctxt i
-               ORELSE resolve_tac ctxt focus_rules i
-               ORELSE elim_tac  focus_elims  ctxt i
-               ORELSE ((eresolve_tac ctxt focus_elims2 THEN' assm_tac ctxt) i))
-    end
 
   val crush_base_unfold_contract_tac : Proof.context -> int -> tactic = fn ctxt =>
     let
@@ -415,6 +402,22 @@ struct
          K no_tac)
     end
 
+  val crush_branch_focus_core_tac : Proof.context -> int -> tactic = fn ctxt =>
+    let val focus_intros =
+      Named_Theorems.get ctxt @{named_theorems focus_intros} @
+      Named_Theorems.get ctxt @{named_theorems micro_rust_record_intros}
+    val focus_rules = Named_Theorems.get ctxt @{named_theorems focus_rules}
+    val focus_elims  = Named_Theorems.get ctxt @{named_theorems focus_elims}
+    val focus_elims2  = Named_Theorems.get ctxt @{named_theorems focus_elims2}
+    in 
+         ((REPEAT_ALL_NEW (intro_tac (focus_rules @ focus_intros) ctxt))
+             THEN_ALL_NEW (TRY o REPEAT_ALL_NEW (assm_tac ctxt ORELSE' crush_branch_base_simps_tac ctxt ORELSE' crush_branch_clarsimp_tac ctxt)))
+         ORELSE' elim_tac  focus_elims  ctxt
+         ORELSE' (eresolve_tac ctxt focus_elims2 THEN' assm_tac ctxt)
+    end
+
+  fun crush_branch_focus_tac ctxt = REPEAT_ALL_NEW (crush_branch_focus_core_tac ctxt)
+
   val crush_branch_clarsimp_fallback_tac = fn ctxt =>
    let fun log_before_after old_goal new_goal_opt =
       (let val old_txt = 
@@ -501,7 +504,6 @@ struct
       post_step_tac = NONE }
   );
 
-  val crush_branch_focus_tac = simp_focus_basic_tac
   val crush_branch_ucincl_tac = Separation_Logic_Tactics.ucincl_solve_tac
 
   val crush_branch_additional_tactic: Proof.context -> int -> tactic = fn ctxt =>

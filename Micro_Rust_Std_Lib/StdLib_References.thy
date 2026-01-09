@@ -112,6 +112,19 @@ lemma points_to_localizesE[focus_elims]:
    shows R
   using assms by simp
 
+lemma focus_compose_is_view_guardedI:
+  assumes \<open>focus_is_view f0 x y\<close>
+      and \<open>GUARD y (focus_is_view f1 y z)\<close>
+    shows \<open>focus_is_view (f0 \<diamondop> f1) x z\<close>
+using assms unfolding GUARD_def by (simp add: focus_compose_is_viewI)
+
+lemma focus_is_view_modify_partial_guarded:
+  assumes \<open>focus_is_view f0 x y'\<close>
+      and \<open>f0 = f0'\<close>
+      and \<open>y = GUARD y' (focus_modify f1 op y')\<close>
+    shows \<open>focus_is_view f0 (focus_modify (f0' \<diamondop> f1) op x) y\<close>
+  using assms unfolding GUARD_def by (simp add: focus_is_view_modify_partial)
+
 ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
  update_contract modify_raw_contract modify_contract dereference_contract
  ro_dereference_contract reference_contract

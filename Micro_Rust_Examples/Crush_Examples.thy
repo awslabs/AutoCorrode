@@ -1024,9 +1024,6 @@ lemma
   step
   step
   step
-  step
-  step
-  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1211,7 +1208,6 @@ ucincl_auto write_foo_read_bar_contract
 lemma write_foo_read_bar_spec:
   shows \<open>\<Gamma>; write_foo_read_bar ptr \<Turnstile>\<^sub>F write_foo_read_bar_contract ptr g v\<close>
   apply (crush_boot f: write_foo_read_bar_def contract: write_foo_read_bar_contract_def)
-  using [[crush_log_toplevel]]
   apply crush_base
   done
 
@@ -1222,16 +1218,6 @@ lemma write_foo_read_bar_spec':
   apply (crush_boot f: write_foo_read_bar_def contract: write_foo_read_bar_contract_def)
   using [[crush_log_toplevel]]
   apply (crush_base stepwise)
-  step
-  step
-  step
-  step
-  step
-  step
-  step
-  step
-  step
-  step
   step
   step
   step
@@ -1548,8 +1534,6 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   show ?case
   \<comment>\<open>TODO: This proof gets slower over time. Investigate\<close>
   apply\<tau> (crush_base stepwise)
-  step 100
-  step 100
   step 100
   step 100
   step 100
