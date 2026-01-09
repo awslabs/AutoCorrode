@@ -361,6 +361,8 @@ struct
       else
         K no_tac
 
+  val update_guards_tac = Crush_Guards.update_guards_shallow_tac
+
   val crush_branch_reduced_clarsimp_tac : Proof.context -> int -> tactic =
     fn ctxt => let fun NOTE msg =  TIME' ctxt (Config.get ctxt Crush_Config.time_clarsimp) msg
                                 #> LOG' ctxt  (Config.get ctxt Crush_Config.log_clarsimp) msg
@@ -411,7 +413,10 @@ struct
     val focus_elims2  = Named_Theorems.get ctxt @{named_theorems focus_elims2}
     in 
          ((REPEAT_ALL_NEW (intro_tac (focus_rules @ focus_intros) ctxt))
-             THEN_ALL_NEW (TRY o REPEAT_ALL_NEW (assm_tac ctxt ORELSE' crush_branch_base_simps_tac ctxt ORELSE' crush_branch_clarsimp_tac ctxt)))
+             THEN_ALL_NEW (TRY o REPEAT_ALL_NEW (update_guards_tac ctxt THEN' (
+                 assm_tac ctxt ORELSE' 
+                 crush_branch_base_simps_tac ctxt ORELSE' 
+                 crush_branch_clarsimp_tac ctxt))))
          ORELSE' elim_tac  focus_elims  ctxt
          ORELSE' (eresolve_tac ctxt focus_elims2 THEN' assm_tac ctxt)
     end
@@ -490,8 +495,6 @@ struct
 
   val crush_branch_aentails_rule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_rule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_rules}) ctxt
-
-  val update_guards_tac = Crush_Guards.update_guards_shallow_tac
 
   structure CrushData = Proof_Data (
     type T = {

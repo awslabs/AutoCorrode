@@ -1265,6 +1265,7 @@ lemma write_foo_read_bar_spec':
   step
   step
   step
+  step
   done
 
 text\<open>Clear many structure fields, return another:\<close>
