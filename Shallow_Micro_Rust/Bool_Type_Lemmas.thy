@@ -36,14 +36,14 @@ lemma evaluate_two_armed_conditionalI [micro_rust_intros]:
       and \<open>\<And>\<pi> \<sigma>' test'. evaluate test \<sigma> = Yield \<pi> \<sigma>' test' \<Longrightarrow> k = Yield \<pi> \<sigma>' (\<lambda>\<omega>. if (test' \<omega>) \<lbrace> t \<rbrace> else \<lbrace> f \<rbrace>)\<close>
     shows \<open>evaluate (if test \<lbrace> t \<rbrace> else \<lbrace> f \<rbrace>) \<sigma> = k\<close>
 using assms by (simp add: two_armed_conditional_def; cases \<open>evaluate test \<sigma>\<close>; intro evaluate_bindI; auto)
- 
+
 lemma evaluate_two_armed_conditionalE [micro_rust_elims]:
   assumes \<open>evaluate (two_armed_conditional test t f) \<sigma> = k\<close>
     and \<open>\<And>q \<sigma>' \<sigma>''. evaluate test \<sigma> = Success True \<sigma>' \<Longrightarrow> evaluate t \<sigma>' = k \<Longrightarrow> R\<close>
     and \<open>\<And>q \<sigma>' \<sigma>''. evaluate test \<sigma> = Success False \<sigma>' \<Longrightarrow> evaluate f \<sigma>' = k \<Longrightarrow> R\<close>
     and \<open>\<And>r \<sigma>'. evaluate test \<sigma> = Return r \<sigma>' \<Longrightarrow> k = Return r \<sigma>' \<Longrightarrow> R\<close>
     and \<open>\<And>a \<sigma>'. evaluate test \<sigma> = Abort a \<sigma>' \<Longrightarrow> k = Abort a \<sigma>' \<Longrightarrow>  R\<close>
-    and \<open>\<And>\<pi> \<sigma>' test'. evaluate test \<sigma> = Yield \<pi> \<sigma>' test' \<Longrightarrow> 
+    and \<open>\<And>\<pi> \<sigma>' test'. evaluate test \<sigma> = Yield \<pi> \<sigma>' test' \<Longrightarrow>
       k = Yield \<pi> \<sigma>' (\<lambda>\<omega>. if (test' \<omega>) \<lbrace> t \<rbrace> else \<lbrace> f \<rbrace>) \<Longrightarrow> R\<close>
   shows \<open>R\<close>
   using assms by (unfold two_armed_conditional_def) (elim evaluate_bindE; clarsimp split: if_splits)
@@ -76,7 +76,7 @@ proof -
   have X: \<open>\<And>v e f g. (if v then (e; g) else (f; g)) = (if v then (e; g) else (f; g))\<close>
     by (case_tac v; auto)
   have \<open>?RHS = (let v = c; ((if v then e else f); g))\<close>
-    by (simp add: two_armed_conditional_def Core_Expression_Lemmas.bind_assoc sequence_def)  
+    by (simp add: two_armed_conditional_def Core_Expression_Lemmas.bind_assoc sequence_def)
   also have \<open>... = (let v = c; (if v then (e; g) else (f; g)))\<close>
     by (metis (mono_tags, lifting))
   also have \<open>... = ?LHS\<close>
@@ -145,6 +145,22 @@ lemma evaluate_eq_literal [micro_rust_simps]:
 lemma evaluate_neq_literal [micro_rust_simps]:
   shows \<open>\<lbrakk> c != d \<rbrakk> = \<lbrakk> \<llangle>c \<noteq> d\<rrangle> \<rbrakk>\<close>
   by (clarsimp simp add: micro_rust_simps urust_neq_def)
+
+(* We don't add these to micro_rust_simps as it can leads to overly aggressive case-splitting
+   by HOL's if_split rule. Still, it can be useful in specific proofs. *)
+
+lemma evaluate_pure_if:
+  shows \<open>\<lbrakk> if x { y } else { z } \<rbrakk> = \<lbrakk> \<llangle>if x then y else z\<rrangle> \<rbrakk>\<close>
+  by (clarsimp simp add: micro_rust_simps)
+
+lemma evaluate_pure_if_then_True:
+  shows \<open>\<lbrakk> \<llangle>if x then True else z\<rrangle> \<rbrakk> = \<lbrakk> \<llangle>x \<or> z\<rrangle> \<rbrakk>\<close>
+  by simp
+
+lemma evaluate_pure_if_else_True:
+  shows \<open>\<lbrakk> \<llangle>if x then y else True\<rrangle> \<rbrakk> = \<lbrakk> \<llangle>\<not>x \<or> y\<rrangle> \<rbrakk>\<close>
+  by simp
+
 
 (*<*)
 end
