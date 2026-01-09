@@ -491,9 +491,11 @@ struct
     type T = {
       additional_tac : (Proof.context -> int -> tactic) option,
       additional_method : (Proof.context -> Method.method) option,
-      abort_before_condition : (Proof.context -> term -> bool) option
+      abort_before_condition : (Proof.context -> term -> bool) option,
+      post_step_tac : (Proof.context -> int -> tactic) option
     };
-    val init = K {additional_tac = NONE, additional_method = NONE, abort_before_condition = NONE}
+    val init = K {additional_tac = NONE, additional_method = NONE, abort_before_condition = NONE,
+      post_step_tac = NONE }
   );
 
   val crush_branch_focus_tac = simp_focus_basic_tac
@@ -501,6 +503,9 @@ struct
 
   val crush_branch_additional_tactic: Proof.context -> int -> tactic = fn ctxt =>
      Option.getOpt((CrushData.get ctxt |> #additional_tac),  K (K no_tac)) ctxt
+
+  val crush_post_step_tac: Proof.context -> int -> tactic = fn ctxt =>
+     Option.getOpt((CrushData.get ctxt |> #post_step_tac),  K (K all_tac)) ctxt
 
   val crush_abort_condition: Proof.context -> term -> bool = fn ctxt =>
      Option.getOpt ((CrushData.get ctxt |> #abort_before_condition), K (K false)) ctxt
@@ -525,6 +530,7 @@ struct
              time_and_report ctxt "crush_instantiation_step_unfold_contract"
              (Config.get ctxt Crush_Config.time_step_instantiation_by_branch)
              (fn _ => crush_base_unfold_contract_tac ctxt))
+         val post_step_tac = crush_post_step_tac ctxt 
          val branches = [
             ("base_simps_tac"          , \<^here>, (fn _ => crush_branch_base_simps_tac ctxt)),
             ("destruct_tac"            , \<^here>, (fn _ => crush_branch_destruct_tac ctxt)),
@@ -560,7 +566,7 @@ struct
              (Config.get ctxt Crush_Config.time_step_instantiation_by_branch) lazy_tac')))
      in fn log =>
        let val branches = List.map (NOTE' log) branches in
-       fn i => fn st => FIRST' branches i st
+       fn i => fn st => (FIRST' branches THEN_ALL_NEW (TRY o post_step_tac)) i st
          handle ABORT msg => ("Early abort of crush step: " ^ msg |> Pretty.text |> Pretty.block |> Pretty.writeln; Seq.empty)
      end end
 
@@ -642,30 +648,35 @@ struct
        name_parser |-- Args.colon |-- value_parser >> (fn v => { init = action v, attribute = dummy_attrib, pos = pos })
      end
 
- fun make_arg_parser'' name_parser value_parser action pos = let
-     val dummy_attrib : attribute = K (NONE, NONE) in
-       (name_parser |-- Args.colon) -- value_parser >> (fn (a,b) => { init = action a b, attribute = dummy_attrib, pos = pos })
-     end
-
  val additional_tac_parser = make_arg_parser' (Args.$$$ "branch" -- Args.$$$ "tactic" -- Args.add) Parser.parse_tactic
      (fn tac => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = #abort_before_condition v,
                                                             additional_tac = SOME tac,
-                                                            additional_method = #additional_method v } ) ) \<^here>
+                                                            additional_method = #additional_method v,
+                                                            post_step_tac = #post_step_tac v } ) ) \<^here>
+
+ val post_step_tac_parser = make_arg_parser' (Args.$$$ "post" -- Args.$$$ "tactic") Parser.parse_tactic
+     (fn tac => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = #abort_before_condition v,
+                                                            additional_tac = #additional_tac v,
+                                                            additional_method = #additional_method v,
+                                                            post_step_tac = SOME tac } ) ) \<^here>
 
  val additional_method_parser = make_arg_parser' (Args.$$$ "branch" -- Args.add) Parser.parse_method
      (fn method => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = #abort_before_condition v,
                                                                additional_method = SOME method,
-                                                               additional_tac = #additional_tac v } ) ) \<^here>
+                                                               additional_tac = #additional_tac v,
+                                                               post_step_tac = #post_step_tac v} ) ) \<^here>
 
  val abort_at_filter_parser = make_arg_parser' (Args.$$$ "abort" -- Args.$$$ "at" -- Args.$$$ "filter") Parser.parse_term_filter
      (fn cond => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = SOME cond,
                                                              additional_method = #additional_method v,
-                                                             additional_tac = #additional_tac v } ) ) \<^here>
+                                                             additional_tac = #additional_tac v,
+                                                             post_step_tac = #post_step_tac v } ) ) \<^here>
 
  val abort_at_pattern_parser = make_arg_parser' (Args.$$$ "abort" -- Args.$$$ "at" -- Args.$$$ "pattern") Parser.parse_goal_filter_pattern
      (fn cond => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = SOME cond,
                                                              additional_method = #additional_method v,
-                                                             additional_tac = #additional_tac v } ) ) \<^here>
+                                                             additional_tac = #additional_tac v,
+                                                             post_step_tac = #post_step_tac v} ) ) \<^here>
 
  val add_del_parser = (Args.add >> K false) || (Args.del >> K true)
 
@@ -754,6 +765,7 @@ struct
                      make_modifier_parser "no_schematics"  (Config.put Crush_Config.enable_schematics false) \<^here>,
                      make_modifier_parser "do_split"       (Config.put Crush_Config.enable_branch_split true) \<^here>,
                      make_modifier_parser "no_urust_case_split" (Config.put Crush_Config.enable_urust_split_branch false) \<^here>,
+                     post_step_tac_parser,
                      additional_tac_parser, additional_method_parser,
                      abort_at_filter_parser, abort_at_pattern_parser]
   val time_parsers = [make_time_parser "steps"    Crush_Config.time_steps,
