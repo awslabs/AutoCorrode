@@ -11,6 +11,7 @@ begin
 named_theorems focus_rules
 named_theorems focus_intros
 named_theorems focus_elims
+named_theorems focus_elims2
 named_theorems focus_simps
 named_theorems focus_components
 (*>*)

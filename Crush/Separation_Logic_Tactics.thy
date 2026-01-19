@@ -27,9 +27,12 @@ ML\<open>
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_late_simps"}        "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_prems_simps"}       "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_concls_simps"}      "" #> snd |> Named_Target.theory_map)
+   val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_cond_rules"}    "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_rules"}    "" #> snd |> Named_Target.theory_map)
+   val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_cond_drules"}   "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_drules"}   "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_wp_split_simps"}    "" #> snd |> Named_Target.theory_map)
+   val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_cond_crules"}   "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_aentails_crules"}   "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_asepconj_simp"}     "" #> snd |> Named_Target.theory_map)
    val _ =  Theory.setup (Named_Theorems.declare @{binding "crush_specs_eager"}       "" #> snd |> Named_Target.theory_map)
@@ -264,6 +267,17 @@ declare asepconj_UNIV_idempotent[crush_asepconj_simp]
 declare awand_pure_false        [crush_asepconj_simp]
 
 declare refl[crush_intros add]
+
+lemma wp_cong[crush_cong]:
+  assumes \<open>\<phi> = \<phi>'\<close>
+      and \<open>e = e'\<close>
+    shows \<open>(\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>) \<longleftrightarrow> (\<phi>' \<longlongrightarrow> \<W>\<P> \<Gamma> e' \<psi> \<rho> \<theta>)\<close>
+using assms by auto
+
+lemma wp_cong'[crush_cong]:
+  assumes \<open>\<phi> = \<phi>'\<close>
+    shows \<open>(\<phi> \<Zsurj> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>) = (\<phi>' \<Zsurj> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>)\<close>
+using assms by auto
 
 end
 (*>*)

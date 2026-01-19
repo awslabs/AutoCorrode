@@ -104,6 +104,21 @@ definition slice_index_vector :: \<open>('a, 'b, ('v, 'l::{len}) vector) ref \<R
      \<epsilon>\<open>abort DanglingPointer\<close>
   \<rbrakk>\<close>
 
+definition slice_index_vector_contract :: \<open>(('a, 'b) gref, 'b, ('t, 'l::{len}) vector) focused \<Rightarrow> 'b \<Rightarrow>
+      ('t, 'l) vector \<Rightarrow> 'c::{len} word \<Rightarrow> share \<Rightarrow> ('s, (('a, 'b) gref, 'b, 't) focused, 'abort) function_contract\<close> where
+  [crush_contracts]: \<open>slice_index_vector_contract ptr g ls idx sh \<equiv>
+    let pre = ptr \<mapsto>\<langle>sh\<rangle> g\<down>ls \<star>
+              \<langle>unat idx < vector_len ls\<rangle> in
+    let post = \<lambda>r. (ptr \<mapsto>\<langle>sh\<rangle> g\<down>ls \<star> \<langle>r = focus_nth_vector (unat idx) ptr\<rangle>) in
+      make_function_contract pre post\<close>
+ucincl_auto slice_index_vector_contract
+
+lemma slice_index_vector_spec [crush_specs]:
+  shows \<open>\<Gamma> ; slice_index_vector ptr idx \<Turnstile>\<^sub>F slice_index_vector_contract ptr g ls idx sh\<close>
+  apply (crush_boot f: slice_index_vector_def contract: slice_index_vector_contract_def)
+  apply crush_base
+  done
+
 \<comment>\<open>TODO: The subrange focus is not valid, and with focus validity baked into the focus type,
 the following does not work anymore. Once we actually use subrange slices, this needs to be
 revisited.\<close>
@@ -134,23 +149,20 @@ definition slice_index_range :: \<open>('a, 'b, 'v list) ref \<Rightarrow> 'w::{
 
 definition list_index_range_contract :: \<open>'t list \<Rightarrow> 'w::{len} word range \<Rightarrow> ('s, 't list, 'abort) function_contract\<close> where
   [crush_contracts]: \<open>list_index_range_contract xs r \<equiv>
-     let pre  = \<langle>unat (end r) \<le> length xs\<rangle>;
-         post = \<lambda>res.
-                  if start r \<ge> end r then
-                    \<langle>res = []\<rangle>
-                  else
-                    \<langle>res = List.take (unat (end r - start r)) (List.drop (unat (start r)) xs)\<rangle>
+     let pre  = \<langle>unat (end r) \<le> length xs \<and> start r \<le> end r\<rangle>;
+         post = \<lambda>res. \<langle>res = List.take (unat (end r - start r)) (List.drop (unat (start r)) xs)\<rangle>
       in make_function_contract pre post\<close>
 ucincl_auto list_index_range_contract
 
 lemma list_index_range_spec [crush_specs]:
   shows \<open>\<Gamma> ; list_index_range xs r \<Turnstile>\<^sub>F list_index_range_contract xs r\<close>
-by (crush_boot f: list_index_range_def contract: list_index_range_contract_def)
-     (crush_base split!: range.splits)
+  by (crush_boot f: list_index_range_def contract: list_index_range_contract_def)
+     (crush_base split!: range.splits; simp)
 
 adhoc_overloading index_const \<rightleftharpoons>
   slice_index
   slice_index_array
+  slice_index_vector
   \<comment>\<open>TODO: Add back in once subrange slices are working again: \<^verbatim>\<open>slice_index_range\<close>\<close>
 
 (*<*)

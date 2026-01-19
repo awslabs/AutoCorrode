@@ -174,6 +174,8 @@ lemma [ucincl_intros]:
 
 lemma update_raw_fun_spec:
   notes mset_upt [simp del]
+    wp_cong[crush_cong del]
+    wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; update_raw_fun r g \<Turnstile>\<^sub>F reference_defs.update_raw_contract points_to_raw' gref_can_store r g0 g\<close>
 proof -
   let ?pr = \<open>Global_Store.address r\<close>
@@ -197,6 +199,9 @@ qed
 
 lemma dereference_raw_fun_spec:
   notes mset_upt [simp del]
+    reference_defs.points_to_raw_def[simp add]
+    and wp_cong[crush_cong del]
+    and wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; dereference_raw_fun r \<Turnstile>\<^sub>F reference_defs.dereference_raw_contract points_to_raw' r sh g\<close>
 proof -
   let ?pr = \<open>Global_Store.address r\<close>
@@ -213,7 +218,7 @@ proof -
     is_valid_raw_pmem_region_nat_word_conv specs add: load_physical_address_spec
     contracts add: load_tagged_physical_address_contract_def)
   apply (fastcrush_base simp prems add: points_to_tagged_phys_bytes_def)
-  apply (aentails_float_multi_assms', rule_tac i=i in aentails_multi_mapped_pick_0L, simp,
+  apply (aentails_float_multi_assms', rule_tac i=\<open>length res\<close> in aentails_multi_mapped_pick_0L, simp,
     fastcrush_base simp add: take_Suc_conv_app_nth simp concls add: points_to_tagged_phys_bytes_def)
   apply (simp add: aentails_def asepconj_comm asepconj_multi_mapped_pick)
   done

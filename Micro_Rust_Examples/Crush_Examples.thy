@@ -366,6 +366,7 @@ begin
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
+    apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     done
 end
 
@@ -499,6 +500,7 @@ begin
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
+    apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     done
 end
 
@@ -530,12 +532,12 @@ begin
     oops \<comment>\<open>5 not enough\<close>
 
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
-    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 8)
-    done \<comment>\<open>8 was enough!\<close>
+    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 9)
+    done \<comment>\<open>9 was enough!\<close>
 
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
-    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 7)
-    oops \<comment>\<open>7 not enough\<close>
+    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 8)
+    oops \<comment>\<open>8 not enough\<close>
 
   \<comment>\<open>So we need exactly 8 steps. In this example, we could of course have found out more quickly
   by the 'copy-paste-method', but it does not scale as well.\<close>
@@ -1000,6 +1002,28 @@ lemma
   step
   step
   step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
+  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1184,7 +1208,6 @@ ucincl_auto write_foo_read_bar_contract
 lemma write_foo_read_bar_spec:
   shows \<open>\<Gamma>; write_foo_read_bar ptr \<Turnstile>\<^sub>F write_foo_read_bar_contract ptr g v\<close>
   apply (crush_boot f: write_foo_read_bar_def contract: write_foo_read_bar_contract_def)
-  using [[crush_log_toplevel]]
   apply crush_base
   done
 
@@ -1242,12 +1265,73 @@ lemma write_foo_read_bar_spec':
   step
   step
   step
+  step
   done
 
 text\<open>Clear many structure fields, return another:\<close>
 
 definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
-  \<open>test_record2_zeroize ptr \<equiv> FunctionBody \<lbrakk>
+  \<open>test_record2_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
+     ptr.f0 = 3;
+     ptr.f1 = 3;
+     ptr.f2 = 3;
+     ptr.f3 = 3;
+     ptr.f4 = 3;
+     ptr.f5 = 3;
+     ptr.f6 = 3;
+     ptr.f7 = 3;
+     ptr.f8 = 3;
+     ptr.f9 = 3;
+     ptr.f10 = 3;
+     ptr.f11 = 3;
+     ptr.f12 = 3;
+     ptr.f13 = 3;
+     ptr.f14 = 3;
+     ptr.f15 = 3;
+     ptr.f16 = 3;
+     ptr.f17 = 3;
+     ptr.f18 = 3;
+     ptr.f19 = 3;
+     ptr.f0 = 2;
+     ptr.f1 = 2;
+     ptr.f2 = 2;
+     ptr.f3 = 2;
+     ptr.f4 = 2;
+     ptr.f5 = 2;
+     ptr.f6 = 2;
+     ptr.f7 = 2;
+     ptr.f8 = 2;
+     ptr.f9 = 2;
+     ptr.f10 = 2;
+     ptr.f11 = 2;
+     ptr.f12 = 2;
+     ptr.f13 = 2;
+     ptr.f14 = 2;
+     ptr.f15 = 2;
+     ptr.f16 = 2;
+     ptr.f17 = 2;
+     ptr.f18 = 2;
+     ptr.f19 = 2;
+     ptr.f0 = 1;
+     ptr.f1 = 1;
+     ptr.f2 = 1;
+     ptr.f3 = 1;
+     ptr.f4 = 1;
+     ptr.f5 = 1;
+     ptr.f6 = 1;
+     ptr.f7 = 1;
+     ptr.f8 = 1;
+     ptr.f9 = 1;
+     ptr.f10 = 1;
+     ptr.f11 = 1;
+     ptr.f12 = 1;
+     ptr.f13 = 1;
+     ptr.f14 = 1;
+     ptr.f15 = 1;
+     ptr.f16 = 1;
+     ptr.f17 = 1;
+     ptr.f18 = 1;
+     ptr.f19 = 1;
      ptr.f0 = 0;
      ptr.f1 = 0;
      ptr.f2 = 0;
@@ -1269,7 +1353,7 @@ definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarro
      ptr.f18 = 0;
      ptr.f19 = 0;
      *(ptr.f20)
-  \<rbrakk>\<close>
+  )\<rbrakk>\<close>
 
 definition test_record2_zeroize_contract ::
    \<open>('a, 'b, test_record2) ref \<Rightarrow> 'b \<Rightarrow> test_record2 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
@@ -1304,8 +1388,9 @@ ucincl_auto test_record2_zeroize_contract
 lemma test_record2_zeroize_contract_spec:
   shows \<open>\<Gamma>; test_record2_zeroize ptr \<Turnstile>\<^sub>F test_record2_zeroize_contract ptr g v\<close>
   apply (crush_boot f: test_record2_zeroize_def contract: test_record2_zeroize_contract_def)
-  using [[crush_time_steps]]
-  apply\<tau> (crush_base)
+  using [[crush_time_steps, crush_time_base_simps]]
+  apply\<tau> (crush_base stepwise)
+  step *
   show_timelogs
   done
 
@@ -1321,7 +1406,7 @@ definition test_record3_zero_field_contract ::
   where [crush_contracts]: \<open>test_record3_zero_field_contract r i g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v \<star> \<langle>i < 20\<rangle> in
      let zero_ith_pure :: test_record3 \<Rightarrow> test_record3 = (\<lambda>t. t \<lparr> data := array_update (data t) (unat i) 0 \<rparr> ) in
-     let post = \<lambda>_. (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(zero_ith_pure v)) in
+     let post = \<lambda>_. r \<mapsto> \<langle>\<top>\<rangle> zero_ith_pure\<sqdot>(g\<down>v) in
       make_function_contract pre post\<close>
 ucincl_auto test_record3_zero_field_contract
 
@@ -1339,7 +1424,47 @@ proof (crush_boot f: test_record3_zero_field_def contract: test_record3_zero_fie
 qed
 
 definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
-  \<open>test_record3_zeroize ptr \<equiv> FunctionBody \<lbrakk>
+  \<open>test_record3_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
+     ptr.test_record3_zero_field(0);
+     ptr.test_record3_zero_field(1);
+     ptr.test_record3_zero_field(2);
+     ptr.test_record3_zero_field(3);
+     ptr.test_record3_zero_field(4);
+     ptr.test_record3_zero_field(5);
+     ptr.test_record3_zero_field(6);
+     ptr.test_record3_zero_field(7);
+     ptr.test_record3_zero_field(8);
+     ptr.test_record3_zero_field(9);
+     ptr.test_record3_zero_field(10);
+     ptr.test_record3_zero_field(11);
+     ptr.test_record3_zero_field(12);
+     ptr.test_record3_zero_field(13);
+     ptr.test_record3_zero_field(14);
+     ptr.test_record3_zero_field(15);
+     ptr.test_record3_zero_field(16);
+     ptr.test_record3_zero_field(17);
+     ptr.test_record3_zero_field(18);
+     ptr.test_record3_zero_field(19);
+     ptr.test_record3_zero_field(0);
+     ptr.test_record3_zero_field(1);
+     ptr.test_record3_zero_field(2);
+     ptr.test_record3_zero_field(3);
+     ptr.test_record3_zero_field(4);
+     ptr.test_record3_zero_field(5);
+     ptr.test_record3_zero_field(6);
+     ptr.test_record3_zero_field(7);
+     ptr.test_record3_zero_field(8);
+     ptr.test_record3_zero_field(9);
+     ptr.test_record3_zero_field(10);
+     ptr.test_record3_zero_field(11);
+     ptr.test_record3_zero_field(12);
+     ptr.test_record3_zero_field(13);
+     ptr.test_record3_zero_field(14);
+     ptr.test_record3_zero_field(15);
+     ptr.test_record3_zero_field(16);
+     ptr.test_record3_zero_field(17);
+     ptr.test_record3_zero_field(18);
+     ptr.test_record3_zero_field(19);
      ptr.test_record3_zero_field(0);
      ptr.test_record3_zero_field(1);
      ptr.test_record3_zero_field(2);
@@ -1361,7 +1486,7 @@ definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarro
      ptr.test_record3_zero_field(18);
      ptr.test_record3_zero_field(19);
      *(ptr.rest)
-  \<rbrakk>\<close>
+  )\<rbrakk>\<close>
 
 definition test_record3_zeroize_contract ::
    \<open>('a, 'b, test_record3) ref \<Rightarrow> 'b \<Rightarrow> test_record3 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
@@ -1408,10 +1533,17 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   }
   note eq = this[simplified]
   show ?case
-  \<comment>\<open>We see a linear built-up of premises here, which may cause performance problems in larger examples.\<close>
-    using [[crush_time_instantiation, crush_time_steps, crush_time_log_instantiation, crush_log_toplevel,
-    crush_timing_threshold=1, crush_time_base_simps]]
-  apply\<tau> (time force "crush" \<open>crush_base\<close>)
+  \<comment>\<open>TODO: This proof gets slower over time. Investigate\<close>
+  apply\<tau> (crush_base stepwise)
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step 100
+  step *
   show_timelogs
   apply (simp add: eq)
   done

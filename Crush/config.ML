@@ -67,11 +67,17 @@ sig
   val enable_base_simps_detect_aentails_contradiction : bool Config.T
   val enable_base_simps_early_unfold : bool Config.T
 
+  (* This option enables/disables custom automation for points-to in crush.
+     Ultimately, this should be removed, and all reasoning about points-to
+     expressed in terms of suitable rules/drules/crules. *)
+  val enable_legacy_points_to_tactics: bool Config.T
+
   val enable_urust_split_branch : bool Config.T
   val enable_urust_determine_branch : bool Config.T
 
   val debug_level : int Config.T
   val do_big_steps : bool Config.T
+  val prioritize_changed_goals : bool Config.T
   val gas : int Config.T
   val keep_history : bool Config.T
   val stepwise : bool Config.T
@@ -82,7 +88,7 @@ sig
   val relevance_filter_max_facts : int Config.T
 
   val crush_simp_trace_enable : bool Config.T
-  
+
   val crush_force_inline : bool Config.T
   val fail_on_bad_schematic : bool Config.T
 
@@ -142,6 +148,7 @@ struct
   val gas = Attrib.setup_config_int @{binding "crush_gas"} (K 100000)
   val keep_history = Attrib.setup_config_bool @{binding "crush_keep_history"} (K false)
   val stepwise = Attrib.setup_config_bool @{binding "crush_stepwise"} (K false)
+  val prioritize_changed_goals = Attrib.setup_config_bool @{binding "crush_prioritize_changed_goals"} (K false)
 
   val crush_force_inline = Attrib.setup_config_bool @{binding "crush_force_inline"} (K false)
 
@@ -157,5 +164,7 @@ struct
 
   val simp_general_implies_prems = Attrib.setup_config_bool @{binding "crush_simp_general_implies_prems"} (K false)
   val simp_general_implies_concls = Attrib.setup_config_bool @{binding "crush_simp_general_implies_concls"} (K false)
+
+  val enable_legacy_points_to_tactics = Attrib.setup_config_bool @{binding "crush_enable_legacy_points_to_tactic"} (K true)
 
 end;

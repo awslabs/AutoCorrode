@@ -136,6 +136,12 @@ sig
  val instantiate_schematic_from_pure_equality: Proof.context -> int -> tactic
  val instantiate_schematic_from_hol_equality: Proof.context -> int -> tactic
 
+ (* remove unnecessary toplevel quantifications *)
+ val remove_unneeded_meta_quantification_conv: Proof.context -> conv
+ val remove_unneeded_meta_quantification: Proof.context -> int -> tactic
+
+ (* remove duplicates pure premises *)
+ val remove_duplicate_pure_premises: Proof.context -> int -> tactic
 end;
 
 structure Crush_Base: CRUSH_BASE =
@@ -147,6 +153,38 @@ struct
   fun assert v = if v then () else raise ASSERT
   fun assert_not v = assert (not v)
   fun assert_eq v0 v1 = assert (v0 = v1)
+
+  (* Find de Bruijn indices of unused univeral quantifiers, in reverse order *)
+  fun collect_unused_quantifiers ct =
+    let
+      val t = Thm.term_of ct
+      val body = Term.strip_all_body t
+      val used = Term.loose_bnos body
+      val n = length (Term.strip_all_vars t)
+      val unused = filter (fn i => not (member (op =) used i)) (0 upto (n - 1))
+    in
+      unused |> map (fn i => n - 1 - i)
+    end
+
+  (* Remove unused universal quantifier at given depth *)
+  fun remove_quantifier_at_depth ctxt 0 = Conv.rewr_conv @{thm triv_forall_equality}
+    | remove_quantifier_at_depth ctxt depth = 
+        Conv.arg_conv (Conv.abs_conv (fn (_, ctxt) => remove_quantifier_at_depth ctxt (depth - 1)) ctxt)
+
+  (* Conversion to remove all unused quantifiers; succeeds if an unused quantifier was found *)
+  val remove_unneeded_meta_quantification_conv: Proof.context -> conv = fn ctxt => fn ct =>
+    let
+      val unused = collect_unused_quantifiers ct
+      val convs = map (remove_quantifier_at_depth ctxt) unused
+    in 
+      if length unused = 0 then
+         Conv.no_conv ct
+      else
+         Conv.every_conv convs ct 
+    end
+
+  val remove_unneeded_meta_quantification: Proof.context -> int -> tactic =
+     remove_unneeded_meta_quantification_conv #> CONVERSION
 
   fun context_transform_as_method (t : Proof.context -> Proof.context) : context_tactic =
     fn (ctxt, thm) => (t ctxt, thm) |> Seq.single |> Seq.make_results
@@ -185,6 +223,28 @@ struct
 
   val thin_tac_idxs = fn ctxt => fn js =>
      EVERY' (List.map (thin_tac_idx ctxt) (rev js))
+
+  fun remove_duplicate_pure_premises ctxt i st =
+  let
+    val prop = Thm.prop_of st;
+    val nprems = Thm.nprems_of st;
+  in
+    if i > nprems then no_tac st
+    else
+      let
+        val goal = Logic.nth_prem (i, prop);
+        val prems = Logic.strip_assums_hyp goal;
+        val (_, dups) =
+          fold_index (fn (idx, t) => fn (tab, dups) =>
+            if Termtab.defined tab t
+            then (tab, idx :: dups)
+            else (Termtab.update (t, ()) tab, dups))
+          prems (Termtab.empty, []);
+      in
+        if null dups then no_tac st
+        else EVERY' (map (thin_tac_idx ctxt) dups) i st
+      end
+  end;
 
   fun context_tactic_to_context_tactic (t: Proof.context -> tactic) : context_tactic =
       fn (ctxt, thm) => (t ctxt thm |> Seq.make_results |> Seq.map_result (fn thm' => (ctxt, thm')))

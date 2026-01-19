@@ -7,6 +7,39 @@ begin
 
 section\<open>Examples for custom tactics and helper functions\<close>
 
+subsection\<open>Miscellaneous\<close>
+
+subsubsection\<open>Remove duplicate premises\<close>
+
+lemma
+  assumes \<open>P x\<close>
+      and \<open>Q y\<close>
+      and \<open>P z\<close>
+      and \<open>P x\<close>
+      and \<open>Q z\<close>
+      and \<open>Q y\<close>
+      and \<open>Q y\<close>
+    shows T
+  using assms apply -
+  apply (tactic \<open>remove_duplicate_pure_premises @{context} 1\<close>)
+  (* This should drop 'P x' and 'Q y' at positions 3, 5, and 6, respectively (0-based) *)
+  oops
+
+subsubsection\<open>Remove unnecessary universal quantification\<close>
+
+lemma \<open>\<And>t x y z. P z\<close>
+  (* \<And>t x y z. P x z *)
+  apply (tactic \<open>CONVERSION (remove_unneeded_meta_quantification_conv @{context}) 1\<close>)
+  (* Trying again will fail *)
+  (* apply (tactic \<open>CONVERSION (remove_unused_meta_quantifications) 1\<close>) *)
+  oops
+
+lemma \<open>\<And>t x y z. P x z\<close>
+  (* \<And>t x y z. P x z *)
+  apply (tactic \<open>remove_unneeded_meta_quantification @{context} 1\<close>)
+  (* \<And>x z. P x z *)
+  oops
+
 subsection\<open>Separation logic\<close>
 
 subsubsection\<open>Normalizing associativity of separating conjunctions\<close>
@@ -459,18 +492,41 @@ lemma
 
 lemma
   fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>A \<Longrightarrow> \<tau>\<longlongrightarrow> \<beta> \<star> \<delta>\<close>
+  assumes t : \<open>A \<Longrightarrow> \<tau> \<longlongrightarrow> \<beta> \<star> \<delta>\<close>
   shows \<open>\<rho> \<longlongrightarrow> \<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho>\<close>
   \<comment>\<open>Match and float goals, apply \<^verbatim>\<open>t\<close>, introduce pure and spatial premises, 
   normalize associativity\<close>
   apply (aentails_rule t)
   oops
 
+subsubsection\<open>Conditional spatial \<^verbatim>\<open>rule\<close>\<close>
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>A \<Longrightarrow> \<psi> [\<rho>]\<longlongrightarrow> \<alpha> \<star> \<tau>\<close>
+  shows \<open>\<chi> \<star> \<rho> \<longlongrightarrow> \<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho>\<close>
+  apply (aentails_cond_rule t)
+  oops
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>A \<Longrightarrow> \<psi> [\<rho>]\<longlongrightarrow> \<alpha> \<star> \<tau>\<close>
+  shows \<open>\<rho> \<longlongrightarrow> \<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho>\<close>
+  apply (aentails_cond_rule t)
+  oops
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>A \<Longrightarrow> \<psi> [\<rho>]\<longlongrightarrow> \<alpha> \<star> \<tau>\<close>
+  shows \<open>\<chi> \<star> \<rho> \<longlongrightarrow> \<tau> \<star> \<alpha>\<close>
+  apply (aentails_cond_rule t)
+  oops
+
 subsubsection\<open>Spatial \<^verbatim>\<open>drule\<close>\<close>
 
 lemma
   fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta>\<longlongrightarrow> \<epsilon>\<close>
+  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow> \<epsilon>\<close>
   shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon>\<close>
   \<comment>\<open>This identifies and floats matching assumptions to the left, but does not 
   yet apply \<^verbatim>\<open>t\<close>\<close>
@@ -484,6 +540,40 @@ lemma
   \<comment>\<open>Match and float assumptions, apply \<^verbatim>\<open>t\<close>, introduce pure and spatial premises, 
   normalize associativity\<close>
   apply (aentails_drule t)
+  oops
+
+subsection\<open>Conditional spatial \<^verbatim>\<open>drule\<close>\<close>
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[C] \<tau>\<close>
+      and t' : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[D] \<tau>\<close>
+      and t'' : \<open>\<tau> \<star> \<gamma> \<longlongrightarrow>[E] \<rho> \<close>
+    shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon> \<star> C \<star> E\<close>
+  (* Does not work because conditional D is not present *)
+  (* apply (aentails_cond_drule t') *) 
+  (* Works because conditional C is present *)
+  apply (aentails_cond_drule t)
+  apply (aentails_cond_drule t'')
+  oops
+
+\<comment>\<open>Should also work with multiple rules at once\<close>
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[C] \<tau>\<close>
+      and t' : \<open>\<tau> \<star> \<gamma> \<longlongrightarrow>[E] \<rho>\<close>
+    shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon> \<star> C \<star> E\<close>
+  apply (aentails_cond_drule t t')+
+  oops
+
+\<comment>\<open>Should also work with pure premises\<close>
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>A \<Longrightarrow> \<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[C] \<tau>\<close>
+    shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon> \<star> C\<close>
+  apply (aentails_cond_drule t)
   oops
 
 subsection\<open>Saturating unfolding of definitions\<close>

@@ -974,8 +974,10 @@ lemma focus_modify_compose [focus_simps]:
 by (auto simp add: focus_laws)
 
 lemma focus_modify_localI[focus_intros]:
-  assumes \<open>focus_is_view l s t\<close>
-      and \<open>f t = g t\<close>
+  \<comment>\<open>When invoked with \<^verbatim>\<open>THEN_ALL_NEW\<close>, the premises are tackled in reverse order,
+     so we order them so that \<^verbatim>\<open>t\<close> gets instantiated first.\<close>
+  assumes \<open>f t = g t\<close>
+      and \<open>focus_is_view l s t\<close>
     shows \<open>focus_modify l f s = focus_modify l g s\<close>
 using assms by (simp add: focus_modify_def')
 
@@ -992,8 +994,10 @@ lemma focus_update_selfI [focus_intros]:
 by (simp add: assms focus_laws_update)
 
 lemma focus_update_selfI':
-  assumes \<open>focus_is_view f g v\<close>
-      and \<open>v = v'\<close>
+  \<comment>\<open>When invoked with \<^verbatim>\<open>THEN_ALL_NEW\<close>, the premises are tackled in reverse order,
+     so we order them so that \<^verbatim>\<open>t\<close> gets instantiated first.\<close>
+  assumes \<open>v = v'\<close>
+      and \<open>focus_is_view f g v\<close>
     shows \<open>focus_update f v' g = g\<close>
 by (simp add: assms focus_laws_update)
 
@@ -1001,8 +1005,10 @@ declare focus_update_selfI'[focus_intros]
 declare focus_update_selfI'[symmetric, focus_intros]
 
 lemma focus_modify_selfI':
-  assumes \<open>focus_is_view l s t\<close>
-      and \<open>f t = t\<close>
+  \<comment>\<open>When invoked with \<^verbatim>\<open>THEN_ALL_NEW\<close>, the premises are tackled in reverse order,
+     so we order them so that \<^verbatim>\<open>t\<close> gets instantiated first.\<close>
+  assumes \<open>f t = t\<close>
+      and \<open>focus_is_view l s t\<close>
     shows \<open>focus_modify l f s = s\<close>
 by (simp add: assms focus_laws_modify)
 
@@ -1018,41 +1024,47 @@ lemma focus_view_modify':
 using assms by (simp add: focus_view_modify)
 
 lemma focus_raw_view_modify'I[focus_rules]:
-  assumes \<open>focus_is_view l s t\<close>
-      and \<open>t' = f t\<close>
+  \<comment>\<open>When invoked with \<^verbatim>\<open>THEN_ALL_NEW\<close>, the premises are tackled in reverse order,
+     so we order them so that \<^verbatim>\<open>t\<close> gets instantiated first.\<close>
+  assumes \<open>t' = f t\<close>
+      and \<open>focus_is_view l s t\<close>
     shows \<open>focus_is_view l (focus_modify l f s) t'\<close>
 using assms by (simp add: focus_view_modify)
 
 lemma focus_raw_view_update'I[focus_rules]:
-  assumes \<open>focus_is_view l s t\<close>
-      and \<open>t' = y\<close>
+  \<comment>\<open>When invoked with \<^verbatim>\<open>THEN_ALL_NEW\<close>, the premises are tackled in reverse order,
+     so we order them so that \<^verbatim>\<open>t\<close> gets instantiated first.\<close>
+  assumes \<open>t' = y\<close>
+      and \<open>focus_is_view l s t\<close>
     shows \<open>focus_is_view l (focus_update l y s) t'\<close>
 using assms by (simp add: focus_laws_update)
 
-lemma focus_compose_is_view[focus_intros]:
+lemma focus_compose_is_viewI[focus_intros]:
   assumes \<open>focus_is_view f0 x y\<close>
       and \<open>focus_is_view f1 y z\<close>
     shows \<open>focus_is_view (f0 \<diamondop> f1) x z\<close>
 using assms by transfer (simp add: focus_raw_compose_components)
 
 lemma focus_is_view_modify_partial[focus_intros]:
-  assumes \<open>focus_is_view f0 x y'\<close>
-      and \<open>f0 = f0'\<close>
+  \<comment>\<open>When invoked with \<^verbatim>\<open>THEN_ALL_NEW\<close>, the premises are tackled in reverse order,
+     so we order them so that \<^verbatim>\<open>t\<close> gets instantiated first.\<close>
+  assumes \<open>f0 = f0'\<close>
       and \<open>y = focus_modify f1 op y'\<close>
+      and \<open>focus_is_view f0 x y'\<close>
     shows \<open>focus_is_view f0 (focus_modify (f0' \<diamondop> f1) op x) y\<close>
 using assms by transfer (simp add: focus_raw_compose_components(2) focus_raw_laws_update(1)
   focus_raw_modify_def)
 
-text\<open>Make this \<^verbatim>\<open>focus_elim\<close> to avoid build-up of redundant hypotheses?\<close>
-lemma focus_compose_view_dropE:
+lemma focus_compose_view_dropE[focus_elims]:
   assumes \<open>focus_is_view (f0 \<diamondop> f1) (focus_modify f2 op x) y\<close>
       and \<open>R\<close>
     shows \<open>R\<close>
 using assms by simp
 
-lemma focus_is_view_elim:
+lemma focus_is_view_elim[focus_elims2]:
   assumes \<open>focus_is_view l (focus_modify l op x) y\<close>
-      and \<open>\<And>y'. focus_is_view l x y' \<Longrightarrow> y = op y' \<Longrightarrow> R\<close>
+      and \<open>focus_is_view l x y'\<close>
+      and \<open>y = op y' \<Longrightarrow> R\<close>
     shows R
 using assms by (metis focus_laws_update(2) focus_modify_def' focus_raw_view_modify'I option.collapse
   option.simps(1))

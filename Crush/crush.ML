@@ -81,6 +81,10 @@ sig
   val crush_branch_aentails_drule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_crule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_rule_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_cond_drule_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_cond_rule_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_cond_crule_tac : Proof.context -> int -> tactic
+  val crush_branch_focus_core_tac : Proof.context -> int -> tactic
   val crush_branch_focus_tac : Proof.context -> int -> tactic
   val crush_branch_unfold_concls_tac : Proof.context -> int -> tactic
   val crush_branch_schematics_tac : Proof.context -> (int -> tactic) -> int -> tactic
@@ -157,18 +161,6 @@ struct
     end
   )  
 
-  val simp_focus_basic_tac : Proof.context -> int -> tactic = fn ctxt =>
-    let val focus_intros =
-      Named_Theorems.get ctxt @{named_theorems focus_intros} @
-      Named_Theorems.get ctxt @{named_theorems micro_rust_record_intros}
-    val focus_rules = Named_Theorems.get ctxt @{named_theorems focus_rules}
-    val focus_elims  = Named_Theorems.get ctxt @{named_theorems focus_elims}
-    in fn i =>
-      REPEAT1(        intro_tac focus_intros ctxt i
-               ORELSE resolve_tac ctxt focus_rules i
-               ORELSE elim_tac  focus_elims  ctxt i)
-    end
-
   val crush_base_unfold_contract_tac : Proof.context -> int -> tactic = fn ctxt =>
     let
       val congs = Named_Theorems.get ctxt @{named_theorems "crush_cong"}
@@ -204,7 +196,10 @@ struct
       #> LOG' ctxt  (Config.get ctxt Crush_Config.log_base_simps) msg
     in
               NOTE "crush_base_simps_schematic" (instantiate_schematic_from_equality ctxt)
+      ORELSE' NOTE "crush_base_simps_unused_quantifier" (remove_unneeded_meta_quantification ctxt)
       ORELSE' NOTE "crush_base_simps_assumption" (assm_tac ctxt)
+      ORELSE' NOTE "crush_base_simps_remove_duplicates" (remove_duplicate_pure_premises ctxt)
+      ORELSE' NOTE "crush_base_simps_subst_bound" (Hypsubst.bound_hyp_subst_tac ctxt)
       ORELSE' NOTE "crush_base_simps_intro"  (intro_tac crush_intros ctxt)
       ORELSE' NOTE "crush_base_simps_unfold" (crush_branch_base_simps_early_unfold ctxt)
       ORELSE' NOTE "crush_base_simps_contr"  (crush_branch_base_detect_aentails_contradiction ctxt)
@@ -366,6 +361,8 @@ struct
       else
         K no_tac
 
+  val update_guards_tac = Crush_Guards.update_guards_shallow_tac
+
   val crush_branch_reduced_clarsimp_tac : Proof.context -> int -> tactic =
     fn ctxt => let fun NOTE msg =  TIME' ctxt (Config.get ctxt Crush_Config.time_clarsimp) msg
                                 #> LOG' ctxt  (Config.get ctxt Crush_Config.log_clarsimp) msg
@@ -406,6 +403,25 @@ struct
        else
          K no_tac)
     end
+
+  val crush_branch_focus_core_tac : Proof.context -> int -> tactic = fn ctxt =>
+    let val focus_intros =
+      Named_Theorems.get ctxt @{named_theorems focus_intros} @
+      Named_Theorems.get ctxt @{named_theorems micro_rust_record_intros}
+    val focus_rules = Named_Theorems.get ctxt @{named_theorems focus_rules}
+    val focus_elims  = Named_Theorems.get ctxt @{named_theorems focus_elims}
+    val focus_elims2  = Named_Theorems.get ctxt @{named_theorems focus_elims2}
+    in 
+         ((REPEAT_ALL_NEW (intro_tac (focus_rules @ focus_intros) ctxt))
+             THEN_ALL_NEW (TRY o REPEAT_ALL_NEW (update_guards_tac ctxt THEN' (
+                 assm_tac ctxt ORELSE' 
+                 crush_branch_base_simps_tac ctxt ORELSE' 
+                 crush_branch_clarsimp_tac ctxt))))
+         ORELSE' elim_tac  focus_elims  ctxt
+         ORELSE' (eresolve_tac ctxt focus_elims2 THEN' assm_tac ctxt)
+    end
+
+  fun crush_branch_focus_tac ctxt = REPEAT_ALL_NEW (crush_branch_focus_core_tac ctxt)
 
   val crush_branch_clarsimp_fallback_tac = fn ctxt =>
    let fun log_before_after old_goal new_goal_opt =
@@ -462,31 +478,42 @@ struct
   val crush_branch_intro_pure_aentails_tac : Proof.context -> int -> tactic = fn ctxt =>
     Separation_Logic_Tactics.ucincl_discharge_tac ctxt (intro_tac @{thms apure_entailsR0} ctxt)
 
+  val crush_branch_aentails_cond_drule_tac =
+     fn ctxt => Separation_Logic_Tactics.aentails_cond_drule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_drules}) ctxt
+
+  val crush_branch_aentails_cond_crule_tac =
+     fn ctxt => Separation_Logic_Tactics.aentails_cond_crule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_crules}) ctxt
+
   val crush_branch_aentails_drule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_drule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_drules}) ctxt
 
   val crush_branch_aentails_crule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_crule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_crules}) ctxt
 
+  val crush_branch_aentails_cond_rule_tac =
+     fn ctxt => Separation_Logic_Tactics.aentails_cond_rule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_rules}) ctxt
+
   val crush_branch_aentails_rule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_rule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_rules}) ctxt
-
-  val update_guards_tac = Crush_Guards.update_guards_shallow_tac
 
   structure CrushData = Proof_Data (
     type T = {
       additional_tac : (Proof.context -> int -> tactic) option,
       additional_method : (Proof.context -> Method.method) option,
-      abort_before_condition : (Proof.context -> term -> bool) option
+      abort_before_condition : (Proof.context -> term -> bool) option,
+      post_step_tac : (Proof.context -> int -> tactic) option
     };
-    val init = K {additional_tac = NONE, additional_method = NONE, abort_before_condition = NONE}
+    val init = K {additional_tac = NONE, additional_method = NONE, abort_before_condition = NONE,
+      post_step_tac = NONE }
   );
 
-  val crush_branch_focus_tac = simp_focus_basic_tac
   val crush_branch_ucincl_tac = Separation_Logic_Tactics.ucincl_solve_tac
 
   val crush_branch_additional_tactic: Proof.context -> int -> tactic = fn ctxt =>
      Option.getOpt((CrushData.get ctxt |> #additional_tac),  K (K no_tac)) ctxt
+
+  val crush_post_step_tac: Proof.context -> int -> tactic = fn ctxt =>
+     Option.getOpt((CrushData.get ctxt |> #post_step_tac),  K (K all_tac)) ctxt
 
   val crush_abort_condition: Proof.context -> term -> bool = fn ctxt =>
      Option.getOpt ((CrushData.get ctxt |> #abort_before_condition), K (K false)) ctxt
@@ -511,19 +538,23 @@ struct
              time_and_report ctxt "crush_instantiation_step_unfold_contract"
              (Config.get ctxt Crush_Config.time_step_instantiation_by_branch)
              (fn _ => crush_base_unfold_contract_tac ctxt))
+         val post_step_tac = crush_post_step_tac ctxt 
          val branches = [
             ("base_simps_tac"          , \<^here>, (fn _ => crush_branch_base_simps_tac ctxt)),
             ("destruct_tac"            , \<^here>, (fn _ => crush_branch_destruct_tac ctxt)),
+            ("focus_tac"               , \<^here>, (fn _ => crush_branch_focus_tac ctxt)),
             ("wp_intros_tac"           , \<^here>, (fn _ => crush_branch_wp_intros_tac ctxt)),
             ("urust_determine_branch"  , \<^here>, (fn _ => crush_branch_determine_branch ctxt)),
             ("call_tac (no schematics)", \<^here>, (fn _ => crush_branch_call_tac ctxt false unfold_contract_tac)),
             ("aentails_cancel_tac"     , \<^here>, (fn _ => crush_branch_aentails_cancel_tac ctxt)),
             ("unfold_prems_tac"        , \<^here>, (fn _ => crush_branch_unfold_prems_tac ctxt)),
             ("aentails_core_tac"       , \<^here>, (fn _ => crush_branch_aentails_core_tac ctxt)),
+            ("aentails_cond_drule_tac" , \<^here>, (fn _ => crush_branch_aentails_cond_drule_tac ctxt)),
             ("aentails_drule_tac"      , \<^here>, (fn _ => crush_branch_aentails_drule_tac ctxt)),
+            ("aentails_cond_crule_tac" , \<^here>, (fn _ => crush_branch_aentails_cond_crule_tac ctxt)),
             ("aentails_crule_tac"      , \<^here>, (fn _ => crush_branch_aentails_crule_tac ctxt)),
+            ("aentails_cond_rule_tac"  , \<^here>, (fn _ => crush_branch_aentails_cond_rule_tac ctxt)),
             ("aentails_rule_tac"       , \<^here>, (fn _ => crush_branch_aentails_rule_tac ctxt)),
-            ("focus_tac"               , \<^here>, (fn _ => crush_branch_focus_tac ctxt)),
             ("unfold_concls_tac"       , \<^here>, (fn _ => crush_branch_unfold_concls_tac ctxt)),
             ("schematics_tac"          , \<^here>, (fn _ => crush_branch_schematics_tac ctxt unfold_contract_tac)),
             ("intro_pure_aentails_tac" , \<^here>, (fn _ => crush_branch_intro_pure_aentails_tac ctxt)),
@@ -543,7 +574,7 @@ struct
              (Config.get ctxt Crush_Config.time_step_instantiation_by_branch) lazy_tac')))
      in fn log =>
        let val branches = List.map (NOTE' log) branches in
-       fn i => fn st => FIRST' branches i st
+       fn i => fn st => (FIRST' branches THEN_ALL_NEW (TRY o post_step_tac)) i st
          handle ABORT msg => ("Early abort of crush step: " ^ msg |> Pretty.text |> Pretty.block |> Pretty.writeln; Seq.empty)
      end end
 
@@ -625,30 +656,35 @@ struct
        name_parser |-- Args.colon |-- value_parser >> (fn v => { init = action v, attribute = dummy_attrib, pos = pos })
      end
 
- fun make_arg_parser'' name_parser value_parser action pos = let
-     val dummy_attrib : attribute = K (NONE, NONE) in
-       (name_parser |-- Args.colon) -- value_parser >> (fn (a,b) => { init = action a b, attribute = dummy_attrib, pos = pos })
-     end
-
  val additional_tac_parser = make_arg_parser' (Args.$$$ "branch" -- Args.$$$ "tactic" -- Args.add) Parser.parse_tactic
      (fn tac => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = #abort_before_condition v,
                                                             additional_tac = SOME tac,
-                                                            additional_method = #additional_method v } ) ) \<^here>
+                                                            additional_method = #additional_method v,
+                                                            post_step_tac = #post_step_tac v } ) ) \<^here>
+
+ val post_step_tac_parser = make_arg_parser' (Args.$$$ "post" -- Args.$$$ "tactic") Parser.parse_tactic
+     (fn tac => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = #abort_before_condition v,
+                                                            additional_tac = #additional_tac v,
+                                                            additional_method = #additional_method v,
+                                                            post_step_tac = SOME tac } ) ) \<^here>
 
  val additional_method_parser = make_arg_parser' (Args.$$$ "branch" -- Args.add) Parser.parse_method
      (fn method => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = #abort_before_condition v,
                                                                additional_method = SOME method,
-                                                               additional_tac = #additional_tac v } ) ) \<^here>
+                                                               additional_tac = #additional_tac v,
+                                                               post_step_tac = #post_step_tac v} ) ) \<^here>
 
  val abort_at_filter_parser = make_arg_parser' (Args.$$$ "abort" -- Args.$$$ "at" -- Args.$$$ "filter") Parser.parse_term_filter
      (fn cond => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = SOME cond,
                                                              additional_method = #additional_method v,
-                                                             additional_tac = #additional_tac v } ) ) \<^here>
+                                                             additional_tac = #additional_tac v,
+                                                             post_step_tac = #post_step_tac v } ) ) \<^here>
 
  val abort_at_pattern_parser = make_arg_parser' (Args.$$$ "abort" -- Args.$$$ "at" -- Args.$$$ "pattern") Parser.parse_goal_filter_pattern
      (fn cond => fn ctxt => ctxt |> CrushData.map (fn v => { abort_before_condition = SOME cond,
                                                              additional_method = #additional_method v,
-                                                             additional_tac = #additional_tac v } ) ) \<^here>
+                                                             additional_tac = #additional_tac v,
+                                                             post_step_tac = #post_step_tac v} ) ) \<^here>
 
  val add_del_parser = (Args.add >> K false) || (Args.del >> K true)
 
@@ -737,6 +773,7 @@ struct
                      make_modifier_parser "no_schematics"  (Config.put Crush_Config.enable_schematics false) \<^here>,
                      make_modifier_parser "do_split"       (Config.put Crush_Config.enable_branch_split true) \<^here>,
                      make_modifier_parser "no_urust_case_split" (Config.put Crush_Config.enable_urust_split_branch false) \<^here>,
+                     post_step_tac_parser,
                      additional_tac_parser, additional_method_parser,
                      abort_at_filter_parser, abort_at_pattern_parser]
   val time_parsers = [make_time_parser "steps"    Crush_Config.time_steps,
@@ -748,12 +785,18 @@ struct
                      make_log_parser "ucincl"   Crush_Config.log_ucincl]
 
   val add_del_parsers = [
+     make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "drule") @{named_theorems crush_aentails_cond_drules} \<^here>,
+     make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "drule") @{named_theorems crush_aentails_cond_drules} \<^here>,
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "drule") @{named_theorems crush_aentails_drules} \<^here>,
      make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "drule") @{named_theorems crush_aentails_drules} \<^here>,
+     make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "crule") @{named_theorems crush_aentails_cond_crules} \<^here>,
+     make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "crule") @{named_theorems crush_aentails_cond_crules} \<^here>,
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "crule") @{named_theorems crush_aentails_crules} \<^here>,
      make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "crule") @{named_theorems crush_aentails_crules} \<^here>,
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "rule")  @{named_theorems crush_aentails_rules}  \<^here>,
      make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "rule")  @{named_theorems crush_aentails_rules}  \<^here>,
+     make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "rule")  @{named_theorems crush_aentails_cond_rules}  \<^here>,
+     make_del_parser' (Args.$$$ "seplog" -- Args.$$$ "cond" -- Args.$$$ "rule")  @{named_theorems crush_aentails_cond_rules}  \<^here>,
      simp_parser \<^here>,
      make_add_parser' (Args.$$$ "simp" -- Args.$$$ "prems")   @{named_theorems crush_prems_simps} \<^here>,
      make_del_parser' (Args.$$$ "simp" -- Args.$$$ "prems")   @{named_theorems crush_prems_simps} \<^here>,

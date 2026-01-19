@@ -14,6 +14,61 @@ adhoc_overloading store_dereference_const \<rightleftharpoons>
   dereference_fun
   ro_dereference_fun
 
+named_theorems crush_points_to_crules
+named_theorems crush_points_to_cond_rules
+named_theorems crush_points_to_cond_drules
+named_theorems crush_points_to_cond_crules
+
+declare points_to_aentails [crush_points_to_crules]
+
+(* Custom rules for working with the points-to predicates.
+ *
+ * Those are currently only gathered in the above named theorem lists,
+ * but not applied by crush by default. *)
+lemma points_to_aentails_crule[crush_aentails_cond_crules]:
+  shows \<open>r \<mapsto>\<langle>sh\<rangle> g0\<down>v0 
+         [
+           \<langle>g0 = g1\<rangle> \<star> \<langle>v0 = v1\<rangle> \<star> \<langle>points_to_localizes r g1 v1\<rangle>
+         ]\<longlongrightarrow>\<^sub>s[
+           \<langle>points_to_localizes r g0 v0\<rangle>
+         ] 
+         r \<mapsto>\<langle>sh\<rangle> g1\<down>v1\<close>
+  unfolding aentails_conditional_crule_strong_def
+  by (crush_base simp add: points_to_def)
+
+lemma points_to_aentails_crule_focusedL[crush_points_to_cond_crules]:
+  shows \<open>focus_reference f r \<mapsto>\<langle>sh\<rangle> g1\<down>v1
+         [
+            \<langle>g0 = g1\<rangle> 
+            \<star> \<langle>focus_view f v0 = Some v1\<rangle> 
+            \<star> \<langle>points_to_localizes r g0 v0\<rangle>
+         ]\<longlongrightarrow>\<^sub>s[
+            \<langle>points_to_localizes (focus_reference f r) g1 v1\<rangle>
+         ]
+         r \<mapsto>\<langle>sh\<rangle> g0\<down>v0\<close>
+  unfolding aentails_conditional_crule_strong_def
+  by (crush_base simp add: points_to_def)
+
+lemma points_to_aentails_crule_focusedR[crush_aentails_cond_crules]:
+  shows \<open>r \<mapsto>\<langle>sh\<rangle> g0\<down>v0 
+         [
+           \<langle>g0 = g1\<rangle>
+            \<star> \<langle>focus_view f v0 = Some v1\<rangle>
+            \<star> \<langle>points_to_localizes (focus_reference f r) g1 v1\<rangle>
+         ]\<longlongrightarrow>\<^sub>s[
+           \<langle>points_to_localizes r g0 v0\<rangle>
+         ] 
+         focus_reference f r \<mapsto>\<langle>sh\<rangle> g1\<down>v1\<close>
+  unfolding aentails_conditional_crule_strong_def
+  by (crush_base simp add: points_to_def)
+
+(*
+declare crush_points_to_crules[crush_aentails_crules]
+declare crush_points_to_cond_rules[crush_aentails_cond_rules]
+declare crush_points_to_cond_drules[crush_aentails_cond_drules]
+declare crush_points_to_cond_crules[crush_aentails_cond_crules]
+*)
+
 lemma points_to_split:
   assumes \<open>sh = sh1+sh2\<close>
       and \<open>sh1 \<sharp> sh2\<close>
@@ -28,8 +83,47 @@ using assms
 
 lemma points_to_combine:
   shows \<open>r \<mapsto>\<langle>sh1\<rangle> g1\<down>v1 \<star> r \<mapsto>\<langle>sh2\<rangle> g2\<down>v2 \<longlongrightarrow> r \<mapsto>\<langle>sh1+sh2\<rangle> g1\<down>v1 \<star> \<langle>g1 = g2\<rangle> \<star> \<langle>v1 = v2\<rangle>\<close>
-  by (crush_base simp add: points_to_def seplog drule add: points_to_raw_combine)
-    (clarsimp simp add: plus_share_def sup.commute intro!: aentails_refl_eq)
+  apply (crush_base simp [prems, concls] add: points_to_def seplog drule add: points_to_raw_combine)
+  apply (simp add: aentails_def plus_share_def sup_aci(1))
+  done
+
+lemma focus_compose_valid_dropE[focus_elims]:
+  assumes \<open>is_valid_ref_for (focus_reference r l) P\<close>
+      and \<open>R\<close>
+    shows \<open>R\<close>
+  using assms by simp
+
+lemma focus_focused_view_dropE[focus_elims]:
+  assumes \<open>focus_is_view (\<integral>(focus_focused f r)) x y\<close>
+      and R
+    shows R
+  using assms by simp
+
+lemma focus_is_view_modified_dropE[focus_elims]:
+  assumes \<open>focus_is_view l (focus_modify l op x) y\<close>
+      and \<open>R\<close>
+    shows R
+using assms by (metis focus_laws_update(2) focus_modify_def' focus_raw_view_modify'I option.collapse
+  option.simps(1))
+
+lemma points_to_localizesE[focus_elims]:
+  assumes \<open>points_to_localizes r b v\<close>
+     and \<open>is_valid_ref_for r (gref_can_store (unwrap_focused r)) \<Longrightarrow> focus_view (get_focus r) b = Some v \<Longrightarrow> R\<close>
+   shows R
+  using assms by simp
+
+lemma focus_compose_is_view_guardedI:
+  assumes \<open>focus_is_view f0 x y\<close>
+      and \<open>GUARD y (focus_is_view f1 y z)\<close>
+    shows \<open>focus_is_view (f0 \<diamondop> f1) x z\<close>
+using assms unfolding GUARD_def by (simp add: focus_compose_is_viewI)
+
+lemma focus_is_view_modify_partial_guarded:
+  assumes \<open>focus_is_view f0 x y'\<close>
+      and \<open>f0 = f0'\<close>
+      and \<open>y = GUARD y' (focus_modify f1 op y')\<close>
+    shows \<open>focus_is_view f0 (focus_modify (f0' \<diamondop> f1) op x) y\<close>
+  using assms unfolding GUARD_def by (simp add: focus_is_view_modify_partial)
 
 ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
  update_contract modify_raw_contract modify_contract dereference_contract
@@ -80,6 +174,8 @@ corollary modify_spec [crush_specs]:
   done
 
 lemma update_spec [crush_specs]:
+  notes wp_cong[crush_cong del]
+    and wp_cong'[crush_cong del]
   shows \<open>\<Gamma> ; update_fun r v \<Turnstile>\<^sub>F update_contract r g0 v0 v\<close>
   by (crush_boot f: update_fun_def contract: update_contract_def) crush_base
 
@@ -113,6 +209,31 @@ using assms
 declare update_spec[crush_specs, crush_specs_eager]
 declare dereference_spec[crush_specs, crush_specs_eager]
 declare ro_dereference_spec[crush_specs, crush_specs_eager]
+
+definition transpose :: \<open>('a, 'b, 't option) ro_ref \<Rightarrow>
+      ('s, ('a, 'b, 't) ro_ref option, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+  \<open>transpose self \<equiv> FunctionBody \<lbrakk>
+     match *self {
+       None    \<Rightarrow> None,
+       Some(_) \<Rightarrow> Some(\<epsilon>\<open>\<up>focus_focused option_focus self\<close>)
+     }
+   \<rbrakk>\<close>
+
+definition transpose_contract :: \<open>(('a, 'b) ro_gref, 'b, 't option) focused \<Rightarrow> 'b \<Rightarrow> _ \<Rightarrow> ('s, (('a, 'b) ro_gref, 'b, 't) focused option, 'abort) function_contract\<close> where
+  [crush_contracts]: \<open>transpose_contract ro_ref g v_opt \<equiv>
+    let ref = unsafe_ref_from_ro_ref ro_ref;
+        pre  = ref \<mapsto> \<langle>\<top>\<rangle> g\<down>v_opt;
+        post = \<lambda>ro_ref'. \<langle>ro_ref' = map_option (\<lambda>_. ro_ref_from_ref (focus_reference option_focus ref)) v_opt\<rangle>
+                         \<star> ref \<mapsto> \<langle>\<top>\<rangle> g\<down>v_opt
+     in make_function_contract pre post\<close>
+
+ucincl_auto transpose_contract 
+
+lemma transpose_spec[crush_specs]:
+  shows \<open>\<Gamma> ; transpose ro_ref \<Turnstile>\<^sub>F transpose_contract ro_ref g v_opt\<close>
+  by (crush_boot f: transpose_def contract: transpose_contract_def)
+     (crush_base simp add: ro_ref_from_ref_def unsafe_ref_from_ro_ref_def 
+        intro!: focused.expand split!: ro_gref.splits option.splits)
 
 end
 

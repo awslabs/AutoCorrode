@@ -793,6 +793,206 @@ lemma awand_univ:
     shows \<open>UNIV \<Zsurj> \<phi> = \<phi>\<close>
 by (metis aentails_cancel_r aentails_eq asepconj_ident2 assms awand_adjoint ucincl_awand)
 
+lemma aentails_conditional_rule': 
+  assumes \<open>C \<star> \<alpha> \<longlongrightarrow> \<beta>\<close>
+      and \<open>H \<longlongrightarrow> \<alpha> \<star> G\<close>
+    shows \<open>C \<star> H \<longlongrightarrow> \<beta> \<star> G\<close>
+proof -
+  from \<open>H \<longlongrightarrow> \<alpha> \<star> G\<close> have \<open>C \<star> H \<longlongrightarrow> C \<star> \<alpha> \<star> G\<close> 
+    by (simp add: asepconj_mono3)
+  also have \<open>\<dots> \<longlongrightarrow> \<beta> \<star> G\<close> 
+    by (metis asepconj_assoc asepconj_mono2 assms(1))
+  finally show ?thesis by simp
+qed
+
+lemma aentails_conditional_drule': 
+  assumes \<open>\<alpha> \<longlongrightarrow> C \<star> \<beta>\<close>
+      and \<open>\<beta> \<star> H \<longlongrightarrow> G\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> C \<star> G\<close>   
+proof -
+  from \<open>\<alpha> \<longlongrightarrow> C \<star> \<beta>\<close> have \<open>\<alpha> \<star> H \<longlongrightarrow> C \<star> \<beta> \<star> H\<close>
+    by (metis asepconj_assoc asepconj_mono2)
+  also from \<open>\<beta>\<star> H \<longlongrightarrow> G\<close> have \<open>\<dots> \<longlongrightarrow> C \<star> G\<close> 
+    by (metis asepconj_comm asepconj_mono)
+  finally show ?thesis by simp
+qed
+
+lemma aentails_conditional_crule_strong':
+  assumes \<open>\<alpha> \<longlongrightarrow> (\<beta> \<Zsurj> \<gamma>) \<star> \<delta>\<close>
+      and \<open>H \<star> \<delta> \<longlongrightarrow> \<beta> \<star> G\<close>
+    shows \<open>H \<star> \<alpha> \<longlongrightarrow> \<gamma> \<star> G\<close>
+proof -
+  from \<open>\<alpha> \<longlongrightarrow> (\<beta> \<Zsurj> \<gamma>) \<star> \<delta>\<close>
+    have \<open>H \<star> \<alpha> \<longlongrightarrow> H \<star> \<delta> \<star> (\<beta> \<Zsurj> \<gamma>)\<close> 
+      by (simp add: asepconj_comm asepconj_mono)
+  also from \<open>H \<star> \<delta> \<longlongrightarrow> \<beta> \<star> G\<close> have \<open>\<dots> \<longlongrightarrow> \<beta> \<star> G \<star> (\<beta> \<Zsurj> \<gamma>)\<close> 
+    by (metis asepconj_assoc asepconj_mono2)
+  also have \<open>\<dots>  \<longlongrightarrow> \<gamma> \<star> G\<close>
+    by (simp add: asepconj_comm asepconj_mono asepconj_swap_top awand_counit)
+  finally show ?thesis
+    by simp
+qed
+
+lemma aentails_conditional_crule':
+  assumes \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<gamma> \<star> \<delta>\<close>
+      and \<open>H \<longlongrightarrow> \<beta> \<star> (\<delta> \<Zsurj> G)\<close>
+    shows \<open>H \<star> \<alpha> \<longlongrightarrow> \<gamma> \<star> G\<close>
+proof -
+  from \<open>H \<longlongrightarrow> \<beta> \<star> (\<delta> \<Zsurj> G)\<close> have \<open>H \<star> \<alpha> \<longlongrightarrow> \<alpha> \<star> \<beta> \<star> (\<delta> \<Zsurj> G)\<close>
+    by (metis asepconj_comm asepconj_mono)
+  also from \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<gamma> \<star> \<delta>\<close> have \<open>\<dots> \<longlongrightarrow> \<gamma> \<star> \<delta> \<star> (\<delta> \<Zsurj> G)\<close> 
+    by (metis asepconj_assoc asepconj_mono2)
+  also have \<open>\<dots>  \<longlongrightarrow> \<gamma> \<star> G\<close>
+    by (simp add: aentails_refl asepconj_comm asepconj_mono_sym awand_counit)
+  finally show ?thesis
+    by simp
+qed
+
+definition aentails_conditional_drule ("_ \<longlongrightarrow>[_] _")
+  where \<open>aentails_conditional_drule \<alpha> C \<beta> \<equiv> \<alpha> \<longlongrightarrow> C \<star> \<beta> \<and> ucincl C\<close>
+definition aentails_conditional_rule ("_ [_]\<longlongrightarrow> _")
+  where \<open>aentails_conditional_rule \<alpha> C \<beta> \<equiv> C \<star> \<alpha> \<longlongrightarrow> \<beta>\<close>
+definition aentails_conditional_crule ("_ [_]\<longlongrightarrow>[_] _")
+  where \<open>aentails_conditional_crule \<alpha> C0 C1 \<beta> \<equiv> C0 \<star> \<alpha> \<longlongrightarrow> C1 \<star> \<beta> \<and> ucincl \<beta>\<close>
+definition aentails_conditional_crule_strong ("_ [_]\<longlongrightarrow>\<^sub>s[_] _")
+  where \<open>aentails_conditional_crule_strong \<alpha> C0 C1 \<beta> \<equiv> \<alpha> \<longlongrightarrow> C1 \<star> (C0 \<Zsurj> \<beta>) \<and> ucincl \<beta>\<close>
+
+lemma aentails_conditional_rule:
+  assumes \<open>\<alpha> [C]\<longlongrightarrow> \<beta>\<close>
+      and \<open>H \<longlongrightarrow> \<alpha> \<star> G\<close>
+    shows \<open>C \<star> H \<longlongrightarrow> \<beta> \<star> G\<close>
+  using assms unfolding aentails_conditional_rule_def by (simp add: aentails_conditional_rule')
+
+lemma aentails_conditional_rule_R0:
+  assumes \<open>\<alpha> [C]\<longlongrightarrow> \<beta>\<close>
+      and \<open>H \<longlongrightarrow> \<alpha>\<close>
+    shows \<open>C \<star> H \<longlongrightarrow> \<beta>\<close>
+  using aentails_conditional_rule_def aentails_trans asepconj_mono assms(1,2) by blast
+
+lemma aentails_conditional_rule_L0:
+  assumes \<open>\<alpha> [C]\<longlongrightarrow> \<beta>\<close>
+      and \<open>UNIV \<longlongrightarrow> \<alpha> \<star> G\<close>
+    shows \<open>C \<longlongrightarrow> \<beta> \<star> G\<close>
+  by (meson aentails_conditional_rule aentails_refl aentails_trans' asepconj_mono6 assms(1,2))
+
+lemma aentails_conditional_rule_LR0:
+  assumes \<open>\<alpha> [C]\<longlongrightarrow> \<beta>\<close>
+      and \<open>UNIV \<longlongrightarrow> \<alpha>\<close>
+    shows \<open>C \<longlongrightarrow> \<beta>\<close>
+  by (meson aentails_conditional_rule_def aentails_refl_eq aentails_trans asepconj_mono6 assms(1,2))
+
+lemmas aentails_conditional_rules = 
+  aentails_conditional_rule 
+  aentails_conditional_rule_L0 
+  aentails_conditional_rule_R0
+  aentails_conditional_rule_LR0
+
+lemma aentails_conditional_drule: 
+  assumes \<open>\<alpha> \<longlongrightarrow>[C] \<beta>\<close>
+      and \<open>\<beta> \<star> H \<longlongrightarrow> G\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> C \<star> G\<close>   
+  using assms unfolding aentails_conditional_drule_def by (clarsimp simp add: aentails_conditional_drule')
+
+lemma aentails_conditional_drule_L0: 
+  assumes \<open>\<alpha> \<longlongrightarrow>[C] \<beta>\<close>
+      and \<open>\<beta> \<longlongrightarrow> G\<close> 
+    shows \<open>\<alpha> \<longlongrightarrow> C \<star> G\<close>   
+  using aentails_conditional_drule_def aentails_trans asepconj_mono assms(1,2) by blast
+
+lemma aentails_conditional_drule_R0: 
+  assumes \<open>\<alpha> \<longlongrightarrow>[C] \<beta>\<close>
+      and \<open>\<beta> \<star> H \<longlongrightarrow> UNIV\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> C\<close> 
+  by (metis aentails_conditional_drule aentails_conditional_drule_def assms(1,2) local.ucincl_alt)
+
+lemma aentails_conditional_drule_LR0: 
+  assumes \<open>\<alpha> \<longlongrightarrow>[C] \<beta>\<close>
+      and \<open>\<beta> \<longlongrightarrow> UNIV\<close> 
+    shows \<open>\<alpha> \<longlongrightarrow> C\<close>
+  by (metis aentails_cancel_l aentails_conditional_drule_def aentails_trans' asepconj_comm assms(1))
+
+lemmas aentails_conditional_drules = 
+  aentails_conditional_drule 
+  aentails_conditional_drule_L0 
+  aentails_conditional_drule_R0
+  aentails_conditional_drule_LR0
+
+lemma aentails_conditional_crule: 
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
+      and \<open>H \<longlongrightarrow> L \<star> R \<Zsurj> G\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta> \<star> G\<close>   
+proof -
+  from \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close> have \<open>\<alpha> \<star> L \<longlongrightarrow> \<beta> \<star> R\<close> 
+    unfolding aentails_conditional_crule_def by (simp add: asepconj_comm)
+  from aentails_conditional_crule'[OF this] and assms show ?thesis 
+    by (simp add: asepconj_comm)
+qed
+
+lemma aentails_conditional_crule_L0:
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
+      and \<open>UNIV \<longlongrightarrow> L \<star> R \<Zsurj> G\<close> 
+    shows \<open>\<alpha> \<longlongrightarrow> \<beta> \<star> G\<close>   
+  using aentails_conditional_crule aentails_refl aentails_trans' asepconj_mono6 assms(1,2)
+  by blast
+
+lemma aentails_conditional_crule_R0: 
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
+      and \<open>H \<longlongrightarrow> L \<star> R \<Zsurj> UNIV\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta>\<close>
+  by (metis aentails_conditional_crule aentails_conditional_crule_def assms(1,2)
+      local.ucincl_alt)
+
+lemma aentails_conditional_crule_LR0: 
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
+      and \<open>UNIV \<longlongrightarrow> L \<star> R \<Zsurj> UNIV\<close> 
+    shows \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>
+  by (metis aentails_conditional_crule_L0 aentails_conditional_crule_def asepconj_ident2 assms(1,2))
+ 
+lemmas aentails_conditional_crules = 
+  aentails_conditional_crule 
+  aentails_conditional_crule_L0 
+  aentails_conditional_crule_R0
+  aentails_conditional_crule_LR0
+
+lemma aentails_conditional_crule_strong: 
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
+      and \<open>H \<star> R \<longlongrightarrow> L \<star> G\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta> \<star> G\<close>   
+proof -
+  from \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close> have \<open>\<alpha> \<longlongrightarrow> (L\<Zsurj>\<beta>) \<star> R\<close> 
+    unfolding aentails_conditional_crule_strong_def by (simp add: asepconj_comm)
+  from aentails_conditional_crule_strong'[OF this] and assms show ?thesis 
+    by (simp add: asepconj_comm)
+qed
+
+lemma aentails_conditional_crule_strong_L0:
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
+      and \<open>R \<longlongrightarrow> L \<star> G\<close> 
+    shows \<open>\<alpha> \<longlongrightarrow> \<beta> \<star> G\<close>    
+  by (smt (verit, best) aentails_conditional_crule_strong aentails_conditional_crule_strong_def
+      asepconj_UNIV_idempotent asepconj_ident2 asepconj_mono3 asepconj_swap_top assms(1,2)
+      local.ucincl_alt' ucincl_asepconjL)
+
+
+lemma aentails_conditional_crule_strong_R0: 
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
+      and \<open>H \<star> R \<longlongrightarrow> L\<close> 
+    shows \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta>\<close>
+  using aentails_conditional_crule_strong aentails_conditional_crule_strong_def aentails_refl
+    asepconj_ident2 asepconj_mono6 assms(1,2) by fastforce
+
+
+lemma aentails_conditional_crule_strong_LR0: 
+  assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
+      and \<open>R \<longlongrightarrow> L\<close> 
+    shows \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>
+  by (meson aentails_conditional_crule_strong_def aentails_trans assms(1,2) awand_adjoint awand_counit)
+ 
+lemmas aentails_conditional_crules_strong = aentails_conditional_crule_strong 
+   aentails_conditional_crule_strong_L0 
+   aentails_conditional_crule_strong_R0
+   aentails_conditional_crule_strong_LR0
+
 text\<open>Note that the converse of \<^verbatim>\<open>awand_counit2\<close> does not seem to hold in general, but one can prove
 the following weaker version:\<close>
 

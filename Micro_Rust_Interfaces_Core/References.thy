@@ -120,8 +120,8 @@ definition points_to :: \<open>('a, 'b, 'v) ref \<Rightarrow> share \<Rightarrow
 notation points_to ("(_) \<mapsto> \<langle>_\<rangle>/_/ \<down>/ _" [69,0,69,69]70)
 
 abbreviation points_to_modified :: \<open>('a, 'b, 'v) ref \<Rightarrow> share \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 's assert\<close> where
-  \<open>points_to_modified r sh op b v \<equiv> points_to_raw (\<flat> r) sh (focus_modify (get_focus r) op b) \<star>
-     \<langle>points_to_localizes r b v\<rangle>\<close>
+  \<open>points_to_modified r sh op b v \<equiv> points_to r sh (focus_modify (get_focus r) op b) (op v) \<star>
+   \<langle>points_to_localizes r b v\<rangle>\<close>
 
 notation points_to_modified ("(_) \<mapsto> \<langle>_\<rangle>/ _\<sqdot> '(_\<down>_')" [69,0,69,69,69]70)
 

@@ -89,4 +89,12 @@ building on the separation logic automation.\<close>
 
 end
 
+text\<open>This contract requires that a function behaves precisely like the first argument (a 'pure'
+function), and does so without requiring any state.\<close>
+definition lift_pure_to_contract :: \<open>'b \<Rightarrow> ('s::sepalg, 'b, 'c) function_contract\<close> where
+  \<open>lift_pure_to_contract pure \<equiv>
+    let pre = \<top> in
+    let post = \<lambda> ret. \<langle>ret = pure\<rangle> in
+    make_function_contract pre post\<close>
+
 end
