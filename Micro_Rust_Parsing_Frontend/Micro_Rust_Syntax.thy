@@ -33,19 +33,8 @@ text\<open>The following is the syntax category of Micro Rust identifiers.\<clos
 
 nonterminal urust_identifier
 
-text\<open>Wildcard patterns:
-Note: This wildcard cannot replace \<^verbatim>\<open>_urust_match_pattern_other\<close> as a match pattern.
-But it will make the syntax ambiguous by allowing a wildcard match case to parse either as:
-  \<^verbatim>\<open>"_urust_match_pattern_constr_no_args" ("_urust_identifier_wildcard")\<close>
-or
-  \<^verbatim>\<open>"_urust_match_pattern_other"\<close>.
-We disambiguous this by making the wildcard identifier's precedence 999 instead\<close>
-syntax
-  "_urust_identifier_wildcard" :: \<open>urust_identifier\<close>
-    ("'_" 999)
-translations
-  "_urust_identifier_wildcard"
-  \<rightharpoonup> "_idtdummy"
+text\<open>Wildcard patterns are represented by \<^verbatim>\<open>_urust_match_pattern_other\<close> and are not valid
+identifiers. We intentionally avoid a wildcard identifier to keep pattern parsing unambiguous.\<close>
 
 text\<open>HOL identifiers can be used as Micro Rust identifiers:\<close>
 syntax
@@ -64,11 +53,9 @@ nonterminal urust_tuple_args
 
 nonterminal urust_match_branch \<comment> \<open>A single branch of a match statement\<close>
 nonterminal urust_match_branches \<comment> \<open>Comma-separate lists of match branches\<close>
-nonterminal urust_match_pattern
-nonterminal urust_match_pattern_arg
-nonterminal urust_match_pattern_args
-
-nonterminal urust_let_pattern
+nonterminal urust_pattern
+nonterminal urust_pattern_arg
+nonterminal urust_pattern_args
 nonterminal urust_let_pattern_args
 
 nonterminal urust_integral_type
@@ -238,14 +225,12 @@ syntax
     ("_'.4" [998]998)
   "_urust_tuple_index_5" :: "urust \<Rightarrow> urust"
     ("_'.5" [998]998)
-  \<comment>\<open>We have very basic support for let-patterns: identifiers and tuple destruction\<close>
-  "_urust_let_pattern_identifier" :: "urust_identifier \<Rightarrow> urust_let_pattern"
-    ("_")
-  "_urust_let_pattern_tuple" :: "urust_let_pattern_args \<Rightarrow> urust_let_pattern"
+  \<comment>\<open>We have very basic support for tuple patterns: identifiers and tuple destruction\<close>
+  "_urust_let_pattern_tuple" :: "urust_let_pattern_args \<Rightarrow> urust_pattern"
     ("'(_')")
-  "_urust_let_pattern_tuple_base_pair" :: "urust_let_pattern \<Rightarrow> urust_let_pattern \<Rightarrow> urust_let_pattern_args"
+  "_urust_let_pattern_tuple_base_pair" :: "urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_let_pattern_args"
     ("_, _")
-  "_urust_let_pattern_tuple_app" :: "urust_let_pattern \<Rightarrow> urust_let_pattern_args \<Rightarrow> urust_let_pattern_args"
+  "_urust_let_pattern_tuple_app" :: "urust_pattern \<Rightarrow> urust_let_pattern_args \<Rightarrow> urust_let_pattern_args"
     ("(_), (_)")
   \<comment>\<open>The monadic composition of two Micro Rust programs, ignoring the result of the first\<close>
   "_urust_sequence" :: "urust \<Rightarrow> urust \<Rightarrow> urust"
@@ -253,9 +238,9 @@ syntax
   "_urust_sequence_mono" :: "urust \<Rightarrow> urust"
     ("_;" [11]10)
   \<comment>\<open>Add immutable binding\<close>
-  "_urust_bind_immutable" :: "urust_let_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
+  "_urust_bind_immutable" :: "urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
     ("let/ _/ =/ _;// _" [1000,20,10]10)
-  "_urust_bind_immutable'" :: "urust_let_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
+  "_urust_bind_immutable'" :: "urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
     ("const/ _/ =/ _;// _" [1000,20,10]10)
   \<comment>\<open>Add mutable binding\<close>
   "_urust_bind_mutable" :: "urust_identifier \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
@@ -283,18 +268,18 @@ syntax
   "_urust_path_string_identifier" :: \<open>string_token \<Rightarrow> urust_identifier\<close>
     ("URUST'_PATH'_STRING'_IDENTIFIER _")
 
-  \<comment>\<open>Other control flow constructs.  TODO: \<^verbatim>\<open>for\<close> loops should accept patterns?\<close>
+  \<comment>\<open>Other control flow constructs\<close>
   "_urust_for_loop"
-    :: \<open>urust_let_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("for _ in (_) {/ _/ }" [100,20,0]11)
 
-  "_urust_let_else" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_let_else" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("let _ = (_) else { (_) } ; (_)" [100,20,0,10]10)
 
-  "_urust_if_let" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_if_let" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) }" [100,20,0]11)
 
-  "_urust_if_let_else" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_if_let_else" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) } else { (_) }" [100,20,0,0]11)
 
   \<comment> \<open>We distinguish two types of matches. The first is the usual \<^verbatim>\<open>case\<close> on datatypes.
@@ -309,29 +294,29 @@ syntax
   "_urust_match_switch" :: "[urust, urust_match_branches] \<Rightarrow> urust"   ("match'_switch (_) {/ _/ }" [20, 10]20)
   \<comment> \<open>This is \<^verbatim>\<open>temporary\<close> since we will disambiguate between two styles of matches\<close>
   "_urust_temporary_match"  :: "[urust, urust_match_branches] \<Rightarrow> urust"  ("match (_) {/ _/ }" [20, 10]20)
-  "_urust_match1" :: "[urust_match_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
+  "_urust_match1" :: "[urust_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
   "_urust_match2" :: "[urust_match_branches, urust_match_branches] \<Rightarrow> urust_match_branches"  ("_/, _" [21, 20]20)
 
   \<comment>\<open>Basic case patterns, restricted to constructor identifiers followed by a potentially empty list of argument identifiers, and numerals\<close>
-  "_urust_match_pattern_other" :: \<open>urust_match_pattern\<close>
+  "_urust_match_pattern_other" :: \<open>urust_pattern\<close>
     ("'_")
-  "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern\<close>
+  "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern\<close>
+    ("_" [0]1000)
+  "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_pattern\<close>
     ("_" [1000]100)
-  "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_match_pattern\<close>
-    ("_" [1000]100)
-  "_urust_match_pattern_zero" :: \<open>urust_match_pattern\<close>
+  "_urust_match_pattern_zero" :: \<open>urust_pattern\<close>
     ("0")
-  "_urust_match_pattern_one" :: \<open>urust_match_pattern\<close>
+  "_urust_match_pattern_one" :: \<open>urust_pattern\<close>
     ("1")
-  "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern_args \<Rightarrow> urust_match_pattern\<close>
+  "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern\<close>
     ("_ '(_')"[1000,100]100)
-  "_urust_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_match_pattern_arg\<close>
+  "_urust_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_pattern_arg\<close>
     ("_")
-  "_urust_match_pattern_arg_dummy" :: \<open>urust_match_pattern_arg\<close>
+  "_urust_match_pattern_arg_dummy" :: \<open>urust_pattern_arg\<close>
     ("'_")
-  "_urust_match_pattern_args_single" :: \<open>urust_match_pattern_arg \<Rightarrow> urust_match_pattern_args\<close>
+  "_urust_match_pattern_args_single" :: \<open>urust_pattern_arg \<Rightarrow> urust_pattern_args\<close>
     ("_")
-  "_urust_match_pattern_args_app" :: \<open>urust_match_pattern_arg \<Rightarrow> urust_match_pattern_args \<Rightarrow> urust_match_pattern_args\<close>
+  "_urust_match_pattern_args_app" :: \<open>urust_pattern_arg \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:

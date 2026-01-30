@@ -264,10 +264,11 @@ syntax
 
   "_shallow_match_branches" :: \<open>urust_match_branches \<Rightarrow> urust_shallow_match_branches\<close>
   "_shallow_match_branch" :: \<open>urust_match_branch  \<Rightarrow> urust_shallow_match_branch \<close>
-  "_shallow_match_pattern" :: \<open>urust_match_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
-  "_shallow_match_args" :: \<open>urust_match_pattern_args \<Rightarrow> urust_shallow_match_pattern_args \<close>
-  "_shallow_match_arg" :: \<open>urust_match_pattern_arg \<Rightarrow> urust_shallow_match_pattern_arg\<close>
-  "_shallow_let_pattern" :: \<open>urust_let_pattern \<Rightarrow> pttrns\<close>
+  "_shallow_match_pattern" :: \<open>urust_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
+  "_shallow_match_args" :: \<open>urust_pattern_args \<Rightarrow> urust_shallow_match_pattern_args \<close>
+  "_shallow_match_arg" :: \<open>urust_pattern_arg \<Rightarrow> urust_shallow_match_pattern_arg\<close>
+  "_shallow_match_tuple_arg" :: \<open>urust_pattern \<Rightarrow> urust_shallow_match_pattern_arg\<close>
+  "_shallow_let_pattern" :: \<open>urust_pattern \<Rightarrow> pttrns\<close>
   "_shallow_let_pattern_args" :: \<open>urust_let_pattern_args \<Rightarrow> pttrns\<close>
 
   "_string_token_to_hol" :: \<open>string_token \<Rightarrow> logic\<close>
@@ -435,8 +436,10 @@ translations
     \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp) (_abs (_shallow_let_pattern pattern) (_shallow cont))"
   "_shallow (_urust_bind_immutable' pattern exp cont)"
     \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp) (_abs (_shallow_let_pattern pattern) (_shallow cont))"
-  "_shallow_let_pattern (_urust_let_pattern_identifier id)"
+  "_shallow_let_pattern (_urust_match_pattern_constr_no_args id)"
     \<rightharpoonup> "_shallow_identifier_as_literal id"
+  "_shallow_let_pattern _urust_match_pattern_other"
+    \<rightharpoonup> "_idtdummy"
 
   \<comment>\<open>Tuples\<close>
   "_shallow (_urust_tuple_args_double a b)"
@@ -608,6 +611,15 @@ translations
   "_shallow( _urust_range_eq x y)"
     \<rightharpoonup> "_urust_shallow_range_eq (_shallow x) (_shallow y)"
 
+  "_shallow (_urust_let_else (_urust_let_pattern_tuple args) exp el tail)"
+    \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp)
+                       (_abs (_shallow_let_pattern (_urust_let_pattern_tuple args)) (_shallow tail))"
+  "_shallow (_urust_if_let (_urust_let_pattern_tuple args) exp this)"
+    \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp)
+                       (_abs (_shallow_let_pattern (_urust_let_pattern_tuple args)) (_shallow this))"
+  "_shallow (_urust_if_let_else (_urust_let_pattern_tuple args) exp this that )"
+    \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp)
+                       (_abs (_shallow_let_pattern (_urust_let_pattern_tuple args)) (_shallow this))"
   "_shallow (_urust_let_else ptrn exp el tail)"
     \<rightharpoonup> "_urust_shallow_let_else (_shallow_match_pattern ptrn) (_shallow exp) (_shallow el) (_shallow tail)"
   "_shallow (_urust_if_let ptrn exp this)"
@@ -635,6 +647,10 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_no_args (_shallow_identifier_as_literal id)"
   "_shallow_match_pattern (_urust_match_pattern_constr_with_args id args)"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (_shallow_identifier_as_literal id) (_shallow_match_args args)"
+  "_shallow_match_pattern (_urust_let_pattern_tuple (_urust_let_pattern_tuple_base_pair a b))"
+    \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (CONST Pair)
+      (_urust_shallow_match_pattern_args_app (_shallow_match_tuple_arg a)
+        (_urust_shallow_match_pattern_args_single (_shallow_match_tuple_arg b)))"
 
   "_shallow_match_args (_urust_match_pattern_args_single arg)"
     \<rightharpoonup> "_urust_shallow_match_pattern_args_single (_shallow_match_arg arg)"
@@ -644,6 +660,10 @@ translations
   "_shallow_match_arg (_urust_match_pattern_arg_id id)"
     \<rightharpoonup> "_urust_shallow_match_pattern_arg_id id"
   "_shallow_match_arg _urust_match_pattern_arg_dummy"
+    \<rightharpoonup> "_urust_shallow_match_pattern_arg_dummy"
+  "_shallow_match_tuple_arg (_urust_match_pattern_constr_no_args id)"
+    \<rightharpoonup> "_urust_shallow_match_pattern_arg_id id"
+  "_shallow_match_tuple_arg _urust_match_pattern_other"
     \<rightharpoonup> "_urust_shallow_match_pattern_arg_dummy"
 
   "_shallow (_urust_match_switch exp branches)"
@@ -732,6 +752,35 @@ term\<open>\<lbrakk>
     _ \<Rightarrow> ()
   };
   if let Some(_) = Some(()) {
+    ()
+  };
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  match (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>) {
+    (a, b) \<Rightarrow> a
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if let (a, b) = (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>) {
+    ()
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let (a, b) = (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>) else {
+    ()
+  };
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let lst = \<llangle>(1 :: 32 word, 2 :: 32 word, TNil) # (3, 4, TNil) # []\<rrangle>;
+  for (a, b) in lst {
+    let _ = a;
+    let _ = b;
     ()
   };
   ()
