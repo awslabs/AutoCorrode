@@ -54,7 +54,6 @@ nonterminal urust_tuple_args
 nonterminal urust_match_branch \<comment> \<open>A single branch of a match statement\<close>
 nonterminal urust_match_branches \<comment> \<open>Comma-separate lists of match branches\<close>
 nonterminal urust_pattern
-nonterminal urust_pattern_arg
 nonterminal urust_pattern_args
 nonterminal urust_let_pattern_args
 
@@ -310,13 +309,9 @@ syntax
     ("1")
   "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern\<close>
     ("_ '(_')"[1000,100]100)
-  "_urust_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_pattern_arg\<close>
+  "_urust_match_pattern_args_single" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args\<close>
     ("_")
-  "_urust_match_pattern_arg_dummy" :: \<open>urust_pattern_arg\<close>
-    ("'_")
-  "_urust_match_pattern_args_single" :: \<open>urust_pattern_arg \<Rightarrow> urust_pattern_args\<close>
-    ("_")
-  "_urust_match_pattern_args_app" :: \<open>urust_pattern_arg \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
+  "_urust_match_pattern_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
@@ -483,6 +478,8 @@ let
      let val parts = long_id |> split_long_identifier
          val parts_as_ids = map (ast_urust_identifier_id) parts
      in Ast.Appl parts_as_ids end
+  | break_long_identifier args =
+     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_long_id\<close>) args
 in
   [(\<^syntax_const>\<open>_urust_temporary_long_id\<close>, K break_long_identifier)]
 end
@@ -535,6 +532,8 @@ let
          val res = fold ast_urust_field_access projections head
          val _ = debug_result "ID" res
      in res end
+   | convert_temporary_identifier_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_identifier_long\<close>) args
 
   fun convert_temporary_callable_id_long [Ast.Appl (head :: projections)] =
      let val head = ast_urust_identifier head
@@ -543,16 +542,22 @@ let
          val res = ast_urust_callable_struct method obj
          val _ = debug_result "callable id" res
      in res end
+   | convert_temporary_callable_id_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_callable_id_long\<close>) args
 
   fun convert_temporary_callable_struct_long [head, Ast.Appl projections] =
      let val res = long_id_struct_access_into_callable head projections
          val _ = debug_result "callable struct" res
      in res end
+   | convert_temporary_callable_struct_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_callable_struct_long\<close>) args
 
   fun convert_temporary_field_access_long [head, Ast.Appl projections] =
      let val res = long_id_field_access_into_urust head projections
          val _ = debug_result "field access" res
      in res end
+   | convert_temporary_field_access_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_field_access_long\<close>) args
 in
   [(\<^syntax_const>\<open>_urust_temporary_identifier_long\<close>,      K convert_temporary_identifier_long),
    (\<^syntax_const>\<open>_urust_temporary_callable_id_long\<close>,     K convert_temporary_callable_id_long),
@@ -608,7 +613,9 @@ parse_ast_translation\<open>
         val rust_name = path_arg_to_rust_name (hd args);
       in
         Ast.mk_appl (Ast.Constant grammar_el) [Ast.Constant rust_name]
-      end;
+      end
+      | path_translator grammar_el _ args =
+          Ast.mk_appl (Ast.Constant grammar_el) args;
   in [
     (\<^syntax_const>\<open>_urust_temporary_path_identifier\<close>, path_translator \<^syntax_const>\<open>_urust_path_string_identifier\<close>)
   ]end
@@ -651,17 +658,21 @@ parse_ast_translation\<open>
     \<comment> \<open>Convert the argument of syntax type \<^verbatim>\<open>_path_identifier_long\<close> into its path string and
         field/method accesses, then use the \<^verbatim>\<open>ast_joiner\<close> argument to turn it into a urust grammar
         entry. The 'syntax type' of \<^verbatim>\<open>ast_joiner\<close> is \<^verbatim>\<open>urust \<rightarrow> urust_identifier list \<rightarrow> urust\<close>.\<close>
-    fun path_translator (ast_joiner: Ast.ast -> Ast.ast list -> Ast.ast) ctx [arg] =
+    fun path_translator grammar_el (ast_joiner: Ast.ast -> Ast.ast list -> Ast.ast) ctx [arg] =
       let
         val (path, field) = split_path_n_field arg
       in
         ast_joiner
           (path |> urust_path_string_to_identifier |> ast_urust_identifier)
           (field |> map ast_urust_identifier_id)
-      end;
+      end
+      | path_translator grammar_el _ _ args =
+          Ast.mk_appl (Ast.Constant grammar_el) args;
   in [
-    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close>,  path_translator long_id_field_access_into_urust),
-    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close>, path_translator long_id_struct_access_into_callable)
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close>,
+      path_translator \<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close> long_id_field_access_into_urust),
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close>,
+      path_translator \<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close> long_id_struct_access_into_callable)
   ] end
 \<close>
 
@@ -672,6 +683,7 @@ parse_ast_translation\<open>
     \<comment> \<open>Get the head constants of an AST node\<close>
     fun pattern_ast_to_head_const (Ast.Appl (Ast.Constant c :: tl)) = c
       | pattern_ast_to_head_const (Ast.Constant c) = c
+      | pattern_ast_to_head_const _ = \<^syntax_const>\<open>_urust_match_pattern_other\<close>
 
     \<comment> \<open>Get the list of patterns from a \<^verbatim>\<open>_urust_match2\<close> node in the AST\<close>
     fun branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match2\<close>, left, right]) =
@@ -719,6 +731,8 @@ parse_ast_translation\<open>
       in
         Ast.mk_appl (Ast.Constant new_hd) [arg, branches]
       end
+      | match_selector _ args =
+          Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_match\<close>) args
   in [
     (\<^syntax_const>\<open>_urust_temporary_match\<close>, match_selector)
   ] end
