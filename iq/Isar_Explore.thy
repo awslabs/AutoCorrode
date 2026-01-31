@@ -85,10 +85,9 @@ fun isar_explore exec_id instance text state =
             directly into error_messages to Isabelle's output channel. *)
          val old_parallel_proofs = ! Multithreading.parallel_proofs
          val _ = Multithreading.parallel_proofs := Int.min(2, old_parallel_proofs)
-         val (st', err_opt) = Toplevel.transition false tr st
+         val st' = Toplevel.command_exception false tr st
          val _ = Multithreading.parallel_proofs := old_parallel_proofs
-      in case err_opt of NONE => st' | SOME (exn, _) =>
-            (raise exn) end
+      in st' end
   in
     List.foldl (fn (tr, st) => run_transition (tr, st)) state transitions
   end;
@@ -100,7 +99,7 @@ fun isar_explore exec_id instance text state =
 val _ = register {name = "isar_explore", pri = Task_Queue.urgent_pri}
     (fn {state, args, writeln_result, instance, exec_id, ...} =>
       (case args of [isar_text] => isar_explore exec_id instance isar_text state
-                                   |> Toplevel.string_of_state
+                                   |> (fn st => Pretty.string_of (Pretty.chunks (Toplevel.pretty_state st)))
                                    |> writeln_result
          | _ => raise (ERROR "Invalid number of arguments for isar_explore")))
 \<close>
