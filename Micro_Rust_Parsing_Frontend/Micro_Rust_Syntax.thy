@@ -33,19 +33,8 @@ text\<open>The following is the syntax category of Micro Rust identifiers.\<clos
 
 nonterminal urust_identifier
 
-text\<open>Wildcard patterns:
-Note: This wildcard cannot replace \<^verbatim>\<open>_urust_match_pattern_other\<close> as a match pattern.
-But it will make the syntax ambiguous by allowing a wildcard match case to parse either as:
-  \<^verbatim>\<open>"_urust_match_pattern_constr_no_args" ("_urust_identifier_wildcard")\<close>
-or
-  \<^verbatim>\<open>"_urust_match_pattern_other"\<close>.
-We disambiguous this by making the wildcard identifier's precedence 999 instead\<close>
-syntax
-  "_urust_identifier_wildcard" :: \<open>urust_identifier\<close>
-    ("'_" 999)
-translations
-  "_urust_identifier_wildcard"
-  \<rightharpoonup> "_idtdummy"
+text\<open>Wildcard patterns are represented by \<^verbatim>\<open>_urust_match_pattern_other\<close> and are not valid
+identifiers. We intentionally avoid a wildcard identifier to keep pattern parsing unambiguous.\<close>
 
 text\<open>HOL identifiers can be used as Micro Rust identifiers:\<close>
 syntax
@@ -64,11 +53,8 @@ nonterminal urust_tuple_args
 
 nonterminal urust_match_branch \<comment> \<open>A single branch of a match statement\<close>
 nonterminal urust_match_branches \<comment> \<open>Comma-separate lists of match branches\<close>
-nonterminal urust_match_pattern
-nonterminal urust_match_pattern_arg
-nonterminal urust_match_pattern_args
-
-nonterminal urust_let_pattern
+nonterminal urust_pattern
+nonterminal urust_pattern_args
 nonterminal urust_let_pattern_args
 
 nonterminal urust_integral_type
@@ -238,14 +224,12 @@ syntax
     ("_'.4" [998]998)
   "_urust_tuple_index_5" :: "urust \<Rightarrow> urust"
     ("_'.5" [998]998)
-  \<comment>\<open>We have very basic support for let-patterns: identifiers and tuple destruction\<close>
-  "_urust_let_pattern_identifier" :: "urust_identifier \<Rightarrow> urust_let_pattern"
-    ("_")
-  "_urust_let_pattern_tuple" :: "urust_let_pattern_args \<Rightarrow> urust_let_pattern"
+  \<comment>\<open>We have very basic support for tuple patterns: identifiers and tuple destruction\<close>
+  "_urust_let_pattern_tuple" :: "urust_let_pattern_args \<Rightarrow> urust_pattern"
     ("'(_')")
-  "_urust_let_pattern_tuple_base_pair" :: "urust_let_pattern \<Rightarrow> urust_let_pattern \<Rightarrow> urust_let_pattern_args"
+  "_urust_let_pattern_tuple_base_pair" :: "urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_let_pattern_args"
     ("_, _")
-  "_urust_let_pattern_tuple_app" :: "urust_let_pattern \<Rightarrow> urust_let_pattern_args \<Rightarrow> urust_let_pattern_args"
+  "_urust_let_pattern_tuple_app" :: "urust_pattern \<Rightarrow> urust_let_pattern_args \<Rightarrow> urust_let_pattern_args"
     ("(_), (_)")
   \<comment>\<open>The monadic composition of two Micro Rust programs, ignoring the result of the first\<close>
   "_urust_sequence" :: "urust \<Rightarrow> urust \<Rightarrow> urust"
@@ -253,9 +237,9 @@ syntax
   "_urust_sequence_mono" :: "urust \<Rightarrow> urust"
     ("_;" [11]10)
   \<comment>\<open>Add immutable binding\<close>
-  "_urust_bind_immutable" :: "urust_let_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
+  "_urust_bind_immutable" :: "urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
     ("let/ _/ =/ _;// _" [1000,20,10]10)
-  "_urust_bind_immutable'" :: "urust_let_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
+  "_urust_bind_immutable'" :: "urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
     ("const/ _/ =/ _;// _" [1000,20,10]10)
   \<comment>\<open>Add mutable binding\<close>
   "_urust_bind_mutable" :: "urust_identifier \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
@@ -283,18 +267,18 @@ syntax
   "_urust_path_string_identifier" :: \<open>string_token \<Rightarrow> urust_identifier\<close>
     ("URUST'_PATH'_STRING'_IDENTIFIER _")
 
-  \<comment>\<open>Other control flow constructs.  TODO: \<^verbatim>\<open>for\<close> loops should accept patterns?\<close>
+  \<comment>\<open>Other control flow constructs\<close>
   "_urust_for_loop"
-    :: \<open>urust_let_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("for _ in (_) {/ _/ }" [100,20,0]11)
 
-  "_urust_let_else" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_let_else" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("let _ = (_) else { (_) } ; (_)" [100,20,0,10]10)
 
-  "_urust_if_let" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_if_let" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) }" [100,20,0]11)
 
-  "_urust_if_let_else" :: \<open>urust_match_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_if_let_else" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) } else { (_) }" [100,20,0,0]11)
 
   \<comment> \<open>We distinguish two types of matches. The first is the usual \<^verbatim>\<open>case\<close> on datatypes.
@@ -309,29 +293,25 @@ syntax
   "_urust_match_switch" :: "[urust, urust_match_branches] \<Rightarrow> urust"   ("match'_switch (_) {/ _/ }" [20, 10]20)
   \<comment> \<open>This is \<^verbatim>\<open>temporary\<close> since we will disambiguate between two styles of matches\<close>
   "_urust_temporary_match"  :: "[urust, urust_match_branches] \<Rightarrow> urust"  ("match (_) {/ _/ }" [20, 10]20)
-  "_urust_match1" :: "[urust_match_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
+  "_urust_match1" :: "[urust_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
   "_urust_match2" :: "[urust_match_branches, urust_match_branches] \<Rightarrow> urust_match_branches"  ("_/, _" [21, 20]20)
 
   \<comment>\<open>Basic case patterns, restricted to constructor identifiers followed by a potentially empty list of argument identifiers, and numerals\<close>
-  "_urust_match_pattern_other" :: \<open>urust_match_pattern\<close>
+  "_urust_match_pattern_other" :: \<open>urust_pattern\<close>
     ("'_")
-  "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern\<close>
+  "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern\<close>
+    ("_" [0]1000)
+  "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_pattern\<close>
     ("_" [1000]100)
-  "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_match_pattern\<close>
-    ("_" [1000]100)
-  "_urust_match_pattern_zero" :: \<open>urust_match_pattern\<close>
+  "_urust_match_pattern_zero" :: \<open>urust_pattern\<close>
     ("0")
-  "_urust_match_pattern_one" :: \<open>urust_match_pattern\<close>
+  "_urust_match_pattern_one" :: \<open>urust_pattern\<close>
     ("1")
-  "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_match_pattern_args \<Rightarrow> urust_match_pattern\<close>
+  "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern\<close>
     ("_ '(_')"[1000,100]100)
-  "_urust_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_match_pattern_arg\<close>
+  "_urust_match_pattern_args_single" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args\<close>
     ("_")
-  "_urust_match_pattern_arg_dummy" :: \<open>urust_match_pattern_arg\<close>
-    ("'_")
-  "_urust_match_pattern_args_single" :: \<open>urust_match_pattern_arg \<Rightarrow> urust_match_pattern_args\<close>
-    ("_")
-  "_urust_match_pattern_args_app" :: \<open>urust_match_pattern_arg \<Rightarrow> urust_match_pattern_args \<Rightarrow> urust_match_pattern_args\<close>
+  "_urust_match_pattern_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
@@ -498,6 +478,8 @@ let
      let val parts = long_id |> split_long_identifier
          val parts_as_ids = map (ast_urust_identifier_id) parts
      in Ast.Appl parts_as_ids end
+  | break_long_identifier args =
+     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_long_id\<close>) args
 in
   [(\<^syntax_const>\<open>_urust_temporary_long_id\<close>, K break_long_identifier)]
 end
@@ -550,6 +532,8 @@ let
          val res = fold ast_urust_field_access projections head
          val _ = debug_result "ID" res
      in res end
+   | convert_temporary_identifier_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_identifier_long\<close>) args
 
   fun convert_temporary_callable_id_long [Ast.Appl (head :: projections)] =
      let val head = ast_urust_identifier head
@@ -558,16 +542,22 @@ let
          val res = ast_urust_callable_struct method obj
          val _ = debug_result "callable id" res
      in res end
+   | convert_temporary_callable_id_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_callable_id_long\<close>) args
 
   fun convert_temporary_callable_struct_long [head, Ast.Appl projections] =
      let val res = long_id_struct_access_into_callable head projections
          val _ = debug_result "callable struct" res
      in res end
+   | convert_temporary_callable_struct_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_callable_struct_long\<close>) args
 
   fun convert_temporary_field_access_long [head, Ast.Appl projections] =
      let val res = long_id_field_access_into_urust head projections
          val _ = debug_result "field access" res
      in res end
+   | convert_temporary_field_access_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_field_access_long\<close>) args
 in
   [(\<^syntax_const>\<open>_urust_temporary_identifier_long\<close>,      K convert_temporary_identifier_long),
    (\<^syntax_const>\<open>_urust_temporary_callable_id_long\<close>,     K convert_temporary_callable_id_long),
@@ -623,7 +613,9 @@ parse_ast_translation\<open>
         val rust_name = path_arg_to_rust_name (hd args);
       in
         Ast.mk_appl (Ast.Constant grammar_el) [Ast.Constant rust_name]
-      end;
+      end
+      | path_translator grammar_el _ args =
+          Ast.mk_appl (Ast.Constant grammar_el) args;
   in [
     (\<^syntax_const>\<open>_urust_temporary_path_identifier\<close>, path_translator \<^syntax_const>\<open>_urust_path_string_identifier\<close>)
   ]end
@@ -666,17 +658,21 @@ parse_ast_translation\<open>
     \<comment> \<open>Convert the argument of syntax type \<^verbatim>\<open>_path_identifier_long\<close> into its path string and
         field/method accesses, then use the \<^verbatim>\<open>ast_joiner\<close> argument to turn it into a urust grammar
         entry. The 'syntax type' of \<^verbatim>\<open>ast_joiner\<close> is \<^verbatim>\<open>urust \<rightarrow> urust_identifier list \<rightarrow> urust\<close>.\<close>
-    fun path_translator (ast_joiner: Ast.ast -> Ast.ast list -> Ast.ast) ctx [arg] =
+    fun path_translator grammar_el (ast_joiner: Ast.ast -> Ast.ast list -> Ast.ast) ctx [arg] =
       let
         val (path, field) = split_path_n_field arg
       in
         ast_joiner
           (path |> urust_path_string_to_identifier |> ast_urust_identifier)
           (field |> map ast_urust_identifier_id)
-      end;
+      end
+      | path_translator grammar_el _ _ args =
+          Ast.mk_appl (Ast.Constant grammar_el) args;
   in [
-    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close>,  path_translator long_id_field_access_into_urust),
-    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close>, path_translator long_id_struct_access_into_callable)
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close>,
+      path_translator \<^syntax_const>\<open>_urust_temporary_path_identifier_long_field\<close> long_id_field_access_into_urust),
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close>,
+      path_translator \<^syntax_const>\<open>_urust_temporary_path_identifier_long_method\<close> long_id_struct_access_into_callable)
   ] end
 \<close>
 
@@ -687,6 +683,7 @@ parse_ast_translation\<open>
     \<comment> \<open>Get the head constants of an AST node\<close>
     fun pattern_ast_to_head_const (Ast.Appl (Ast.Constant c :: tl)) = c
       | pattern_ast_to_head_const (Ast.Constant c) = c
+      | pattern_ast_to_head_const _ = \<^syntax_const>\<open>_urust_match_pattern_other\<close>
 
     \<comment> \<open>Get the list of patterns from a \<^verbatim>\<open>_urust_match2\<close> node in the AST\<close>
     fun branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match2\<close>, left, right]) =
@@ -734,6 +731,8 @@ parse_ast_translation\<open>
       in
         Ast.mk_appl (Ast.Constant new_hd) [arg, branches]
       end
+      | match_selector _ args =
+          Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_match\<close>) args
   in [
     (\<^syntax_const>\<open>_urust_temporary_match\<close>, match_selector)
   ] end

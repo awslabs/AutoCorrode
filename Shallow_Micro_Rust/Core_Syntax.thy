@@ -4,7 +4,7 @@
 (*<*)
 theory Core_Syntax
   imports Core_Expression Rust_Iterator Result_Type Numeric_Types Option_Type
-    Range_Type Bool_Type Global_Store Num_Case_Expression
+    Range_Type Bool_Type Global_Store Num_Case_Expression Basic_Case_Expression
 begin
 (*>*)
 
@@ -188,6 +188,7 @@ syntax
     ("_")
   "_urust_shallow_match_pattern_arg_dummy" :: \<open>urust_shallow_match_pattern_arg\<close>
     ("'_")
+  "_urust_shallow_match_pattern_arg_pattern" :: \<open>urust_shallow_match_pattern \<Rightarrow> urust_shallow_match_pattern_arg\<close>
   "_urust_shallow_match_pattern_args_single" :: \<open>urust_shallow_match_pattern_arg \<Rightarrow> urust_shallow_match_pattern_args\<close>
     ("_")
   "_urust_shallow_match_pattern_args_app" :: \<open>urust_shallow_match_pattern_arg \<Rightarrow> urust_shallow_match_pattern_args \<Rightarrow> urust_shallow_match_pattern_args\<close>
@@ -519,6 +520,7 @@ into a lambda over a HOL-case at the "parse translation" stage (that is, when we
 translations
   "_urust_shallow_match exp branches"
     \<rightharpoonup> "(CONST bind) exp (_anonymous_case (_case_basic_syntax _anonymous_var (_urust_shallow_match_convert_branches branches)))"
+
   "_urust_shallow_match_convert_branches (_urust_shallow_match1 pattern exp)"
     \<rightharpoonup> "_case_basic1 (_urust_shallow_match_convert_pattern pattern) exp"
   "_urust_shallow_match_convert_branches (_urust_shallow_match2 b0 b1)"
@@ -540,6 +542,8 @@ translations
     \<rightharpoonup> "_case_basic_pattern_arg_id id"
   "_urust_shallow_match_convert_arg (_urust_shallow_match_pattern_arg_dummy)"
     \<rightharpoonup> "_case_basic_pattern_arg_dummy"
+  "_urust_shallow_match_convert_arg (_urust_shallow_match_pattern_arg_pattern pat)"
+    \<rightharpoonup> "_case_basic_pattern_arg_pattern (_urust_shallow_match_convert_pattern pat)"
 
 translations
   \<comment> \<open>Since we can convert these numeric cases to a function, we don't have to worry about creating
@@ -564,15 +568,15 @@ translations
 
 \<comment>\<open>todo: add print translation for this so the case expressions remain readable\<close>
 parse_translation\<open>
-let fun anonymous_case_tr _
-     \<comment>\<open>Identify dummy variable in case expression and replace it with a freshly bound variable in
-a lambda abstraction\<close>
-     [(c as Const (\<^const_syntax>\<open>case_guard\<close>, ty0))
-         $ guard
-         $ (Const ("_anonymous_var",_))
-         $ case_body] =
-     Abs ("anon_case",
-          dummyT, c $ guard $ (Bound 0) $ case_body)
+let
+  fun replace_anon_var t =
+    Term.map_aterms
+      (fn Const ("_anonymous_var", _) => Bound 0 | x => x) t;
+
+  fun anonymous_case_tr _ [t] =
+      Abs ("anon_case", dummyT, replace_anon_var t)
+    | anonymous_case_tr _ args =
+      Term.list_comb (Syntax.const \<^syntax_const>\<open>_anonymous_case\<close>, args)
 in
   [(\<^syntax_const>\<open>_anonymous_case\<close>, anonymous_case_tr)]
 end
