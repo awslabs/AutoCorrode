@@ -86,7 +86,9 @@ parse_translation\<open>
             \<comment> \<open>In the \<^verbatim>\<open>NONE\<close> case, this will output a somewhat nice error message of the form
               \<^verbatim>\<open>Foo::Bar constant not found\<close>\<close>
               Term.Const (rust_name, the_typ)
-      end;
+      end
+      | internal_path_translator _ args =
+          Term.list_comb (Syntax.const \<^syntax_const>\<open>_shallow_unparsed_path_string\<close>, args);
   in [
     (\<^syntax_const>\<open>_shallow_unparsed_path_string\<close>, internal_path_translator)
   ] end
@@ -266,8 +268,7 @@ syntax
   "_shallow_match_branch" :: \<open>urust_match_branch  \<Rightarrow> urust_shallow_match_branch \<close>
   "_shallow_match_pattern" :: \<open>urust_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
   "_shallow_match_args" :: \<open>urust_pattern_args \<Rightarrow> urust_shallow_match_pattern_args \<close>
-  "_shallow_match_arg" :: \<open>urust_pattern_arg \<Rightarrow> urust_shallow_match_pattern_arg\<close>
-  "_shallow_match_tuple_arg" :: \<open>urust_pattern \<Rightarrow> urust_shallow_match_pattern_arg\<close>
+  "_shallow_match_arg" :: \<open>urust_pattern \<Rightarrow> urust_shallow_match_pattern_arg\<close>
   "_shallow_let_pattern" :: \<open>urust_pattern \<Rightarrow> pttrns\<close>
   "_shallow_let_pattern_args" :: \<open>urust_let_pattern_args \<Rightarrow> pttrns\<close>
 
@@ -649,22 +650,20 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (_shallow_identifier_as_literal id) (_shallow_match_args args)"
   "_shallow_match_pattern (_urust_let_pattern_tuple (_urust_let_pattern_tuple_base_pair a b))"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (CONST Pair)
-      (_urust_shallow_match_pattern_args_app (_shallow_match_tuple_arg a)
-        (_urust_shallow_match_pattern_args_single (_shallow_match_tuple_arg b)))"
+      (_urust_shallow_match_pattern_args_app (_shallow_match_arg a)
+        (_urust_shallow_match_pattern_args_single
+          (_urust_shallow_match_pattern_arg_pattern
+            (_urust_shallow_match_pattern_constr_with_args (CONST Pair)
+              (_urust_shallow_match_pattern_args_app (_shallow_match_arg b)
+                (_urust_shallow_match_pattern_args_single
+                  (_urust_shallow_match_pattern_arg_pattern
+                    (_urust_shallow_match_pattern_constr_no_args (CONST TNil)))))))))"
 
   "_shallow_match_args (_urust_match_pattern_args_single arg)"
     \<rightharpoonup> "_urust_shallow_match_pattern_args_single (_shallow_match_arg arg)"
   "_shallow_match_args (_urust_match_pattern_args_app a bs)"
     \<rightharpoonup> "_urust_shallow_match_pattern_args_app (_shallow_match_arg a) (_shallow_match_args bs)"
 
-  "_shallow_match_arg (_urust_match_pattern_arg_id id)"
-    \<rightharpoonup> "_urust_shallow_match_pattern_arg_id id"
-  "_shallow_match_arg _urust_match_pattern_arg_dummy"
-    \<rightharpoonup> "_urust_shallow_match_pattern_arg_dummy"
-  "_shallow_match_tuple_arg (_urust_match_pattern_constr_no_args id)"
-    \<rightharpoonup> "_urust_shallow_match_pattern_arg_id id"
-  "_shallow_match_tuple_arg _urust_match_pattern_other"
-    \<rightharpoonup> "_urust_shallow_match_pattern_arg_dummy"
 
   "_shallow (_urust_match_switch exp branches)"
     \<rightharpoonup> "_urust_shallow_switch (_shallow exp) (_shallow_match_branches branches)"
@@ -695,6 +694,90 @@ parse_translation\<open>[(\<^syntax_const>\<open>_urust_identifier_id\<close>, K
                    (\<^syntax_const>\<open>_shallow_identifier_as_literal\<close>, K hd),
                    (\<^syntax_const>\<open>_shallow_identifier_as_function\<close>, K hd),
                    (\<^syntax_const>\<open>_shallow_identifier_as_field\<close>, K hd)]\<close>
+
+ML\<open>
+  fun starts_upper s =
+    size s > 0 andalso Char.isUpper (String.sub (s, 0));
+
+  fun dest_ident_name ctxt (Free (name, _)) = name
+    | dest_ident_name ctxt (Const (name, _)) = name
+    | dest_ident_name ctxt t =
+        error ("invalid identifier term: " ^ Syntax.string_of_term ctxt t);
+
+  fun shallow_match_arg_tr ctxt ts =
+    let
+      val pat =
+        (case ts of
+          [] => error "_shallow_match_arg: missing pattern argument"
+        | p :: _ => p)
+      val mk = Syntax.const
+      val mk_arg_id = fn id => mk \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_id\<close> $ id
+      val mk_arg_dummy = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_dummy\<close>
+      val mk_arg_pat = fn p => mk \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_pattern\<close> $ p
+      val mk_pair = mk \<^const_syntax>\<open>Pair\<close>
+      val mk_tnil = mk \<^const_syntax>\<open>TNil\<close>
+
+      fun tuple_args_destruct (Const (\<^syntax_const>\<open>_urust_let_pattern_tuple_base_pair\<close>, _) $ a $ b) = [a, b]
+        | tuple_args_destruct (Const (\<^syntax_const>\<open>_urust_let_pattern_tuple_app\<close>, _) $ a $ rest) =
+            a :: tuple_args_destruct rest
+        | tuple_args_destruct t =
+            error ("_shallow_match_arg: invalid tuple args: " ^ Syntax.string_of_term ctxt t)
+
+      fun mk_args_single a = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_args_single\<close> $ a
+      fun mk_args_app a b = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_args_app\<close> $ a $ b
+      fun mk_pat_no_args c = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_no_args\<close> $ c
+      fun mk_pat_with_args c args = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_with_args\<close> $ c $ args
+
+      fun mk_pair_pat arg1 pat2 =
+            mk_pat_with_args mk_pair
+              (mk_args_app arg1 (mk_args_single (mk_arg_pat pat2)))
+
+      fun tuple_pattern_of [] = mk_pat_no_args mk_tnil
+        | tuple_pattern_of (p :: ps) =
+            mk_pair_pat (shallow_match_arg_of p) (tuple_pattern_of ps)
+
+      and shallow_match_pattern_of pat =
+            (case pat of
+              Const (\<^syntax_const>\<open>_urust_match_pattern_other\<close>, _) =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_num_const\<close>, _) $ num =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_num_const\<close> $ num
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_zero\<close>, _) =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_zero\<close>
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_one\<close>, _) =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_one\<close>
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>, _) $ id =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_no_args\<close> $ id
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_with_args\<close>, _) $ id $ args =>
+                mk_pat_with_args id (shallow_match_args_of args)
+            | Const (\<^syntax_const>\<open>_urust_let_pattern_tuple\<close>, _) $ args =>
+                tuple_pattern_of (tuple_args_destruct args)
+            | _ =>
+                error ("_shallow_match_arg: invalid pattern: " ^ Syntax.string_of_term ctxt pat))
+
+      and shallow_match_args_of args =
+            (case args of
+              Const (\<^syntax_const>\<open>_urust_match_pattern_args_single\<close>, _) $ arg =>
+                mk_args_single (shallow_match_arg_of arg)
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_args_app\<close>, _) $ a $ bs =>
+                mk_args_app (shallow_match_arg_of a) (shallow_match_args_of bs)
+            | _ =>
+                error ("_shallow_match_arg: invalid args: " ^ Syntax.string_of_term ctxt args))
+
+      and shallow_match_arg_of pat =
+            (case pat of
+              Const (\<^syntax_const>\<open>_urust_match_pattern_other\<close>, _) => mk_arg_dummy
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>, _) $ id =>
+                if starts_upper (dest_ident_name ctxt id)
+                then mk_arg_pat (shallow_match_pattern_of pat)
+                else mk_arg_id id
+            | _ => mk_arg_pat (shallow_match_pattern_of pat))
+    in
+      shallow_match_arg_of pat
+    end;
+
+  val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_shallow_match_arg\<close>, shallow_match_arg_tr)]);
+\<close>
 
 subsection\<open>Tests\<close>
 
@@ -786,7 +869,6 @@ term\<open>\<lbrakk>
   ()
 \<rbrakk>\<close>
 
-\<comment>\<open>TODO: Nested patterns not currently supported\<close>
 value[simp]\<open>\<lbrakk>
   let one = \<llangle>1 :: 32 word\<rrangle>;
   let zero = \<llangle>0 :: 32 word\<rrangle>;
@@ -794,6 +876,120 @@ value[simp]\<open>\<lbrakk>
     Some(None) \<Rightarrow> one,
     _ \<Rightarrow> zero
   }) == zero)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let two = \<llangle>2 :: 32 word\<rrangle>;
+  let res = match Some(Some(two)) {
+    Some(Some(x)) \<Rightarrow> x,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(res == two)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let a = \<llangle>1 :: 32 word\<rrangle>;
+  let b = \<llangle>2 :: 32 word\<rrangle>;
+  let c = \<llangle>3 :: 32 word\<rrangle>;
+  let res = match ((a, b), c) {
+    ((x, y), z) \<Rightarrow> (x, y, z)
+  };
+  assert!(res.0 == a);
+  assert!(res.1 == b);
+  assert!(res.2 == c)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  if let Some((a, b)) = Some((\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>)) {
+    assert!(a == \<llangle>1 :: 32 word\<rrangle>);
+    assert!(b == \<llangle>2 :: 32 word\<rrangle>);
+    ()
+  } else {
+    ()
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let Some((a, b)) = Some((\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>)) else {
+    ()
+  };
+  assert!(a == \<llangle>1 :: 32 word\<rrangle>);
+  assert!(b == \<llangle>2 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  if let Some(Some(x)) = Some(Some(\<llangle>3 :: 32 word\<rrangle>)) {
+    assert!(x == \<llangle>3 :: 32 word\<rrangle>);
+    ()
+  } else {
+    ()
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let a = \<llangle>10 :: 32 word\<rrangle>;
+  let b = \<llangle>20 :: 32 word\<rrangle>;
+  let c = \<llangle>30 :: 32 word\<rrangle>;
+  let tup = (a, (b, c));
+  let (x, (y, z)) = tup;
+  assert!(x == a);
+  assert!(y == b);
+  assert!(z == c)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let a = \<llangle>1 :: 32 word\<rrangle>;
+  let b = \<llangle>2 :: 32 word\<rrangle>;
+  let c = \<llangle>3 :: 32 word\<rrangle>;
+  let res = match Some((a, b, c)) {
+    Some((x, _, z)) \<Rightarrow> (x, z),
+    _ \<Rightarrow> (\<llangle>0 :: 32 word\<rrangle>, \<llangle>0 :: 32 word\<rrangle>)
+  };
+  assert!(res.0 == a);
+  assert!(res.1 == c)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let a = \<llangle>7 :: 32 word\<rrangle>;
+  let b = \<llangle>9 :: 32 word\<rrangle>;
+  let Ok((x, y)) = Ok((a, b)) else {
+    ()
+  };
+  assert!(x == a);
+  assert!(y == b)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let v = match Err(\<llangle>5 :: 32 word\<rrangle>) {
+    Ok(_) \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>,
+    Err(x) \<Rightarrow> x
+  };
+  assert!(v == \<llangle>5 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let a = \<llangle>4 :: 32 word\<rrangle>;
+  let b = \<llangle>8 :: 32 word\<rrangle>;
+  if let Some((_, y)) = Some((a, b)) {
+    assert!(y == b);
+    ()
+  } else {
+    ()
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let a = \<llangle>1 :: 32 word\<rrangle>;
+  let b = \<llangle>2 :: 32 word\<rrangle>;
+  let c = \<llangle>3 :: 32 word\<rrangle>;
+  let d = \<llangle>4 :: 32 word\<rrangle>;
+  let res = match ((a, b), (c, d)) {
+    ((w, x), (y, z)) \<Rightarrow> (w, x, y, z)
+  };
+  assert!(res.0 == a);
+  assert!(res.1 == b);
+  assert!(res.2 == c);
+  assert!(res.3 == d)
 \<rbrakk>\<close>
 
 section\<open>Tuples\<close>
@@ -1283,6 +1479,8 @@ fun mk_string_syntax [] = Syntax.const \<^const_syntax>\<open>Nil\<close>
 
 fun str_tok_to_hol ctxt [Free (str, _)] =
     (Syntax.const \<^const_syntax>\<open>String.implode\<close>) $ mk_string_syntax (plain_strings_of str)
+  | str_tok_to_hol ctxt args =
+    Term.list_comb (Syntax.const \<^syntax_const>\<open>_string_token_to_hol\<close>, args)
 
 in
   [(\<^syntax_const>\<open>_string_token_to_hol\<close>, str_tok_to_hol)]

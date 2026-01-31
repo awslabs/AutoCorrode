@@ -98,6 +98,7 @@ syntax
     ("_")
   "_case_basic_pattern_arg_dummy" :: \<open>case_basic_pattern_arg\<close>
     ("'_")
+  "_case_basic_pattern_arg_pattern" :: \<open>case_basic_pattern \<Rightarrow> case_basic_pattern_arg\<close>
   "_case_basic_pattern_args_single" :: \<open>case_basic_pattern_arg \<Rightarrow> case_basic_pattern_args\<close>
     ("_")
   "_case_basic_pattern_args_app" :: \<open>case_basic_pattern_arg \<Rightarrow> case_basic_pattern_args \<Rightarrow> case_basic_pattern_args\<close>
@@ -127,42 +128,133 @@ fun case_tr err _ [t, u] =
           | pattern_args_destruct (Const( \<^syntax_const>\<open>_case_basic_pattern_args_app\<close>,_) $ t $ rem) = t :: (pattern_args_destruct rem)
           | pattern_args_destruct t = case_error ("invalid constructor argument list:" ^ (print_term t))
 
-        fun pattern_get_args_as_terms (Const (\<^syntax_const>\<open>_case_basic_pattern_constr_with_args\<close>, _) 
-                                    $ _ $ args) = pattern_args_destruct args
-          | pattern_get_args_as_terms  (Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ _) = []
-          | pattern_get_args_as_terms t = case_error ("get_args -- invalid pattern: " ^ (print_term t));
-
         fun pattern_get_constructor (Const (\<^syntax_const>\<open>_case_basic_pattern_constr_with_args\<close>, _) $ c $ _) = c
           | pattern_get_constructor (Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ c) = c
           | pattern_get_constructor t = case_error ("get_constructor -- invalid pattern: " ^ (print_term t))
 
-        fun pattern_destruct pattern = (pattern_get_constructor pattern, pattern_get_args_as_terms pattern)
-
         fun pattern_build_term constructor args  =  
                fold (fn a => fn b => (b $ a)) args constructor
 
-        (* replace occurrences of dummy_pattern by distinct variables *)
-        fun replace_dummy_single (Const ( \<^syntax_const>\<open>_case_basic_pattern_arg_dummy\<close>, _)) used = 
-              let val (x, used') = Name.variant "x" used 
-              in (Free (x, dummyT), used') end 
-           | replace_dummy_single ((Const (\<^syntax_const>\<open>_case_basic_pattern_arg_id\<close>,_)) $ id) used = (id, used)  
-           | replace_dummy_single _ _ = case_error "invalid pattern argument"
+        fun dest_id_name id =
+              (fst (Term.dest_Free id))
+                handle TERM _ => case_error ("invalid pattern identifier: " ^ (print_term id))
 
-        fun replace_dummies [] _ = []
-          | replace_dummies (t :: ts) used = 
-                let val (t', used') = replace_dummy_single t used in
-                t' :: (replace_dummies ts used') end
+        fun strip_convert_arg t =
+              (case t of
+                Const (name, _) $ u =>
+                  if name = "_urust_shallow_match_convert_arg" then strip_convert_arg u else t
+              | _ => t)
+
+        fun strip_convert_pattern t =
+              (case t of
+                Const (name, _) $ u =>
+                  if name = "_urust_shallow_match_convert_pattern" then strip_convert_pattern u
+                  else if name = "_shallow_match_pattern" then strip_convert_pattern u
+                  else t
+              | _ => t)
+
+        fun shallow_args_destruct (Const ("_urust_shallow_match_pattern_args_single", _) $ t) = [t]
+          | shallow_args_destruct (Const ("_urust_shallow_match_pattern_args_app",_) $ t $ rem) =
+              t :: (shallow_args_destruct rem)
+          | shallow_args_destruct t = case_error ("invalid shallow constructor argument list:" ^ (print_term t))
+
+        fun urust_args_destruct (Const ("_urust_match_pattern_args_single", _) $ t) = [t]
+          | urust_args_destruct (Const ("_urust_match_pattern_args_app",_) $ t $ rem) =
+              t :: (urust_args_destruct rem)
+          | urust_args_destruct t = case_error ("invalid urust constructor argument list:" ^ (print_term t))
+
+        fun collect_ids_from_pattern pat =
+              (case strip_convert_pattern pat of
+                Const (\<^syntax_const>\<open>_case_basic_pattern_constr_with_args\<close>, _) $ _ $ args =>
+                  fold (fn a => fn acc => (collect_ids_from_arg a) @ acc) (pattern_args_destruct args) []
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ _ => []
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _) => []
+              | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ _ $ args =>
+                  fold (fn a => fn acc => (collect_ids_from_arg a) @ acc) (shallow_args_destruct args) []
+              | Const ("_urust_shallow_match_pattern_constr_no_args",_) $ _ => []
+              | Const ("_urust_shallow_match_pattern_other", _) => []
+              | Const ("_urust_match_pattern_constr_with_args", _) $ _ $ args =>
+                  fold (fn a => fn acc => (collect_ids_from_pattern a) @ acc) (urust_args_destruct args) []
+              | Const ("_urust_match_pattern_constr_no_args",_) $ _ => []
+              | Const ("_urust_match_pattern_other", _) => []
+              | t => case_error ("collect_ids -- invalid pattern: " ^ (print_term t)))
+        and collect_ids_from_arg arg =
+              (case strip_convert_arg arg of
+                Const (\<^syntax_const>\<open>_case_basic_pattern_arg_id\<close>,_) $ id => [dest_id_name id]
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_arg_pattern\<close>,_) $ pat => collect_ids_from_pattern pat
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_arg_dummy\<close>, _) => []
+              | Const ("_urust_shallow_match_pattern_arg_id", _) $ id => [dest_id_name id]
+              | Const ("_urust_shallow_match_pattern_arg_pattern", _) $ pat => collect_ids_from_pattern pat
+              | Const ("_urust_shallow_match_pattern_arg_dummy", _) => []
+              | t =>
+                  (collect_ids_from_pattern t
+                    handle ERROR _ =>
+                      case_error ("collect_ids -- invalid pattern arg: " ^ (print_term t))))
+
+        fun pattern_arg_to_term arg used =
+              (case strip_convert_arg arg of
+                Const ( \<^syntax_const>\<open>_case_basic_pattern_arg_dummy\<close>, _) =>
+                  let val (x, used') = Name.variant "x" used
+                  in (Free (x, dummyT), [x], used') end
+              | (Const (\<^syntax_const>\<open>_case_basic_pattern_arg_id\<close>,_)) $ id =>
+                  (id, [dest_id_name id], used)
+              | (Const (\<^syntax_const>\<open>_case_basic_pattern_arg_pattern\<close>,_)) $ pat =>
+                  pattern_term_of_pattern pat used
+              | (Const ("_urust_shallow_match_pattern_arg_id",_)) $ id =>
+                  (id, [dest_id_name id], used)
+              | (Const ("_urust_shallow_match_pattern_arg_pattern",_)) $ pat =>
+                  pattern_term_of_pattern pat used
+              | Const ("_urust_shallow_match_pattern_arg_dummy", _) =>
+                  let val (x, used') = Name.variant "x" used
+                  in (Free (x, dummyT), [x], used') end
+              | t =>
+                  (pattern_term_of_pattern t used
+                    handle ERROR _ =>
+                      case_error ("invalid pattern argument: " ^ (print_term t))))
+
+        and pattern_args_to_terms [] used = ([], [], used)
+          | pattern_args_to_terms (t :: ts) used =
+                let val (t', binders, used') = pattern_arg_to_term t used
+                    val (ts', binders', used'') = pattern_args_to_terms ts used'
+                in (t' :: ts', binders @ binders', used'') end
+
+        and pattern_term_of_pattern pat used =
+              (case strip_convert_pattern pat of
+                Const (\<^syntax_const>\<open>_case_basic_pattern_constr_with_args\<close>, _) $ c $ args =>
+                  let val args' = pattern_args_destruct args
+                      val (arg_terms, binders, used') = pattern_args_to_terms args' used
+                  in (pattern_build_term c arg_terms, binders, used') end
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ c => (c, [], used)
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _) =>
+                  let val (x, used') = Name.variant "x" used
+                  in (Free (x, dummyT), [x], used') end
+              | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ c $ args =>
+                  let val args' = shallow_args_destruct args
+                      val (arg_terms, binders, used') = pattern_args_to_terms args' used
+                  in (pattern_build_term c arg_terms, binders, used') end
+              | Const ("_urust_shallow_match_pattern_constr_no_args", _) $ c => (c, [], used)
+              | Const ("_urust_shallow_match_pattern_other", _) =>
+                  let val (x, used') = Name.variant "x" used
+                  in (Free (x, dummyT), [x], used') end
+              | Const ("_urust_match_pattern_constr_with_args", _) $ c $ args =>
+                  let val args' = urust_args_destruct args
+                      val (arg_terms, binders, used') = pattern_args_to_terms args' used
+                  in (pattern_build_term c arg_terms, binders, used') end
+              | Const ("_urust_match_pattern_constr_no_args", _) $ c => (c, [], used)
+              | Const ("_urust_match_pattern_other", _) =>
+                  let val (x, used') = Name.variant "x" used
+                  in (Free (x, dummyT), [x], used') end
+              | t => case_error ("invalid pattern: " ^ (print_term t)))
 
         fun handle_pattern (Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _)) exp = 
             let val (constr_str, _) = Name.variant "C" (Term.declare_free_names t Name.context)
                 val constr = Free (constr_str, dummyT) in
                 abs constr_str (Syntax.const \<^const_syntax>\<open>case_elem\<close> $ constr $ exp) end
           | handle_pattern pattern exp =
-            let val (constructor, args) = pattern_destruct pattern 
-                val args = replace_dummies args (Term.declare_free_names exp Name.context)
-                val args_str = map (fst o Term.dest_Free) args 
-                val term = pattern_build_term constructor args in
-                fold abs args_str (Syntax.const \<^const_syntax>\<open>case_elem\<close> $ term $ exp) end
+            let val used0 = Term.declare_free_names exp Name.context
+                val used = fold Name.declare (collect_ids_from_pattern pattern) used0
+                val (term, binders, _) = pattern_term_of_pattern pattern used
+            in fold abs binders (Syntax.const \<^const_syntax>\<open>case_elem\<close> $ term $ exp) end
 
         fun dest_case_basic1 (Const (\<^syntax_const>\<open>_case_basic1\<close>, _) $ pattern $ exp) = 
             handle_pattern pattern exp
@@ -182,6 +274,7 @@ fun case_tr err _ [t, u] =
   | case_tr _ _ _ = case_error "case_tr";
 
 val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_case_basic_syntax\<close>, case_tr true)]);
+structure Basic_Case_Expression = struct val case_tr = case_tr end;
 \<close>
 
 subsubsection\<open>Some tests\<close>
