@@ -280,6 +280,21 @@ syntax
    "_urust_shallow_assign_add"
      :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c\<close>
      (infix "+=\<^sub>\<mu>" 52)
+   "_urust_shallow_assign_minus"
+     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c\<close>
+     (infix "-=\<^sub>\<mu>" 52)
+   "_urust_shallow_assign_mul"
+     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c\<close>
+     (infix "*=\<^sub>\<mu>" 52)
+   "_urust_shallow_assign_mod"
+     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c\<close>
+     (infix "%=\<^sub>\<mu>" 52)
+   "_urust_shallow_word_assign_shift_left"
+     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c\<close>
+     (infix "<<=\<^sub>\<mu>" 52)
+   "_urust_shallow_word_assign_shift_right"
+     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c\<close>
+     (infix ">>=\<^sub>\<mu>" 52)
 
 subsection\<open>Special notation for HOL identifiers\<close>
 
@@ -429,6 +444,16 @@ translations
     \<rightharpoonup> "_urust_shallow_store_update ptr (_urust_shallow_word_bitwise_and (_urust_shallow_store_dereference ptr) assign)"
   "_urust_shallow_assign_add ptr assign"
     \<rightharpoonup> "CONST funcall2 (CONST assign_add_const) ptr assign"
+  "_urust_shallow_assign_minus ptr assign"
+    \<rightharpoonup> "_urust_shallow_store_update ptr (_urust_shallow_minus (_urust_shallow_store_dereference ptr) assign)"
+  "_urust_shallow_assign_mul ptr assign"
+    \<rightharpoonup> "_urust_shallow_store_update ptr (_urust_shallow_mul (_urust_shallow_store_dereference ptr) assign)"
+  "_urust_shallow_assign_mod ptr assign"
+    \<rightharpoonup> "_urust_shallow_store_update ptr (_urust_shallow_mod (_urust_shallow_store_dereference ptr) assign)"
+  "_urust_shallow_word_assign_shift_left ptr assign"
+    \<rightharpoonup> "_urust_shallow_store_update ptr (_urust_shallow_word_shift_left (_urust_shallow_store_dereference ptr) assign)"
+  "_urust_shallow_word_assign_shift_right ptr assign"
+    \<rightharpoonup> "_urust_shallow_store_update ptr (_urust_shallow_word_shift_right (_urust_shallow_store_dereference ptr) assign)"
 
   \<comment>\<open>Function call syntax for up to 8 arguments. Add more if needed\<close>
   "_urust_shallow_fun_no_args func"
