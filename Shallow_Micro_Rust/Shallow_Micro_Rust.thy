@@ -13,6 +13,7 @@ theory Shallow_Micro_Rust
     Global_Store
     Micro_Rust     
     Micro_Rust_Shallow_Embedding
+    Micro_Rust_Shallow_Embedding_Tests
     Numeric_Types
     Numeric_Types_Lemmas
     Option_Type
