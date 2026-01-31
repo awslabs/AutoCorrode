@@ -633,6 +633,8 @@ translations
 
   "_shallow_match_branches (_urust_match1 pattern exp)"
     \<rightharpoonup> "_urust_shallow_match1 (_shallow_match_pattern pattern) (_shallow exp)"
+  "_shallow_match_branches (_urust_match1_guard pattern guard exp)"
+    \<rightharpoonup> "_urust_shallow_match1_guard (_shallow_match_pattern pattern) (_shallow guard) (_shallow exp)"
   "_shallow_match_branches (_urust_match2 b0 b1)"
     \<rightharpoonup> "_urust_shallow_match2 (_shallow_match_branches b0) (_shallow_match_branches b1)"
 
@@ -924,6 +926,40 @@ value[simp]\<open>\<lbrakk>
   } else {
     ()
   }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  match Some(x) {
+    Some(y) if y > \<llangle>0 :: 32 word\<rrangle> \<Rightarrow> y,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  match Some(x) {
+    Some(y) if (if True { True } else { False }) \<Rightarrow> y,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let zero = \<llangle>0 :: 32 word\<rrangle>;
+  let one = \<llangle>1 :: 32 word\<rrangle>;
+  let res = match Some(one) {
+    Some(x) if x > zero \<Rightarrow> x,
+    _ \<Rightarrow> zero
+  };
+  assert!(res == one)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let zero = \<llangle>0 :: 32 word\<rrangle>;
+  let res = match Some(zero) {
+    Some(x) if x > zero \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    Some(x) \<Rightarrow> x,
+    _ \<Rightarrow> \<llangle>2 :: 32 word\<rrangle>
+  };
+  assert!(res == zero)
 \<rbrakk>\<close>
 
 value[simp]\<open>\<lbrakk>
