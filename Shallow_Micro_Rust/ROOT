@@ -20,6 +20,7 @@ session Shallow_Micro_Rust = HOL +
     Numeric_Types Numeric_Types_Lemmas
     Global_Store
     Micro_Rust_Shallow_Embedding
+    Micro_Rust_Shallow_Embedding_Tests
     Micro_Rust
     Prompts_And_Responses
     SSA

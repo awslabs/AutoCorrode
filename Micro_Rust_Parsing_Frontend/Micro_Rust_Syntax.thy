@@ -323,9 +323,13 @@ syntax
     ("_'?" [400]400)
 
   "_urust_negation" :: \<open>urust \<Rightarrow> urust\<close>
-    ("!_" [301]300)
+    ("'! _" [300]300)
+  "_urust_double_negation" :: \<open>urust \<Rightarrow> urust\<close>
+    ("'!'! _" [300]300)
   "_urust_deref" :: \<open>urust \<Rightarrow> urust\<close>
     ("*_" [200]100)
+  "_urust_double_deref" :: \<open>urust \<Rightarrow> urust\<close>
+    ("**_" [200]100)
 
   \<comment>\<open>Arithmetic expressions\<close>
   "_urust_mul" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
@@ -453,6 +457,30 @@ begin
 term\<open>\<guillemotleft>foo.bar.boo.far\<guillemotright>\<close>
 *)
 end
+
+text\<open>Handle double negation \<^verbatim>\<open>!!\<close> by expanding to nested single negations.\<close>
+parse_ast_translation\<open>
+let
+  fun double_neg_tr [x] =
+    Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_negation\<close>)
+      [Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_negation\<close>) [x]]
+  | double_neg_tr args = raise Ast.AST ("double_neg_tr", args)
+in
+  [(\<^syntax_const>\<open>_urust_double_negation\<close>, K double_neg_tr)]
+end
+\<close>
+
+text\<open>Handle double dereference \<^verbatim>\<open>**\<close> by expanding to nested single dereferences.\<close>
+parse_ast_translation\<open>
+let
+  fun double_deref_tr [x] =
+    Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_deref\<close>)
+      [Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_deref\<close>) [x]]
+  | double_deref_tr args = raise Ast.AST ("double_deref_tr", args)
+in
+  [(\<^syntax_const>\<open>_urust_double_deref\<close>, K double_deref_tr)]
+end
+\<close>
 
 text\<open>First, we register a parse AST translation splitting long IDs at dots (".") and emitting them
 as an anonymous \<^ML>\<open>Ast.Appl\<close>, with one \<^text>\<open>urust_identifier\<close> argument per component.\<close>
