@@ -294,6 +294,8 @@ syntax
   \<comment> \<open>This is \<^verbatim>\<open>temporary\<close> since we will disambiguate between two styles of matches\<close>
   "_urust_temporary_match"  :: "[urust, urust_match_branches] \<Rightarrow> urust"  ("match (_) {/ _/ }" [20, 10]20)
   "_urust_match1" :: "[urust_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
+  "_urust_match1_guard" :: "[urust_pattern, urust, urust] \<Rightarrow> urust_match_branches"
+    ("(2_ if _ \<Rightarrow>/ _)" [100, 0, 20] 21)
   "_urust_match2" :: "[urust_match_branches, urust_match_branches] \<Rightarrow> urust_match_branches"  ("_/, _" [21, 20]20)
 
   \<comment>\<open>Basic case patterns, restricted to constructor identifiers followed by a potentially empty list of argument identifiers, and numerals\<close>
@@ -690,6 +692,15 @@ parse_ast_translation\<open>
           branches_ast_to_pattern_list left @ branches_ast_to_pattern_list right
       | branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1\<close>, clause, _]) =
           [pattern_ast_to_head_const clause]
+      | branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1_guard\<close>, clause, _, _]) =
+          [pattern_ast_to_head_const clause]
+      | branches_ast_to_pattern_list _ = []
+
+    \<comment> \<open>Detect guards in match branches\<close>
+    fun branches_ast_has_guard (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match2\<close>, left, right]) =
+          branches_ast_has_guard left orelse branches_ast_has_guard right
+      | branches_ast_has_guard (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1_guard\<close>, _, _, _]) = true
+      | branches_ast_has_guard _ = false
 
     \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_case\<close>?\<close>
     fun pat_is_match_case pat =
@@ -710,8 +721,9 @@ parse_ast_translation\<open>
     fun match_selector ctx [arg, branches] =
       let
         val patterns = branches_ast_to_pattern_list branches
-        val is_match_case = patterns |> List.all pat_is_match_case
-        val is_match_select = patterns |> List.all pat_is_match_switch
+        val has_guard = branches_ast_has_guard branches
+        val is_match_case = has_guard orelse (patterns |> List.all pat_is_match_case)
+        val is_match_select = (not has_guard) andalso (patterns |> List.all pat_is_match_switch)
         val new_hd = (
           \<comment> \<open>Note that we default to \<^verbatim>\<open>is_match_case\<close>! If you explicitly want your match to be
               parsed as a switch statement, use \<^verbatim>\<open>match_switch {...}\<close>\<close>
