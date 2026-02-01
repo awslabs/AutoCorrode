@@ -197,6 +197,10 @@ syntax
   "_urust_shallow_match_pattern_args_app" :: \<open>urust_shallow_match_pattern_arg \<Rightarrow> urust_shallow_match_pattern_args \<Rightarrow> urust_shallow_match_pattern_args\<close>
     ("_ _"[1000,100]100)
 
+  \<comment>\<open>Disjunctive patterns: p1 | p2\<close>
+  "_urust_shallow_match_pattern_disjunction"
+    :: \<open>urust_shallow_match_pattern \<Rightarrow> urust_shallow_match_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
+
 syntax
   "_urust_shallow_return"
     :: \<open>('s, 'v, 'r, 'abort, 'i, 'o) expression \<Rightarrow> ('s, 'r, 'r, 'abort, 'i, 'o) expression\<close>
@@ -575,6 +579,20 @@ translations
       an anonymous function and variable, as we have to do for the \<^verbatim>\<open>match_case\<close>-types of matches.\<close>
   "_urust_shallow_switch exp branches"
     \<rightharpoonup> "(CONST bind) exp (_case_num_fun_syntax (_urust_shallow_switch_convert_branches branches))"
+
+  \<comment>\<open>Expand disjunctive patterns in switch branches: p1 | p2 => e becomes two branches.
+     These rules MUST come before the general branch rules to take precedence.
+     Note: p1 is always atomic (not a disjunction) due to right-associative parsing.\<close>
+  "_urust_shallow_switch_convert_branches (_urust_shallow_match1 (_urust_shallow_match_pattern_disjunction p1 p2) exp)"
+    \<rightharpoonup> "_case_num2
+          (_case_num1 (_urust_shallow_switch_convert_pattern p1) exp)
+          (_urust_shallow_switch_convert_branches (_urust_shallow_match1 p2 exp))"
+  "_urust_shallow_switch_convert_branches (_urust_shallow_match2 (_urust_shallow_match1 (_urust_shallow_match_pattern_disjunction p1 p2) exp) rest)"
+    \<rightharpoonup> "_case_num2
+          (_case_num1 (_urust_shallow_switch_convert_pattern p1) exp)
+          (_urust_shallow_switch_convert_branches (_urust_shallow_match2 (_urust_shallow_match1 p2 exp) rest))"
+
+  \<comment>\<open>General branch conversion rules\<close>
   "_urust_shallow_switch_convert_branches (_urust_shallow_match2 (_urust_shallow_match1 pat1 exp) branch2)"
     \<rightharpoonup> "_case_num2 (_case_num1 (_urust_shallow_switch_convert_pattern pat1) exp) (_urust_shallow_switch_convert_branches branch2)"
   "_urust_shallow_switch_convert_branches (_urust_shallow_match1 pat exp)"
@@ -619,14 +637,69 @@ parse_translation\<open>
 let
   fun case_error s = error ("Error in shallow match translation:\n" ^ s);
 
+  \<comment>\<open>Helper to construct pattern with args\<close>
+  fun mk_constr_with_args id args =
+    Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_with_args\<close> $ id $ args;
+  fun mk_args_single arg =
+    Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_args_single\<close> $ arg;
+  fun mk_args_app arg rest =
+    Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_args_app\<close> $ arg $ rest;
+  fun mk_arg_pattern pat =
+    Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_pattern\<close> $ pat;
+
+  \<comment>\<open>Expand disjunctive patterns into a list of patterns.
+     For example: Some(x) | None becomes [Some(x), None]
+     Handles nested disjunctions: A | B | C becomes [A, B, C]
+     Also handles nested disjunctions in constructor args: Some(A | B) becomes [Some(A), Some(B)]\<close>
+
+  \<comment>\<open>Expand a single arg that might contain a nested pattern with disjunction.
+     Returns a list of possible args.\<close>
+  fun expand_arg arg =
+    (case arg of
+      Const ("_urust_shallow_match_pattern_arg_pattern", _) $ pat =>
+        map mk_arg_pattern (expand_pattern pat)
+    | _ => [arg])
+
+  \<comment>\<open>Expand args, handling disjunctions in any position.
+     Returns a list of possible args structures.\<close>
+  and expand_args args =
+    (case args of
+      Const ("_urust_shallow_match_pattern_args_single", _) $ arg =>
+        map mk_args_single (expand_arg arg)
+    | Const ("_urust_shallow_match_pattern_args_app", _) $ arg $ rest =>
+        let
+          val expanded_arg = expand_arg arg
+          val expanded_rest = expand_args rest
+        in
+          maps (fn a => map (fn r => mk_args_app a r) expanded_rest) expanded_arg
+        end
+    | _ => [args])
+
+  \<comment>\<open>Expand a pattern, handling both top-level and nested disjunctions.\<close>
+  and expand_pattern pat =
+    (case pat of
+      Const ("_urust_shallow_match_pattern_disjunction", _) $ p1 $ p2 =>
+        expand_pattern p1 @ expand_pattern p2
+    | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ id $ args =>
+        map (fn a => mk_constr_with_args id a) (expand_args args)
+    | _ => [pat]);
+
+  \<comment>\<open>Wrapper for top-level expansion\<close>
+  fun expand_disjunction_pattern pat = expand_pattern pat;
+
+  \<comment>\<open>Expand a single branch with potentially disjunctive pattern into multiple branches.
+     (p1 | p2, guard, rhs) becomes [(p1, guard, rhs), (p2, guard, rhs)]\<close>
+  fun expand_branch (pat, guard, rhs) =
+    map (fn p => (p, guard, rhs)) (expand_disjunction_pattern pat);
+
   fun branches_to_list ctxt t =
     (case t of
       Const (name, _) $ l $ r =>
         if name = "_urust_shallow_match2" then branches_to_list ctxt l @ branches_to_list ctxt r
-        else if name = "_urust_shallow_match1" then [(l, NONE, r)]
+        else if name = "_urust_shallow_match1" then flat (map expand_branch [(l, NONE, r)])
         else case_error ("invalid match branch: " ^ Syntax.string_of_term ctxt t)
     | Const (name, _) $ pat $ guard $ rhs =>
-        if name = "_urust_shallow_match1_guard" then [(pat, SOME guard, rhs)]
+        if name = "_urust_shallow_match1_guard" then flat (map expand_branch [(pat, SOME guard, rhs)])
         else case_error ("invalid match branch: " ^ Syntax.string_of_term ctxt t)
     | _ => case_error ("invalid match branches: " ^ Syntax.string_of_term ctxt t));
 

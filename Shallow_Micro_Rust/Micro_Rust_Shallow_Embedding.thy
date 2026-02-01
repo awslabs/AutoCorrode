@@ -660,6 +660,8 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_no_args (_shallow_identifier_as_literal id)"
   "_shallow_match_pattern (_urust_match_pattern_constr_with_args id args)"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (_shallow_identifier_as_literal id) (_shallow_match_args args)"
+  "_shallow_match_pattern (_urust_match_pattern_disjunction p1 p2)"
+    \<rightharpoonup> "_urust_shallow_match_pattern_disjunction (_shallow_match_pattern p1) (_shallow_match_pattern p2)"
   "_shallow_match_pattern (_urust_let_pattern_tuple (_urust_let_pattern_tuple_base_pair a b))"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (CONST Pair)
       (_urust_shallow_match_pattern_args_app (_shallow_match_arg a)
@@ -764,6 +766,9 @@ ML\<open>
                 mk_pat_with_args id (shallow_match_args_of args)
             | Const (\<^syntax_const>\<open>_urust_let_pattern_tuple\<close>, _) $ args =>
                 tuple_pattern_of (tuple_args_destruct args)
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_disjunction\<close>, _) $ p1 $ p2 =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_disjunction\<close>
+                  $ shallow_match_pattern_of p1 $ shallow_match_pattern_of p2
             | _ =>
                 error ("_shallow_match_arg: invalid pattern: " ^ Syntax.string_of_term ctxt pat))
 
