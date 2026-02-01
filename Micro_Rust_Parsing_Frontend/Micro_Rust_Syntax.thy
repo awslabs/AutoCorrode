@@ -304,17 +304,21 @@ syntax
   "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern\<close>
     ("_" [0]1000)
   "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_pattern\<close>
-    ("_" [1000]100)
+    ("_" [1000]1000)
   "_urust_match_pattern_zero" :: \<open>urust_pattern\<close>
-    ("0")
+    ("0" 1000)
   "_urust_match_pattern_one" :: \<open>urust_pattern\<close>
-    ("1")
+    ("1" 1000)
   "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern\<close>
-    ("_ '(_')"[1000,100]100)
+    ("_ '(_')"[1000,100]1000)
   "_urust_match_pattern_args_single" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args\<close>
     ("_")
   "_urust_match_pattern_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
+
+  \<comment>\<open>Disjunctive patterns: p1 | p2 (right-associative)\<close>
+  "_urust_match_pattern_disjunction" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("_ '|/ _" [1000, 100] 100)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
        https://doc.rust-lang.org/reference/expressions.html\<close>
