@@ -678,7 +678,6 @@ translations
   "_shallow_match_args (_urust_match_pattern_args_app a bs)"
     \<rightharpoonup> "_urust_shallow_match_pattern_args_app (_shallow_match_arg a) (_shallow_match_args bs)"
 
-
   "_shallow (_urust_match_switch exp branches)"
     \<rightharpoonup> "_urust_shallow_switch (_shallow exp) (_shallow_match_branches branches)"
 
