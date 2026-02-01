@@ -1391,4 +1391,125 @@ term\<open>\<lbrakk>
 
 end
 
+subsection\<open>Disjunctive Patterns\<close>
+
+text\<open>For testing non-exhaustive disjunctive patterns in @{text "if let"} and @{text "let else"},
+we need a type with more than two constructors. Using @{type option} or @{type result} with
+disjunctive patterns that cover all constructors causes HOL's case expression machinery to
+complain about redundant clauses (the implicit wildcard fallback becomes unreachable).\<close>
+
+datatype three_case = CaseA nat | CaseB nat | CaseC
+
+subsubsection\<open>Basic Match with Disjunctive Pattern\<close>
+
+term\<open>\<lbrakk>
+  match Some(\<llangle>42 :: nat\<rrangle>) {
+    Some(x) | None \<Rightarrow> x
+  }
+\<rbrakk>\<close>
+
+subsubsection\<open>Multiple Alternatives\<close>
+
+context
+  fixes x :: \<open>32 word\<close>
+begin
+term\<open>\<lbrakk>
+  match_switch x {
+    1 | 2 | 3 \<Rightarrow> True,
+    _ \<Rightarrow> False
+  }
+\<rbrakk>\<close>
+end
+
+subsubsection\<open>Disjunctive Pattern with Guard\<close>
+
+context
+  fixes x :: \<open>32 word option\<close>
+begin
+term\<open>\<lbrakk>
+  match x {
+    Some(y) | None if y > \<llangle>0 :: 32 word\<rrangle> \<Rightarrow> y,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  }
+\<rbrakk>\<close>
+end
+
+subsubsection\<open>If-Let with Disjunctive Pattern\<close>
+
+text\<open>Using @{type three_case} with only two alternatives ensures non-exhaustiveness,
+so the implicit wildcard fallback is not redundant.\<close>
+
+term\<open>\<lbrakk>
+  if let CaseA(x) | CaseB(x) = \<llangle>CaseA 42\<rrangle> {
+    ()
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  if let CaseA(x) | CaseB(x) = \<llangle>CaseA 5\<rrangle> {
+    assert!(x == \<llangle>5 :: nat\<rrangle>);
+    ()
+  } else {
+    ()
+  }
+\<rbrakk>\<close>
+
+subsubsection\<open>Let-Else with Disjunctive Pattern\<close>
+
+text\<open>Using @{type three_case} ensures the disjunctive pattern is non-exhaustive.\<close>
+
+term\<open>\<lbrakk>
+  let CaseA(x) | CaseB(x) = \<llangle>CaseA 7\<rrangle> else {
+    return;
+  };
+  x
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let CaseA(x) | CaseB(x) = \<llangle>CaseB 10\<rrangle> else {
+    ()
+  };
+  assert!(x == \<llangle>10 :: nat\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Nested Disjunctive Patterns\<close>
+
+term\<open>\<lbrakk>
+  match Some(Ok(\<llangle>1 :: nat\<rrangle>)) {
+    Some(Ok(x) | Err(x)) \<Rightarrow> x,
+    _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
+  }
+\<rbrakk>\<close>
+
+subsubsection\<open>Match-Switch with Disjunctive Numeric Patterns\<close>
+
+context
+  fixes x :: \<open>64 word\<close>
+begin
+term\<open>\<lbrakk>
+  match_switch x {
+    0 | 1 \<Rightarrow> False,
+    _ \<Rightarrow> True
+  }
+\<rbrakk>\<close>
+end
+
+subsubsection\<open>Disjunctive Pattern with Result\<close>
+
+value[simp]\<open>\<lbrakk>
+  let res = match Ok(\<llangle>10 :: 32 word\<rrangle>) {
+    Ok(x) | Err(x) \<Rightarrow> x
+  };
+  assert!(res == \<llangle>10 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Multiple Disjunctions in One Match\<close>
+
+term\<open>\<lbrakk>
+  match (Some(\<llangle>1 :: nat\<rrangle>), Some(\<llangle>2 :: nat\<rrangle>)) {
+    (Some(x), Some(y)) | (None, Some(y)) \<Rightarrow> y,
+    _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
+  }
+\<rbrakk>\<close>
+
 end
