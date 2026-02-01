@@ -167,7 +167,8 @@ nonterminal urust_shallow_match_pattern_args
 
 syntax
   "_urust_shallow_match" :: "[('s, 'v, 'r, 'abort, 'i, 'o) expression, urust_shallow_match_branches] \<Rightarrow> ('sp, 'vp, 'rp, 'abort, 'i, 'o) expression"  ("match (_) \<lbrace>/ _/ \<rbrace>" [20, 20]20)
-  "_urust_shallow_switch" :: "[('s, 'v, 'r, 'abort, 'i, 'o) expression, urust_shallow_match_branches] \<Rightarrow> ('sp, 'vp, 'rp, 'abort, 'i, 'o) expression"  ("match'_switch (_) \<lbrace>/ _/ \<rbrace>" [20, 20]20)
+  \<comment>\<open>Internal syntax for numeric switch - used by translation, not user-facing\<close>
+  "_urust_shallow_switch" :: "[('s, 'v, 'r, 'abort, 'i, 'o) expression, urust_shallow_match_branches] \<Rightarrow> ('sp, 'vp, 'rp, 'abort, 'i, 'o) expression"
   \<comment>\<open>Basic case branches\<close>
   "_urust_shallow_match1" :: "[urust_shallow_match_pattern, 'b] \<Rightarrow> urust_shallow_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
   "_urust_shallow_match1_guard"
@@ -738,15 +739,10 @@ let
       Const (name, _) =>
         if name = "_urust_shallow_match_pattern_other" then
           Syntax.const \<^syntax_const>\<open>_case_basic_pattern_other\<close>
-        else if name = "_urust_shallow_match_pattern_zero" orelse
-                name = "_urust_shallow_match_pattern_one" then
-          case_error ("numeric pattern in match_case: " ^ Syntax.string_of_term ctxt pat)
         else case_error ("invalid match pattern: " ^ Syntax.string_of_term ctxt pat)
     | Const (name, _) $ id =>
         if name = "_urust_shallow_match_pattern_constr_no_args" then
           Syntax.const \<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close> $ id
-        else if name = "_urust_shallow_match_pattern_num_const" then
-          case_error ("numeric pattern in match_case: " ^ Syntax.string_of_term ctxt pat)
         else case_error ("invalid match pattern: " ^ Syntax.string_of_term ctxt pat)
     | Const (name, _) $ id $ args =>
         if name = "_urust_shallow_match_pattern_constr_with_args" then
@@ -1182,21 +1178,8 @@ term \<open>
   \<up>x +=\<^sub>\<mu> \<up>12
 \<close>
 
-term\<open>let y = x; match_switch y \<lbrace>
-  3 \<Rightarrow> \<up>True,
-  5 \<Rightarrow> \<up>False
-\<rbrace>\<close>
-
-term\<open>
-  match_switch x \<lbrace>
-    3 \<Rightarrow> \<up>True,
-    5 \<Rightarrow> \<up>True,
-    \<guillemotleft>twentyfive\<guillemotright> \<Rightarrow> \<up>True,
-    0 \<Rightarrow> \<up>True,
-    1 \<Rightarrow> \<up>True,
-    _ \<Rightarrow> \<up>False
-  \<rbrace>
-\<close>
+\<comment>\<open>Numeric match tests are in Micro_Rust_Shallow_Embedding_Tests.thy using the full uRust syntax,
+   which properly dispatches to the switch path. The shallow syntax here bypasses that dispatch.\<close>
 
 (*>*)
 end

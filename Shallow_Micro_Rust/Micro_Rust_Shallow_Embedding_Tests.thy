@@ -737,9 +737,9 @@ term\<open>\<lbrakk>
   };
 \<rbrakk>\<close>
 
-subsubsection\<open>Numeric Match (match_switch)\<close>
+subsubsection\<open>Numeric Match\<close>
 
-text\<open>See Section 21 (Rust Path Expressions) for match_switch examples\<close>
+text\<open>See Section 21 (Rust Path Expressions) for numeric match examples\<close>
 
 subsection\<open>Control Flow - Loops\<close>
 
@@ -1380,15 +1380,6 @@ term\<open>\<lbrakk>
   }
 \<rbrakk>\<close>
 
-term\<open>\<lbrakk>
-  let x = 5;
-\<comment> \<open>\<^verbatim>\<open>match_switch\<close> forces interpretation of this \<^verbatim>\<open>match\<close> clause as a \<^verbatim>\<open>switch\<close>\<close>
-  match_switch x {
-    number::three \<Rightarrow> False,
-    _ \<Rightarrow> True
-  }
-\<rbrakk>\<close>
-
 end
 
 subsection\<open>Disjunctive Patterns\<close>
@@ -1414,7 +1405,7 @@ context
   fixes x :: \<open>32 word\<close>
 begin
 term\<open>\<lbrakk>
-  match_switch x {
+  match x {
     1 | 2 | 3 \<Rightarrow> True,
     _ \<Rightarrow> False
   }
@@ -1481,13 +1472,13 @@ term\<open>\<lbrakk>
   }
 \<rbrakk>\<close>
 
-subsubsection\<open>Match-Switch with Disjunctive Numeric Patterns\<close>
+subsubsection\<open>Match with Disjunctive Numeric Patterns\<close>
 
 context
   fixes x :: \<open>64 word\<close>
 begin
 term\<open>\<lbrakk>
-  match_switch x {
+  match x {
     0 | 1 \<Rightarrow> False,
     _ \<Rightarrow> True
   }
@@ -1510,6 +1501,175 @@ term\<open>\<lbrakk>
     (Some(x), Some(y)) | (None, Some(y)) \<Rightarrow> y,
     _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
   }
+\<rbrakk>\<close>
+
+subsection\<open>Unified Match (Numeric Patterns in match)\<close>
+
+text\<open>These tests verify that numeric patterns can be used directly in \<^verbatim>\<open>match\<close>
+expressions. The \<^verbatim>\<open>match\<close> keyword handles all pattern types uniformly:
+algebraic patterns (constructors), numeric patterns (0, 1, numerals), and wildcards.\<close>
+
+subsubsection\<open>Basic Match with Numeric Literals\<close>
+
+text\<open>Numeric literals work directly in \<^verbatim>\<open>match\<close> expressions.\<close>
+
+context
+  fixes x :: \<open>32 word\<close>
+begin
+term\<open>\<lbrakk>
+  match x {
+    0 \<Rightarrow> True,
+    1 \<Rightarrow> False,
+    _ \<Rightarrow> True
+  }
+\<rbrakk>\<close>
+end
+
+subsubsection\<open>Unified Match with Disjunctive Numeric Patterns\<close>
+
+context
+  fixes x :: \<open>64 word\<close>
+begin
+term\<open>\<lbrakk>
+  match x {
+    1 | 2 | 3 \<Rightarrow> True,
+    _ \<Rightarrow> False
+  }
+\<rbrakk>\<close>
+end
+
+subsubsection\<open>Unified Match with Zero and One Literals\<close>
+
+context
+  fixes x :: \<open>16 word\<close>
+begin
+term\<open>\<lbrakk>
+  match x {
+    0 \<Rightarrow> \<llangle>0 :: nat\<rrangle>,
+    1 \<Rightarrow> \<llangle>1 :: nat\<rrangle>,
+    _ \<Rightarrow> \<llangle>2 :: nat\<rrangle>
+  }
+\<rbrakk>\<close>
+end
+
+subsubsection\<open>Numeric Match Evaluation Tests\<close>
+
+text\<open>These tests verify that numeric matches actually evaluate correctly, not just parse.\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>0 :: 32 word\<rrangle>;
+  let res = match x {
+    0 \<Rightarrow> \<llangle>100 :: 32 word\<rrangle>,
+    1 \<Rightarrow> \<llangle>200 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>300 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>100 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>1 :: 32 word\<rrangle>;
+  let res = match x {
+    0 \<Rightarrow> \<llangle>100 :: 32 word\<rrangle>,
+    1 \<Rightarrow> \<llangle>200 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>300 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>200 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>99 :: 32 word\<rrangle>;
+  let res = match x {
+    0 \<Rightarrow> \<llangle>100 :: 32 word\<rrangle>,
+    1 \<Rightarrow> \<llangle>200 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>300 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>300 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Larger Numerals in Match\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>42 :: 32 word\<rrangle>;
+  let res = match x {
+    42 \<Rightarrow> True,
+    100 \<Rightarrow> False,
+    255 \<Rightarrow> False,
+    _ \<Rightarrow> False
+  };
+  assert!(res == True)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>255 :: 32 word\<rrangle>;
+  let res = match x {
+    42 \<Rightarrow> \<llangle>1 :: nat\<rrangle>,
+    100 \<Rightarrow> \<llangle>2 :: nat\<rrangle>,
+    255 \<Rightarrow> \<llangle>3 :: nat\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
+  };
+  assert!(res == \<llangle>3 :: nat\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Numeric Match with Different Word Sizes\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>5 :: 8 word\<rrangle>;
+  let res = match x {
+    0 \<Rightarrow> \<llangle>0 :: 8 word\<rrangle>,
+    5 \<Rightarrow> \<llangle>50 :: 8 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>255 :: 8 word\<rrangle>
+  };
+  assert!(res == \<llangle>50 :: 8 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>1000 :: 64 word\<rrangle>;
+  let res = match x {
+    0 \<Rightarrow> False,
+    1000 \<Rightarrow> True,
+    _ \<Rightarrow> False
+  };
+  assert!(res == True)
+\<rbrakk>\<close>
+
+subsubsection\<open>Single Branch Numeric Match\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>7 :: 32 word\<rrangle>;
+  let res = match x {
+    _ \<Rightarrow> \<llangle>42 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>42 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Disjunctive Numeric Match Evaluation\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>2 :: 32 word\<rrangle>;
+  let res = match x {
+    1 | 2 | 3 \<Rightarrow> True,
+    _ \<Rightarrow> False
+  };
+  assert!(res == True)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>5 :: 32 word\<rrangle>;
+  let res = match x {
+    1 | 2 | 3 \<Rightarrow> True,
+    _ \<Rightarrow> False
+  };
+  assert!(res == False)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>0 :: 64 word\<rrangle>;
+  let res = match x {
+    0 | 1 \<Rightarrow> \<llangle>10 :: nat\<rrangle>,
+    2 | 3 | 4 \<Rightarrow> \<llangle>20 :: nat\<rrangle>,
+    _ \<Rightarrow> \<llangle>30 :: nat\<rrangle>
+  };
+  assert!(res == \<llangle>10 :: nat\<rrangle>)
 \<rbrakk>\<close>
 
 end
