@@ -564,7 +564,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   initializeHistoryEntries()
 
   // Query operation - use our custom Extended_Query_Operation class
-  private var exploreOperation: Option[Extended_Query_Operation[View]] = None
+  private var exploreOperation: Option[Extended_Query_Operation] = None
 
   // Find command at file+offset
   private def findCommandAtFileOffset(file_path: String, offset: Int): Option[Command] = {
@@ -622,7 +622,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       exploreOperation.foreach(_.deactivate())
 
       // Create new operation with the selected print function
-      exploreOperation = Some(new Extended_Query_Operation[View](
+      exploreOperation = Some(new Extended_Query_Operation(
         PIDE.editor, view, printFunction,
         status => {
           status match {

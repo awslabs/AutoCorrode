@@ -38,9 +38,9 @@ object Extended_Query_Operation {
     exec_id: Document_ID.Exec = Document_ID.none)
 }
 
-class Extended_Query_Operation[Editor_Context](
-  editor: Editor[Editor_Context],
-  editor_context: Editor_Context,
+class Extended_Query_Operation(
+  editor: Editor,
+  editor_context: editor.Context,
   operation_name: String,
   consume_status: Extended_Query_Operation.Status => Unit,
   consume_output: (Document.Snapshot, Command.Results, List[XML.Elem]) => Unit,
@@ -245,7 +245,7 @@ class Extended_Query_Operation[Editor_Context](
     for {
       command <- state.location
       snapshot = editor.node_snapshot(command.node_name)
-      link <- editor.hyperlink_command(true, snapshot, command.id)
+      link <- editor.hyperlink_command(snapshot, command.id, focus = true)
     } link.follow(editor_context)
   }
 

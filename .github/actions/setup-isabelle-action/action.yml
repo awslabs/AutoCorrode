@@ -1,5 +1,5 @@
 # Composite action to setup Isabelle
-# NOTE: Needs to be run under the makarius/isabelle:Isabelle2025 container
+# NOTE: Needs to be run under the makarius/isabelle:Isabelle2025-2 container
 name: Setup Isabelle
 description: 'Setup Isabelle: checkout the AFP, set environment variables, cache heap images'
 runs:
@@ -8,7 +8,7 @@ runs:
     - name: Checkout AFP
       uses: actions/checkout@v3
       with:
-        repository: isabelle-prover/mirror-afp-2025
+        repository: isabelle-prover/mirror-afp-2025-1
         path: afp
 
     - name: Set AFP component base

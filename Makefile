@@ -10,8 +10,8 @@
 .DEFAULT_GOAL: jedit
 .PHONY: register-afp-components build jedit
 
-# Set this to the directory containing the Isabelle2025 binary
-ISABELLE_HOME?=/Applications/Isabelle2025.app/bin
+# Set this to the directory containing the Isabelle2025-2 binary
+ISABELLE_HOME?=/Applications/Isabelle2025-2.app/bin
 # Set this to your home directory
 USER_HOME?=$(HOME)
 # Set this to where you maintain, or want to maintain, AFP dependencies

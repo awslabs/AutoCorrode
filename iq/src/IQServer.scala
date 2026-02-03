@@ -124,7 +124,7 @@ class IQServer(port: Int = 8765) {
       val snapshot = Document_Model.snapshot(model)
       val state = snapshot.state
       val version = snapshot.version
-      Document_Status.Node_Status.make(state, version, node_name)
+      Document_Status.Node_Status.make(Date.now(), state, version, node_name)
     }
 
     var completed = false
@@ -143,7 +143,7 @@ class IQServer(port: Int = 8765) {
         val snapshot = Document_Model.snapshot(model)
         val state = snapshot.state
         val version = snapshot.version
-        Document_Status.Node_Status.make(state, version, node_name)
+        Document_Status.Node_Status.make(Date.now(), state, version, node_name)
       }
 
       // Check completion status
@@ -1563,16 +1563,8 @@ class IQServer(port: Int = 8765) {
       val states = snapshot.state.command_states(snapshot.version, command)
       val status = Document_Status.Command_Status.merge(states.iterator.map(_.document_status))
 
-      // Extract timing information from status markup
-      val timing_seconds = states.foldLeft(0.0) { (total, state) =>
-        total + state.status.foldLeft(0.0) {
-          case (timing, markup) =>
-            markup match {
-              case isabelle.Markup.Timing(t) => timing + t.elapsed.seconds
-              case _ => timing
-            }
-        }
-      }
+      // Extract timing information from status - use the new timings API
+      val timing_seconds = status.timings.sum(Date.now()).seconds
 
       // Debug: log the actual status values
       Output.writeln(s"I/Q Server: Command status debug - unprocessed: ${status.is_unprocessed}, running: ${status.is_running}, finished: ${status.is_finished}, failed: ${status.is_failed}, terminated: ${status.is_terminated}, forks: ${status.forks}, runs: ${status.runs}, timing: ${timing_seconds}s")
@@ -1780,14 +1772,12 @@ class IQServer(port: Int = 8765) {
     val version = snapshot.version
     val node = snapshot.get_node(node_name)
 
-    // Calculate timing information for the entire document
-    val overall_timing = Document_Status.Overall_Timing.make(
-      state, version, node.commands, threshold = 0.0  // Always use 0.0 for total calculation
-    )
+    // Calculate timing information using Node_Status (Overall_Timing was removed in Isabelle2025-2)
+    val node_status = Document_Status.Node_Status.make(Date.now(), state, version, node_name, threshold = Time.zero)
 
     val baseTimingInfo = Map(
-      "total_seconds" -> formatDecimal(overall_timing.total),
-      "total_command_count" -> overall_timing.command_timings.size
+      "total_seconds" -> formatDecimal(node_status.cumulated_time.seconds),
+      "total_command_count" -> node_status.command_timings.size
     )
 
     if (!includeDetailedCommands) {
@@ -1809,22 +1799,24 @@ class IQServer(port: Int = 8765) {
       }
 
       // Filter commands for detailed display based on user threshold
-      val commands_above_threshold = overall_timing.command_timings.filter { case (_, timing) =>
-        timing >= timingThresholdMs / 1000.0
+      val threshold_time = Time.ms(timingThresholdMs)
+      val commands_above_threshold = node_status.command_timings.filter { case (_, timings) =>
+        timings.sum(Date.now()) >= threshold_time
       }
 
       Output.writeln(s"I/Q Server: calculateTimingInfo - timingThreshold=$timingThresholdMs ms")
 
       baseTimingInfo ++ Map(
         "timing_threshold_ms" -> timingThresholdMs,
-        "commands_with_timing" -> commands_above_threshold.map { case (cmd, timing) =>
+        "commands_with_timing" -> commands_above_threshold.map { case (cmd, timings) =>
           // Get the absolute document offset for this command
           val commandStart = node.command_start(cmd).getOrElse(0)
           val start_line = offsetToLine(commandStart)
+          val timing = timings.sum(Date.now())
           Map(
             "line" -> start_line,
             "source_preview" -> cmd.source.take(50), // First 50 chars for identification
-            "timing_seconds" -> formatDecimal(timing)
+            "timing_seconds" -> formatDecimal(timing.seconds)
           )
         }.toList.sortBy(_.apply("timing_seconds").asInstanceOf[Double]).reverse // Sort by timing descending
       )
@@ -1852,7 +1844,7 @@ class IQServer(port: Int = 8765) {
     val node_name = model.node_name
     val state = snapshot.state
     val version = snapshot.version
-    val node_status = Document_Status.Node_Status.make(state, version, node_name)
+    val node_status = Document_Status.Node_Status.make(Date.now(), state, version, node_name)
 
     result("status") = Map(
       "is_processed" -> node_status.terminated,
@@ -2777,7 +2769,7 @@ end"""
               Output.writeln(s"I/Q Server: Creating Extended_Query_Operation for $internalQuery")
 
               // Create the query operation (same pattern as I/Q Explore)
-              val operation = new Extended_Query_Operation[View](
+              val operation = new Extended_Query_Operation(
                 PIDE.editor,
                 activeView,
                 internalQuery,

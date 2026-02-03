@@ -7,8 +7,9 @@ endif
 
 # Paths (configurable via environment variables)
 PLUGIN_DIR := $(shell pwd)
-ISABELLE_HOME ?= /Applications/Isabelle2025.app
-JEDIT_JAR ?= $(ISABELLE_HOME)/contrib/jedit-20250215/jedit5.7.0-patched/jedit.jar
+ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
+JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
+JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar

@@ -102,7 +102,7 @@ by (transfer, clarsimp simp add: is_array_def list_fast_correct size_list)
 
 lemma array_to_list_update [simp]:
   shows \<open>array_to_list (array_update l i v) = list_update (array_to_list l) i v\<close>
-  by (transfer, simp add: is_array_def list_fast_correct braun_update1 list_update1 size_list)
+by transfer (auto simp add: is_array_def list_fast_correct braun_update1 list_update1 size_list list_update_beyond)
 
 lemma array_map_nth [simp]:
   assumes \<open>i < array_len xs\<close>

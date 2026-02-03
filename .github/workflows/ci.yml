@@ -24,7 +24,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: makarius/isabelle:Isabelle2025
+      image: makarius/isabelle:Isabelle2025-2
       options: --user root
 
     steps:
@@ -41,7 +41,7 @@ jobs:
   iq:
     runs-on: ubuntu-latest
     container:
-      image: makarius/isabelle:Isabelle2025
+      image: makarius/isabelle:Isabelle2025-2
       options: --user root
 
     steps:
@@ -55,8 +55,8 @@ jobs:
         run: |
           apt install -y make
           echo "ISABELLE_HOME=/home/isabelle/Isabelle" >> $GITHUB_ENV
-          echo "JAVA_HOME=/home/isabelle/Isabelle/contrib/jdk-21.0.6/x86_64-linux/" >> $GITHUB_ENV
-          echo "PATH=/home/isabelle/Isabelle/contrib/jdk-21.0.6/x86_64-linux/bin:$PATH" >> $GITHUB_ENV
+          echo "JAVA_HOME=/home/isabelle/Isabelle/contrib/jdk-21.0.9/x86_64-linux/" >> $GITHUB_ENV
+          echo "PATH=/home/isabelle/Isabelle/contrib/jdk-21.0.9/x86_64-linux/bin:$PATH" >> $GITHUB_ENV
 
       - name: Build I/Q plugin
         run: |

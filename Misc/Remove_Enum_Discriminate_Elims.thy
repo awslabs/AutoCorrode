@@ -19,10 +19,14 @@ rules from a newly generated \<^verbatim>\<open>datatype\<close> directly after 
 
 ML\<open>
   \<comment> \<open>Given a generic context, get the list of safe elimination rules\<close>
-  val safe_elims_of =
-    Classical.get_cs #>
-    Classical.rep_cs #> #safeEs #>
-    Item_Net.content #> List.map #1;
+  fun safe_elims_of ctxt =
+    let
+      fun is_safe_elim (_, {kind, ...}) =
+        Bires.kind_safe kind andalso Bires.kind_is_elim kind;
+    in
+      Classical.dest_decls (Context.proof_of ctxt) is_safe_elim
+      |> List.map #1
+    end;
 
   \<comment> \<open>Some wrappers for use with \<^verbatim>\<open>@{theory}\<close> and \<^verbatim>\<open>@{context}\<close>}\<close>
   val safe_elims_of_thy = Context.Theory #> safe_elims_of;

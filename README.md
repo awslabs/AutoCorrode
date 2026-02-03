@@ -23,7 +23,7 @@ An HTML rendering of the AutoCorrode source code is available [here](https://aws
 
 ## Setup
 
-AutoCorrode requires Isabelle2025, which can be downloaded [here](https://isabelle.in.tum.de/website-Isabelle2025/). Set `ISABELLE_HOME` to the directory containing the `isabelle` binary.
+AutoCorrode requires Isabelle2025-2, which can be downloaded [here](https://isabelle.in.tum.de/website-Isabelle2025-2/). Set `ISABELLE_HOME` to the directory containing the `isabelle` binary.
 
 AutoCorrode also requires the [WordLib](https://www.isa-afp.org/entries/Word_Lib.html) AFP entry. Set `AFP_COMPONENT_BASE` to the directory contaning the `Word_Lib` directory. By default, AutoCorrode expects it to be located in [dependencies/afp-2025](dependencies/afp-2025).
 
