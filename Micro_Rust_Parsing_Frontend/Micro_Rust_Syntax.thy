@@ -282,18 +282,18 @@ syntax
     ("if let _ = (_) { (_) } else { (_) }" [100,20,0,0]11)
 
   \<comment> \<open>We distinguish two types of matches. The first is the usual \<^verbatim>\<open>case\<close> on datatypes.
-      The second is more of a C-style \<^verbatim>\<open>switch\<close> statement via a match. It is hard to distinguish
-      these at first parsing time. Instead, we distinguish them via a \<^emph>\<open>parse AST translation\<close>. The
-      distinguishing property (on the AST level) is that the \<^verbatim>\<open>switch\<close>-style matches must contain
-      only numeral, other and \<^verbatim>\<open>id\<close> clauses, while the \<^verbatim>\<open>case\<close> style matches cannot contain numeral
-      clauses.
-     We add two syntax clauses which this AST translation will insert, which will then be used
-      as a handle for further translations of the syntax tree later on.\<close>
+      The second is more of a C-style \<^verbatim>\<open>switch\<close> statement via a match. These are now unified
+      under a single \<^verbatim>\<open>match\<close> syntax that handles both algebraic patterns (constructors) and
+      numeric patterns (0, 1, numerals, named constants). The implementation automatically
+      routes to the appropriate backend (bcase for algebraic, ncase for numeric).\<close>
   "_urust_match_case" :: "[urust, urust_match_branches] \<Rightarrow> urust"   ("match'_case (_) {/ _/ }" [20, 10]20)
-  "_urust_match_switch" :: "[urust, urust_match_branches] \<Rightarrow> urust"   ("match'_switch (_) {/ _/ }" [20, 10]20)
-  \<comment> \<open>This is \<^verbatim>\<open>temporary\<close> since we will disambiguate between two styles of matches\<close>
+  \<comment> \<open>Internal syntax for numeric matches - not user-facing, used by AST translation\<close>
+  "_urust_match_switch" :: "[urust, urust_match_branches] \<Rightarrow> urust"
+  \<comment> \<open>This is \<^verbatim>\<open>temporary\<close> since we convert it to \<^verbatim>\<open>_urust_match_case\<close> or \<^verbatim>\<open>_urust_match_switch\<close> via AST translation\<close>
   "_urust_temporary_match"  :: "[urust, urust_match_branches] \<Rightarrow> urust"  ("match (_) {/ _/ }" [20, 10]20)
   "_urust_match1" :: "[urust_pattern, urust] \<Rightarrow> urust_match_branches"  ("(2_ \<Rightarrow>/ _)" [100, 20] 21)
+  "_urust_match1_guard" :: "[urust_pattern, urust, urust] \<Rightarrow> urust_match_branches"
+    ("(2_ if _ \<Rightarrow>/ _)" [100, 0, 20] 21)
   "_urust_match2" :: "[urust_match_branches, urust_match_branches] \<Rightarrow> urust_match_branches"  ("_/, _" [21, 20]20)
 
   \<comment>\<open>Basic case patterns, restricted to constructor identifiers followed by a potentially empty list of argument identifiers, and numerals\<close>
@@ -302,17 +302,21 @@ syntax
   "_urust_match_pattern_constr_no_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern\<close>
     ("_" [0]1000)
   "_urust_match_pattern_num_const" :: \<open>num_const \<Rightarrow> urust_pattern\<close>
-    ("_" [1000]100)
+    ("_" [1000]1000)
   "_urust_match_pattern_zero" :: \<open>urust_pattern\<close>
-    ("0")
+    ("0" 1000)
   "_urust_match_pattern_one" :: \<open>urust_pattern\<close>
-    ("1")
+    ("1" 1000)
   "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern\<close>
-    ("_ '(_')"[1000,100]100)
+    ("_ '(_')"[1000,100]1000)
   "_urust_match_pattern_args_single" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args\<close>
     ("_")
   "_urust_match_pattern_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
+
+  \<comment>\<open>Disjunctive patterns: p1 | p2 (right-associative)\<close>
+  "_urust_match_pattern_disjunction" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("_ '|/ _" [1000, 100] 100)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
        https://doc.rust-lang.org/reference/expressions.html\<close>
@@ -321,9 +325,13 @@ syntax
     ("_'?" [400]400)
 
   "_urust_negation" :: \<open>urust \<Rightarrow> urust\<close>
-    ("!_" [301]300)
+    ("'! _" [300]300)
+  "_urust_double_negation" :: \<open>urust \<Rightarrow> urust\<close>
+    ("'!'! _" [300]300)
   "_urust_deref" :: \<open>urust \<Rightarrow> urust\<close>
     ("*_" [200]100)
+  "_urust_double_deref" :: \<open>urust \<Rightarrow> urust\<close>
+    ("**_" [200]100)
 
   \<comment>\<open>Arithmetic expressions\<close>
   "_urust_mul" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
@@ -451,6 +459,30 @@ begin
 term\<open>\<guillemotleft>foo.bar.boo.far\<guillemotright>\<close>
 *)
 end
+
+text\<open>Handle double negation \<^verbatim>\<open>!!\<close> by expanding to nested single negations.\<close>
+parse_ast_translation\<open>
+let
+  fun double_neg_tr [x] =
+    Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_negation\<close>)
+      [Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_negation\<close>) [x]]
+  | double_neg_tr args = raise Ast.AST ("double_neg_tr", args)
+in
+  [(\<^syntax_const>\<open>_urust_double_negation\<close>, K double_neg_tr)]
+end
+\<close>
+
+text\<open>Handle double dereference \<^verbatim>\<open>**\<close> by expanding to nested single dereferences.\<close>
+parse_ast_translation\<open>
+let
+  fun double_deref_tr [x] =
+    Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_deref\<close>)
+      [Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_deref\<close>) [x]]
+  | double_deref_tr args = raise Ast.AST ("double_deref_tr", args)
+in
+  [(\<^syntax_const>\<open>_urust_double_deref\<close>, K double_deref_tr)]
+end
+\<close>
 
 text\<open>First, we register a parse AST translation splitting long IDs at dots (".") and emitting them
 as an anonymous \<^ML>\<open>Ast.Appl\<close>, with one \<^text>\<open>urust_identifier\<close> argument per component.\<close>
@@ -676,58 +708,79 @@ parse_ast_translation\<open>
   ] end
 \<close>
 
-text\<open>Now we add an AST translation that converts \<^verbatim>\<open>_urust_temporary_match\<close> to the appropriate type
-of match, i.e. \<^verbatim>\<open>match_case\<close> or \<^verbatim>\<open>match_select\<close>s.\<close>
+text\<open>Now we add an AST translation that converts \<^verbatim>\<open>_urust_temporary_match\<close> to the appropriate
+internal representation. Users always write \<^verbatim>\<open>match\<close>, but internally we dispatch to either
+\<^verbatim>\<open>_urust_match_case\<close> (for algebraic patterns) or \<^verbatim>\<open>_urust_match_switch\<close> (for numeric patterns)
+based on pattern analysis.\<close>
 parse_ast_translation\<open>
   let
-    \<comment> \<open>Get the head constants of an AST node\<close>
-    fun pattern_ast_to_head_const (Ast.Appl (Ast.Constant c :: tl)) = c
-      | pattern_ast_to_head_const (Ast.Constant c) = c
-      | pattern_ast_to_head_const _ = \<^syntax_const>\<open>_urust_match_pattern_other\<close>
+    \<comment> \<open>Get all head constants from a pattern, handling disjunctions recursively.
+        For \<^verbatim>\<open>1 | 2 | 3\<close>, returns the head constants of 1, 2, and 3.\<close>
+    fun pattern_ast_to_head_consts (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_disjunction\<close>, left, right]) =
+          pattern_ast_to_head_consts left @ pattern_ast_to_head_consts right
+      | pattern_ast_to_head_consts (Ast.Appl (Ast.Constant c :: _)) = [c]
+      | pattern_ast_to_head_consts (Ast.Constant c) = [c]
+      | pattern_ast_to_head_consts _ = [\<^syntax_const>\<open>_urust_match_pattern_other\<close>]
 
-    \<comment> \<open>Get the list of patterns from a \<^verbatim>\<open>_urust_match2\<close> node in the AST\<close>
+    \<comment> \<open>Get the list of all pattern head constants from branches, flattening disjunctions\<close>
     fun branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match2\<close>, left, right]) =
           branches_ast_to_pattern_list left @ branches_ast_to_pattern_list right
       | branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1\<close>, clause, _]) =
-          [pattern_ast_to_head_const clause]
+          pattern_ast_to_head_consts clause
+      | branches_ast_to_pattern_list (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1_guard\<close>, clause, _, _]) =
+          pattern_ast_to_head_consts clause
+      | branches_ast_to_pattern_list _ = []
 
-    \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_case\<close>?\<close>
-    fun pat_is_match_case pat =
-      pat <> \<^syntax_const>\<open>_urust_match_pattern_num_const\<close> andalso
-      pat <> \<^syntax_const>\<open>_urust_match_pattern_zero\<close> andalso
-      pat <> \<^syntax_const>\<open>_urust_match_pattern_one\<close>
+    \<comment> \<open>Detect guards in match branches\<close>
+    fun branches_ast_has_guard (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match2\<close>, left, right]) =
+          branches_ast_has_guard left orelse branches_ast_has_guard right
+      | branches_ast_has_guard (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match1_guard\<close>, _, _, _]) = true
+      | branches_ast_has_guard _ = false
 
-    \<comment> \<open>Is this pattern valid in a \<^verbatim>\<open>match_switch\<close>?\<close>
-    fun pat_is_match_switch pat =
-      (pat = \<^syntax_const>\<open>_urust_match_pattern_num_const\<close>)
-      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>)
-      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_other\<close>)
-      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_zero\<close>)
-      orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_one\<close>)
+    \<comment> \<open>Does this pattern REQUIRE the algebraic case path?
+        - Constructor patterns with arguments: Some(x), Ok(v), etc.
+        - Tuple patterns: (a, b), ((x, y), z), etc.
+        These patterns need HOL's case expression for structural matching.\<close>
+    fun pat_requires_algebraic pat =
+      pat = \<^syntax_const>\<open>_urust_match_pattern_constr_with_args\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_let_pattern_tuple\<close>
 
-    \<comment> \<open>Replace a \<^verbatim>\<open>_urust_temporary_match\<close> AST node with arguments \<^verbatim>\<open>[arg, branches]\<close> with the
-        appropriate match AST node\<close>
+    \<comment> \<open>Does this pattern REQUIRE the switch path?
+        - Numeric literals: 0, 1, 42, etc.
+        These patterns need ncase for numeric comparison.\<close>
+    fun pat_requires_switch pat =
+      pat = \<^syntax_const>\<open>_urust_match_pattern_num_const\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_match_pattern_zero\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_match_pattern_one\<close>
+
+    \<comment> \<open>Is this pattern compatible with the switch path?
+        Includes: numerics, nullary constructors/constants, wildcards.
+        Excludes: constructor patterns with args, tuple patterns.\<close>
+    fun pat_is_switch_compatible pat =
+      pat = \<^syntax_const>\<open>_urust_match_pattern_num_const\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_match_pattern_other\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_match_pattern_zero\<close> orelse
+      pat = \<^syntax_const>\<open>_urust_match_pattern_one\<close>
+
+    \<comment> \<open>Replace a \<^verbatim>\<open>_urust_temporary_match\<close> AST node with the appropriate internal match form.
+        Logic:
+        - If guards present: must use algebraic case (for conditional fallthrough)
+        - If any pattern requires algebraic (constructor with args, tuple): use algebraic case
+        - If any pattern requires switch (numerics) AND all patterns are switch-compatible: use switch
+        - Otherwise: default to algebraic case\<close>
     fun match_selector ctx [arg, branches] =
       let
         val patterns = branches_ast_to_pattern_list branches
-        val is_match_case = patterns |> List.all pat_is_match_case
-        val is_match_select = patterns |> List.all pat_is_match_switch
-        val new_hd = (
-          \<comment> \<open>Note that we default to \<^verbatim>\<open>is_match_case\<close>! If you explicitly want your match to be
-              parsed as a switch statement, use \<^verbatim>\<open>match_switch {...}\<close>\<close>
-          if is_match_case then \<^syntax_const>\<open>_urust_match_case\<close>
-          else (if is_match_select then \<^syntax_const>\<open>_urust_match_switch\<close>
-          else
-            \<comment> \<open>User wrote down a mixed 'illegal' match. We thus do not know how to change the
-               AST in a meaningful way, and keep it as is.
-               The problem is now that this will give a very poor error message, so add some logging\<close>
-            let
-              val _ = writeln "Error: detected match with mixed numeral and constructors" 
-            in
-              \<^syntax_const>\<open>_urust_temporary_match\<close>
-            end
-          )
-        )
+        val has_guard = branches_ast_has_guard branches
+        val has_algebraic = List.exists pat_requires_algebraic patterns
+        val has_switch = List.exists pat_requires_switch patterns
+        val all_switch_compatible = List.all pat_is_switch_compatible patterns
+        val use_switch = (not has_guard) andalso (not has_algebraic) andalso
+                         has_switch andalso all_switch_compatible
+        val new_hd = if use_switch
+                     then \<^syntax_const>\<open>_urust_match_switch\<close>
+                     else \<^syntax_const>\<open>_urust_match_case\<close>
       in
         Ast.mk_appl (Ast.Constant new_hd) [arg, branches]
       end
