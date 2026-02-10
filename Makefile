@@ -15,7 +15,7 @@ ISABELLE_HOME?=/Applications/Isabelle2025-2.app/bin
 # Set this to your home directory
 USER_HOME?=$(HOME)
 # Set this to where you maintain, or want to maintain, AFP dependencies
-AFP_COMPONENT_BASE?=./dependencies/afp-2025
+AFP_COMPONENT_BASE?=./dependencies/afp
 # Set this option to accept `sorry`'ed proofs
 ifdef QUICK_AND_DIRTY
 	ISABELLE_FLAGS += -o quick_and_dirty

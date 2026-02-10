@@ -17,11 +17,6 @@ theory Raw_Physical_Memory_Trie_Core
 begin
 (*>*)
 
-text \<open>FIXME: MOVE\<close>
-lemma map_sum_lemma:
-  \<open>(map_sum id f (if P then q else Inl r) = Inr m) \<longleftrightarrow> (P \<and> (\<exists>m'. q = Inr m' \<and> f m' = m))\<close>
-  by (cases q) auto
-
 section\<open>Breaking memory regions into naturally-aligned blocks\<close>
 
 lemma word_ctz_is_aligned:
@@ -331,12 +326,6 @@ type_synonym 'tag physical_byte_state = \<open>('tag \<times> 8 word) shareable_
 abbreviation Unmapped :: \<open>'tag physical_byte_state\<close> where \<open>Unmapped \<equiv> No_Value\<close>
 abbreviation Tagged :: \<open>nonempty_share \<Rightarrow> 'tag \<Rightarrow> 8 word \<Rightarrow> 'tag physical_byte_state\<close> where
    \<open>Tagged sh tag val \<equiv> Shared_Value sh (tag, val)\<close>
-
-\<comment>\<open>TODO: Remove? With the rewrite of \<^verbatim>\<open>physical_byte_state\<close> via \<^verbatim>\<open>shareable_value\<close>,
-those lemmas as already trivial by simp.\<close>
-lemma Unmapped_unit [simp]:
-  shows \<open>Unmapped + x = x\<close> and \<open>x + Unmapped = x\<close>
-  by simp_all
 
 lemma tagged_disjoint_lemma:
   assumes \<open>Tagged sh tag b \<sharp> x\<close>
@@ -1661,8 +1650,7 @@ next
     moreover from calculation have \<open>\<not> (writeable_byte_state (lookup_memory_tree mt2 ?h' ?x'))\<close>
       using MT_node.prems(5) by argo
     ultimately show ?thesis
-      thm MT_node(2)[OF hl mt2c _ _ _ mt2h]
-      using MT_node.prems(5) by (intro MT_node(2)[OF hl mt2c _ _ _ mt2h, where x=\<open>?x'\<close>]; clarsimp)
+      using MT_node(2)[OF hl mt2c _ _ _ mt2h] by blast
   qed
   show ?case
   proof (cases \<open>block_h < h\<close>)
