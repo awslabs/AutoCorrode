@@ -319,6 +319,9 @@ syntax
   \<comment>\<open>Disjunctive patterns: p1 | p2 (right-associative)\<close>
   "_urust_match_pattern_disjunction" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
     ("_ '|/ _" [1000, 100] 100)
+  \<comment>\<open>Grouped patterns: (p)\<close>
+  "_urust_match_pattern_grouped" :: \<open>urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("'(_')" [1000]1000)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
        https://doc.rust-lang.org/reference/expressions.html\<close>
@@ -719,7 +722,9 @@ of match, i.e. \<^verbatim>\<open>match_case\<close> or \<^verbatim>\<open>match
 parse_ast_translation\<open>
   let
     \<comment> \<open>Get the head constants of an AST node\<close>
-    fun pattern_ast_to_head_const (Ast.Appl (Ast.Constant c :: tl)) = c
+    fun pattern_ast_to_head_const (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_grouped\<close>, pat]) =
+          pattern_ast_to_head_const pat
+      | pattern_ast_to_head_const (Ast.Appl (Ast.Constant c :: tl)) = c
       | pattern_ast_to_head_const (Ast.Constant c) = c
       | pattern_ast_to_head_const _ = \<^syntax_const>\<open>_urust_match_pattern_other\<close>
 

@@ -624,6 +624,51 @@ value[simp]\<open>\<lbrakk>
   assert!(res == two)
 \<rbrakk>\<close>
 
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>9 :: 32 word\<rrangle>;
+  let y = match x {
+    z \<Rightarrow> z
+  };
+  assert!(y == x)
+\<rbrakk>\<close>
+
+subsubsection\<open>Grouped and Irrefutable Patterns\<close>
+
+value[simp]\<open>\<lbrakk>
+  let v = match Some(\<llangle>5 :: 32 word\<rrangle>) {
+    (Some(x)) \<Rightarrow> x,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(v == \<llangle>5 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let foo = (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>);
+  let (x, y) = foo;
+  assert!(x == \<llangle>1 :: 32 word\<rrangle>);
+  assert!(y == \<llangle>2 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let x = \<llangle>7 :: 32 word\<rrangle>;
+  if let Some(y) = Some(x) {
+    assert!(y == x);
+    ()
+  } else {
+    assert!(False);
+    ()
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let foo = (\<llangle>3 :: 32 word\<rrangle>, \<llangle>4 :: 32 word\<rrangle>);
+  let (x, y) = foo else {
+    ()
+  };
+  assert!(x == \<llangle>3 :: 32 word\<rrangle>);
+  assert!(y == \<llangle>4 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
 subsubsection\<open>Nested Patterns\<close>
 
 value[simp]\<open>\<lbrakk>

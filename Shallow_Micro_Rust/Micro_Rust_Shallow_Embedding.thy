@@ -441,6 +441,8 @@ translations
     \<rightharpoonup> "_shallow_identifier_as_literal id"
   "_shallow_let_pattern _urust_match_pattern_other"
     \<rightharpoonup> "_idtdummy"
+  "_shallow_let_pattern (_urust_match_pattern_grouped pat)"
+    \<rightharpoonup> "_shallow_let_pattern pat"
 
   \<comment>\<open>Tuples\<close>
   "_shallow (_urust_tuple_args_double a b)"
@@ -666,6 +668,8 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (_shallow_identifier_as_literal id) (_shallow_match_args args)"
   "_shallow_match_pattern (_urust_match_pattern_disjunction p1 p2)"
     \<rightharpoonup> "_urust_shallow_match_pattern_disjunction (_shallow_match_pattern p1) (_shallow_match_pattern p2)"
+  "_shallow_match_pattern (_urust_match_pattern_grouped pat)"
+    \<rightharpoonup> "_shallow_match_pattern pat"
   "_shallow_match_pattern (_urust_let_pattern_tuple (_urust_let_pattern_tuple_base_pair a b))"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_with_args (CONST Pair)
       (_urust_shallow_match_pattern_args_app (_shallow_match_arg a)
@@ -714,13 +718,20 @@ parse_translation\<open>[(\<^syntax_const>\<open>_urust_identifier_id\<close>, K
                    (\<^syntax_const>\<open>_shallow_identifier_as_field\<close>, K hd)]\<close>
 
 ML\<open>
-  fun starts_upper s =
-    size s > 0 andalso Char.isUpper (String.sub (s, 0));
+  fun known_constructor_name ctxt name =
+    let
+      val full = Proof_Context.intern_const ctxt name
+      val thy = Proof_Context.theory_of ctxt
+    in
+      if can (Sign.the_const_type thy) full andalso Code.is_constr thy full
+      then SOME full
+      else NONE
+    end;
 
-  fun dest_ident_name ctxt (Free (name, _)) = name
-    | dest_ident_name ctxt (Const (name, _)) = name
-    | dest_ident_name ctxt t =
-        error ("invalid identifier term: " ^ Syntax.string_of_term ctxt t);
+  fun resolve_constructor_id _ (id as Const _) = SOME id
+    | resolve_constructor_id ctxt (Free (name, _)) =
+        Option.map Syntax.const (known_constructor_name ctxt name)
+    | resolve_constructor_id _ _ = NONE;
 
   fun shallow_match_arg_tr ctxt ts =
     let
@@ -765,14 +776,24 @@ ML\<open>
             | Const (\<^syntax_const>\<open>_urust_match_pattern_one\<close>, _) =>
                 mk \<^syntax_const>\<open>_urust_shallow_match_pattern_one\<close>
             | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>, _) $ id =>
-                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_no_args\<close> $ id
+                let
+                  val id' = the_default id (resolve_constructor_id ctxt id)
+                in
+                  mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_no_args\<close> $ id'
+                end
             | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_with_args\<close>, _) $ id $ args =>
-                mk_pat_with_args id (shallow_match_args_of args)
+                let
+                  val id' = the_default id (resolve_constructor_id ctxt id)
+                in
+                  mk_pat_with_args id' (shallow_match_args_of args)
+                end
             | Const (\<^syntax_const>\<open>_urust_let_pattern_tuple\<close>, _) $ args =>
                 tuple_pattern_of (tuple_args_destruct args)
             | Const (\<^syntax_const>\<open>_urust_match_pattern_disjunction\<close>, _) $ p1 $ p2 =>
                 mk \<^syntax_const>\<open>_urust_shallow_match_pattern_disjunction\<close>
                   $ shallow_match_pattern_of p1 $ shallow_match_pattern_of p2
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_grouped\<close>, _) $ p =>
+                shallow_match_pattern_of p
             | _ =>
                 error ("_shallow_match_arg: invalid pattern: " ^ Syntax.string_of_term ctxt pat))
 
@@ -789,9 +810,9 @@ ML\<open>
             (case pat of
               Const (\<^syntax_const>\<open>_urust_match_pattern_other\<close>, _) => mk_arg_dummy
             | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>, _) $ id =>
-                if starts_upper (dest_ident_name ctxt id)
-                then mk_arg_pat (shallow_match_pattern_of pat)
-                else mk_arg_id id
+                (case resolve_constructor_id ctxt id of
+                  SOME _ => mk_arg_pat (shallow_match_pattern_of pat)
+                | NONE => mk_arg_id id)
             | _ => mk_arg_pat (shallow_match_pattern_of pat))
     in
       shallow_match_arg_of pat

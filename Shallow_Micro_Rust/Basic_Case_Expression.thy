@@ -119,7 +119,7 @@ ML\<open>
     | print_term (t $ u) = "(" ^ (print_term t) ^ " $ " ^ (print_term u) ^ ")";
 
 fun case_error s = error ("Error in bcase expression:\n" ^ s);
-fun case_tr err _ [t, u] =
+fun case_tr err ctxt [t, u] =
       let
         fun abs p t =
           Syntax.const \<^const_syntax>\<open>case_abs\<close> $ Term.absfree (p, dummyT) t;
@@ -138,6 +138,34 @@ fun case_tr err _ [t, u] =
         fun dest_id_name id =
               (fst (Term.dest_Free id))
                 handle TERM _ => case_error ("invalid pattern identifier: " ^ (print_term id))
+
+        fun known_constructor_name ctxt name =
+              let
+                val full = Proof_Context.intern_const ctxt name
+                val thy = Proof_Context.theory_of ctxt
+              in
+                if can (Sign.the_const_type thy) full andalso Code.is_constr thy full
+                then SOME full
+                else NONE
+              end
+
+        fun resolve_constructor_id _ (id as Const _) = id
+          | resolve_constructor_id ctxt (Free (name, _)) =
+              (case known_constructor_name ctxt name of
+                SOME full => Syntax.const full
+              | NONE => Free (name, dummyT))
+          | resolve_constructor_id ctxt t = t
+
+        fun is_constructor_id ctxt id =
+              (case id of
+                Const _ => true
+              | Free (name, _) => Option.isSome (known_constructor_name ctxt name)
+              | _ => false)
+
+        fun is_binding_id ctxt id =
+              (case id of
+                Free _ => not (is_constructor_id ctxt id)
+              | _ => false)
 
         fun strip_convert_arg t =
               (case t of
@@ -167,15 +195,18 @@ fun case_tr err _ [t, u] =
               (case strip_convert_pattern pat of
                 Const (\<^syntax_const>\<open>_case_basic_pattern_constr_with_args\<close>, _) $ _ $ args =>
                   fold (fn a => fn acc => (collect_ids_from_arg a) @ acc) (pattern_args_destruct args) []
-              | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ _ => []
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ id =>
+                  if is_binding_id ctxt id then [dest_id_name id] else []
               | Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _) => []
               | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ _ $ args =>
                   fold (fn a => fn acc => (collect_ids_from_arg a) @ acc) (shallow_args_destruct args) []
-              | Const ("_urust_shallow_match_pattern_constr_no_args",_) $ _ => []
+              | Const ("_urust_shallow_match_pattern_constr_no_args",_) $ id =>
+                  if is_binding_id ctxt id then [dest_id_name id] else []
               | Const ("_urust_shallow_match_pattern_other", _) => []
               | Const ("_urust_match_pattern_constr_with_args", _) $ _ $ args =>
                   fold (fn a => fn acc => (collect_ids_from_pattern a) @ acc) (urust_args_destruct args) []
-              | Const ("_urust_match_pattern_constr_no_args",_) $ _ => []
+              | Const ("_urust_match_pattern_constr_no_args",_) $ id =>
+                  if is_binding_id ctxt id then [dest_id_name id] else []
               | Const ("_urust_match_pattern_other", _) => []
               | t => case_error ("collect_ids -- invalid pattern: " ^ (print_term t)))
         and collect_ids_from_arg arg =
@@ -223,24 +254,33 @@ fun case_tr err _ [t, u] =
                 Const (\<^syntax_const>\<open>_case_basic_pattern_constr_with_args\<close>, _) $ c $ args =>
                   let val args' = pattern_args_destruct args
                       val (arg_terms, binders, used') = pattern_args_to_terms args' used
-                  in (pattern_build_term c arg_terms, binders, used') end
-              | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ c => (c, [], used)
+                  in (pattern_build_term (resolve_constructor_id ctxt c) arg_terms, binders, used') end
+              | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ c =>
+                  if is_binding_id ctxt c
+                  then (c, [dest_id_name c], used)
+                  else (resolve_constructor_id ctxt c, [], used)
               | Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _) =>
                   let val (x, used') = Name.variant "x" used
                   in (Free (x, dummyT), [x], used') end
               | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ c $ args =>
                   let val args' = shallow_args_destruct args
                       val (arg_terms, binders, used') = pattern_args_to_terms args' used
-                  in (pattern_build_term c arg_terms, binders, used') end
-              | Const ("_urust_shallow_match_pattern_constr_no_args", _) $ c => (c, [], used)
+                  in (pattern_build_term (resolve_constructor_id ctxt c) arg_terms, binders, used') end
+              | Const ("_urust_shallow_match_pattern_constr_no_args", _) $ c =>
+                  if is_binding_id ctxt c
+                  then (c, [dest_id_name c], used)
+                  else (resolve_constructor_id ctxt c, [], used)
               | Const ("_urust_shallow_match_pattern_other", _) =>
                   let val (x, used') = Name.variant "x" used
                   in (Free (x, dummyT), [x], used') end
               | Const ("_urust_match_pattern_constr_with_args", _) $ c $ args =>
                   let val args' = urust_args_destruct args
                       val (arg_terms, binders, used') = pattern_args_to_terms args' used
-                  in (pattern_build_term c arg_terms, binders, used') end
-              | Const ("_urust_match_pattern_constr_no_args", _) $ c => (c, [], used)
+                  in (pattern_build_term (resolve_constructor_id ctxt c) arg_terms, binders, used') end
+              | Const ("_urust_match_pattern_constr_no_args", _) $ c =>
+                  if is_binding_id ctxt c
+                  then (c, [dest_id_name c], used)
+                  else (resolve_constructor_id ctxt c, [], used)
               | Const ("_urust_match_pattern_other", _) =>
                   let val (x, used') = Name.variant "x" used
                   in (Free (x, dummyT), [x], used') end
