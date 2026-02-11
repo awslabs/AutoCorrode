@@ -330,6 +330,10 @@ syntax
     ("'! _" [300]300)
   "_urust_double_negation" :: \<open>urust \<Rightarrow> urust\<close>
     ("'!'! _" [300]300)
+  "_urust_borrow" :: \<open>urust \<Rightarrow> urust\<close>
+    ("&_" [200]100)
+  "_urust_borrow_mut" :: \<open>urust \<Rightarrow> urust\<close>
+    ("& mut _" [200]100)
   "_urust_deref" :: \<open>urust \<Rightarrow> urust\<close>
     ("*_" [200]100)
   "_urust_double_deref" :: \<open>urust \<Rightarrow> urust\<close>

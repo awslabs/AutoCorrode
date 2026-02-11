@@ -1114,6 +1114,24 @@ term\<open>\<lbrakk>
   x
 \<rbrakk>\<close>
 
+subsubsection\<open>Borrow Syntax\<close>
+
+context
+  fixes r :: \<open>('s, 'b, integer) ref\<close>
+  fixes x y :: \<open>32 word\<close>
+begin
+term \<open>\<lbrakk> &r \<rbrakk>\<close>
+term \<open>\<lbrakk> &mut r \<rbrakk>\<close>
+term \<open>\<lbrakk> x & y \<rbrakk>\<close>
+end
+
+term\<open>\<lbrakk>
+  let mut x = \<llangle>0 :: 32 word\<rrangle>;
+  let xr = &x;
+  let xw = &mut x;
+  xw
+\<rbrakk>\<close>
+
 subsubsection\<open>Dereference\<close>
 
 context

@@ -483,6 +483,10 @@ translations
 
   "_shallow (_urust_propagate exp)"
     \<rightharpoonup> "_urust_shallow_propagate (_shallow exp)"
+  "_shallow (_urust_borrow exp)"
+    \<rightharpoonup> "CONST bindlift1 (CONST ro_ref_from_ref) (_shallow exp)"
+  "_shallow (_urust_borrow_mut exp)"
+    \<rightharpoonup> "CONST bindlift1 (CONST mut_ref_from_ref) (_shallow exp)"
   "_shallow (_urust_deref exp)"
     \<rightharpoonup> "_urust_shallow_store_dereference (_shallow exp)"
 

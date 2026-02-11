@@ -56,6 +56,9 @@ translations
 definition ro_ref_from_ref :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ro_ref\<close> where
   \<open>ro_ref_from_ref \<equiv> update_unwrap_focused ROGRef\<close>
 
+definition mut_ref_from_ref :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref\<close> where
+  \<open>mut_ref_from_ref \<equiv> id\<close>
+
 definition unsafe_ref_from_ro_ref :: \<open>('a, 'b, 'v) ro_ref \<Rightarrow> ('a, 'b, 'v) ref\<close> where
   \<open>unsafe_ref_from_ro_ref \<equiv> update_unwrap_focused unsafe_gref_from_ro_gref\<close>
 
