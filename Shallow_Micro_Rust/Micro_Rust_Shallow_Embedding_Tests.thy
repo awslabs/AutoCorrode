@@ -669,6 +669,46 @@ value[simp]\<open>\<lbrakk>
   assert!(y == \<llangle>4 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
 
+subsubsection\<open>Slice Patterns\<close>
+
+term\<open>\<lbrakk>
+  let xs = \<llangle>[1 :: 32 word, 2, 3]\<rrangle>;
+  let res = match xs {
+    [a, b, c] \<Rightarrow> a + b + c,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>6 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let xs = \<llangle>[1 :: 32 word, 2, 3]\<rrangle>;
+  let tag = match xs {
+    [_, _] \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(tag == \<llangle>0 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let ys = \<llangle>([] :: 32 word list)\<rrangle>;
+  let tag = match ys {
+    [] \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(tag == \<llangle>1 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if let [a, b] = \<llangle>[7 :: 32 word, 8]\<rrangle> {
+    assert!(a == \<llangle>7 :: 32 word\<rrangle>);
+    assert!(b == \<llangle>8 :: 32 word\<rrangle>);
+    ()
+  } else {
+    assert!(False);
+    ()
+  }
+\<rbrakk>\<close>
+
 subsubsection\<open>Nested Patterns\<close>
 
 value[simp]\<open>\<lbrakk>

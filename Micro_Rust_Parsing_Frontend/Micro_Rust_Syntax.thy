@@ -55,6 +55,7 @@ nonterminal urust_match_branch \<comment> \<open>A single branch of a match stat
 nonterminal urust_match_branches \<comment> \<open>Comma-separate lists of match branches\<close>
 nonterminal urust_pattern
 nonterminal urust_pattern_args
+nonterminal urust_pattern_slice_args
 nonterminal urust_let_pattern_args
 
 nonterminal urust_integral_type
@@ -315,6 +316,17 @@ syntax
     ("_")
   "_urust_match_pattern_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
+  \<comment>\<open>Slice/list patterns: [p0, p1, ...]\<close>
+  "_urust_match_pattern_slice_empty" :: \<open>urust_pattern\<close>
+    ("'[]")
+  "_urust_match_pattern_slice" :: \<open>urust_pattern_slice_args \<Rightarrow> urust_pattern\<close>
+    ("'[_']")
+  "_urust_match_pattern_slice_args_empty" :: \<open>urust_pattern_slice_args\<close>
+    ("")
+  "_urust_match_pattern_slice_args_single" :: \<open>urust_pattern \<Rightarrow> urust_pattern_slice_args\<close>
+    ("_")
+  "_urust_match_pattern_slice_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_slice_args \<Rightarrow> urust_pattern_slice_args\<close>
+    ("_,/ _"[1000,100]100)
 
   \<comment>\<open>Disjunctive patterns: p1 | p2 (right-associative)\<close>
   "_urust_match_pattern_disjunction" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
@@ -509,6 +521,46 @@ ML\<open>
 
   fun ast_urust_identifier_id str =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [Ast.Variable str]
+\<close>
+
+text\<open>Lower slice patterns to nested list constructor patterns:
+\<^verbatim>\<open>[a, b, c]\<close> becomes \<^verbatim>\<open>Cons(a, Cons(b, Cons(c, Nil)))\<close>.\<close>
+parse_ast_translation\<open>
+let
+  val mk = Ast.mk_appl
+  val cons_id = mk (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [Ast.Variable "Cons"]
+  val nil_id = mk (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [Ast.Variable "Nil"]
+
+  fun mk_pat_no_args id =
+    mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>) [id]
+  fun mk_pat_with_args id args =
+    mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_constr_with_args\<close>) [id, args]
+  fun mk_args_single a =
+    mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_args_single\<close>) [a]
+  fun mk_args_app a bs =
+    mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_args_app\<close>) [a, bs]
+
+  fun slice_args_destruct (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice_args_empty\<close>) = []
+    | slice_args_destruct (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice_args_single\<close>, a]) = [a]
+    | slice_args_destruct (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice_args_app\<close>, a, bs]) =
+        a :: slice_args_destruct bs
+    | slice_args_destruct ast = raise Ast.AST ("slice_args_destruct", [ast])
+
+  fun mk_list_pattern [] = mk_pat_no_args nil_id
+    | mk_list_pattern (a :: as') =
+        mk_pat_with_args cons_id (mk_args_app a (mk_args_single (mk_list_pattern as')))
+
+  fun slice_empty_pattern_tr [] = mk_list_pattern []
+    | slice_empty_pattern_tr xs =
+        mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice_empty\<close>) xs
+
+  fun slice_pattern_tr [args] = mk_list_pattern (slice_args_destruct args)
+    | slice_pattern_tr xs =
+        mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice\<close>) xs
+in
+  [(\<^syntax_const>\<open>_urust_match_pattern_slice_empty\<close>, K slice_empty_pattern_tr),
+   (\<^syntax_const>\<open>_urust_match_pattern_slice\<close>, K slice_pattern_tr)]
+end
 \<close>
 
 parse_ast_translation\<open>
