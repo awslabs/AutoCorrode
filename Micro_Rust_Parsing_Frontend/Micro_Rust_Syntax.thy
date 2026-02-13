@@ -56,6 +56,8 @@ nonterminal urust_match_branches \<comment> \<open>Comma-separate lists of match
 nonterminal urust_pattern
 nonterminal urust_pattern_args
 nonterminal urust_pattern_slice_args
+nonterminal urust_pattern_struct_fields
+nonterminal urust_pattern_struct_field
 nonterminal urust_let_pattern_args
 
 nonterminal urust_integral_type
@@ -342,6 +344,7 @@ syntax
     ("_")
   "_urust_match_pattern_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern_args\<close>
     ("_,/ _"[1000,100]100)
+
   \<comment>\<open>Slice/list patterns: [p0, p1, ...]\<close>
   "_urust_match_pattern_slice_empty" :: \<open>urust_pattern\<close>
     ("'[]")
@@ -353,6 +356,16 @@ syntax
     ("_")
   "_urust_match_pattern_slice_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_slice_args \<Rightarrow> urust_pattern_slice_args\<close>
     ("_,/ _"[1000,100]100)
+
+  \<comment>\<open>Struct patterns: Foo { foo: p, goo: q }\<close>
+  "_urust_match_pattern_struct" :: \<open>urust_identifier \<Rightarrow> urust_pattern_struct_fields \<Rightarrow> urust_pattern\<close>
+    ("_/ {/ _/ }" [1000, 0] 1000)
+  "_urust_match_pattern_struct_field" :: \<open>urust_identifier \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern_struct_field\<close>
+    ("_ :/ _" [1000, 100] 1000)
+  "_urust_match_pattern_struct_fields_single" :: \<open>urust_pattern_struct_field \<Rightarrow> urust_pattern_struct_fields\<close>
+    ("_")
+  "_urust_match_pattern_struct_fields_app" :: \<open>urust_pattern_struct_field \<Rightarrow> urust_pattern_struct_fields \<Rightarrow> urust_pattern_struct_fields\<close>
+    ("_,/ _" [1000, 100] 100)
 
   \<comment>\<open>Disjunctive patterns: p1 | p2 (right-associative)\<close>
   "_urust_match_pattern_disjunction" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>

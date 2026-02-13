@@ -733,6 +733,173 @@ ML\<open>
         Option.map Syntax.const (known_constructor_name ctxt name)
     | resolve_constructor_id _ _ = NONE;
 
+  fun dest_ident_name ctxt (Free (name, _)) = name
+    | dest_ident_name ctxt (Const (name, _)) = name
+    | dest_ident_name ctxt t =
+        error ("invalid identifier term: " ^ Syntax.string_of_term ctxt t);
+
+  fun canonical_name s = Long_Name.base_name s;
+
+  fun name_matches a b = a = b orelse canonical_name a = canonical_name b;
+
+  fun term_name_of (Const (name, _)) = SOME name
+    | term_name_of (Free (name, _)) = SOME name
+    | term_name_of _ = NONE;
+
+  fun type_name_of (Type (name, _)) = SOME name
+    | type_name_of _ = NONE;
+
+  fun resolve_struct_constructor ctxt id =
+    let
+      val id_name = dest_ident_name ctxt id
+      val id_name' = canonical_name id_name
+      val thy = Proof_Context.theory_of ctxt
+      val sugars = Ctr_Sugar.ctr_sugars_of ctxt
+
+      fun from_sugar ({T, ctrs, selss, ...} : Ctr_Sugar.ctr_sugar) =
+        let
+          val ty_name_opt = Option.map canonical_name (type_name_of T)
+          val entries =
+            map_index (fn (i, ctr) =>
+              (ctr, (nth selss i handle Subscript => []))) ctrs
+          val direct =
+            map_filter (fn (ctr, sels) =>
+              (case term_name_of ctr of
+                SOME ctor_name =>
+                  if name_matches ctor_name id_name' then SOME (canonical_name ctor_name, ctr, sels)
+                  else NONE
+              | NONE => NONE)) entries
+          val fallback =
+            (case (ty_name_opt, entries) of
+              (SOME ty_name, [(ctr, sels)]) =>
+                if ty_name = id_name' then
+                  (case term_name_of ctr of
+                    SOME ctor_name => [(canonical_name ctor_name, ctr, sels)]
+                  | NONE => [])
+                else []
+            | _ => [])
+        in
+          direct @ fallback
+        end
+
+      val raw_candidates = maps from_sugar sugars
+
+      fun record_candidate rec_name =
+        let
+          val resolved_name_opt =
+            (type_name_of (Proof_Context.read_type_name {proper = true, strict = false} ctxt rec_name)
+              handle ERROR _ => NONE)
+          val info_opt =
+            (case resolved_name_opt of
+              SOME resolved_name => Record.get_info thy resolved_name
+            | NONE => Record.get_info thy rec_name)
+          val key_name = the_default rec_name resolved_name_opt
+        in
+          (case info_opt of
+            NONE => NONE
+          | SOME info =>
+              let
+                val (ext_name, _) = #extension info
+                val field_names = map fst (#fields info) @ ["more"]
+                val ctor = Const (ext_name, dummyT)
+                val sels = map (fn f => Const (f, dummyT)) field_names
+              in
+                SOME (canonical_name key_name, ctor, sels)
+              end)
+        end
+
+      val record_raw_candidates =
+        map_filter record_candidate (distinct (op =) [id_name, id_name'])
+
+      fun insert_unique (key, value) acc =
+        if AList.defined (op =) acc key then acc else AList.update (op =) (key, value) acc
+      val unique_candidates =
+        fold (fn (key, ctr, sels) => insert_unique (key, (ctr, sels)))
+          (raw_candidates @ record_raw_candidates) []
+
+      val ctor_msg =
+        if null unique_candidates then
+          "unknown constructor/type"
+        else
+          unique_candidates
+          |> map fst
+          |> rev
+          |> space_implode ", "
+    in
+      (case unique_candidates of
+        [] =>
+          error ("struct pattern " ^ quote id_name ^ ": no matching constructor or single-constructor record/datatype found")
+      | [(_, res)] => res
+      | _ =>
+          error ("struct pattern " ^ quote id_name ^ " is ambiguous; candidates: " ^ ctor_msg))
+    end;
+
+  fun struct_pattern_tr ctxt ts =
+    let
+      val mk = Syntax.const
+      fun mk_args [p] = mk \<^syntax_const>\<open>_urust_match_pattern_args_single\<close> $ p
+        | mk_args (p :: ps) = mk \<^syntax_const>\<open>_urust_match_pattern_args_app\<close> $ p $ mk_args ps
+        | mk_args [] = error "struct pattern: empty field list"
+
+      fun struct_field_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_field\<close>, _) $ fld $ p) =
+              (canonical_name (dest_ident_name ctxt fld), p)
+        | struct_field_destruct t =
+            error ("struct pattern: invalid field syntax: " ^ Syntax.string_of_term ctxt t)
+
+      fun struct_fields_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_fields_single\<close>, _) $ fld) =
+              [struct_field_destruct fld]
+        | struct_fields_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_fields_app\<close>, _) $ fld $ rest) =
+              struct_field_destruct fld :: struct_fields_destruct rest
+        | struct_fields_destruct t =
+            error ("struct pattern: invalid field list syntax: " ^ Syntax.string_of_term ctxt t)
+
+      fun tr [id, fields] =
+        let
+          val (ctor, sels) = resolve_struct_constructor ctxt id
+          val ctor_name =
+            (case term_name_of ctor of
+              SOME n => canonical_name n
+            | NONE => dest_ident_name ctxt id)
+          val selector_names = map (canonical_name o dest_ident_name ctxt) sels
+          val field_entries = struct_fields_destruct fields
+          val field_names = map fst field_entries
+          fun is_optional_selector s = (s = "more")
+          val duplicate_fields = Library.duplicates (op =) field_names
+          val _ =
+            if null duplicate_fields then ()
+            else error ("struct pattern for " ^ quote ctor_name ^ " has duplicate field(s): " ^
+              space_implode ", " duplicate_fields)
+          val extra_fields =
+            filter (fn f => not (member (op =) selector_names f)) field_names
+          val missing_fields =
+            filter (fn s =>
+              not (member (op =) field_names s) andalso not (is_optional_selector s)) selector_names
+          val _ =
+            if null extra_fields then ()
+            else error ("struct pattern for " ^ quote ctor_name ^ " has unknown field(s): " ^
+              space_implode ", " extra_fields)
+          val _ =
+            if null missing_fields then ()
+            else error ("struct pattern for " ^ quote ctor_name ^ " is missing field(s): " ^
+              space_implode ", " missing_fields)
+          val ordered_pats =
+            map (fn s =>
+              (case AList.lookup (op =) field_entries s of
+                SOME p => p
+              | NONE =>
+                  if is_optional_selector s then Syntax.const \<^syntax_const>\<open>_urust_match_pattern_other\<close>
+                  else error ("internal error: struct field lookup failed for " ^ quote s))) selector_names
+        in
+          mk \<^syntax_const>\<open>_urust_match_pattern_constr_with_args\<close> $ ctor $ mk_args ordered_pats
+        end
+        | tr args = Term.list_comb (mk \<^syntax_const>\<open>_urust_match_pattern_struct\<close>, args)
+    in
+      tr ts
+    end;
+
   fun shallow_match_arg_tr ctxt ts =
     let
       val pat =
@@ -761,9 +928,28 @@ ML\<open>
             mk_pat_with_args mk_pair
               (mk_args_app arg1 (mk_args_single (mk_arg_pat pat2)))
 
-      fun tuple_pattern_of [] = mk_pat_no_args mk_tnil
-        | tuple_pattern_of (p :: ps) =
-            mk_pair_pat (shallow_match_arg_of p) (tuple_pattern_of ps)
+      fun tuple_pattern_of _ [] = mk_pat_no_args mk_tnil
+        | tuple_pattern_of conv (p :: ps) =
+            mk_pair_pat (conv p) (tuple_pattern_of conv ps)
+
+      fun struct_field_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_field\<close>, _) $ fld $ p) =
+              (canonical_name (dest_ident_name ctxt fld), p)
+        | struct_field_destruct t =
+            error ("_shallow_match_arg: invalid struct field: " ^ Syntax.string_of_term ctxt t)
+
+      fun struct_fields_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_fields_single\<close>, _) $ fld) =
+              [struct_field_destruct fld]
+        | struct_fields_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_fields_app\<close>, _) $ fld $ rest) =
+              struct_field_destruct fld :: struct_fields_destruct rest
+        | struct_fields_destruct t =
+            error ("_shallow_match_arg: invalid struct fields: " ^ Syntax.string_of_term ctxt t)
+
+      fun pats_to_args _ [] = error "_shallow_match_arg: empty struct pattern"
+        | pats_to_args conv [p] = mk_args_single (conv p)
+        | pats_to_args conv (p :: ps) = mk_args_app (conv p) (pats_to_args conv ps)
 
       and shallow_match_pattern_of pat =
             (case pat of
@@ -787,8 +973,47 @@ ML\<open>
                 in
                   mk_pat_with_args id' (shallow_match_args_of args)
                 end
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_struct\<close>, _) $ id $ fields =>
+                let
+                  val (ctor, sels) = resolve_struct_constructor ctxt id
+                  val ctor_name =
+                    (case term_name_of ctor of
+                      SOME n => canonical_name n
+                    | NONE => dest_ident_name ctxt id)
+                  val selector_names = map (canonical_name o dest_ident_name ctxt) sels
+                  val field_entries = struct_fields_destruct fields
+                  val field_names = map fst field_entries
+                  fun is_optional_selector s = (s = "more")
+                  val duplicate_fields = Library.duplicates (op =) field_names
+                  val _ =
+                    if null duplicate_fields then ()
+                    else error ("struct pattern for " ^ quote ctor_name ^ " has duplicate field(s): " ^
+                      space_implode ", " duplicate_fields)
+                  val extra_fields =
+                    filter (fn f => not (member (op =) selector_names f)) field_names
+                  val missing_fields =
+                    filter (fn s =>
+                      not (member (op =) field_names s) andalso not (is_optional_selector s)) selector_names
+                  val _ =
+                    if null extra_fields then ()
+                    else error ("struct pattern for " ^ quote ctor_name ^ " has unknown field(s): " ^
+                      space_implode ", " extra_fields)
+                  val _ =
+                    if null missing_fields then ()
+                    else error ("struct pattern for " ^ quote ctor_name ^ " is missing field(s): " ^
+                      space_implode ", " missing_fields)
+                  val ordered_pats =
+                    map (fn s =>
+                      (case AList.lookup (op =) field_entries s of
+                        SOME p => p
+                      | NONE =>
+                          if is_optional_selector s then Syntax.const \<^syntax_const>\<open>_urust_match_pattern_other\<close>
+                          else error ("internal error: field lookup failed for " ^ quote s))) selector_names
+                in
+                  mk_pat_with_args ctor (pats_to_args shallow_match_arg_of ordered_pats)
+                end
             | Const (\<^syntax_const>\<open>_urust_let_pattern_tuple\<close>, _) $ args =>
-                tuple_pattern_of (tuple_args_destruct args)
+                tuple_pattern_of shallow_match_arg_of (tuple_args_destruct args)
             | Const (\<^syntax_const>\<open>_urust_match_pattern_disjunction\<close>, _) $ p1 $ p2 =>
                 mk \<^syntax_const>\<open>_urust_shallow_match_pattern_disjunction\<close>
                   $ shallow_match_pattern_of p1 $ shallow_match_pattern_of p2
@@ -818,7 +1043,21 @@ ML\<open>
       shallow_match_arg_of pat
     end;
 
-  val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_shallow_match_arg\<close>, shallow_match_arg_tr)]);
+  fun shallow_match_pattern_tr ctxt ts =
+    let
+      val mk = Syntax.const
+      fun tr [pat] =
+        (case shallow_match_arg_tr ctxt [pat] of
+          Const (\<^syntax_const>\<open>_urust_shallow_match_pattern_arg_pattern\<close>, _) $ p => p
+        | _ => mk \<^syntax_const>\<open>_shallow_match_pattern\<close> $ pat)
+        | tr args = Term.list_comb (mk \<^syntax_const>\<open>_shallow_match_pattern\<close>, args)
+    in
+      tr ts
+    end;
+
+  val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_urust_match_pattern_struct\<close>, struct_pattern_tr),
+                                                (\<^syntax_const>\<open>_shallow_match_pattern\<close>, shallow_match_pattern_tr),
+                                                (\<^syntax_const>\<open>_shallow_match_arg\<close>, shallow_match_arg_tr)]);
 \<close>
 
 parse_translation\<open>

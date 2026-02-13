@@ -794,6 +794,16 @@ value[simp]\<open>\<lbrakk>
 
 subsubsection\<open>Tuple Patterns in Match\<close>
 
+datatype struct_pattern_fixture = Foo (foo: "32 word") (goo: "32 word") | Other
+
+datatype_record struct_pattern_dr =
+  dr_foo :: "32 word"
+  dr_goo :: "32 word"
+
+record struct_pattern_rec =
+  rec_foo :: "32 word"
+  rec_goo :: "32 word"
+
 term\<open>\<lbrakk>
   match (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>) {
     (a, b) \<Rightarrow> a
@@ -835,6 +845,48 @@ value[simp]\<open>\<lbrakk>
   assert!(res.1 == b);
   assert!(res.2 == c);
   assert!(res.3 == d)
+\<rbrakk>\<close>
+
+subsubsection\<open>Struct Patterns\<close>
+
+term\<open>\<lbrakk>
+  match \<llangle>Foo (1 :: 32 word) 2\<rrangle> {
+    Foo { foo: p, goo: q } \<Rightarrow> p + q,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let res = match \<llangle>Foo (3 :: 32 word) 4\<rrangle> {
+    Foo { foo: p, goo: q } \<Rightarrow> p + q,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>7 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if let Foo { foo: p, goo: q } = \<llangle>Foo (5 :: 32 word) 6\<rrangle> {
+    assert!(p == \<llangle>5 :: 32 word\<rrangle>);
+    assert!(q == \<llangle>6 :: 32 word\<rrangle>);
+    ()
+  } else {
+    assert!(False);
+    ()
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let Foo { foo: p, goo: q } = \<llangle>Foo (8 :: 32 word) 9\<rrangle> else {
+    return;
+  };
+  p + q
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let res = match \<llangle>make_struct_pattern_dr (10 :: 32 word) 11\<rrangle> {
+    struct_pattern_dr { dr_goo: q, dr_foo: p } \<Rightarrow> p + q
+  };
+  assert!(res == \<llangle>21 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
 
 subsubsection\<open>Pattern Guards\<close>
