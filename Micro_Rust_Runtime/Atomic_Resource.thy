@@ -98,9 +98,6 @@ lemma atomic_value_is_writable_ucincl[ucincl_intros]:
   shows \<open>ucincl atomic_value_is_writable\<close>
   by (clarsimp intro!: ucincl_intros simp flip: atomic_value_is_writable_alt)
 
-\<comment>\<open>TODO: This lemma is currently unused -- remove?\<close>
-    \<comment>\<open>TODO: This lemma is currently unused -- remove?\<close>
-\<comment>\<open>TODO: This lemma is currently unused -- remove?\<close>
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma atomic_value_is_writable_basic:
   shows \<open>Some v \<Turnstile> atomic_value_is_writable\<close>

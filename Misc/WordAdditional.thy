@@ -10,9 +10,14 @@ begin
 (*>*)
 
 
-section \<open>Lukas's experimental extension for numerals and order\<close>
+section \<open>An experimental extension for numerals and order\<close>
 
-(*Off by default: to activate, use note [[numeral_aware]] in a local proof scope*)
+text \<open>This is due to Lukas Stevens, formerly a PhD student of Tobias Nipkow at TU Munich.
+It is off by default and when activated ensures that the order solver
+recognises numerical constants that denote machine words. Ordering relationships only work for 
+machine words of fixed length.\<close>
+
+(*To activate, use note [[numeral_aware]] in a local proof scope*)
 
 ML \<open>
   val numeral_cfg = Attrib.setup_config_bool @{binding "numeral_aware"} (K false)
@@ -36,7 +41,7 @@ let
         #> HOLogic.mk_Trueprop
       fun num_pair_thm (n1, n2) =
         Goal.prove ctxt [] [] (mk_lt_num_pair (n1, n2))
-          (fn {prems, context} => Code_Simp.dynamic_tac context 1)
+          (fn {prems, context} => simp_tac context 1)
     in
       maps (try num_pair_thm #> the_list) num_pairs
     end
