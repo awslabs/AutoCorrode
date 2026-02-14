@@ -9,6 +9,7 @@ session Misc = HOL +
   theories
     Array
     Bitfields
+    Code_Assertion
     Debug_Logging
     ListAdditional
     MultisetAdditional
