@@ -12,11 +12,11 @@ JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
-SCALA_SWING_JAR ?= $(SCALA_HOME)/lib/scala-swing_3-3.0.0.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
 JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
 JAVA_ENV = $(if $(JAVA_HOME),JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH",)
+SCALA_SWING_JAR ?= $(SCALA_HOME)/lib/scala-swing_3-3.0.0.jar
 SCALA3_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala3-library_3-*.jar)
 SCALA2_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala-library-*.jar)
 SCALA_XML_JAR := $(wildcard $(SCALA_HOME)/lib/scala-xml_3-*.jar)
@@ -43,7 +43,7 @@ TEST_SOURCES := $(wildcard src/test/scala/*.scala)
 SCALATEST_JARS = $(wildcard lib/test/*.jar)
 TEST_CLASSPATH = $(shell echo $(SCALATEST_JARS) | tr ' ' ':')
 
-.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-test-sanity verify-test-coverage
+.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-test-sanity verify-test-coverage fetch-test-deps
 
 all: check-deps iq-install build
 
@@ -197,6 +197,8 @@ debug:
 	echo "ISABELLE_JAR  = $(ISABELLE_JAR)"
 	echo "SCALA_HOME    = $(SCALA_HOME)"
 	echo "JAVA_HOME     = $(JAVA_HOME)"
+	echo "JAVA          = $(JAVA)"
+	echo "JAR           = $(JAR)"
 	echo "LIB_JARS      = $(LIB_JARS)"
 	echo "IQ_JAR        = $(IQ_JAR)"
 	echo "IQ_AVAILABLE  = $(if $(IQ_CLASSPATH),yes,no)"

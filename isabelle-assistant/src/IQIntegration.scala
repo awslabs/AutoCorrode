@@ -100,7 +100,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
             completionLock.synchronized {
               if (!completed) {
                 completed = true
-                VerificationCache.put(command, proofText, newResult)
+                VerificationCache.putIfCacheable(command, proofText, newResult)
                 callback(newResult)
                 // Always interrupt timeout thread on any completion path
                 Option(timeoutThread).foreach(_.interrupt())

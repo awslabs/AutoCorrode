@@ -148,6 +148,8 @@ When I/Q is available, generated proofs are automatically verified against Isabe
 - **? Unverified** — not checked (I/Q unavailable)
 - **✗ Failed** — verification failed after retries
 
+Verification cache semantics: only successful verification outcomes are cached. Failed, timeout, and unavailable outcomes are not cached, so retries always re-run verification.
+
 ### Tool Use (Anthropic Models)
 
 With Anthropic Claude models, the LLM can autonomously use tools during chat:

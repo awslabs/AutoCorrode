@@ -3,6 +3,7 @@
 
 package isabelle.assistant
 
+import isabelle.assistant.IQIntegration.VerificationResult._
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
@@ -46,5 +47,28 @@ class VerificationCacheTest extends AnyFunSuite with Matchers {
     val stats = VerificationCache.stats
     stats should include("0")
     stats should include("entries")
+  }
+
+  test("cache policy should only cache successful verification") {
+    VerificationCache.shouldCacheResult(ProofSuccess(12L, "ok")) shouldBe true
+    VerificationCache.shouldCacheResult(ProofTimeout) shouldBe false
+    VerificationCache.shouldCacheResult(IQUnavailable) shouldBe false
+    VerificationCache.shouldCacheResult(MissingImport("imports ...")) shouldBe false
+    VerificationCache.shouldCacheResult(ProofFailure("proof method failed")) shouldBe false
+  }
+
+  test("result classification should mark transient unavailability outcomes") {
+    VerificationCache.classifyResult(ProofTimeout) shouldBe VerificationCache.ResultClass.TransientUnavailable
+    VerificationCache.classifyResult(IQUnavailable) shouldBe VerificationCache.ResultClass.TransientUnavailable
+    VerificationCache.classifyResult(MissingImport("import iq.Isar_Explore")) shouldBe VerificationCache.ResultClass.TransientUnavailable
+  }
+
+  test("failure classification should distinguish infrastructure from semantic failures") {
+    VerificationCache.classifyResult(ProofFailure("Network connection timed out")) shouldBe
+      VerificationCache.ResultClass.InfrastructureFailure
+    VerificationCache.classifyResult(ProofFailure("Verification unavailable (import iq.Isar_Explore to enable)")) shouldBe
+      VerificationCache.ResultClass.InfrastructureFailure
+    VerificationCache.classifyResult(ProofFailure("failed to apply proof method to goal")) shouldBe
+      VerificationCache.ResultClass.SemanticFailure
   }
 }

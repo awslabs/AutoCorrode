@@ -15,7 +15,9 @@ SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
+JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
 JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
+JAVA_ENV = $(if $(JAVA_HOME),JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH",)
 
 # Output directories (configurable via environment variables)
 BUILD_DIR ?= $(PLUGIN_DIR)/build
@@ -47,7 +49,7 @@ $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
 # Compile Scala sources
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling Scala sources..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
+	$(JAVA_ENV) $(SCALAC) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
@@ -130,6 +132,9 @@ debug:
 	echo "  SCALA_HOME    = $(SCALA_HOME)"
 	echo "  SCALAC        = $(SCALAC)"
 	echo "  ISABELLE_JAR  = $(ISABELLE_JAR)"
+	echo "  JAVA_HOME     = $(JAVA_HOME)"
+	echo "  JAVA          = $(JAVA)"
+	echo "  JAR           = $(JAR)"
 	echo "  BUILD_DIR     = $(BUILD_DIR)"
 	echo "  CLASSES_DIR   = $(CLASSES_DIR)"
 	echo "  JAR_FILE      = $(JAR_FILE)"
