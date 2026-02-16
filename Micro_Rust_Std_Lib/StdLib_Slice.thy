@@ -10,7 +10,7 @@ begin
 definition range_new_contract :: \<open>'a \<Rightarrow> 'a \<Rightarrow> ('s::sepalg, 'a range, 'abort) function_contract\<close> where
   [crush_contracts]: \<open>range_new_contract b e \<equiv>
      let pre  = \<langle>True\<rangle>;
-         post = \<lambda>r. \<langle>r = make_range b e\<rangle>
+         post = \<lambda>r. \<langle>r = make_range b e False\<rangle>
       in make_function_contract pre post\<close>
 ucincl_auto range_new_contract
 
@@ -149,8 +149,15 @@ definition slice_index_range :: \<open>('a, 'b, 'v list) ref \<Rightarrow> 'w::{
 
 definition list_index_range_contract :: \<open>'t list \<Rightarrow> 'w::{len} word range \<Rightarrow> ('s, 't list, 'abort) function_contract\<close> where
   [crush_contracts]: \<open>list_index_range_contract xs r \<equiv>
-     let pre  = \<langle>unat (end r) \<le> length xs \<and> start r \<le> end r\<rangle>;
-         post = \<lambda>res. \<langle>res = List.take (unat (end r - start r)) (List.drop (unat (start r)) xs)\<rangle>
+     let pre  = \<langle>start r \<le> end r \<and>
+                     (end_inclusive r \<longrightarrow> unat (end r) < length xs) \<and>
+                     (\<not> end_inclusive r \<longrightarrow> unat (end r) \<le> length xs)\<rangle>;
+         post = \<lambda>res. \<langle>(end_inclusive r \<longrightarrow>
+                             res = List.take (Suc (unat (end r) - unat (start r)))
+                               (List.drop (unat (start r)) xs)) \<and>
+                            (\<not> end_inclusive r \<longrightarrow>
+                             res = List.take (unat (end r) - unat (start r))
+                               (List.drop (unat (start r)) xs))\<rangle>
       in make_function_contract pre post\<close>
 ucincl_auto list_index_range_contract
 
@@ -176,7 +183,10 @@ begin
 
 fun generate_debug_range :: \<open>'a range \<Rightarrow> log_data\<close> where
   \<open>generate_debug_range r =
-     str ''(''#generate_debug (start r)@[str ''..<'']@generate_debug (end r)@[str '')'']\<close>
+     (if end_inclusive r then
+        str ''(''#generate_debug (start r)@[str ''..='']@generate_debug (end r)@[str '')'']
+      else
+        str ''(''#generate_debug (start r)@[str ''..<'']@generate_debug (end r)@[str '')''])\<close>
 
 instance ..
 

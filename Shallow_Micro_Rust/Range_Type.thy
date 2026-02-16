@@ -12,27 +12,40 @@ section\<open>The \<^emph>\<open>Range\<close> type\<close>
 datatype_record 'a range =
   start :: \<open>'a\<close>
   "end"  :: \<open>'a\<close>
+  end_inclusive :: \<open>bool\<close>
 
 text\<open>A range contains all values with \<^term>\<open>start \<le> x \<and> x < end\<close>.  It is empty if \<^term>\<open>start \<ge> end\<close>.\<close>
 
 subsection\<open>Core material related to the \<^emph>\<open>Range\<close> type\<close>
 
 definition is_empty :: \<open>'a::{ord} range \<Rightarrow> ('s, bool, 'abort, 'i, 'o) function_body\<close>  where
-  \<open>is_empty r \<equiv> FunctionBody (literal (\<not> (start r < end r)))\<close>
+  \<open>is_empty r \<equiv> FunctionBody (literal (
+    if end_inclusive r then
+      start r > end r
+    else
+      \<not> (start r < end r)))\<close>
 
 definition contains :: \<open>'a::ord range \<Rightarrow> 'a \<Rightarrow> ('s, bool, 'abort, 'i, 'o) function_body\<close> where
-  \<open>contains r x \<equiv> FunctionBody (literal (start r \<le> x \<and> x < end r))\<close>
+  \<open>contains r x \<equiv> FunctionBody (literal (
+    if end_inclusive r then
+      start r \<le> x \<and> x \<le> end r
+    else
+      start r \<le> x \<and> x < end r))\<close>
 
 definition range_new :: \<open>'a \<Rightarrow> 'a \<Rightarrow> ('s, 'a range, 'abort, 'i, 'o) function_body\<close> where
-  \<open>range_new \<equiv> lift_fun2 make_range\<close>
+  \<open>range_new \<equiv> lift_fun2 (\<lambda>x y. make_range x y False)\<close>
 
-definition range_eq_new :: \<open>'a::{one, plus} \<Rightarrow> 'a \<Rightarrow> ('s, 'a range, 'abort, 'i, 'o) function_body\<close> where
-  \<open>range_eq_new \<equiv> lift_fun2 (\<lambda>x y. make_range x (y + 1))\<close>
+definition range_eq_new :: \<open>'a \<Rightarrow> 'a \<Rightarrow> ('s, 'a range, 'abort, 'i, 'o) function_body\<close> where
+  \<open>range_eq_new \<equiv> lift_fun2 (\<lambda>x y. make_range x y True)\<close>
 
 text\<open>Iterator for a range\<close>
 
 definition range_into_list :: \<open>'a::{len} word range \<Rightarrow> 'a word list\<close> where
-  \<open>range_into_list r \<equiv> List.map of_nat [unat (start r) ..< unat (end r)]\<close>
+  \<open>range_into_list r \<equiv>
+     (if end_inclusive r then
+        List.map of_nat [unat (start r) ..< Suc (unat (end r))]
+      else
+        List.map of_nat [unat (start r) ..< unat (end r)])\<close>
 
 definition make_iterator_from_range :: \<open>'b::{len} word range \<Rightarrow> ('a, 'b word, 'abort, 'i, 'o) iterator\<close> where
   [micro_rust_simps]: \<open>make_iterator_from_range r \<equiv> make_iterator_from_list (range_into_list r)\<close>
@@ -71,10 +84,17 @@ definition list_index_range :: \<open>'a list \<Rightarrow> 'w::{len} word range
   \<open>list_index_range xs rng \<equiv> FunctionBody (
     if start rng > end rng then
       abort DanglingPointer
-    else if unat (end rng) > length xs then
-      abort DanglingPointer
     else
-      literal (take (unat ((end rng) - (start rng))) (drop (unat (start rng)) xs)))
+      if end_inclusive rng then
+        if unat (end rng) \<ge> length xs then
+          abort DanglingPointer
+        else
+          literal (take (Suc (unat (end rng) - unat (start rng))) (drop (unat (start rng)) xs))
+      else
+        if unat (end rng) > length xs then
+          abort DanglingPointer
+        else
+          literal (take (unat (end rng) - unat (start rng)) (drop (unat (start rng)) xs)))
 \<close>
 
 definition array_index_range :: \<open>('a, 'l::{len}) array \<Rightarrow> 'w::{len} word range \<Rightarrow>

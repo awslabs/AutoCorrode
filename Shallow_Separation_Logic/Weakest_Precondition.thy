@@ -670,7 +670,7 @@ lemma wp_funliteral:
 
 lemma wp_range_new [micro_rust_wp_simps]:
   assumes \<open>\<And>r. ucincl (\<phi> r)\<close>
-    shows \<open>\<W>\<P> \<Gamma> (\<langle>\<up>b\<dots>\<up>e\<rangle>) \<phi> \<rho> \<theta> = \<phi> (make_range b e)\<close>
+    shows \<open>\<W>\<P> \<Gamma> (\<langle>\<up>b\<dots>\<up>e\<rangle>) \<phi> \<rho> \<theta> = \<phi> (make_range b e False)\<close>
 using assms by (clarsimp simp add: range_new_def wp_funliteral)
 
 lemma wp_op_eq [micro_rust_wp_simps]:

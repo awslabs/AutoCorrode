@@ -1165,6 +1165,28 @@ term \<open>\<lbrakk> x..=y \<rbrakk>\<close>
 term \<open>\<lbrakk> let rng = x ..= x+y; rng.is_empty() \<rbrakk>\<close>
 end
 
+subsubsection\<open>Inclusive Range Boundary Behavior\<close>
+
+value[simp]\<open>\<lbrakk>
+  let int_max = \<llangle>255 :: 8 word\<rrangle>;
+  let inclusive = int_max ..= int_max;
+  assert!(!(inclusive.is_empty()));
+  assert!(inclusive.contains(int_max));
+  let exclusive = int_max .. int_max;
+  assert!(exclusive.is_empty());
+  ()
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let mut count = \<llangle>0 :: 8 word\<rrangle>;
+  let int_max = \<llangle>255 :: 8 word\<rrangle>;
+  for i in int_max ..= int_max {
+    count += \<llangle>1 :: 8 word\<rrangle>;
+  };
+  assert!(*count == \<llangle>1 :: 8 word\<rrangle>);
+  ()
+\<rbrakk>\<close>
+
 subsubsection\<open>Range in For Loops\<close>
 
 text\<open>See For Loop with Range subsection above.\<close>
