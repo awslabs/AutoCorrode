@@ -141,8 +141,8 @@ class CopilotOptions extends AbstractOptionPane("copilot-options") {
   }
 
   private def refreshModelsAsync(): Unit = {
-    val region = regionCombo.getSelectedItem.toString
-    val current = modelCombo.getSelectedItem.toString
+    val region = Option(regionCombo.getSelectedItem).map(_.toString).getOrElse("us-east-1")
+    val current = Option(modelCombo.getSelectedItem).map(_.toString).getOrElse("")
     refreshButton.setEnabled(false)
     refreshButton.setText("Refreshing...")
 
@@ -163,8 +163,10 @@ class CopilotOptions extends AbstractOptionPane("copilot-options") {
   }
 
   override def _save(): Unit = {
-    jEdit.setProperty("copilot.aws.region", regionCombo.getSelectedItem.toString)
-    jEdit.setProperty("copilot.model.id", modelCombo.getSelectedItem.toString)
+    Option(regionCombo.getSelectedItem).foreach(item => 
+      jEdit.setProperty("copilot.aws.region", item.toString))
+    Option(modelCombo.getSelectedItem).foreach(item => 
+      jEdit.setProperty("copilot.model.id", item.toString))
     jEdit.setBooleanProperty("copilot.use.cris", crisCheckbox.isSelected)
     jEdit.setProperty("copilot.temperature", temperatureField.getText)
     jEdit.setProperty("copilot.max.tokens", maxTokensField.getText)
