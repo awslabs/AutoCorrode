@@ -1,0 +1,18 @@
+# Proxy Plugin Properties
+
+plugin.ProxyPlugin.name=ML Proxy
+plugin.ProxyPlugin.author=Generated
+plugin.ProxyPlugin.version=1.0
+plugin.ProxyPlugin.description=Status and log panel for Isabelle ML proxy
+
+plugin.ProxyPlugin.activate=startup
+plugin.ProxyPlugin.usePluginHome=false
+
+plugin.ProxyPlugin.depend.0=jdk 21
+plugin.ProxyPlugin.depend.1=jedit 05.06.00.00
+
+plugin.ProxyPlugin.menu.label=ML Proxy
+plugin.ProxyPlugin.menu=proxy-log-dockable
+
+proxy-log-dockable.label=Proxy Log
+proxy-log-dockable.title=Proxy Log

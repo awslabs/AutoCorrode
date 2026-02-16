@@ -41,3 +41,8 @@ jobs:
       run: |
         cd isabelle-assistant
         make test ISABELLE_HOME=$ISABELLE_HOME
+
+    - name: Build I/P plugin
+      run: |
+        cd ip/ip_plugin
+        make build ISABELLE_HOME=$ISABELLE_HOME

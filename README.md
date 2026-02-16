@@ -17,6 +17,10 @@ The [Showcase.thy](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Mi
 [I/Q](iq) -- short for Isabelle/Q -- is an experimental Isabelle/jEdit plugin exposing proof editing/exploration capabilities as an MCP server. Its purpose is to enable MCP-capable AI agents such as [Amazon Q](https://aws.amazon.com/q/) to autonomously
 or collaboratively conduct interactive theorem proving using Isabelle. See [iq](iq) for more information.
 
+## I/P
+
+[I/P](ip) -- short for Isabelle/Proxy -- runs the Isabelle ML prover on a remote machine while keeping Isabelle/jEdit local. It requires no Isabelle source changes and includes a jEdit plugin for remote status monitoring. See [ip](ip) for more information.
+
 ## Isabelle Assistant
 
 [Isabelle Assistant](isabelle-assistant) is an LLM-powered proof assistant for Isabelle/jEdit, built on [AWS Bedrock](https://aws.amazon.com/bedrock/). It provides autonomous proof search, interactive chat with LaTeX rendering, proof suggestions, code explanation, refactoring, and more — all integrated into the Isabelle/jEdit IDE. When combined with [I/Q](iq), generated proofs are automatically verified against Isabelle before display. See [isabelle-assistant](isabelle-assistant) for more information.
