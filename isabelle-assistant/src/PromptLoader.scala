@@ -17,9 +17,19 @@ object PromptLoader {
 
   /** Resolve ISABELLE_ASSISTANT_HOME, returning None with a warning if unset. */
   private def assistantHome: Option[String] = {
-    val home = Isabelle_System.getenv("ISABELLE_ASSISTANT_HOME")
+    assistantHomeFrom(
+      key => Isabelle_System.getenv(key),
+      msg => Output.warning(msg)
+    )
+  }
+
+  private[assistant] def assistantHomeFrom(
+    getenv: String => String,
+    warn: String => Unit
+  ): Option[String] = {
+    val home = getenv("ISABELLE_ASSISTANT_HOME")
     if (home.isEmpty) {
-      Output.warning("[Assistant] ISABELLE_ASSISTANT_HOME not set. Install the plugin via 'make install' or set the variable manually.")
+      warn("[Assistant] ISABELLE_ASSISTANT_HOME not set. Install the plugin via 'make install' or set the variable manually.")
       None
     } else Some(home)
   }
@@ -32,24 +42,43 @@ object PromptLoader {
     if (!path.is_file)
       error("Prompt file not found: " + path)
 
-    val template = Mustache.compiler().compile(File.read(path))
+    renderTemplate(File.read(path), substitutions)
+  }
+
+  private[assistant] def renderTemplate(templateText: String, substitutions: Map[String, String]): String = {
+    val template = Mustache.compiler().compile(templateText)
     template.execute(substitutions.asJava)
   }
 
   /** Load and cache all system prompts from prompts/system/ directory */
   def getSystemPrompt: String = cacheLock.synchronized {
     cachedSystemPrompt.getOrElse {
-      val prompt = assistantHome match {
-        case None => ""
-        case Some(home) =>
-          val systemDir = Path.explode(home) + Path.explode("prompts") + Path.explode("system")
-          if (systemDir.is_dir) {
-            val files = File.read_dir(systemDir).filter(_.endsWith(".md")).sorted
-            files.map(name => File.read(systemDir + Path.explode(name))).mkString("\n\n")
-          } else ""
-      }
+      val prompt = loadSystemPromptFromHome(
+        assistantHome,
+        _.is_dir,
+        dir => File.read_dir(dir),
+        path => File.read(path)
+      )
       cachedSystemPrompt = Some(prompt)
       prompt
+    }
+  }
+
+  private[assistant] def loadSystemPromptFromHome(
+    home: Option[String],
+    isDir: Path => Boolean,
+    readDir: Path => List[String],
+    readFile: Path => String
+  ): String = {
+    home match {
+      case None => ""
+      case Some(root) =>
+        val systemDir = Path.explode(root) + Path.explode("prompts") + Path.explode("system")
+        if (!isDir(systemDir)) ""
+        else {
+          val files = readDir(systemDir).filter(_.endsWith(".md")).sorted
+          files.map(name => readFile(systemDir + Path.explode(name))).mkString("\n\n")
+        }
     }
   }
 

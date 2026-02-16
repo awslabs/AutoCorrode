@@ -7,55 +7,33 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 class SuggestActionTest extends AnyFunSuite with Matchers {
-  
-  test("parseLLMSuggestions should extract suggestions correctly") {
-    val response = """
-      Some text before
-      SUGGESTION: by simp
-      More text
-      SUGGESTION: by auto
-      SUGGESTION: by (simp add: foo_def)
-      Final text
-    """
-    
-    val suggestions = SuggestAction.parseLLMSuggestions(response)
-    suggestions should contain theSameElementsAs List(
-      "by simp",
-      "by auto", 
-      "by (simp add: foo_def)"
+
+  test("deduplicateCandidates should keep one candidate per proof text") {
+    val candidates = List(
+      SuggestAction.Candidate("by simp", SuggestAction.LLM),
+      SuggestAction.Candidate("by simp", SuggestAction.LLM),
+      SuggestAction.Candidate("by auto", SuggestAction.LLM)
     )
+    val deduped = SuggestAction.deduplicateCandidates(candidates)
+    deduped.map(_.proof).toSet shouldBe Set("by simp", "by auto")
+    deduped.length shouldBe 2
   }
-  
-  test("parseLLMSuggestions should handle empty response") {
-    val suggestions = SuggestAction.parseLLMSuggestions("")
-    suggestions shouldBe empty
+
+  test("deduplicateCandidates should prefer sledgehammer candidate for duplicate proof") {
+    val llm = SuggestAction.Candidate("by metis", SuggestAction.LLM, VerificationBadge.Unverified)
+    val sh = SuggestAction.Candidate("by metis", SuggestAction.Sledgehammer, VerificationBadge.Sledgehammer(Some(80L)))
+    val deduped = SuggestAction.deduplicateCandidates(List(llm, sh))
+    deduped should have length 1
+    deduped.head.source shouldBe SuggestAction.Sledgehammer
   }
-  
-  test("parseLLMSuggestions should handle malformed suggestions") {
-    val response = """
-      SUGGESTION:
-      SUGGESTION: 
-      SUGGESTION: by simp
-      Not a suggestion line
-    """
-    
-    val suggestions = SuggestAction.parseLLMSuggestions(response)
-    suggestions should contain only "by simp"
-  }
-  
-  test("parseLLMSuggestions should respect max candidates limit") {
-    val response = (1 to 10).map(i => s"SUGGESTION: method$i").mkString("\n")
-    val suggestions = SuggestAction.parseLLMSuggestions(response)
-    suggestions.length should be <= AssistantOptions.getMaxVerifyCandidates
-  }
-  
+
   test("rankCandidates should prioritize verified candidates") {
     val candidates = List(
       SuggestAction.Candidate("failed", SuggestAction.LLM, VerificationBadge.Failed("error")),
       SuggestAction.Candidate("verified", SuggestAction.LLM, VerificationBadge.Verified(Some(100L))),
       SuggestAction.Candidate("unverified", SuggestAction.LLM, VerificationBadge.Unverified)
     )
-    
+
     val ranked = SuggestAction.rankCandidates(candidates)
     ranked.head.proof shouldBe "verified"
     ranked.last.proof shouldBe "failed"

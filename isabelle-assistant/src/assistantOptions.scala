@@ -204,7 +204,7 @@ object AssistantOptions {
    * Boolean settings are included here (not read from jEdit directly) to
    * ensure a consistent view across all settings.
    */
-  private case class SettingsSnapshot(
+  private[assistant] case class SettingsSnapshot(
     region: String,
     baseModelId: String,
     temperature: Double,
@@ -246,7 +246,16 @@ object AssistantOptions {
   }
 
   private def loadSnapshot(): SettingsSnapshot = {
-    def prop(key: String, default: String): String = jEdit.getProperty(key, default)
+    parseSnapshot(
+      (key, default) => jEdit.getProperty(key, default),
+      (key, default) => jEdit.getBooleanProperty(key, default)
+    )
+  }
+
+  private[assistant] def parseSnapshot(
+    prop: (String, String) => String,
+    boolProp: (String, Boolean) => Boolean
+  ): SettingsSnapshot = {
     def intProp(key: String, default: Int, min: Int, max: Int): Int =
       try { math.max(min, math.min(max, prop(key, default.toString).toInt)) }
       catch { case _: NumberFormatException => default }
@@ -281,9 +290,9 @@ object AssistantOptions {
       proveStepTimeout = longProp("assistant.prove.step.timeout", AssistantConstants.DEFAULT_PROVE_STEP_TIMEOUT, 5000L, 300000L),
       proveBranches = intProp("assistant.prove.branches", AssistantConstants.DEFAULT_PROVE_BRANCHES, 1, 10),
       proveTimeout = longProp("assistant.prove.timeout", AssistantConstants.DEFAULT_PROVE_TIMEOUT, 30000L, 1800000L),
-      useCris = jEdit.getBooleanProperty("assistant.use.cris", true),
-      verifySuggestions = jEdit.getBooleanProperty("assistant.verify.suggestions", true),
-      useSledgehammer = jEdit.getBooleanProperty("assistant.use.sledgehammer", false)
+      useCris = boolProp("assistant.use.cris", true),
+      verifySuggestions = boolProp("assistant.verify.suggestions", true),
+      useSledgehammer = boolProp("assistant.use.sledgehammer", false)
     )
   }
 
@@ -418,6 +427,10 @@ object AssistantOptions {
   }
 
   private def normalizeKey(key: String): String = key.toLowerCase.replace('-', '_')
+
+  private[assistant] def normalizeKeyForTest(key: String): String = normalizeKey(key)
+  private[assistant] def hasSettingKey(key: String): Boolean = settingsByKey.contains(normalizeKey(key))
+  private[assistant] def publicSettingKeys: List[String] = settingDefs.map(_.key)
 
   def setSetting(key: String, value: String): Option[String] = {
     val result = settingsByKey.get(normalizeKey(key)).flatMap(_.set(value))

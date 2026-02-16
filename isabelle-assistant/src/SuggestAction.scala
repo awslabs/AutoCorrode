@@ -126,11 +126,17 @@ object SuggestAction {
     val waited = latch.await(AssistantConstants.SUGGESTION_COLLECTION_TIMEOUT, TimeUnit.MILLISECONDS)
     Output.writeln(s"[Assistant] Latch done, waited=$waited, results count: ${results.size}")
     // Deduplicate by proof text, preferring Sledgehammer (verified) over LLM (unverified)
-    val all = results.asScala.toList
-    all.groupBy(_.proof).values.map { dupes =>
-      dupes.find(_.source == Sledgehammer).getOrElse(dupes.head)
-    }.toList
+    deduplicateCandidates(results.asScala.toList)
   }
+
+  private[assistant] def deduplicateCandidates(candidates: List[Candidate]): List[Candidate] =
+    candidates
+      .groupBy(_.proof)
+      .values
+      .map { dupes =>
+        dupes.find(_.source == Sledgehammer).getOrElse(dupes.head)
+      }
+      .toList
 
   private def getCurrentTarget(view: View, buffer: JEditBuffer, offset: Int): TargetParser.Target = {
     val textArea = view.getTextArea

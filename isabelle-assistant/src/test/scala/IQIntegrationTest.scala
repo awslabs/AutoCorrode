@@ -92,35 +92,51 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
     connected should not be disconnected
   }
 
-  // Test the parseStepResult logic by extracting it to a testable form
   test("parseStepResult should parse PROOF_COMPLETE header") {
-    // This is testing the logic that would be in parseStepResult
-    // The actual method is private, but we can test the expected behavior
-    val text = "PROOF_COMPLETE\nProof state after completion"
-    val lines = text.linesIterator
-    val header = lines.next()
-    
-    header should startWith("PROOF_COMPLETE")
-    // A ProofStepResult created from this should have complete=true, numSubgoals=0
+    val result = IQIntegration.parseStepResult(
+      "PROOF_COMPLETE\nNo subgoals",
+      timeMs = 123L
+    )
+    result.complete shouldBe true
+    result.numSubgoals shouldBe 0
+    result.stateText shouldBe "No subgoals"
+    result.timeMs shouldBe 123L
   }
 
   test("parseStepResult should parse PROOF_STATE header with subgoal count") {
-    val text = "PROOF_STATE 3\nSubgoal 1: P\nSubgoal 2: Q\nSubgoal 3: R"
-    val lines = text.linesIterator
-    val header = lines.next()
-    
-    header should startWith("PROOF_STATE")
-    val count = header.stripPrefix("PROOF_STATE ").trim.toInt
-    count shouldBe 3
-    // A ProofStepResult created from this should have complete=false, numSubgoals=3
+    val result = IQIntegration.parseStepResult(
+      "PROOF_STATE 3\n1. P\n2. Q\n3. R",
+      timeMs = 88L
+    )
+    result.complete shouldBe false
+    result.numSubgoals shouldBe 3
+    result.stateText shouldBe "1. P\n2. Q\n3. R"
+    result.timeMs shouldBe 88L
   }
 
-  test("parseStepResult should handle legacy format without header") {
+  test("parseStepResult should return opaque legacy result without PROOF_* header") {
     val text = "goal (1 subgoal):\n 1. P ⟹ Q"
-    val lines = text.linesIterator
-    val header = lines.next()
-    
-    header should not startWith("PROOF_")
-    // Legacy format should be treated as opaque state with numSubgoals=-1
+    val result = IQIntegration.parseStepResult(text, timeMs = 42L)
+    result.complete shouldBe false
+    result.numSubgoals shouldBe -1
+    result.stateText shouldBe text
+    result.timeMs shouldBe 42L
+  }
+
+  test("parseStepResult should handle malformed PROOF_STATE header") {
+    val result = IQIntegration.parseStepResult(
+      "PROOF_STATE abc\nstate",
+      timeMs = 17L
+    )
+    result.complete shouldBe false
+    result.numSubgoals shouldBe -1
+    result.stateText shouldBe "state"
+  }
+
+  test("parseStepResult should treat empty output as completed proof") {
+    val result = IQIntegration.parseStepResult("", timeMs = 9L)
+    result.complete shouldBe true
+    result.numSubgoals shouldBe 0
+    result.stateText shouldBe ""
   }
 }

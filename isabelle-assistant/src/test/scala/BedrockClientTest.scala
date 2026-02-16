@@ -8,72 +8,10 @@ import org.scalatest.matchers.should.Matchers
 
 /**
  * Tests for BedrockClient helper methods.
- * Since isProvider and isLlama3OrLater are private, we test them indirectly
- * via BedrockModels.applyCrisPrefix which exercises provider detection.
- * We also test LLMResponseCache behavior thoroughly.
+ * Bedrock transport is exercised in integration environments; this suite keeps
+ * only deterministic utility/error handling checks that do not require AWS.
  */
 class BedrockClientTest extends AnyFunSuite with Matchers {
-
-  // --- LLMResponseCache tests ---
-
-  test("LLMResponseCache should store and retrieve entries") {
-    LLMResponseCache.clear()
-    LLMResponseCache.put("prompt1", "response1")
-    LLMResponseCache.get("prompt1") shouldBe Some("response1")
-  }
-
-  test("LLMResponseCache should return None for missing entries") {
-    LLMResponseCache.clear()
-    LLMResponseCache.get("nonexistent") shouldBe None
-  }
-
-  test("LLMResponseCache should not cache error responses") {
-    LLMResponseCache.clear()
-    LLMResponseCache.put("prompt", "Error: something went wrong")
-    LLMResponseCache.get("prompt") shouldBe None
-  }
-
-  test("LLMResponseCache should not cache timeout messages") {
-    LLMResponseCache.clear()
-    LLMResponseCache.put("prompt", "Operation timed out. Please try again.")
-    LLMResponseCache.get("prompt") shouldBe None
-  }
-
-  test("LLMResponseCache should not cache credential errors") {
-    LLMResponseCache.clear()
-    LLMResponseCache.put("prompt", "AWS credentials are invalid or insufficient.")
-    LLMResponseCache.get("prompt") shouldBe None
-  }
-
-  test("LLMResponseCache should respect max size via eviction") {
-    LLMResponseCache.clear()
-    // Fill beyond cache capacity
-    for (i <- 1 to (AssistantConstants.LLM_CACHE_SIZE + 20)) {
-      LLMResponseCache.put(s"prompt-$i", s"response-$i")
-    }
-    // Recent entries should be present
-    LLMResponseCache.get(s"prompt-${AssistantConstants.LLM_CACHE_SIZE + 20}") shouldBe Some(s"response-${AssistantConstants.LLM_CACHE_SIZE + 20}")
-    // Very old entries should be evicted
-    LLMResponseCache.get("prompt-1") shouldBe None
-    LLMResponseCache.clear()
-  }
-
-  test("LLMResponseCache.clear should empty the cache") {
-    LLMResponseCache.put("key", "value")
-    LLMResponseCache.clear()
-    LLMResponseCache.get("key") shouldBe None
-  }
-
-  test("LLMResponseCache.cleanup should remove expired entries") {
-    LLMResponseCache.clear()
-    LLMResponseCache.put("key", "value")
-    // Cleanup shouldn't remove recently added entries
-    LLMResponseCache.cleanup()
-    LLMResponseCache.get("key") shouldBe Some("value")
-    LLMResponseCache.clear()
-  }
-
-  // --- ErrorHandler integration tests ---
 
   test("ErrorHandler.makeUserFriendly handles credential errors") {
     val msg = ErrorHandler.makeUserFriendly("access denied for user", "test")

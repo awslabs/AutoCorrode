@@ -34,6 +34,16 @@ object GoalExtractor {
     numSubgoals: Int
   )
 
+  private[assistant] val proofOpeners: Set[String] = Set(
+    "proof", "lemma", "theorem", "corollary", "proposition",
+    "schematic_goal", "function", "primrec", "fun", "definition", "inductive",
+    "coinductive", "nominal_inductive"
+  )
+
+  private[assistant] val proofClosers: Set[String] = Set(
+    "qed", "done", "end", "sorry", "oops", "\\<close>"
+  )
+
   /** Get the goal state text at the given buffer offset.
    *  Returns None if no goal is available (e.g., outside a proof context). */
   def getGoalState(buffer: JEditBuffer, offset: Int): Option[String] = {
@@ -62,54 +72,54 @@ object GoalExtractor {
     Document_Model.get_model(buffer).flatMap { model =>
       val snapshot = Document_Model.snapshot(model)
       val output = PIDE.editor.output(snapshot, offset)
+      analyzeGoalFromMessages(
+        output.messages,
+        extractFreeVarsFromCommand(snapshot, offset)
+      )
+    }
+  }
 
-      if (output.messages.isEmpty) None
+  private[assistant] def analyzeGoalFromMessages(
+    messages: List[XML.Tree],
+    fallbackFreeVars: List[String] = Nil
+  ): Option[GoalAnalysis] = {
+    if (messages.isEmpty) None
+    else {
+      val text = messages.map(elem => XML.content(elem).trim).filter(_.nonEmpty).mkString("\n\n")
+      if (text.isEmpty) None
       else {
-        val text = output.messages.map(elem => XML.content(elem).trim).filter(_.nonEmpty).mkString("\n\n")
-        if (text.isEmpty) None
-        else {
-          // Extract free variables and constants from the XML markup
-          val freeVars = scala.collection.mutable.LinkedHashSet[String]()
-          val constants = scala.collection.mutable.LinkedHashSet[String]()
-          var numSubgoals = 0
+        val freeVars = scala.collection.mutable.LinkedHashSet[String]()
+        val constants = scala.collection.mutable.LinkedHashSet[String]()
+        var numSubgoals = 0
 
-          // Walk the XML tree to find FREE, CONST, and subgoal structure
-          // Uses PIDE markup exclusively — no regex on rendered text
-          def walk(tree: XML.Tree): Unit = tree match {
-            case XML.Elem(Markup(Markup.FREE, props), body) =>
-              Markup.Name.unapply(props).foreach(freeVars.add)
-              body.foreach(walk)
-            case XML.Elem(Markup("fixed", props), body) =>
-              // "fixed" variables are also induction candidates
-              Markup.Name.unapply(props).foreach(freeVars.add)
-              body.foreach(walk)
-            case XML.Elem(Markup(Markup.CONSTANT, props), body) =>
-              Markup.Name.unapply(props).foreach { name =>
-                if (!isMetaConstant(name)) constants.add(name)
-              }
-              body.foreach(walk)
-            case XML.Elem(Markup("subgoal", _), body) =>
-              // PIDE marks each subgoal with a "subgoal" element
-              numSubgoals += 1
-              body.foreach(walk)
-            case XML.Elem(_, body) => body.foreach(walk)
-            case XML.Text(_) => // No regex fallback — PIDE markup only
-          }
-
-          output.messages.foreach(walk)
-
-          // If markup didn't give us free vars, try extracting from the
-          // command at offset as a fallback (uses PIDE entity markup)
-          val finalFreeVars = if (freeVars.nonEmpty) freeVars.toList
-          else extractFreeVarsFromCommand(snapshot, offset)
-
-          Some(GoalAnalysis(
-            text = text,
-            freeVars = finalFreeVars,
-            constants = constants.toList,
-            numSubgoals = math.max(numSubgoals, 1) // at least 1 if we have a goal
-          ))
+        def walk(tree: XML.Tree): Unit = tree match {
+          case XML.Elem(Markup(Markup.FREE, props), body) =>
+            Markup.Name.unapply(props).foreach(freeVars.add)
+            body.foreach(walk)
+          case XML.Elem(Markup("fixed", props), body) =>
+            Markup.Name.unapply(props).foreach(freeVars.add)
+            body.foreach(walk)
+          case XML.Elem(Markup(Markup.CONSTANT, props), body) =>
+            Markup.Name.unapply(props).foreach { name =>
+              if (!isMetaConstant(name)) constants.add(name)
+            }
+            body.foreach(walk)
+          case XML.Elem(Markup("subgoal", _), body) =>
+            numSubgoals += 1
+            body.foreach(walk)
+          case XML.Elem(_, body) => body.foreach(walk)
+          case XML.Text(_) =>
         }
+
+        messages.foreach(walk)
+        val resolvedFreeVars = if (freeVars.nonEmpty) freeVars.toList else fallbackFreeVars
+
+        Some(GoalAnalysis(
+          text = text,
+          freeVars = resolvedFreeVars,
+          constants = constants.toList,
+          numSubgoals = math.max(numSubgoals, 1)
+        ))
       }
     }
   }
@@ -143,35 +153,29 @@ object GoalExtractor {
    *  commands backwards from the offset, tracking proof opener/closer depth.
    *  Returns true if an unmatched proof opener is found before any closer. */
   def isInProofContext(buffer: JEditBuffer, offset: Int): Boolean = {
-    import scala.util.boundary, boundary.break
     Document_Model.get_model(buffer).exists { model =>
       val snapshot = Document_Model.snapshot(model)
       val node = snapshot.get_node(model.node_name)
       if (node.commands.isEmpty) false
       else {
-        val proofOpeners = Set("proof", "lemma", "theorem", "corollary", "proposition",
-          "schematic_goal", "function", "primrec", "fun", "definition", "inductive",
-          "coinductive", "nominal_inductive")
-        // Note: "by" is intentionally excluded — it terminates a proof without
-        // opening a block, so it shouldn't affect depth tracking of proof...qed nesting.
-        // "next" and "subgoal" are proof-interior commands that separate subgoals but
-        // don't affect the nesting depth of proof...qed blocks.
-        val proofClosers = Set("qed", "done", "end", "sorry", "oops", "\\<close>")
         val commands = node.command_iterator(Text.Range(0, offset + 1)).toList
-        boundary {
-          var depth = 0
-          for ((cmd, _) <- commands.reverseIterator) {
-            // Use PIDE span name — the parsed command keyword, not string splitting
-            val kw = cmd.span.name
-            if (proofClosers.contains(kw)) depth += 1
-            else if (proofOpeners.contains(kw)) {
-              if (depth > 0) depth -= 1
-              else break(true)
-            }
-          }
-          false
+        isInProofContextFromKeywords(commands.map(_._1.span.name))
+      }
+    }
+  }
+
+  private[assistant] def isInProofContextFromKeywords(keywords: Seq[String]): Boolean = {
+    import scala.util.boundary, boundary.break
+    boundary {
+      var depth = 0
+      for (kw <- keywords.reverseIterator) {
+        if (proofClosers.contains(kw)) depth += 1
+        else if (proofOpeners.contains(kw)) {
+          if (depth > 0) depth -= 1
+          else break(true)
         }
       }
+      false
     }
   }
 }

@@ -6,19 +6,23 @@ endif
 
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
+ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
 JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
 SCALA_SWING_JAR ?= $(SCALA_HOME)/lib/scala-swing_3-3.0.0.jar
+JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
+JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
+JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
 SCALA3_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala3-library_3-*.jar)
 SCALA2_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala-library-*.jar)
 SCALA_XML_JAR := $(wildcard $(SCALA_HOME)/lib/scala-xml_3-*.jar)
 
 # AWS SDK JARs
-LIB_JARS := $(wildcard lib/*.jar)
-LIB_CLASSPATH := $(shell echo $(LIB_JARS) | tr ' ' ':')
+LIB_JARS = $(wildcard lib/*.jar)
+LIB_CLASSPATH = $(shell echo $(LIB_JARS) | tr ' ' ':')
 
 BUILD_DIR ?= $(PLUGIN_DIR)/build
 CLASSES_DIR ?= $(BUILD_DIR)/classes
@@ -28,16 +32,17 @@ INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
 # I/Q Plugin (dependency for proof verification features)
 IQ_DIR := $(PLUGIN_DIR)/../iq
 IQ_JAR := $(INSTALL_DIR)/iq_plugin.jar
-IQ_CLASSPATH = $(shell test -f $(IQ_JAR) && echo $(IQ_JAR))
+IQ_BUILD_JAR := $(IQ_DIR)/build/iq_plugin.jar
+IQ_CLASSPATH = $(firstword $(wildcard $(IQ_JAR) $(IQ_BUILD_JAR)))
 
 SCALA_SOURCES := $(wildcard src/*.scala)
 RESOURCE_FILES := $(wildcard resources/*)
 
 TEST_SOURCES := $(wildcard src/test/scala/*.scala)
-SCALATEST_JARS := $(wildcard lib/test/*.jar)
-TEST_CLASSPATH := $(shell echo $(SCALATEST_JARS) | tr ' ' ':')
+SCALATEST_JARS = $(wildcard lib/test/*.jar)
+TEST_CLASSPATH = $(shell echo $(SCALATEST_JARS) | tr ' ' ':')
 
-.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test
+.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-test-sanity verify-test-coverage
 
 all: check-deps iq-install build
 
@@ -53,28 +58,31 @@ iq-clean:
 	$(MAKE) -C $(IQ_DIR) clean
 
 check-deps:
-	@if [ -z "$(LIB_JARS)" ]; then \
-		echo "ERROR: No JAR files found in lib/"; \
-		echo "Run ./fetch-deps.sh first to download AWS SDK dependencies"; \
+	@if ! ls lib/*.jar >/dev/null 2>&1; then \
+		echo "No dependency JARs found in lib/, fetching now..."; \
+		./fetch-deps.sh; \
+	fi
+	@if ! ls lib/*.jar >/dev/null 2>&1; then \
+		echo "ERROR: Dependency fetch did not populate lib/"; \
 		exit 1; \
 	fi
 
-build: $(JAR_FILE)
+build: iq-build check-deps $(JAR_FILE)
 	echo "Plugin built successfully: $(JAR_FILE)"
 
 $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources $(CLASSES_DIR)/.libs
 	echo "Creating JAR..."
-	cd $(CLASSES_DIR) && jar cf $(JAR_FILE) .
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
 
 $(CLASSES_DIR)/.libs: $(LIB_JARS) | $(CLASSES_DIR)
 	echo "Extracting library JARs..."
-	cd $(CLASSES_DIR) && for jar in $(LIB_JARS); do jar xf ../../$$jar 2>/dev/null || true; done
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && for jar in $(LIB_JARS); do $(JAR) xf ../../$$jar 2>/dev/null || true; done
 	rm -rf $(CLASSES_DIR)/META-INF/maven $(CLASSES_DIR)/META-INF/*.SF $(CLASSES_DIR)/META-INF/*.RSA
 	touch $@
 
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling..."
-	$(SCALAC) \
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
@@ -105,18 +113,45 @@ clean: iq-clean
 TEST_CLASSES_DIR ?= $(BUILD_DIR)/test-classes
 
 test: build fetch-test-deps
+test: check-test-sanity verify-test-coverage
 	echo "Compiling tests..."
 	mkdir -p $(TEST_CLASSES_DIR)
-	$(SCALAC) \
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH):$(CLASSES_DIR):$(TEST_CLASSPATH)" \
 		-d $(TEST_CLASSES_DIR) \
-		$(TEST_SOURCES) 2>&1 || { echo "Test compilation failed (some tests may require jEdit runtime)"; exit 0; }
+		$(TEST_SOURCES)
 	echo "Running tests..."
-	java -cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR)" \
-		org.scalatest.tools.Runner -R $(TEST_CLASSES_DIR) -o 2>&1 || echo "Some tests failed (integration tests require jEdit runtime)"
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(JAVA) -cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR)" \
+		org.scalatest.tools.Runner -R $(TEST_CLASSES_DIR) -oD
+
+check-test-sanity:
+	@if command -v rg >/dev/null 2>&1; then \
+		! rg -n '\bpending\b' src/test/scala || (echo "ERROR: pending tests are not allowed"; exit 1); \
+		! rg -n '\bignore\s*\(' src/test/scala || (echo "ERROR: ignored tests are not allowed"; exit 1); \
+		! rg -n '\bTODO\b|\bFIXME\b' src/test/scala || (echo "ERROR: TODO/FIXME left in test sources"; exit 1); \
+		! rg -n '\bcatch\b' src/test/scala || (echo "ERROR: catch blocks in tests hide failures; use explicit assertions/intercepts"; exit 1); \
+	else \
+		! grep -R -n -E '\bpending\b' src/test/scala || (echo "ERROR: pending tests are not allowed"; exit 1); \
+		! grep -R -n -E '\bignore[[:space:]]*\(' src/test/scala || (echo "ERROR: ignored tests are not allowed"; exit 1); \
+		! grep -R -n -E '\bTODO\b|\bFIXME\b' src/test/scala || (echo "ERROR: TODO/FIXME left in test sources"; exit 1); \
+		! grep -R -n -E '\bcatch\b' src/test/scala || (echo "ERROR: catch blocks in tests hide failures; use explicit assertions/intercepts"; exit 1); \
+	fi
+
+verify-test-coverage:
+	@if command -v rg >/dev/null 2>&1; then \
+		CHECK_CMD='rg -q -w'; \
+	else \
+		CHECK_CMD='grep -R -q -w'; \
+	fi; \
+	for module in GoalExtractor PromptLoader IQIntegration AssistantOptions AssistantTools VerificationCache LLMResponseCache ResponseParser PayloadBuilder BedrockModels ErrorHandler TargetParser ProofTextUtil ChatAction SuggestAction; do \
+		$$CHECK_CMD "$$module" src/test/scala || { \
+			echo "ERROR: missing test ownership for module $$module"; \
+			exit 1; \
+		}; \
+	done
 
 fetch-test-deps:
-	@if [ -z "$(SCALATEST_JARS)" ]; then \
+	@if ! ls lib/test/*.jar >/dev/null 2>&1; then \
 		echo "Downloading ScalaTest JARs..."; \
 		mkdir -p lib/test; \
 		for jar in \

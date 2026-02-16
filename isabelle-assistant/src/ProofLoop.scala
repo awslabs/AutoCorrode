@@ -111,6 +111,9 @@ object ProofLoop {
       )
     }
 
+  private[assistant] def inductionCandidatesForTest(freeVars: List[String]): List[String] =
+    inductionCandidates(freeVars)
+
   /** 
    * Try a list of proof methods via I/Q, returning the first that succeeds.
    * Used in Phase 0 to test simple one-liner proofs before resorting to sketch-and-fill.
@@ -181,6 +184,9 @@ object ProofLoop {
       case None => "(unknown method)"
     }
   }
+
+  private[assistant] def findReplacementForTest(oldProof: String, newProof: String): String =
+    findReplacement(oldProof, newProof)
 
   // --- Proof planning ---
 

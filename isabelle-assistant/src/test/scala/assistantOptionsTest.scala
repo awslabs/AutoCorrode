@@ -7,67 +7,80 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 /**
- * Tests for AssistantOptions: setting key resolution and unknown-key handling.
- *
- * Tests that require jEdit runtime (getSetting, setSetting with actual values)
- * are guarded by try/catch since jEdit.getProperty is unavailable in unit tests.
+ * Tests for AssistantOptions pure parsing and key resolution helpers.
  */
 class AssistantOptionsTest extends AnyFunSuite with Matchers {
 
-  test("getSetting should return None for unknown keys") {
-    // This only exercises the settingsByKey lookup, not jEdit
-    AssistantOptions.getSetting("nonexistent_key") shouldBe None
-    AssistantOptions.getSetting("") shouldBe None
-    AssistantOptions.getSetting("foobar_baz") shouldBe None
-  }
-
-  test("setSetting should return None for unknown keys") {
-    // This only exercises the settingsByKey lookup, not jEdit
-    AssistantOptions.setSetting("nonexistent_key", "value") shouldBe None
-    AssistantOptions.setSetting("", "value") shouldBe None
-  }
-
-  test("setting key normalization should handle hyphens and case") {
-    // Test that hyphenated and underscored versions resolve the same way
-    // Both should resolve to the same SettingDef (or both be None for unknown)
-    AssistantOptions.getSetting("nonexistent-key") shouldBe None // normalized to nonexistent_key → None
-    AssistantOptions.getSetting("NONEXISTENT") shouldBe None // normalized to nonexistent → None
-  }
-
-  test("known setting keys should be recognized (if jEdit available)") {
-    // This test exercises the full path through snapshot, which requires jEdit.
-    // In unit test environment, it will throw — we just verify the key lookup works.
-    val knownKeys = List(
-      "region", "model", "cris", "temperature", "max_tokens",
-      "max_tool_iterations", "max_retries", "verify_timeout",
-      "verify_suggestions", "use_sledgehammer", "sledgehammer_timeout",
-      "quickcheck_timeout", "nitpick_timeout", "max_verify_candidates",
-      "find_theorems_limit", "find_theorems_timeout", "trace_timeout",
-      "trace_depth", "prove_max_steps", "prove_retries",
-      "prove_step_timeout", "prove_branches", "prove_timeout"
+  private def parse(
+    props: Map[String, String] = Map.empty,
+    bools: Map[String, Boolean] = Map.empty
+  ): AssistantOptions.SettingsSnapshot =
+    AssistantOptions.parseSnapshot(
+      (k, d) => props.getOrElse(k, d),
+      (k, d) => bools.getOrElse(k, d)
     )
-    try {
-      for (key <- knownKeys) {
-        withClue(s"Key '$key' should be recognized: ") {
-          AssistantOptions.getSetting(key) should not be None
-        }
-      }
-    } catch {
-      // jEdit not available in test environment — key lookup worked if we got this far
-      case _: ExceptionInInitializerError => // expected without jEdit
-      case _: NoClassDefFoundError => // expected without jEdit
-      case _: NullPointerException => // jEdit.getProperty returns null
-    }
+
+  test("normalizeKey should lowercase and convert hyphens to underscores") {
+    AssistantOptions.normalizeKeyForTest("VERIFY-TIMEOUT") shouldBe "verify_timeout"
+    AssistantOptions.normalizeKeyForTest("Max_Tokens") shouldBe "max_tokens"
   }
 
-  test("alias keys should resolve (if jEdit available)") {
-    try {
-      AssistantOptions.getSetting("cris") shouldBe AssistantOptions.getSetting("use_cris")
-      AssistantOptions.getSetting("sledgehammer") shouldBe AssistantOptions.getSetting("use_sledgehammer")
-    } catch {
-      case _: ExceptionInInitializerError => // expected without jEdit
-      case _: NoClassDefFoundError => // expected without jEdit
-      case _: NullPointerException => // jEdit.getProperty returns null
-    }
+  test("known settings and aliases should resolve") {
+    AssistantOptions.hasSettingKey("region") shouldBe true
+    AssistantOptions.hasSettingKey("verify-timeout") shouldBe true
+    AssistantOptions.hasSettingKey("use_cris") shouldBe true
+    AssistantOptions.hasSettingKey("sledgehammer") shouldBe true
+    AssistantOptions.hasSettingKey("does_not_exist") shouldBe false
+  }
+
+  test("parseSnapshot should sanitize invalid region/model values") {
+    val snapshot = parse(Map(
+      "assistant.aws.region" -> "!!!",
+      "assistant.model.id" -> "bad model id with spaces"
+    ))
+    snapshot.region shouldBe "us-east-1"
+    snapshot.baseModelId shouldBe ""
+  }
+
+  test("parseSnapshot should clamp numeric values to configured bounds") {
+    val snapshot = parse(Map(
+      "assistant.temperature" -> "-1.0",
+      "assistant.max.tokens" -> "99999999",
+      "assistant.prove.branches" -> "0",
+      "assistant.verify.timeout" -> "1"
+    ))
+    snapshot.temperature shouldBe AssistantConstants.MIN_TEMPERATURE
+    snapshot.maxTokens shouldBe AssistantConstants.MAX_MAX_TOKENS
+    snapshot.proveBranches shouldBe 1
+    snapshot.verifyTimeout shouldBe 5000L
+  }
+
+  test("parseSnapshot should fall back to defaults for non-numeric values") {
+    val snapshot = parse(Map(
+      "assistant.temperature" -> "not-a-number",
+      "assistant.max.tokens" -> "nan",
+      "assistant.prove.timeout" -> "oops"
+    ))
+    snapshot.temperature shouldBe AssistantConstants.DEFAULT_TEMPERATURE
+    snapshot.maxTokens shouldBe AssistantConstants.DEFAULT_MAX_TOKENS
+    snapshot.proveTimeout shouldBe AssistantConstants.DEFAULT_PROVE_TIMEOUT
+  }
+
+  test("parseSnapshot should honor boolean flags and defaults") {
+    val defaults = parse()
+    defaults.useCris shouldBe true
+    defaults.verifySuggestions shouldBe true
+    defaults.useSledgehammer shouldBe false
+
+    val overridden = parse(
+      bools = Map(
+        "assistant.use.cris" -> false,
+        "assistant.verify.suggestions" -> false,
+        "assistant.use.sledgehammer" -> true
+      )
+    )
+    overridden.useCris shouldBe false
+    overridden.verifySuggestions shouldBe false
+    overridden.useSledgehammer shouldBe true
   }
 }

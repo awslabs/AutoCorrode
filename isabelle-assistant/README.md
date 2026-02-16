@@ -254,10 +254,16 @@ Enabled by default. Automatically prefixes model IDs with `us.` or `eu.` for sup
 ```bash
 make help       # Show available targets
 make build      # Build the plugin
+make test       # Compile and run the full strict unit test suite (CI-gating)
 make install    # Build and install (includes I/Q)
 make clean      # Remove build artifacts
 make debug      # Show build configuration
 ```
+
+`make test` is intentionally strict:
+- It fails on any test compile/runtime failure.
+- It rejects `pending`/ignored tests and broad exception-swallowing in test sources.
+- It enforces ownership checks for critical modules.
 
 ## License
 

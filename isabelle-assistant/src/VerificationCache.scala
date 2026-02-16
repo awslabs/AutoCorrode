@@ -27,8 +27,29 @@ object VerificationCache {
     Option(cache.get(key)).map(_.result)
   }
 
+  private[assistant] def getByKey(
+    nodeName: String,
+    commandId: Long,
+    commandSource: String,
+    proofText: String
+  ): Option[IQIntegration.VerificationResult] = synchronized {
+    val key = CacheKey(nodeName, commandId, commandSource, proofText)
+    Option(cache.get(key)).map(_.result)
+  }
+
   def put(command: Command, proofText: String, result: IQIntegration.VerificationResult): Unit = synchronized {
     val key = CacheKey(command.node_name.node, command.id, command.source, proofText)
+    cache.put(key, CacheEntry(result, System.currentTimeMillis()))
+  }
+
+  private[assistant] def putByKey(
+    nodeName: String,
+    commandId: Long,
+    commandSource: String,
+    proofText: String,
+    result: IQIntegration.VerificationResult
+  ): Unit = synchronized {
+    val key = CacheKey(nodeName, commandId, commandSource, proofText)
     cache.put(key, CacheEntry(result, System.currentTimeMillis()))
   }
 

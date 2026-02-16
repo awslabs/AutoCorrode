@@ -221,7 +221,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
   }
 
   /** Parse the PROOF_COMPLETE/PROOF_STATE header from isar_explore output. */
-  private def parseStepResult(text: String, timeMs: Long): ProofStepResult = {
+  private[assistant] def parseStepResult(text: String, timeMs: Long): ProofStepResult = {
     val lines = text.linesIterator
     if (!lines.hasNext) return ProofStepResult(complete = true, numSubgoals = 0, stateText = "", timeMs = timeMs)
     val header = lines.next()
