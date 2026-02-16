@@ -27,6 +27,9 @@ object AssistantDockable {
   @volatile private var _busyStartTime = 0L
 
   def setInstance(d: AssistantDockable): Unit = synchronized { instance = Some(d) }
+  def clearInstance(d: AssistantDockable): Unit = synchronized {
+    if (instance.contains(d)) instance = None
+  }
 
   def isCancelled: Boolean = _cancelled
 
@@ -90,6 +93,19 @@ object AssistantDockable {
 
   def refreshModelLabel(): Unit =
     instance.foreach(d => GUI_Thread.later { d.updateModelLabel() })
+
+  /** Global teardown hook used from plugin stop to avoid leaked dockable state/subscriptions. */
+  def shutdown(): Unit = {
+    val current = synchronized { instance }
+    current.foreach(_.disposeDockable())
+    synchronized {
+      instance = None
+      clearInsertActions()
+      _cancelled = false
+      _busy = false
+      _busyStartTime = 0L
+    }
+  }
 }
 
 /**
@@ -101,6 +117,13 @@ object AssistantDockable {
 class AssistantDockable(view: View, position: String) extends Dockable(view, position) {
 
   AssistantDockable.setInstance(this)
+  private[this] val statusSubscription =
+    AssistantStatusSubscription.create(
+      PIDE.session,
+      s"assistant-status-${System.identityHashCode(this)}",
+      _ => GUI_Thread.later { updateAssistantStatus() }
+    )
+  @volatile private[this] var disposed = false
 
   // Display state — MUST be declared before initializeUI() runs
   private val displayLock = new Object()
@@ -392,9 +415,20 @@ class AssistantDockable(view: View, position: String) extends Dockable(view, pos
       override def mouseClicked(e: java.awt.event.MouseEvent): Unit = showAssistantHelp()
     })
 
-    PIDE.session.commands_changed += Session.Consumer("assistant-status") { _ =>
-      GUI_Thread.later { updateAssistantStatus() }
+    statusSubscription.start()
+  }
+
+  private[assistant] def disposeDockable(): Unit = synchronized {
+    if (!disposed) {
+      disposed = true
+      statusSubscription.stop()
+      AssistantDockable.clearInstance(this)
     }
+  }
+
+  override def exit(): Unit = {
+    disposeDockable()
+    super.exit()
   }
 
   private def clearChat(): Unit = {

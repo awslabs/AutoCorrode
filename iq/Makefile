@@ -8,11 +8,14 @@ endif
 # Paths (configurable via environment variables)
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
+ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
 JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
+JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
+JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
 
 # Output directories (configurable via environment variables)
 BUILD_DIR ?= $(PLUGIN_DIR)/build
@@ -39,12 +42,12 @@ build: $(JAR_FILE)
 # Create JAR file
 $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
 	echo "Creating JAR file..."
-	cd $(CLASSES_DIR) && jar cf $(JAR_FILE) .
+	cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
 
 # Compile Scala sources
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling Scala sources..."
-	$(SCALAC) \
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)

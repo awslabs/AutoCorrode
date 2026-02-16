@@ -16,6 +16,7 @@ SCALA_SWING_JAR ?= $(SCALA_HOME)/lib/scala-swing_3-3.0.0.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
 JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
+JAVA_ENV = $(if $(JAVA_HOME),JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH",)
 SCALA3_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala3-library_3-*.jar)
 SCALA2_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala-library-*.jar)
 SCALA_XML_JAR := $(wildcard $(SCALA_HOME)/lib/scala-xml_3-*.jar)
@@ -72,17 +73,17 @@ build: iq-build check-deps $(JAR_FILE)
 
 $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources $(CLASSES_DIR)/.libs
 	echo "Creating JAR..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
+	cd $(CLASSES_DIR) && $(JAVA_ENV) $(JAR) cf $(JAR_FILE) .
 
 $(CLASSES_DIR)/.libs: $(LIB_JARS) | $(CLASSES_DIR)
 	echo "Extracting library JARs..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && for jar in $(LIB_JARS); do $(JAR) xf ../../$$jar 2>/dev/null || true; done
+	cd $(CLASSES_DIR) && for jar in $(LIB_JARS); do $(JAVA_ENV) $(JAR) xf ../../$$jar 2>/dev/null || true; done
 	rm -rf $(CLASSES_DIR)/META-INF/maven $(CLASSES_DIR)/META-INF/*.SF $(CLASSES_DIR)/META-INF/*.RSA
 	touch $@
 
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
+	$(JAVA_ENV) $(SCALAC) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
@@ -112,16 +113,15 @@ clean: iq-clean
 
 TEST_CLASSES_DIR ?= $(BUILD_DIR)/test-classes
 
-test: build fetch-test-deps
-test: check-test-sanity verify-test-coverage
+test: build fetch-test-deps check-test-sanity verify-test-coverage
 	echo "Compiling tests..."
 	mkdir -p $(TEST_CLASSES_DIR)
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
+	$(JAVA_ENV) $(SCALAC) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH):$(CLASSES_DIR):$(TEST_CLASSPATH)" \
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
 	echo "Running tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(JAVA) -cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR)" \
+	$(JAVA_ENV) $(JAVA) -cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR)" \
 		org.scalatest.tools.Runner -R $(TEST_CLASSES_DIR) -oD
 
 check-test-sanity:
@@ -143,7 +143,7 @@ verify-test-coverage:
 	else \
 		CHECK_CMD='grep -R -q -w'; \
 	fi; \
-	for module in GoalExtractor PromptLoader IQIntegration AssistantOptions AssistantTools VerificationCache LLMResponseCache ResponseParser PayloadBuilder BedrockModels ErrorHandler TargetParser ProofTextUtil ChatAction SuggestAction; do \
+	for module in GoalExtractor PromptLoader IQIntegration AssistantOptions AssistantTools AssistantStatusSubscription VerificationCache LLMResponseCache ResponseParser PayloadBuilder BedrockModels ErrorHandler TargetParser ProofTextUtil ChatAction SuggestAction; do \
 		$$CHECK_CMD "$$module" src/test/scala || { \
 			echo "ERROR: missing test ownership for module $$module"; \
 			exit 1; \
@@ -196,6 +196,7 @@ debug:
 	echo "JEDIT_JAR     = $(JEDIT_JAR)"
 	echo "ISABELLE_JAR  = $(ISABELLE_JAR)"
 	echo "SCALA_HOME    = $(SCALA_HOME)"
+	echo "JAVA_HOME     = $(JAVA_HOME)"
 	echo "LIB_JARS      = $(LIB_JARS)"
 	echo "IQ_JAR        = $(IQ_JAR)"
 	echo "IQ_AVAILABLE  = $(if $(IQ_CLASSPATH),yes,no)"

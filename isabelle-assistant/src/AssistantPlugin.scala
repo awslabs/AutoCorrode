@@ -15,6 +15,7 @@ class AssistantPlugin extends EBPlugin {
 
   override def stop(): Unit = {
     Output.writeln("Isabelle Assistant stopping...")
+    AssistantDockable.shutdown()
     BedrockClient.cleanup()
     ErrorHandler.cleanupAll()
     VerificationCache.clear()
