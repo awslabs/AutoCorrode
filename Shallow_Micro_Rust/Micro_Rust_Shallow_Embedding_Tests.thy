@@ -444,6 +444,66 @@ value[simp]\<open>\<lbrakk>
   ((if True { 0 } else { 1 }, True), False)
 \<rbrakk>\<close>
 
+subsubsection\<open>Rust-Style Optional Semicolons for Block-Like Statements\<close>
+
+term\<open>\<lbrakk>
+  if True {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if True {
+    ()
+  } else {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if let Some(_) = Some(()) {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if let Some(_) = Some(()) {
+    ()
+  } else {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  match Some(()) {
+    Some(_) \<Rightarrow> (),
+    _ \<Rightarrow> ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let lst = \<llangle>(1 :: 32 word, 2 :: 32 word, TNil) # []\<rrangle>;
+  for (a, b) in lst {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>(FunctionBody \<lbrakk>
+  { () }
+  ()
+\<rbrakk>)\<close>
+
+term\<open>\<lbrakk>
+  unsafe { () }
+  ()
+\<rbrakk>\<close>
+
 subsection\<open>Control Flow - If-Let and Let-Else\<close>
 
 subsubsection\<open>If-Let with Option\<close>

@@ -282,6 +282,32 @@ syntax
   "_urust_if_let_else" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) } else { (_) }" [100,20,0,0]11)
 
+  \<comment>\<open>Rust-style statement sequencing: block-like expressions may omit a trailing semicolon.\<close>
+  "_urust_sequence_if_then_else"
+    :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if/ _/ / {/ _/ }/ else/ {/ _/ }/ _" [20,0,0,10]10)
+  "_urust_sequence_if_then"
+    :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if/ _/ / {/ _/ }/ _" [20,0,10]10)
+  "_urust_sequence_for_loop"
+    :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("for _ in (_) {/ _/ }/ _" [100,20,0,10]10)
+  "_urust_sequence_if_let"
+    :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if let _ = (_) { (_) }/ _" [100,20,0,10]10)
+  "_urust_sequence_if_let_else"
+    :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if let _ = (_) { (_) } else { (_) }/ _" [100,20,0,0,10]10)
+  "_urust_sequence_temporary_match"
+    :: \<open>urust \<Rightarrow> urust_match_branches \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("match (_) {/ _/ }/ _" [20,10,10]10)
+  "_urust_sequence_scoping"
+    :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("{/ _/ }/ _" [0,10]10)
+  "_urust_sequence_unsafe_block"
+    :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("unsafe/ {/ _ /}/ _" [0,10]10)
+
   \<comment> \<open>We distinguish two types of matches. The first is the usual \<^verbatim>\<open>case\<close> on datatypes.
       The second is more of a C-style \<^verbatim>\<open>switch\<close> statement via a match. It is hard to distinguish
       these at first parsing time. Instead, we distinguish them via a \<^emph>\<open>parse AST translation\<close>. The
@@ -435,6 +461,16 @@ syntax
   "_urust_word_assign_shift_right"
      :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr ">>=" 40)
+
+translations
+  "_urust_sequence_if_then_else c t e next" => "_urust_sequence (_urust_if_then_else c t e) next"
+  "_urust_sequence_if_then c t next" => "_urust_sequence (_urust_if_then c t) next"
+  "_urust_sequence_for_loop x iter body next" => "_urust_sequence (_urust_for_loop x iter body) next"
+  "_urust_sequence_if_let ptrn exp this next" => "_urust_sequence (_urust_if_let ptrn exp this) next"
+  "_urust_sequence_if_let_else ptrn exp this that next" =>
+    "_urust_sequence (_urust_if_let_else ptrn exp this that) next"
+  "_urust_sequence_scoping body next" => "_urust_sequence (_urust_scoping body) next"
+  "_urust_sequence_unsafe_block body next" => "_urust_sequence (_urust_unsafe_block body) next"
 
 subsection\<open>Breaking long identifiers\<close>
 
@@ -809,15 +845,15 @@ parse_ast_translation\<open>
       orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_zero\<close>)
       orelse (pat = \<^syntax_const>\<open>_urust_match_pattern_one\<close>)
 
-    \<comment> \<open>Replace a \<^verbatim>\<open>_urust_temporary_match\<close> AST node with arguments \<^verbatim>\<open>[arg, branches]\<close> with the
-        appropriate match AST node\<close>
-    fun match_selector ctx [arg, branches] =
+    \<comment> \<open>Determine whether a temporary match should become \<^verbatim>\<open>match_case\<close> or \<^verbatim>\<open>match_switch\<close>.\<close>
+    fun match_selector_hd branches =
       let
         val patterns = branches_ast_to_pattern_list branches
         val has_guard = branches_ast_has_guard branches
         val is_match_case = has_guard orelse (patterns |> List.all pat_is_match_case)
         val is_match_select = (not has_guard) andalso (patterns |> List.all pat_is_match_switch)
-        val new_hd = (
+      in
+        (
           \<comment> \<open>Note that we default to \<^verbatim>\<open>is_match_case\<close>! If you explicitly want your match to be
               parsed as a switch statement, use \<^verbatim>\<open>match_switch {...}\<close>\<close>
           if is_match_case then \<^syntax_const>\<open>_urust_match_case\<close>
@@ -833,13 +869,28 @@ parse_ast_translation\<open>
             end
           )
         )
-      in
-        Ast.mk_appl (Ast.Constant new_hd) [arg, branches]
       end
+
+    \<comment> \<open>Replace a \<^verbatim>\<open>_urust_temporary_match\<close> AST node with arguments \<^verbatim>\<open>[arg, branches]\<close> with the
+        appropriate match AST node\<close>
+    fun match_selector _ [arg, branches] =
+      Ast.mk_appl (Ast.Constant (match_selector_hd branches)) [arg, branches]
       | match_selector _ args =
           Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_match\<close>) args
+
+    \<comment> \<open>Semicolon-free statement form: \<^verbatim>\<open>match ... { ... } next\<close> desugars to sequencing after
+        first disambiguating temporary match syntax.\<close>
+    fun match_sequence_selector _ [arg, branches, next] =
+      let
+        val selected_match = Ast.mk_appl (Ast.Constant (match_selector_hd branches)) [arg, branches]
+      in
+        Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_sequence\<close>) [selected_match, next]
+      end
+      | match_sequence_selector _ args =
+          Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_sequence_temporary_match\<close>) args
   in [
-    (\<^syntax_const>\<open>_urust_temporary_match\<close>, match_selector)
+    (\<^syntax_const>\<open>_urust_temporary_match\<close>, match_selector),
+    (\<^syntax_const>\<open>_urust_sequence_temporary_match\<close>, match_sequence_selector)
   ] end
 \<close>
 
