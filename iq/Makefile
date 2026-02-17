@@ -13,6 +13,7 @@ JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
+SCALA ?= $(SCALA_HOME)/bin/scala
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
@@ -22,11 +23,13 @@ JAVA_ENV = $(if $(JAVA_HOME),JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$P
 # Output directories (configurable via environment variables)
 BUILD_DIR ?= $(PLUGIN_DIR)/build
 CLASSES_DIR ?= $(BUILD_DIR)/classes
+TEST_CLASSES_DIR ?= $(BUILD_DIR)/test-classes
 JAR_FILE ?= $(BUILD_DIR)/iq_plugin.jar
 INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025/jedit/jars
 
 # Source files
 SCALA_SOURCES := $(wildcard src/*.scala)
+TEST_SOURCES := $(wildcard test/*.scala)
 RESOURCE_FILES := $(wildcard resources/*)
 
 # Default target
@@ -41,10 +44,19 @@ build: $(JAR_FILE)
 	echo "Plugin built successfully!"
 	echo "JAR file: $(JAR_FILE)"
 
+# Test target
+.PHONY: test
+test: build $(TEST_CLASSES_DIR)/.compiled
+	echo "Running I/Q line/offset tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		IQLineOffsetUtilsTest
+	echo "I/Q tests passed."
+
 # Create JAR file
 $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
 	echo "Creating JAR file..."
-	cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
 
 # Compile Scala sources
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
@@ -64,6 +76,17 @@ $(CLASSES_DIR)/.resources: $(RESOURCE_FILES) | $(CLASSES_DIR)
 # Create build directories
 $(CLASSES_DIR):
 	mkdir -p $(CLASSES_DIR)
+
+$(TEST_CLASSES_DIR):
+	mkdir -p $(TEST_CLASSES_DIR)
+
+$(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST_CLASSES_DIR)
+	echo "Compiling I/Q tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
+		-classpath "$(CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-d $(TEST_CLASSES_DIR) \
+		$(TEST_SOURCES)
+	touch $@
 
 # Install target
 .PHONY: install
@@ -102,6 +125,7 @@ help:
 	echo "Available targets:"
 	echo "  all       - Build the plugin (default)"
 	echo "  build     - Build the plugin JAR file"
+	echo "  test      - Build and run line/offset regression tests"
 	echo "  install   - Build and install the plugin"
 	echo "  clean     - Remove build directory"
 	echo "  uninstall - Remove installed plugin"

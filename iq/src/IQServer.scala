@@ -79,6 +79,97 @@ case class DocumentStatusInfo(
   unprocessed: Int
 )
 
+object IQLineOffsetUtils {
+  private def clamp(value: Int, min: Int, max: Int): Int = {
+    if (max < min) min else math.max(min, math.min(max, value))
+  }
+
+  def splitLines(text: String): Array[String] = text.split("\n", -1)
+
+  private def safeTotalLines(totalLines: Int): Int = math.max(1, totalLines)
+
+  def normalizeLineIndex(totalLines: Int, line: Int): Int = {
+    val safeTotal = safeTotalLines(totalLines)
+    val rawIndex = if (line < 0) safeTotal + line else line - 1
+    clamp(rawIndex, 0, safeTotal - 1)
+  }
+
+  def normalizeLineRange(totalLines: Int, startLine: Int, endLine: Int): (Int, Int) = {
+    val start = normalizeLineIndex(totalLines, startLine)
+    val end = normalizeLineIndex(totalLines, endLine)
+    if (start <= end) (start, end) else (end, start)
+  }
+
+  def normalizeLineBoundary(totalLines: Int, line: Int, increment: Boolean = false): Int = {
+    val safeTotal = safeTotalLines(totalLines)
+    val rawIndex = if (line < 0) safeTotal + line else line - 1
+    val adjusted = rawIndex + (if (increment) 1 else 0)
+    clamp(adjusted, 0, safeTotal)
+  }
+
+  def clampOffset(offset: Int, textLength: Int): Int =
+    clamp(offset, 0, math.max(0, textLength))
+
+  def normalizeOffsetRange(startOffset: Int, endOffset: Int, textLength: Int): (Int, Int) = {
+    val start = clampOffset(startOffset, textLength)
+    val end = clampOffset(endOffset, textLength)
+    if (start <= end) (start, end) else (end, start)
+  }
+
+  private def lineStartOffsets(text: String): Array[Int] = {
+    val starts = scala.collection.mutable.ArrayBuffer[Int](0)
+    var i = 0
+    while (i < text.length) {
+      if (text.charAt(i) == '\n') starts += (i + 1)
+      i += 1
+    }
+    starts.toArray
+  }
+
+  def lineNumberToOffset(
+    text: String,
+    line: Int,
+    increment: Boolean = false,
+    withLastNewLine: Boolean = true
+  ): Int = {
+    val starts = lineStartOffsets(text)
+    val totalLines = starts.length
+    val boundaryIndex = normalizeLineBoundary(totalLines, line, increment = increment)
+    val boundaryOffset =
+      if (boundaryIndex >= totalLines) text.length
+      else starts(boundaryIndex)
+
+    val correctedOffset =
+      if (!withLastNewLine && boundaryOffset > 0 && text.charAt(boundaryOffset - 1) == '\n') {
+        boundaryOffset - 1
+      } else {
+        boundaryOffset
+      }
+
+    clampOffset(correctedOffset, text.length)
+  }
+
+  def formatLinesWithNumbers(
+    lines: Array[String],
+    startLine: Int,
+    endLine: Int,
+    highlightLine: Option[Int] = None
+  ): String = {
+    if (lines.isEmpty) return ""
+
+    val clampedStart = clamp(startLine, 0, lines.length - 1)
+    val clampedEnd = clamp(endLine, 0, lines.length - 1)
+    if (clampedStart > clampedEnd) return ""
+
+    val builder = new StringBuilder()
+    for (i <- clampedStart to clampedEnd) {
+      val prefix = if (Some(i) == highlightLine) "→ " else "  "
+      builder.append(f"$prefix${i + 1}%d:${lines(i)}\n")
+    }
+    builder.toString()
+  }
+}
+
 // TODO: The code uses seemingly random negative error IDs. Explain where
 // they come from if the values matter, or otherwise introduce an enum.
 
@@ -1164,7 +1255,7 @@ class IQServer(port: Int = 8765) {
       case _ => None
     }
 
-    val (content, model, startOffset, endOffset) = (mode, filePath, startLineOpt, endLineOpt, startOffsetOpt, endOffsetOpt) match {
+    val (content, model, startOffsetRaw, endOffsetRaw) = (mode, filePath, startLineOpt, endLineOpt, startOffsetOpt, endOffsetOpt) match {
       case (Some ("line"), Some (filePath), Some (startLine), Some(endLine), _, _) =>
         // Lookup buffer associated with file
         val (content, model) = getFileContentAndModel(filePath) match {
@@ -1203,6 +1294,8 @@ class IQServer(port: Int = 8765) {
 
       case _ => return Right(s"Unknown mode $mode or invalid parameters for mode.")
     }
+    val (startOffset, endOffset) =
+      IQLineOffsetUtils.normalizeOffsetRange(startOffsetRaw, endOffsetRaw, content.length)
 
     val waitUntilProcessed = params.get("wait_until_processed") match {
       case Some(value: Boolean) => value
@@ -1725,35 +1818,13 @@ class IQServer(port: Int = 8765) {
     }
   }
 
-  private def prepareLineNumber(totalLines: Int, line: Int, increment: Boolean = false): Int = {
-    val inc = if (increment) { 1 } else { 0 }
-    if (line < 0) {
-      totalLines + line
-    } else {
-      line - 1 // Convert to 0-based offset
-    } + inc
-  }
-
   private def lineNumberToOffset(text: String, line: Int, increment: Boolean = false, withLastNewLine: Boolean = true): Int = {
-    val lines = text.split("\n", -1) // -1 to preserve empty trailing elements
-    val totalLines = lines.length
-
-    val adjustedLine = prepareLineNumber(totalLines, line, increment=increment)
-    val lineIdx = math.min(totalLines, math.max(0, adjustedLine))
-
-    // Calculate offset and return as Some
-    val offset = lines.take(lineIdx).map(_.length + 1).sum
-
-    // Special cases: Don't count a newline character for the last line,
-    // or if withLastNewLine is unset.
-    val correctedOffset =
-      if (withLastNewLine == false || line == totalLines) {
-        offset - 1
-      } else {
-        offset
-      }
-
-    correctedOffset
+    IQLineOffsetUtils.lineNumberToOffset(
+      text,
+      line,
+      increment = increment,
+      withLastNewLine = withLastNewLine
+    )
   }
 
   /**
@@ -2126,7 +2197,7 @@ class IQServer(port: Int = 8765) {
       case _ => return Left(s"$filePath is not opened in jEdit")
     }
 
-    val (startOffset, endOffset, text): (Int, Int, String) = command match {
+    val (startOffsetRaw, endOffsetRaw, text): (Int, Int, String) = command match {
       case "line" =>
         val new_str: String = params.get("new_str") match {
           case Some(s: String) => s
@@ -2190,7 +2261,10 @@ class IQServer(port: Int = 8765) {
       case _ => return Left(s"command $command not implemented")
     }
 
-    Output.writeln(s"I/Q Server: Writing to theory file: $filePath (waitUntilProcessed: $waitUntilProcessed, timeout: ${timeoutMs.getOrElse(0)}ms)")
+    val (startOffset, endOffset) =
+      IQLineOffsetUtils.normalizeOffsetRange(startOffsetRaw, endOffsetRaw, content.length)
+
+    Output.writeln(s"I/Q Server: Writing to theory file: $filePath (waitUntilProcessed: $waitUntilProcessed, timeout: ${timeoutMs.getOrElse(0)}ms, range: $startOffset-$endOffset)")
 
     // Delegate to existing resource write logic
     GUI_Thread.now {
@@ -2411,12 +2485,7 @@ end"""
     endLine: Int,
     highlightLine: Option[Int] = None
   ): String = {
-    val builder = new StringBuilder()
-    for (i <- startLine to endLine) {
-      val prefix = if (Some(i) == highlightLine) "→ " else "  "
-      builder.append(f"$prefix${i+1}%d:${lines(i)}\n")
-    }
-    builder.toString()
+    IQLineOffsetUtils.formatLinesWithNumbers(lines, startLine, endLine, highlightLine)
   }
 
   private def readTheoryFile(filePath: String, startLine: Int, endLine: Int): Option[String] = {
@@ -2426,10 +2495,10 @@ end"""
       case _ => return None
     }
 
-    val lines = content.split("\n", -1) // -1 to preserve empty trailing elements
+    val lines = IQLineOffsetUtils.splitLines(content)
     val totalLines = lines.length
-    val startAdjusted = prepareLineNumber(totalLines, startLine)
-    val endAdjusted = prepareLineNumber(totalLines, endLine, increment=true)
+    val (startAdjusted, endAdjusted) =
+      IQLineOffsetUtils.normalizeLineRange(totalLines, startLine, endLine)
 
     Some(formatLinesWithNumbers(lines, startAdjusted, endAdjusted, None))
   }
@@ -2450,8 +2519,9 @@ end"""
     }
 
     // Split content into lines
-    val lines = content.split("\n", -1)
+    val lines = IQLineOffsetUtils.splitLines(content)
     val totalLines = lines.length
+    val safeContextLines = math.max(0, contextLines)
 
     // Create a regex pattern (case insensitive)
     val regex = s"(?i)$pattern".r
@@ -2466,8 +2536,8 @@ end"""
       val lineNum = lineIdx + 1  // Convert to 1-based
 
       // Calculate context range
-      val startLine = math.max(0, lineIdx - contextLines)
-      val endLine = math.min(totalLines - 1, lineIdx + contextLines)
+      val startLine = math.max(0, lineIdx - safeContextLines)
+      val endLine = math.min(totalLines - 1, lineIdx + safeContextLines)
 
       // Create match object - use a List of tuples instead of Map for better JSON serialization
       Map(
