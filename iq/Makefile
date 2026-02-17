@@ -29,8 +29,8 @@ INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
 
 # Source files
 SCALA_SOURCES := $(wildcard src/*.scala)
-TEST_SOURCES := $(wildcard test/*.scala)
 RESOURCE_FILES := $(wildcard resources/*)
+TEST_SOURCES := $(wildcard test/*.scala) $(wildcard src/test/scala/*.scala)
 
 # Default target
 .PHONY: all
@@ -55,6 +55,10 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		IQArgumentUtilsTest
+	echo "Running I/Q security tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		IQSecurityTest
 	echo "I/Q tests passed."
 
 # Documentation checks
@@ -148,6 +152,7 @@ help:
 	echo "  ISABELLE_HOME - Isabelle installation path (default: $(ISABELLE_HOME))"
 	echo "  SCALA_HOME    - Scala installation path (default: $(SCALA_HOME))"
 	echo "  SCALAC        - Scala compiler path (default: $(SCALAC))"
+	echo "  SCALA         - Scala runner path (default: $(SCALA))"
 	echo "  BUILD_DIR     - Build output directory (default: $(BUILD_DIR))"
 	echo ""
 	echo "Examples:"
@@ -163,10 +168,11 @@ debug:
 	echo "  PLUGIN_DIR    = $(PLUGIN_DIR)"
 	echo "  ISABELLE_HOME = $(ISABELLE_HOME)"
 	echo "  JEDIT_JAR     = $(JEDIT_JAR)"
+	echo "  JAVA_HOME     = $(JAVA_HOME)"
 	echo "  SCALA_HOME    = $(SCALA_HOME)"
 	echo "  SCALAC        = $(SCALAC)"
+	echo "  SCALA         = $(SCALA)"
 	echo "  ISABELLE_JAR  = $(ISABELLE_JAR)"
-	echo "  JAVA_HOME     = $(JAVA_HOME)"
 	echo "  JAVA          = $(JAVA)"
 	echo "  JAR           = $(JAR)"
 	echo "  BUILD_DIR     = $(BUILD_DIR)"
@@ -175,3 +181,4 @@ debug:
 	echo "  INSTALL_DIR   = $(INSTALL_DIR)"
 	echo "  SCALA_SOURCES = $(SCALA_SOURCES)"
 	echo "  RESOURCE_FILES = $(RESOURCE_FILES)"
+	echo "  TEST_SOURCES  = $(TEST_SOURCES)"

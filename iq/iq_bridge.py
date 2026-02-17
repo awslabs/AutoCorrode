@@ -10,12 +10,15 @@ import sys
 import json
 import socket
 import time
+import os
 from typing import Dict, Any, Optional
 
 class MCPBridgeWithReconnect:
     def __init__(self):
         self.isabelle_socket = None
         self.connected = False
+        token = os.environ.get("IQ_MCP_AUTH_TOKEN", "").strip()
+        self.auth_token = token if token else None
 
     def log(self, message: str):
         """Log messages to stderr and file with timestamp."""
@@ -72,6 +75,9 @@ class MCPBridgeWithReconnect:
 
     def forward_to_isabelle(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Forward request to Isabelle server with automatic reconnection."""
+        if self.auth_token and "auth_token" not in request:
+            request["auth_token"] = self.auth_token
+
         method = request.get('method', 'unknown')
 
         # Check if this is a notification (no 'id' field)

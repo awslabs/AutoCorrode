@@ -7,7 +7,7 @@ import isabelle.jedit._
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.nio.file.Files
 import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, OutputStreamWriter}
-import java.net.{ServerSocket, Socket}
+import java.net.{InetAddress, ServerSocket, Socket}
 import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
 import scala.util.{Try, Success, Failure}
 import scala.concurrent.{Future, ExecutionContext}
@@ -290,7 +290,7 @@ object IQArgumentUtils {
  *
  * @param port The port number to listen on (default: 8765)
  */
-class IQServer(port: Int = 8765) {
+class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment()) {
   /**
    * Waits for a theory to be fully processed by marking it as required and polling until completion.
    *
@@ -427,6 +427,7 @@ class IQServer(port: Int = 8765) {
 
   // Timestamp formatter for socket logging
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+  private val clientAddressTL = new ThreadLocal[String]()
 
   /**
    * Gets the current timestamp formatted as HH:mm:ss.SSS
@@ -437,6 +438,50 @@ class IQServer(port: Int = 8765) {
     LocalTime.now().format(timeFormatter)
   }
 
+  private def currentClientAddress(): String = {
+    Option(clientAddressTL.get()).getOrElse("unknown")
+  }
+
+  private def getProvidedAuthToken(json: JSON.T): Option[String] = {
+    def extractToken(value: Any): Option[String] = {
+      value match {
+        case token: String => Option(token.trim).filter(_.nonEmpty)
+        case _ => None
+      }
+    }
+
+    json match {
+      case JSON.Object(obj) =>
+        extractToken(obj.getOrElse("auth_token", null))
+          .orElse {
+            obj.get("params") match {
+              case Some(JSON.Object(params)) => extractToken(params.getOrElse("auth_token", null))
+              case _ => None
+            }
+          }
+      case _ => None
+    }
+  }
+
+  private def logSecurityEvent(message: String): Unit = {
+    Output.writeln(s"I/Q Server [SECURITY]: $message")
+  }
+
+  private def authorizeMutationPath(operation: String, rawPath: String): Either[String, String] = {
+    IQSecurity.resolveMutationPath(rawPath, securityConfig.allowedMutationRoots) match {
+      case Right(canonicalPath) =>
+        logSecurityEvent(
+          s"ALLOW mutation op=$operation client=${currentClientAddress()} requested='$rawPath' canonical='${canonicalPath.toString}'"
+        )
+        Right(canonicalPath.toString)
+      case Left(errorMessage) =>
+        logSecurityEvent(
+          s"DENY mutation op=$operation client=${currentClientAddress()} requested='$rawPath' reason='$errorMessage'"
+        )
+        Left(errorMessage)
+    }
+  }
+
   /**
    * Starts the MCP server.
    *
@@ -445,10 +490,27 @@ class IQServer(port: Int = 8765) {
    */
   def start(): Unit = {
     try {
-      serverSocket = Some(new ServerSocket(port))
+      val bindAddress: InetAddress = IQSecurity.resolveBindAddress(securityConfig.bindHost) match {
+        case Right(address) => address
+        case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
+      }
+      if (!securityConfig.allowRemoteBind && !bindAddress.isLoopbackAddress) {
+        throw new IllegalArgumentException(
+          s"Refusing to bind to non-loopback host '${securityConfig.bindHost}'. " +
+          "Set IQ_MCP_ALLOW_REMOTE_BIND=true to opt in explicitly."
+        )
+      }
+
+      serverSocket = Some(new ServerSocket(port, 50, bindAddress))
       isRunning = true
 
-      Output.writeln(s"I/Q Server starting on port $port")
+      val authEnabled = securityConfig.authToken.isDefined
+      val mutationRoots = securityConfig.allowedMutationRoots.map(_.toString).mkString(", ")
+      Output.writeln(
+        s"I/Q Server starting on ${bindAddress.getHostAddress}:$port " +
+        s"(allow_remote_bind=${securityConfig.allowRemoteBind}, auth_enabled=$authEnabled)"
+      )
+      logSecurityEvent(s"Allowed mutation roots: $mutationRoots")
 
       Future {
         serverSocket.foreach { socket =>
@@ -498,6 +560,8 @@ class IQServer(port: Int = 8765) {
    */
   private def handleClient(clientSocket: Socket): Unit = {
     try {
+      clientAddressTL.set(Option(clientSocket.getRemoteSocketAddress).map(_.toString).getOrElse("unknown"))
+
       // Configure socket for large responses
       clientSocket.setSendBufferSize(65536)  // 64KB send buffer
       clientSocket.setTcpNoDelay(true)       // Disable Nagle's algorithm for immediate sending
@@ -514,9 +578,11 @@ class IQServer(port: Int = 8765) {
       var line: String = null
       while ({ line = reader.readLine(); line != null }) {
         try {
+          val redactedLine = IQSecurity.redactAuthToken(line)
+
           // Log incoming request if logging is enabled
           if (IQCommunicationLogger.isLoggingEnabled) {
-            IQCommunicationLogger.logCommunication(s"${getTimestamp()} [RECV] $line")
+            IQCommunicationLogger.logCommunication(s"${getTimestamp()} [RECV] $redactedLine")
           }
 
           processRequest(line) match {
@@ -528,7 +594,7 @@ class IQServer(port: Int = 8765) {
 
               // Log outgoing response if logging is enabled
               if (IQCommunicationLogger.isLoggingEnabled) {
-                IQCommunicationLogger.logCommunication(s"${getTimestamp()} [SEND] $response")
+                IQCommunicationLogger.logCommunication(s"${getTimestamp()} [SEND] ${IQSecurity.redactAuthToken(response)}")
               }
 
               // Send response with detailed logging
@@ -567,6 +633,8 @@ class IQServer(port: Int = 8765) {
         IQCommunicationLogger.updateClientStatus(false)
       } catch {
         case _: Exception => // Ignore close errors
+      } finally {
+        clientAddressTL.remove()
       }
     }
   }
@@ -582,12 +650,25 @@ class IQServer(port: Int = 8765) {
    */
   private def processRequest(requestLine: String): Option[String] = {
     try {
-      Output.writeln(s"I/Q Server: Processing request: $requestLine")
+      Output.writeln(s"I/Q Server: Processing request: ${IQSecurity.redactAuthToken(requestLine)}")
 
       val json = JSON.parse(requestLine)
       val (method, id) = extractMethodAndId(json)
 
       Output.writeln(s"I/Q Server: Parsed method='$method', id=$id")
+
+      val providedToken = getProvidedAuthToken(json)
+      if (!IQSecurity.isTokenAuthorized(securityConfig.authToken, providedToken)) {
+        logSecurityEvent(
+          s"DENY unauthorized request method='$method' id=$id client=${currentClientAddress()}"
+        )
+        return id match {
+          case Some(requestId) =>
+            Some(formatErrorResponse(Some(requestId), ErrorCodes.INVALID_REQUEST, "Unauthorized request"))
+          case None =>
+            None
+        }
+      }
 
       id match {
         case Some(requestId) =>
@@ -697,7 +778,7 @@ class IQServer(port: Int = 8765) {
    */
   private def handleToolCallFromJson(json: JSON.T): Either[(Int, String), Map[String, Any]] = {
     try {
-      Output.writeln(s"I/Q Server: Raw JSON for tool call: $json")
+      Output.writeln(s"I/Q Server: Raw JSON for tool call: ${IQSecurity.redactAuthToken(json.toString)}")
 
       val (toolName, params) = extractToolAndParams(json)
       Output.writeln(s"I/Q Server: Extracted tool='$toolName', params=$params")
@@ -2123,7 +2204,7 @@ class IQServer(port: Int = 8765) {
   private def handleOpenFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
 
-    val filePath = params.getOrElse("path", "").toString match {
+    val resolvedPath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
         IQUtils.autoCompleteFilePath(path.trim, trackedOnly = false, allowNonexisting = createIfMissing) match {
           case Right(fullPath) => fullPath
@@ -2131,6 +2212,12 @@ class IQServer(port: Int = 8765) {
         }
       case _ => return Left("path parameter is required")
     }
+    val filePath = if (createIfMissing) {
+      authorizeMutationPath("open_file(create_if_missing=true)", resolvedPath) match {
+        case Right(canonicalPath) => canonicalPath
+        case Left(errorMsg) => return Left(errorMsg)
+      }
+    } else resolvedPath
     val view = params.getOrElse("view", "true").toString.toBoolean
 
     Output.writeln(s"I/Q Server: Opening file: $filePath, create_if_missing: $createIfMissing, view: $view")
@@ -2163,15 +2250,19 @@ class IQServer(port: Int = 8765) {
   }
 
   private def handleCreateFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
-    val filePath = params.getOrElse("path", "").toString
+    val requestedPath = params.getOrElse("path", "").toString
     val content = params.getOrElse("content", "").toString
     val overwriteIfExists = params.getOrElse("overwrite_if_exists", "false").toString.toBoolean
     val view = params.getOrElse("view", "true").toString.toBoolean
 
-    Output.writeln(s"I/Q Server: Creating file: $filePath, overwrite_if_exists: $overwriteIfExists, view: $view")
+    Output.writeln(s"I/Q Server: Creating file: $requestedPath, overwrite_if_exists: $overwriteIfExists, view: $view")
 
-    if (filePath.isEmpty) {
+    if (requestedPath.isEmpty) {
       return Left("path parameter is required")
+    }
+    val filePath = authorizeMutationPath("create_file", requestedPath) match {
+      case Right(canonicalPath) => canonicalPath
+      case Left(errorMsg) => return Left(errorMsg)
     }
 
     try {
@@ -2277,6 +2368,10 @@ class IQServer(port: Int = 8765) {
           case Left(errorMsg) => return Left(errorMsg)
         }
       case _ => return Left("path parameter is required")
+    }
+    authorizeMutationPath("write_file", filePath) match {
+      case Left(errorMsg) => return Left(errorMsg)
+      case Right(_) =>
     }
 
     val waitUntilProcessed = params.get("wait_until_processed") match {
@@ -2412,7 +2507,15 @@ class IQServer(port: Int = 8765) {
   }
 
   private def openFileCommon(filePath: String, createIfMissing: Boolean, inView: Boolean): Map[String, String] = {
-    val file = new java.io.File(filePath)
+    val authorizedPath =
+      if (createIfMissing) {
+        authorizeMutationPath("open_file_common(create)", filePath) match {
+          case Right(path) => path
+          case Left(error) => throw new Exception(error)
+        }
+      } else filePath
+
+    val file = new java.io.File(authorizedPath)
     var fileCreated = false
 
     if (!file.exists() && createIfMissing) {
@@ -2423,9 +2526,9 @@ class IQServer(port: Int = 8765) {
       }
       file.createNewFile()
       fileCreated = true
-      Output.writeln(s"I/Q Server: Created empty file${if (inView) "" else " for buffer"}: $filePath")
+      Output.writeln(s"I/Q Server: Created empty file${if (inView) "" else " for buffer"}: $authorizedPath")
     } else if (!file.exists()) {
-      throw new java.io.FileNotFoundException(s"File does not exist: $filePath")
+      throw new java.io.FileNotFoundException(s"File does not exist: $authorizedPath")
     }
 
     if (inView) {
@@ -2435,14 +2538,14 @@ class IQServer(port: Int = 8765) {
       }
 
       val view = views(0)
-      val buffer = jEdit.openFile(view, filePath)
+      val buffer = jEdit.openFile(view, authorizedPath)
       if (buffer == null) {
-        throw new Exception(s"Failed to open file in jEdit: $filePath")
+        throw new Exception(s"Failed to open file in jEdit: $authorizedPath")
       }
 
       view.setBuffer(buffer)
       view.getTextArea.requestFocus()
-      Output.writeln(s"I/Q Server: Opened file in jEdit: $filePath")
+      Output.writeln(s"I/Q Server: Opened file in jEdit: $authorizedPath")
     } else {
       // Read file content and provide it to document model
       val content = if (file.exists()) {
@@ -2451,14 +2554,14 @@ class IQServer(port: Int = 8765) {
         ""
       }
 
-      val node_name = PIDE.resources.node_name(filePath)
+      val node_name = PIDE.resources.node_name(authorizedPath)
       Document_Model.provide_files(PIDE.session, List((node_name, content)))
 
-      Output.writeln(s"I/Q Server: Provided file to buffer: $filePath")
+      Output.writeln(s"I/Q Server: Provided file to buffer: $authorizedPath")
     }
 
     Map(
-      "path" -> filePath,
+      "path" -> authorizedPath,
       "created" -> fileCreated.toString,
       "opened" -> "true",
       "in_view" -> inView.toString
@@ -2500,22 +2603,26 @@ end"""
   }
 
   private def createFileWithContentCommon(filePath: String, content: String, overwriteIfExists: Boolean, inView: Boolean): Map[String, String] = {
-    val file = new java.io.File(filePath)
+    val authorizedPath = authorizeMutationPath("create_file_common", filePath) match {
+      case Right(path) => path
+      case Left(error) => throw new Exception(error)
+    }
+    val file = new java.io.File(authorizedPath)
     var fileCreated = false
     var fileOverwritten = false
 
     if (file.exists() && !overwriteIfExists) {
-      throw new Exception(s"File already exists and overwrite_if_exists is false: $filePath")
+      throw new Exception(s"File already exists and overwrite_if_exists is false: $authorizedPath")
     } else if (file.exists() && overwriteIfExists) {
       fileOverwritten = true
-      Output.writeln(s"I/Q Server: Overwriting existing file${if (inView) "" else " for buffer"}: $filePath")
+      Output.writeln(s"I/Q Server: Overwriting existing file${if (inView) "" else " for buffer"}: $authorizedPath")
     } else {
       fileCreated = true
-      Output.writeln(s"I/Q Server: Creating new file${if (inView) "" else " for buffer"}: $filePath")
+      Output.writeln(s"I/Q Server: Creating new file${if (inView) "" else " for buffer"}: $authorizedPath")
     }
 
     // Create the file with content
-    createFileWithContent(file, filePath, content)
+    createFileWithContent(file, authorizedPath, content)
 
     if (inView) {
       // Open the file in jEdit
@@ -2525,24 +2632,24 @@ end"""
       }
 
       val view = views(0)
-      val buffer = jEdit.openFile(view, filePath)
+      val buffer = jEdit.openFile(view, authorizedPath)
       if (buffer == null) {
-        throw new Exception(s"Failed to open file in jEdit: $filePath")
+        throw new Exception(s"Failed to open file in jEdit: $authorizedPath")
       }
 
       view.setBuffer(buffer)
       view.getTextArea.requestFocus()
-      Output.writeln(s"I/Q Server: Opened file in jEdit: $filePath")
+      Output.writeln(s"I/Q Server: Opened file in jEdit: $authorizedPath")
     } else {
       // Provide the file to document model (buffer only, no view)
-      val node_name = PIDE.resources.node_name(filePath)
+      val node_name = PIDE.resources.node_name(authorizedPath)
       Document_Model.provide_files(PIDE.session, List((node_name, content)))
 
-      Output.writeln(s"I/Q Server: Provided file to buffer: $filePath")
+      Output.writeln(s"I/Q Server: Provided file to buffer: $authorizedPath")
     }
 
     Map(
-      "path" -> filePath,
+      "path" -> authorizedPath,
       "created" -> fileCreated.toString,
       "overwritten" -> fileOverwritten.toString,
       "opened" -> "true",
@@ -3077,6 +3184,10 @@ end"""
             case Right(fullPath) => fullPath
             case Left(errorMsg) => return Left(errorMsg)
           }
+          authorizeMutationPath("save_file(path)", filePath) match {
+            case Left(errorMsg) => return Left(errorMsg)
+            case Right(_) =>
+          }
 
           // Try to find the buffer for this file
           getBufferModel(filePath) match {
@@ -3102,20 +3213,25 @@ end"""
 
         case None =>
           // Save all modified files
-          val savedFiles = GUI_Thread.now {
+          val saveResult: Either[String, List[String]] = GUI_Thread.now {
             val views = getOpenViews()
             val allBuffers = views.flatMap(_.getBuffers()).distinct
             val modifiedBuffers = allBuffers.filter(_.isDirty())
 
-            modifiedBuffers.foreach { buffer =>
-              buffer.save(null, null)
-              Output.writeln(s"I/Q Server: Saved modified file: ${buffer.getPath()}")
+            val decisions = modifiedBuffers.map(buffer => (buffer, authorizeMutationPath("save_file(all)", buffer.getPath())))
+            val deniedPaths = decisions.collect { case (buffer, Left(error)) => s"${buffer.getPath()} ($error)" }
+            if (deniedPaths.nonEmpty) {
+              Left(s"Refusing to save out-of-root files: ${deniedPaths.mkString(", ")}")
+            } else {
+              val saved = decisions.collect { case (buffer, Right(_)) =>
+                buffer.save(null, null)
+                Output.writeln(s"I/Q Server: Saved modified file: ${buffer.getPath()}")
+                buffer.getPath()
+              }.toList
+              Right(saved)
             }
-
-            modifiedBuffers.map(_.getPath()).toList
           }
-
-          Right(Map("saved_files" -> savedFiles))
+          saveResult.map(savedFiles => Map("saved_files" -> savedFiles))
       }
 
     } catch {

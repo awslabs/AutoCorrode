@@ -57,6 +57,24 @@ echo '{"jsonrpc": "2.0", "method": "tools/call", "id": "test", "params": {"name"
 
 should give you a JSON reply with all tracked. theory files.
 
+## Security configuration
+
+I/Q now defaults to a hardened local-only posture:
+
+- Loopback bind by default (`IQ_MCP_BIND_HOST=127.0.0.1`).
+- Remote bind is blocked unless explicitly enabled (`IQ_MCP_ALLOW_REMOTE_BIND=true`).
+- Optional request authentication token (`IQ_MCP_AUTH_TOKEN`).
+- Mutating tools (`open_file` with `create_if_missing=true`, `create_file`, `write_file`, `save_file`) are restricted to allowed mutation roots.
+
+Use these environment variables to configure behavior:
+
+- `IQ_MCP_BIND_HOST`: Host/IP to bind to (default: `127.0.0.1`).
+- `IQ_MCP_ALLOW_REMOTE_BIND`: Set to `true` to allow non-loopback bind hosts (default: `false`).
+- `IQ_MCP_AUTH_TOKEN`: If set, every JSON-RPC request must include top-level `auth_token` matching this value.
+- `IQ_MCP_ALLOWED_ROOTS`: Path-list of allowed mutation roots (separator: `:` on Unix). If unset, defaults to the current working directory.
+
+The bundled `iq_bridge.py` automatically forwards `IQ_MCP_AUTH_TOKEN` as `auth_token` on outgoing requests.
+
 ### Connecting to I/Q via an MCP client
 
 If you connect to I/Q via an MCP-capable AI agent, you should see it learn and use the MCP interface automatically. For example, if you have [Amazon Q](https://aws.amazon.com/q/) installed and the I/Q MCP server registered as above, you should see the following:

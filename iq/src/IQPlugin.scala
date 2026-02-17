@@ -14,7 +14,8 @@ class IQPlugin extends EBPlugin {
 
     // Start MCP server
     try {
-      iqServer = Some(new IQServer(port = 8765))
+      val securityConfig = IQSecurity.fromEnvironment(readEnv = key => Option(Isabelle_System.getenv(key)))
+      iqServer = Some(new IQServer(port = 8765, securityConfig = securityConfig))
       iqServer.foreach(_.start())
       Output.writeln("Isabelle/Q Server started successfully on port 8765")
     } catch {
