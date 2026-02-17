@@ -8,7 +8,7 @@ import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.nio.file.Files
 import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, OutputStreamWriter}
 import java.net.{ServerSocket, Socket}
-import java.util.concurrent.{ExecutorService, Executors}
+import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
 import scala.util.{Try, Success, Failure}
 import scala.concurrent.{Future, ExecutionContext}
 import java.time.LocalTime
@@ -1052,7 +1052,7 @@ class IQServer(port: Int = 8765) {
         Output.writeln(s"I/Q Server: Document_Model.get_models_map() returned ${models_map.size} models")
 
         // Get all open buffers for quick lookup
-        val views = jEdit.getViews()
+        val views = getOpenViews()
         val activeView = jEdit.getActiveView()
         val allBuffers = views.flatMap(_.getBuffers()).distinct
         val bufferPaths = allBuffers.map(_.getPath()).toSet
@@ -2318,7 +2318,7 @@ class IQServer(port: Int = 8765) {
     }
 
     if (inView) {
-      val views = jEdit.getViews()
+      val views = getOpenViews()
       if (views.isEmpty) {
         throw new Exception("No jEdit views available to display the file")
       }
@@ -2408,7 +2408,7 @@ end"""
 
     if (inView) {
       // Open the file in jEdit
-      val views = jEdit.getViews()
+      val views = getOpenViews()
       if (views.isEmpty) {
         throw new Exception("No jEdit views available to display the file")
       }
@@ -2448,8 +2448,18 @@ end"""
   }
 
   // Helper methods
+  private def getOpenViews(): List[View] = {
+    val viewManager = jEdit.getViewManager()
+    if (viewManager == null) List.empty
+    else {
+      val views = scala.collection.mutable.ListBuffer.empty[View]
+      viewManager.forEach((view: View) => views += view)
+      views.toList
+    }
+  }
+
   private def findViewForFile(filePath: String): Option[View] = {
-    val views = jEdit.getViews()
+    val views = getOpenViews()
     views.find { view =>
       val buffer = view.getBuffer()
       val bufferPath = buffer.getPath()
@@ -2633,11 +2643,10 @@ end"""
    * Captures XML output and status from Extended_Query_Operation.
    */
   private class ExploreResultCollector(queryType: String) {
-    var xmlResults: List[XML.Tree] = List.empty
-    private var currentStatus: Extended_Query_Operation.Status = Extended_Query_Operation.Status.waiting
-    private var isComplete: Boolean = false
-    private var hasError: Boolean = false
-    private var errorMessage: String = ""
+    @volatile private var xmlResults: List[XML.Tree] = List.empty
+    @volatile private var currentStatus: Extended_Query_Operation.Status = Extended_Query_Operation.Status.waiting
+    @volatile private var hasError: Boolean = false
+    private val completionLatch = new CountDownLatch(1)
 
     def statusCallback(status: Extended_Query_Operation.Status): Unit = {
       // Debug: log status changes
@@ -2645,14 +2654,14 @@ end"""
 
       currentStatus = status
       if (status == Extended_Query_Operation.Status.finished) {
-        isComplete = true
+        completionLatch.countDown()
         // Debug: log completion
-        Output.writeln(s"I/Q Server: Query completed, isComplete=$isComplete, hasError=$hasError")
+        Output.writeln(s"I/Q Server: Query completed, hasError=$hasError")
       }
 
       if (status == Extended_Query_Operation.Status.failed) {
         hasError = true
-        isComplete = true
+        completionLatch.countDown()
         Output.writeln("I/Q Server: Query failed, presumably because of an unknown print function")
       }
     }
@@ -2682,20 +2691,21 @@ end"""
     }
 
     def getResultsAsString(): String = {
+      val resultsSnapshot = xmlResults
       // Debug: log result collection
-      Output.writeln(s"I/Q Server: Getting results as string, xmlResults.size=${xmlResults.size}")
+      Output.writeln(s"I/Q Server: Getting results as string, xmlResults.size=${resultsSnapshot.size}")
 
-      if (xmlResults.isEmpty) {
+      if (resultsSnapshot.isEmpty) {
         Output.writeln("I/Q Server: No XML results collected")
         return "No results"
       }
 
       // Debug: log XML types
-      val types = xmlResults.map(_.getClass.getSimpleName).distinct
+      val types = resultsSnapshot.map(_.getClass.getSimpleName).distinct
       Output.writeln(s"I/Q Server: XML result types: ${types.mkString(", ")}")
 
       // Convert XML results to readable text using a consistent approach
-      val results = xmlResults.flatMap { tree =>
+      val results = resultsSnapshot.flatMap { tree =>
         val content = XML.content(tree).trim
         if (content.nonEmpty) {
           Output.writeln(s"I/Q Server: Extracted content: ${content.take(150)}")
@@ -2705,7 +2715,7 @@ end"""
 
       if (results.isEmpty) {
         // Debug: show raw XML if no readable content found
-        val rawXml = xmlResults.map(_.toString).mkString("\n")
+        val rawXml = resultsSnapshot.map(_.toString).mkString("\n")
         s"Query completed but no readable results found. Raw XML (first 500 chars): ${rawXml.take(500)}"
       } else {
         // Apply sledgehammer-specific filtering
@@ -2751,8 +2761,11 @@ end"""
       }
     }
 
-    def isFinished(): Boolean = isComplete
-    def wasSuccessful(): Boolean = isComplete && !hasError
+    def awaitCompletion(timeoutMs: Long): Boolean =
+      completionLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
+
+    def isFinished(): Boolean = completionLatch.getCount == 0
+    def wasSuccessful(): Boolean = isFinished() && !hasError
     def getStatus(): String = currentStatus.toString
   }
 
@@ -2862,17 +2875,16 @@ end"""
             // Wait for completion with timeout - NOT in GUI thread
             val timeoutMs = 30000L // 30 seconds timeout
             val startTime = System.currentTimeMillis()
-            val pollInterval = 500L // 500ms polling
 
             // Debug: log waiting start
             Output.writeln(s"I/Q Server: Waiting for query completion (timeout: ${timeoutMs}ms)")
-
-            while (!collector.isFinished() && (System.currentTimeMillis() - startTime) < timeoutMs) {
-              // Debug: log polling every 5 seconds
-              if ((System.currentTimeMillis() - startTime) % 5000 < pollInterval) {
-                Output.writeln(s"I/Q Server: Still waiting... Status: ${collector.getStatus()}, Elapsed: ${System.currentTimeMillis() - startTime}ms")
-              }
-              Thread.sleep(pollInterval)
+            val completedInTime = try {
+              collector.awaitCompletion(timeoutMs)
+            } catch {
+              case _: InterruptedException =>
+                Thread.currentThread().interrupt()
+                Output.writeln("I/Q Server: Interrupted while waiting for query completion")
+                false
             }
 
             // Debug: log completion or timeout
@@ -2886,7 +2898,7 @@ end"""
             }
 
             // Check if we timed out
-            val timedOut = !collector.isFinished()
+            val timedOut = !completedInTime
 
             // Get command text for response (thread-safe)
             val cmdText = command.source.trim.replace("\n", "\\n")
@@ -2981,7 +2993,7 @@ end"""
         case None =>
           // Save all modified files
           val savedFiles = GUI_Thread.now {
-            val views = jEdit.getViews()
+            val views = getOpenViews()
             val allBuffers = views.flatMap(_.getBuffers()).distinct
             val modifiedBuffers = allBuffers.filter(_.isDirty())
 
