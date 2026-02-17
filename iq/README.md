@@ -14,11 +14,12 @@ The purpose of I/Q is to enable MCP-capable AI agents such as [Amazon Q](https:/
 
 ### Prerequisites
 
-We recommend that you use Isabelle2025. We have not tested I/Q with another version of Isabelle. The build instructions below assume a Unix-like environment (e.g. Linux, MacOS).
+We recommend Isabelle2025-2. We have not tested I/Q with another version of Isabelle.
+The build instructions below assume a Unix-like environment (e.g. Linux, macOS).
 
 ### Building the plugin
 
-You can build the plugin via `make` and `make install`. This compiles the Scala sources and installs the plugin JAR. By default, the JAR is copied to `~/.isabelle/Isabelle2025/jedit/jars/`, but you can inspect and configure various environment variables; see `make help`.
+You can build the plugin via `make` and `make install`. This compiles the Scala sources and installs the plugin JAR. By default, the JAR is copied to `~/.isabelle/Isabelle2025-2/jedit/jars/`, but you can inspect and configure various environment variables; see `make help`.
 
 ### Registering the plugin
 
@@ -102,9 +103,11 @@ You have XXX theory files open in total, ...
 2. **get_command_info**: Get detailed command information including status, errors, and proof states
 3. **get_document_info**: Comprehensive theory file status with error/warning details
 4. **open_file**: Open or create files in Isabelle/jEdit with optional content initialization
-5. **read_file**: Read file content with line range and pattern search support
-6. **explore**: Non-invasive proof exploration (sledgehammer, find_theorems, proof attempts)
+5. **create_file**: Create a new file with content and optionally open it in a view
+6. **read_file**: Read file content with line range and pattern search support
 7. **write_file**: Write or modify content in theory files with multiple edit modes (str_replace, insert, line replacement)
+8. **explore**: Non-invasive proof exploration (sledgehammer, find_theorems, proof attempts)
+9. **save_file**: Save one file or all modified open files
 
 ## Behavioral Guidance
 

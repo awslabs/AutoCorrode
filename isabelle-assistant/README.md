@@ -4,6 +4,17 @@ LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), b
 
 Isabelle Assistant is part of the [AutoCorrode](https://github.com/awslabs/AutoCorrode) project.
 
+## Architecture
+
+Isabelle Assistant combines four main layers:
+
+1. jEdit UI integration (`AssistantPlugin`, `AssistantDockable`, context menus, chat actions)
+2. LLM orchestration (`BedrockClient`, prompts, tool-use loop, retry/caching)
+3. Isabelle context/proof pipelines (`ContextFetcher`, `GoalExtractor`, `SuggestAction`, `ProofLoop`)
+4. Optional I/Q integration for proof-state operations and verification (`IQIntegration`)
+
+For contributor-level component and threading details, see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Highlights
 
 ### Freeform Chat

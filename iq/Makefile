@@ -25,7 +25,7 @@ BUILD_DIR ?= $(PLUGIN_DIR)/build
 CLASSES_DIR ?= $(BUILD_DIR)/classes
 TEST_CLASSES_DIR ?= $(BUILD_DIR)/test-classes
 JAR_FILE ?= $(BUILD_DIR)/iq_plugin.jar
-INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025/jedit/jars
+INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
 
 # Source files
 SCALA_SOURCES := $(wildcard src/*.scala)
@@ -52,6 +52,11 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		IQLineOffsetUtilsTest
 	echo "I/Q tests passed."
+
+# Documentation checks
+.PHONY: check-docs
+check-docs:
+	./scripts/check_docs.sh
 
 # Create JAR file
 $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
@@ -123,14 +128,15 @@ help:
 	echo "I/Q Plugin Makefile"
 	echo ""
 	echo "Available targets:"
-	echo "  all       - Build the plugin (default)"
-	echo "  build     - Build the plugin JAR file"
-	echo "  test      - Build and run line/offset regression tests"
-	echo "  install   - Build and install the plugin"
-	echo "  clean     - Remove build directory"
-	echo "  uninstall - Remove installed plugin"
-	echo "  help      - Show this help message"
-	echo "  debug     - Show build configuration variables"
+	echo "  all        - Build the plugin (default)"
+	echo "  build      - Build the plugin JAR file"
+	echo "  test       - Build and run line/offset regression tests"
+	echo "  check-docs - Validate docs (tool list + internal links)"
+	echo "  install    - Build and install the plugin"
+	echo "  clean      - Remove build directory"
+	echo "  uninstall  - Remove installed plugin"
+	echo "  help       - Show this help message"
+	echo "  debug      - Show build configuration variables"
 	echo ""
 	echo "Configurable environment variables:"
 	echo "  V             - Show individual commands (default: off)"
