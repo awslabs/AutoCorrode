@@ -1,2 +1,7 @@
 dependencies/
 *.thy~
+
+# Generated conformance artifacts
+Conformance_Testing/rust_harness/src/lib.rs
+Conformance_Testing/rust_harness/coverage_summary.json
+Conformance_Testing/rust_harness/coverage_summary.md

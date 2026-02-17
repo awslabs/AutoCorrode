@@ -41,6 +41,38 @@ You can interactively explore AutoCorrode using `make jedit`, which opens the Au
 
 To non-interactively check all material in AutoCorrode, run `make build`, which starts a batch-build in Isabelle.
 
+## Conformance Testing
+
+AutoCorrode includes a conformance-testing pipeline that validates Micro Rust semantics against real Rust execution.
+
+From the repository root:
+
+```bash
+make conformance-gen
+make conformance-test
+```
+
+Or end-to-end:
+
+```bash
+make conformance
+```
+
+This pipeline:
+
+1. generates Rust tests from HOL-evaluated expectations
+2. runs them with `cargo test`
+3. emits coverage summaries for auditing
+
+Coverage summaries are generated at:
+
+- `Conformance_Testing/rust_harness/coverage_summary.json`
+- `Conformance_Testing/rust_harness/coverage_summary.md`
+
+Conformance is CI-blocking in `.github/workflows/ci.yml` via `make conformance`.
+
+For full details (categories, API coverage status, and extension workflow), see `Conformance_Testing/README.md`.
+
 ## Citing AutoCorrode
 
 If you want to cite AutoCorrode, consider using the following BibTeX entry:

@@ -1,0 +1,13 @@
+[package]
+name = "micro_rust_conformance"
+version = "0.1.0"
+edition = "2021"
+description = "Conformance tests for Micro Rust (μRust) semantics"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[dev-dependencies]

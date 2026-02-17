@@ -63,10 +63,10 @@ definition word_minus_no_wrap_pure :: \<open>'l::{len} word \<Rightarrow> 'l wor
      else
        None\<close>
 
-abbreviation word_add_no_wrap_pure :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow> ('l word) option\<close> where
+definition word_add_no_wrap_pure :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow> ('l word) option\<close> where
   \<open>word_add_no_wrap_pure \<equiv> word_op_no_wrap_pure ((+) :: nat \<Rightarrow> nat \<Rightarrow> nat)\<close>
 
-abbreviation word_mul_no_wrap_pure :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow> ('l word) option\<close> where
+definition word_mul_no_wrap_pure :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow> ('l word) option\<close> where
   \<open>word_mul_no_wrap_pure \<equiv> word_op_no_wrap_pure ((*) :: nat \<Rightarrow> nat \<Rightarrow> nat)\<close>
 
 text\<open>We lift this to Micro Rust expressions by panicking in case of an arithmetic overflow.\<close>

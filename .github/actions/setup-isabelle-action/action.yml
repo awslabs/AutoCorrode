@@ -19,12 +19,12 @@ runs:
     - name: Set Isabelle home
       shell: bash
       run: |
-        echo "$(/home/isabelle/Isabelle/bin/isabelle getenv ISABELLE_HOME)" >> $GITHUB_ENV
+        echo "ISABELLE_HOME=$(/home/isabelle/Isabelle/bin/isabelle getenv -b ISABELLE_HOME)" >> "$GITHUB_ENV"
 
     - name: Set Isabelle home user
       shell: bash
       run: |
-        echo "$($ISABELLE_HOME/bin/isabelle getenv ISABELLE_HOME_USER)" >> $GITHUB_ENV
+        echo "ISABELLE_HOME_USER=$($ISABELLE_HOME/bin/isabelle getenv -b ISABELLE_HOME_USER)" >> "$GITHUB_ENV"
 
     - name: Cache heap images
       uses: actions/cache@v3

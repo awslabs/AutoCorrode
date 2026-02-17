@@ -1,0 +1,24 @@
+session Conformance_Testing = HOL +
+  options [document = false]
+  sessions
+    "HOL-Library"
+    "Word_Lib"
+    Shallow_Micro_Rust
+    Micro_Rust_Std_Lib
+  directories
+    "Tests"
+  theories
+    Conformance_Framework
+  theories
+    "Tests/Arithmetic_Conformance"
+    "Tests/Bitwise_Conformance"
+    "Tests/Comparison_Conformance"
+    "Tests/Conversion_Conformance"
+    "Tests/Panic_Conformance"
+    "Tests/StdLib_Arithmetic_Conformance"
+    "Tests/Option_Conformance"
+    "Tests/Result_Conformance"
+    "Tests/Range_Conformance"
+    "Tests/Ordering_Conformance"
+    "Tests/Tuple_Conformance"
+    "Tests/Generate_All"
