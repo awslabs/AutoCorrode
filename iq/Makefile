@@ -51,6 +51,10 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		IQLineOffsetUtilsTest
+	echo "Running I/Q argument tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		IQArgumentUtilsTest
 	echo "I/Q tests passed."
 
 # Documentation checks
@@ -130,7 +134,7 @@ help:
 	echo "Available targets:"
 	echo "  all        - Build the plugin (default)"
 	echo "  build      - Build the plugin JAR file"
-	echo "  test       - Build and run line/offset regression tests"
+	echo "  test       - Build and run I/Q regression tests"
 	echo "  check-docs - Validate docs (tool list + internal links)"
 	echo "  install    - Build and install the plugin"
 	echo "  clean      - Remove build directory"

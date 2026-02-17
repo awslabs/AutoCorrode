@@ -170,6 +170,114 @@ object IQLineOffsetUtils {
   }
 }
 
+object IQArgumentUtils {
+  private def describeValue(value: Any): String = value match {
+    case null => "null"
+    case s: String => s"'$s' (String)"
+    case other => s"$other (${other.getClass.getSimpleName})"
+  }
+
+  private def invalidNumericType(param: String, value: Any, expected: String): String =
+    s"Invalid parameter '$param': expected $expected, got ${describeValue(value)}"
+
+  private def parseWholeDouble(value: Double): Option[Long] = {
+    if (!java.lang.Double.isFinite(value)) None
+    else if (value != math.rint(value)) None
+    else {
+      val asLong = value.toLong
+      if (asLong.toDouble == value) Some(asLong) else None
+    }
+  }
+
+  def parseLongParamValue(param: String, value: Any): Either[String, Long] = value match {
+    case n: java.lang.Long => Right(n.longValue())
+    case n: java.lang.Integer => Right(n.longValue())
+    case n: java.lang.Short => Right(n.longValue())
+    case n: java.lang.Byte => Right(n.longValue())
+    case n: scala.Long => Right(n)
+    case n: scala.Int => Right(n.toLong)
+    case n: scala.Short => Right(n.toLong)
+    case n: scala.Byte => Right(n.toLong)
+    case n: java.math.BigInteger =>
+      if (n.bitLength() <= 63) Right(n.longValue())
+      else Left(s"Invalid parameter '$param': value $n is outside Long range")
+    case n: BigInt =>
+      if (n.isValidLong) Right(n.toLong)
+      else Left(s"Invalid parameter '$param': value $n is outside Long range")
+    case d: java.lang.Double =>
+      parseWholeDouble(d.doubleValue()) match {
+        case Some(v) => Right(v)
+        case None => Left(invalidNumericType(param, value, "integer (Long range)"))
+      }
+    case d: scala.Double =>
+      parseWholeDouble(d) match {
+        case Some(v) => Right(v)
+        case None => Left(invalidNumericType(param, value, "integer (Long range)"))
+      }
+    case f: java.lang.Float =>
+      parseWholeDouble(f.doubleValue()) match {
+        case Some(v) => Right(v)
+        case None => Left(invalidNumericType(param, value, "integer (Long range)"))
+      }
+    case f: scala.Float =>
+      parseWholeDouble(f.toDouble) match {
+        case Some(v) => Right(v)
+        case None => Left(invalidNumericType(param, value, "integer (Long range)"))
+      }
+    case s: String =>
+      Try(s.trim.toLong).toOption match {
+        case Some(v) => Right(v)
+        case None => Left(invalidNumericType(param, value, "integer (Long range)"))
+      }
+    case _ =>
+      Left(invalidNumericType(param, value, "integer (Long range)"))
+  }
+
+  def parseIntParamValue(param: String, value: Any): Either[String, Int] = {
+    parseLongParamValue(param, value).flatMap { longVal =>
+      if (longVal >= Int.MinValue && longVal <= Int.MaxValue) Right(longVal.toInt)
+      else Left(s"Invalid parameter '$param': value $longVal is outside Int range")
+    }
+  }
+
+  def optionalIntParam(params: Map[String, Any], name: String): Either[String, Option[Int]] = {
+    params.get(name) match {
+      case None => Right(None)
+      case Some(value) => parseIntParamValue(name, value).map(Some(_))
+    }
+  }
+
+  def optionalLongParam(params: Map[String, Any], name: String): Either[String, Option[Long]] = {
+    params.get(name) match {
+      case None => Right(None)
+      case Some(value) => parseLongParamValue(name, value).map(Some(_))
+    }
+  }
+
+  def requiredIntParam(params: Map[String, Any], name: String): Either[String, Int] = {
+    params.get(name) match {
+      case Some(value) => parseIntParamValue(name, value)
+      case None => Left(s"Missing required parameter: $name")
+    }
+  }
+
+  private def convertJsonValue(value: JSON.T): Any = value match {
+    case obj: Map[_, _] =>
+      obj.asInstanceOf[Map[String, JSON.T]].map { case (k, v) => k -> convertJsonValue(v) }
+    case list: List[_] =>
+      list.map(v => convertJsonValue(v.asInstanceOf[JSON.T]))
+    case s: String => s
+    case b: Boolean => b
+    case n: Number => n
+    case null => null
+    case other => other
+  }
+
+  def extractArguments(jsonMap: Map[String, JSON.T]): Map[String, Any] = {
+    jsonMap.map { case (key, value) => key -> convertJsonValue(value) }
+  }
+}
+
 // TODO: The code uses seemingly random negative error IDs. Explain where
 // they come from if the values matter, or otherwise introduce an enum.
 
@@ -483,18 +591,21 @@ class IQServer(port: Int = 8765) {
 
       id match {
         case Some(requestId) =>
-          val result = method match {
-            case "initialize" => createInitializeResult()
-            case "tools/list" => createToolsListResult()
-            case "tools/call" => handleToolCallFromJson(json)
+          val result: Either[(Int, String), Map[String, Any]] = method match {
+            case "initialize" =>
+              createInitializeResult().left.map(msg => (ErrorCodes.METHOD_NOT_FOUND, msg))
+            case "tools/list" =>
+              createToolsListResult().left.map(msg => (ErrorCodes.METHOD_NOT_FOUND, msg))
+            case "tools/call" =>
+              handleToolCallFromJson(json)
             case _ =>
               Output.writeln(s"I/Q Server: Unknown method '$method'")
-              Left(s"Method not found: $method")
+              Left((ErrorCodes.METHOD_NOT_FOUND, s"Method not found: $method"))
           }
 
           result match {
             case Right(data) => Some(formatSuccessResponse(requestId, data))
-            case Left(error) => Some(formatErrorResponse(Some(requestId), ErrorCodes.METHOD_NOT_FOUND, error))
+            case Left((code, error)) => Some(formatErrorResponse(Some(requestId), code, error))
           }
         /* From https://www.jsonrpc.org/specification:
          *  "A Notification is a Request object without an "id" member.
@@ -584,26 +695,26 @@ class IQServer(port: Int = 8765) {
    * @param json The parsed JSON-RPC request
    * @return Either error message or result data
    */
-  private def handleToolCallFromJson(json: JSON.T): Either[String, Map[String, Any]] = {
+  private def handleToolCallFromJson(json: JSON.T): Either[(Int, String), Map[String, Any]] = {
     try {
       Output.writeln(s"I/Q Server: Raw JSON for tool call: $json")
 
       val (toolName, params) = extractToolAndParams(json)
       Output.writeln(s"I/Q Server: Extracted tool='$toolName', params=$params")
 
-      val result = toolName match {
-        case "list_files" => handleListFiles(params)
-        case "get_command_info" => handleGetCommand(params)
-        case "get_document_info" => handleGetDocumentInfo(params)
-        case "open_file" => handleOpenFile(params)
-        case "create_file" => handleCreateFile(params)
-        case "read_file" => handleReadTheoryFile(params)
-        case "write_file" => handleWriteTheoryFile(params)
-        case "explore" => handleExplore(params)
-        case "save_file" => handleSaveFile(params)
+      val result: Either[(Int, String), Map[String, Any]] = toolName match {
+        case "list_files" => handleListFiles(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "get_command_info" => handleGetCommand(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "get_document_info" => handleGetDocumentInfo(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "open_file" => handleOpenFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "create_file" => handleCreateFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "read_file" => handleReadTheoryFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "write_file" => handleWriteTheoryFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "explore" => handleExplore(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
+        case "save_file" => handleSaveFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
         case _ =>
           Output.writeln(s"I/Q Server: Unknown tool name: '$toolName'")
-          Left(s"Unknown tool: $toolName")
+          Left((ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $toolName"))
       }
 
       result.map(wrapToolCallResult)
@@ -611,7 +722,7 @@ class IQServer(port: Int = 8765) {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Tool execution error: ${ex.getMessage}")
         ex.printStackTrace()
-        Left(s"Tool execution error: ${ex.getMessage}")
+        Left((ErrorCodes.INTERNAL_ERROR, s"Tool execution error: ${ex.getMessage}"))
     }
   }
 
@@ -647,21 +758,13 @@ class IQServer(port: Int = 8765) {
   }
 
   /**
-   * Extracts arguments from a JSON object and converts them to appropriate Scala types.
+   * Extracts arguments from a JSON object while preserving JSON value kinds.
    *
    * @param jsonMap The JSON object containing arguments
    * @return A map of argument names to values
    */
   def extractArguments(jsonMap: Map[String, JSON.T]): Map[String, Any] = {
-    jsonMap.map { case (key, value) =>
-      val convertedValue = value match {
-        case s: String => s
-        case b: Boolean => b
-        case n: Number => n.intValue()
-        case other => other.toString // Fallback for other types
-      }
-      key -> convertedValue
-    }
+    IQArgumentUtils.extractArguments(jsonMap)
   }
 
   /**
@@ -1235,24 +1338,24 @@ class IQServer(port: Int = 8765) {
       case _ => None
     }
 
-    val startLineOpt = params.get("start_line") match {
-      case Some(n: Number) => Some(n.intValue())
-      case _ => None
+    val startLineOpt = IQArgumentUtils.optionalIntParam(params, "start_line") match {
+      case Right(v) => v
+      case Left(err) => return Right(err)
     }
 
-    val endLineOpt = params.get("end_line") match {
-      case Some(n: Number) => Some(n.intValue())
-      case _ => None
+    val endLineOpt = IQArgumentUtils.optionalIntParam(params, "end_line") match {
+      case Right(v) => v
+      case Left(err) => return Right(err)
     }
 
-    val startOffsetOpt = params.get("start_offset") match {
-      case Some(n: Number) => Some(n.intValue())
-      case _ => None
+    val startOffsetOpt = IQArgumentUtils.optionalIntParam(params, "start_offset") match {
+      case Right(v) => v
+      case Left(err) => return Right(err)
     }
 
-    val endOffsetOpt = params.get("end_offset") match {
-      case Some(n: Number) => Some(n.intValue())
-      case _ => None
+    val endOffsetOpt = IQArgumentUtils.optionalIntParam(params, "end_offset") match {
+      case Right(v) => v
+      case Left(err) => return Right(err)
     }
 
     val (content, model, startOffsetRaw, endOffsetRaw) = (mode, filePath, startLineOpt, endLineOpt, startOffsetOpt, endOffsetOpt) match {
@@ -1302,14 +1405,16 @@ class IQServer(port: Int = 8765) {
       case _ => false
     }
 
-    val timeoutMs = params.get("timeout") match {
-      case Some(value: Number) => Some(value.longValue())
-      case _ => Some(5000L) // Default timeout of 5 seconds
+    val timeoutMs = IQArgumentUtils.optionalLongParam(params, "timeout") match {
+      case Right(Some(v)) => Some(v)
+      case Right(None) => Some(5000L) // Default timeout of 5 seconds
+      case Left(err) => return Right(err)
     }
 
-    val timeoutPerCommandMs: Option[Int] = params.get("timeout_per_command") match {
-      case Some(value: Number) => Some(value.intValue())
-      case _ => Some(5000) // Default per-command timeout of 5 seconds
+    val timeoutPerCommandMs: Option[Int] = IQArgumentUtils.optionalIntParam(params, "timeout_per_command") match {
+      case Right(Some(v)) => Some(v)
+      case Right(None) => Some(5000) // Default per-command timeout of 5 seconds
+      case Left(err) => return Right(err)
     }
 
     Output.writeln(s"I/Q Server: Parameters - mode: $mode, startLine: $startLineOpt, endLine: $endLineOpt, startOffset: $startOffsetOpt, endOffset: $endOffsetOpt, filePath: $filePath, waitUntilProcessed: $waitUntilProcessed, timeout: $timeoutMs, timeout_per_command: ${timeoutPerCommandMs}ms")
@@ -1711,11 +1816,12 @@ class IQServer(port: Int = 8765) {
       case _ => false  // Default to false
     }
 
-    val timingThresholdMs = params.get("timing_threshold_ms") match {
-      case Some(value: Number) => value.intValue()
-      case _ =>
+    val timingThresholdMs = IQArgumentUtils.optionalIntParam(params, "timing_threshold_ms") match {
+      case Right(Some(value)) => value
+      case Right(None) =>
         Output.writeln(s"I/Q Server: No timing_threshold parameter provided, using 3000ms default")
         3000
+      case Left(err) => return Left(err)
     }
 
     val waitUntilProcessed = params.get("wait_until_processed") match {
@@ -1723,14 +1829,15 @@ class IQServer(port: Int = 8765) {
       case _ => false  // Default to false
     }
 
-    val timeout_ms = params.get("timeout") match {
-      case Some(value: Number) => Some(value.intValue())
-      case _ => None
+    val timeout_ms = IQArgumentUtils.optionalIntParam(params, "timeout") match {
+      case Right(value) => value
+      case Left(err) => return Left(err)
     }
 
-    val timeoutPerCommandMs: Option[Int] = params.get("timeout_per_command") match {
-      case Some(value: Number) => Some(value.intValue())
-      case _ => Some(5000) // Default per-command timeout of 5 seconds
+    val timeoutPerCommandMs: Option[Int] = IQArgumentUtils.optionalIntParam(params, "timeout_per_command") match {
+      case Right(Some(value)) => Some(value)
+      case Right(None) => Some(5000) // Default per-command timeout of 5 seconds
+      case Left(err) => return Left(err)
     }
 
     Output.writeln(s"I/Q Server: Getting document info for file: $filePath (errors: $includeErrors, warnings: $includeWarnings, timing_threshold: ${timingThresholdMs}ms, wait_until_processed: $waitUntilProcessed, timeout: ${timeout_ms} ms, timeout_per_command: ${timeoutPerCommandMs}ms)")
@@ -2118,14 +2225,16 @@ class IQServer(port: Int = 8765) {
       val result = mode match {
         case "Line" =>
 
-          val startLine: Int = params.get("start_line") match {
-            case Some(line: Int) => line
-            case _ => 1
+          val startLine: Int = IQArgumentUtils.optionalIntParam(params, "start_line") match {
+            case Right(Some(line)) => line
+            case Right(None) => 1
+            case Left(err) => return Left(err)
           }
 
-          val endLine: Int = params.get("end_line") match {
-            case Some(line: Int) => line
-            case _ => -1
+          val endLine: Int = IQArgumentUtils.optionalIntParam(params, "end_line") match {
+            case Right(Some(line)) => line
+            case Right(None) => -1
+            case Left(err) => return Left(err)
           }
 
           // Delegate to existing resource read logic
@@ -2133,10 +2242,10 @@ class IQServer(port: Int = 8765) {
             readTheoryFile(filePath, startLine, endLine)
           }
         case "Search" =>
-          val contextLines = params.get("context_lines") match {
-            case Some(lines: Number) => lines.intValue()
-            case Some(lines: String) => try { lines.toInt } catch { case _: Exception => 0 }
-            case _ => 0
+          val contextLines = IQArgumentUtils.optionalIntParam(params, "context_lines") match {
+            case Right(Some(lines)) => lines
+            case Right(None) => 0
+            case Left(err) => return Left(err)
           }
           params.get("pattern") match {
             case Some(pattern: String) =>
@@ -2180,14 +2289,16 @@ class IQServer(port: Int = 8765) {
       return Left("command parameter is required")
     }
 
-    val timeoutMs = params.get("timeout") match {
-      case Some(value: Number) => Some(value.longValue())
-      case _ => Some(2500L) // Default timeout of 2.5 seconds
+    val timeoutMs = IQArgumentUtils.optionalLongParam(params, "timeout") match {
+      case Right(Some(v)) => Some(v)
+      case Right(None) => Some(2500L) // Default timeout of 2.5 seconds
+      case Left(err) => return Left(err)
     }
 
-    val timeoutPerCommandMs: Option[Int] = params.get("timeout_per_command") match {
-      case Some(value: Number) => Some(value.intValue())
-      case _ => Some(5000) // Default per-command timeout of 5 seconds
+    val timeoutPerCommandMs: Option[Int] = IQArgumentUtils.optionalIntParam(params, "timeout_per_command") match {
+      case Right(Some(v)) => Some(v)
+      case Right(None) => Some(5000) // Default per-command timeout of 5 seconds
+      case Left(err) => return Left(err)
     }
 
     // Lookup buffer associated with file
@@ -2204,14 +2315,14 @@ class IQServer(port: Int = 8765) {
           case _ => return Left("new_str parameter is required for command 'str_replace'")
         }
 
-        val startLine: Int = params.get("start_line") match {
-          case Some(line: Int) => line
-          case _ => return Left("start_line parameter is required for command 'line'")
+        val startLine: Int = IQArgumentUtils.requiredIntParam(params, "start_line") match {
+          case Right(line) => line
+          case Left(err) => return Left(err)
         }
 
-        val endLine: Int = params.get("end_line") match {
-          case Some(line: Int) => line
-          case _ => return Left("end_line parameter is required for command 'line'")
+        val endLine: Int = IQArgumentUtils.requiredIntParam(params, "end_line") match {
+          case Right(line) => line
+          case Left(err) => return Left(err)
         }
 
         val startOffset = lineNumberToOffset(content, startLine)
@@ -2250,9 +2361,9 @@ class IQServer(port: Int = 8765) {
           case _ => return Left("new_str parameter is required for command 'insert'")
         }
 
-        val insertLine: Int = params.get("insert_line") match {
-          case Some(line: Int) => line
-          case _ => return Left("insert_line parameter is required for command 'insert'")
+        val insertLine: Int = IQArgumentUtils.requiredIntParam(params, "insert_line") match {
+          case Right(line) => line
+          case Left(err) => return Left(err)
         }
 
         val startOffset = lineNumberToOffset(content, insertLine + 1) // +1 because we insert _after_ the line
@@ -2605,10 +2716,9 @@ end"""
         case Some(_) => None
         case None => None
       }
-      val offset = params.get("offset").flatMap {
-        case n: Number => Some(n.intValue())
-        case s: String => Try(s.toInt).toOption
-        case _ => None
+      val offset = IQArgumentUtils.optionalIntParam(params, "offset") match {
+        case Right(v) => v
+        case Left(err) => return Left(err)
       }
       val pattern = params.get("pattern").map(_.toString)
 
