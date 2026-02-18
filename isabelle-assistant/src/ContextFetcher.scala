@@ -144,30 +144,25 @@ object ContextFetcher {
     timeoutMs: Long,
     callback: Either[String, String] => Unit
   ): Unit = {
-    val completionLock = new Object()
-    @volatile var completed = false
+    val outputLock = new Object()
     val output = new StringBuilder
+    var operation: Extended_Query_Operation = null
+    val lifecycle = new IQOperationLifecycle[Either[String, String]](
+      onComplete = callback,
+      deactivate = () => Option(operation).foreach(_.deactivate())
+    )
 
-    def completeWith(result: Either[String, String]): Unit = {
-      completionLock.synchronized {
-        if (!completed) {
-          completed = true
-          callback(result)
-        }
-      }
-    }
-
-    val operation = new Extended_Query_Operation(
+    operation = new Extended_Query_Operation(
       PIDE.editor, view, "isar_explore",
       status => {
         if (status == Extended_Query_Operation.Status.finished ||
             status == Extended_Query_Operation.Status.failed) {
-          completeWith(Right(output.synchronized { output.toString }))
+          lifecycle.complete(Right(output.synchronized { output.toString }))
         }
       },
       (snapshot, cmdResults, results) => {
-        completionLock.synchronized {
-          if (!completed) {
+        outputLock.synchronized {
+          if (!lifecycle.isCompleted) {
             val text = results.map(XML.content(_)).mkString("\n")
             if (text.nonEmpty) output.synchronized { output.append(text).append("\n") }
           }
@@ -175,15 +170,16 @@ object ContextFetcher {
       }
     )
 
-    operation.activate()
-    operation.apply_query_at_command(command, List("get_defs " + names.mkString(" ")))
+    lifecycle.forkTimeout(name = "context-fetch-timeout", timeoutMs = timeoutMs) {
+      Right(output.synchronized { output.toString })
+    }
 
-    Isabelle_Thread.fork(name = "context-fetch-timeout") {
-      try {
-        Thread.sleep(timeoutMs)
-        completeWith(Right(output.synchronized { output.toString }))
-        GUI_Thread.later { operation.deactivate() }
-      } catch { case _: InterruptedException => /* early completion */ }
+    try {
+      operation.activate()
+      operation.apply_query_at_command(command, List("get_defs " + names.mkString(" ")))
+    } catch {
+      case ex: Exception =>
+        lifecycle.complete(Left(s"context fetch setup failed: ${ex.getMessage}"))
     }
   }
 }

@@ -91,55 +91,49 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
           callback(cachedResult)
         case None =>
           val startTime = System.currentTimeMillis()
-          val completionLock = new Object()
-          @volatile var completed = false
+          val outputLock = new Object()
           @volatile var receivedOutput = false
-          @volatile var timeoutThread: Thread = null
+          var operation: Extended_Query_Operation = null
+          val lifecycle = new IQOperationLifecycle[VerificationResult](
+            onComplete = newResult => {
+              VerificationCache.put(command, proofText, newResult)
+              callback(newResult)
+            },
+            deactivate = () => Option(operation).foreach(_.deactivate())
+          )
 
-          def completeOperation(newResult: VerificationResult): Unit = {
-            completionLock.synchronized {
-              if (!completed) {
-                completed = true
-                VerificationCache.putIfCacheable(command, proofText, newResult)
-                callback(newResult)
-                // Always interrupt timeout thread on any completion path
-                Option(timeoutThread).foreach(_.interrupt())
-              }
-            }
-          }
-
-          val operation = new Extended_Query_Operation(
+          operation = new Extended_Query_Operation(
             PIDE.editor, view, AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
             status => {
               if (status == Extended_Query_Operation.Status.failed) {
-                completeOperation(ProofFailure("Verification unavailable (import iq.Isar_Explore to enable)"))
+                lifecycle.complete(ProofFailure("Verification unavailable (import iq.Isar_Explore to enable)"))
               } else if (status == Extended_Query_Operation.Status.finished) {
                 // Don't immediately report success — wait to see if we received valid output.
                 // If output callback already completed with ProofSuccess, do nothing.
                 // Otherwise, wait a brief grace period then report failure if still no output.
                 Isabelle_Thread.fork(name = "verify-grace-period") {
                   Thread.sleep(500) // 500ms grace period for output callback to fire
-                  completionLock.synchronized {
-                    if (!completed && !receivedOutput) {
-                      completeOperation(ProofFailure("proof method did not produce a result (may not have terminated)"))
+                  outputLock.synchronized {
+                    if (!lifecycle.isCompleted && !receivedOutput) {
+                      lifecycle.complete(ProofFailure("proof method did not produce a result (may not have terminated)"))
                     }
                   }
                 }
               }
             },
             (snapshot, cmdResults, output) => {
-              completionLock.synchronized {
-                if (!completed) {
+              outputLock.synchronized {
+                if (!lifecycle.isCompleted) {
                   // Check for errors by XML markup, not text content heuristics
                   val errors = output.filter(e => e.name == Markup.ERROR_MESSAGE || e.name == Markup.ERROR)
                   if (errors.nonEmpty) {
                     val errorMsg = errors.map(e => XML.content(e).trim).mkString("\n").take(100)
-                    completeOperation(ProofFailure(if (errorMsg.nonEmpty) errorMsg else "proof method failed"))
+                    lifecycle.complete(ProofFailure(if (errorMsg.nonEmpty) errorMsg else "proof method failed"))
                   } else {
                     val text = output.map(XML.content(_).trim).filter(_.nonEmpty).mkString("\n")
                     if (text.nonEmpty) {
                       receivedOutput = true
-                      completeOperation(ProofSuccess(System.currentTimeMillis() - startTime, text))
+                      lifecycle.complete(ProofSuccess(System.currentTimeMillis() - startTime, text))
                     }
                   }
                 }
@@ -147,16 +141,15 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
             }
           )
 
-          timeoutThread = Isabelle_Thread.fork(name = "verify-timeout") {
-            try {
-              Thread.sleep(timeoutMs)
-              completeOperation(ProofTimeout)
-              GUI_Thread.later { operation.deactivate() }
-            } catch { case _: InterruptedException => /* early completion, thread exits cleanly */ }
+          lifecycle.forkTimeout(name = "verify-timeout", timeoutMs = timeoutMs)(ProofTimeout)
+
+          try {
+            operation.activate()
+            operation.apply_query_at_command(command, List(proofText))
+          } catch {
+            case ex: Exception =>
+              lifecycle.complete(ProofFailure(s"verification setup failed: ${ex.getMessage}"))
           }
-          
-          operation.activate()
-          operation.apply_query_at_command(command, List(proofText))
       }
     }
   }
@@ -176,40 +169,32 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     if (!IQAvailable.isAvailable) { callback(Left("I/Q unavailable")); return }
 
     val startTime = System.currentTimeMillis()
-    val completionLock = new Object()
-    @volatile var completed = false
-    @volatile var timeoutThread: Thread = null
+    val outputLock = new Object()
+    var operation: Extended_Query_Operation = null
+    val lifecycle = new IQOperationLifecycle[Either[String, ProofStepResult]](
+      onComplete = callback,
+      deactivate = () => Option(operation).foreach(_.deactivate())
+    )
 
-    def complete(result: Either[String, ProofStepResult]): Unit = {
-      completionLock.synchronized {
-        if (!completed) {
-          completed = true
-          callback(result)
-          val tt = timeoutThread
-          if (tt != null) tt.interrupt()
-        }
-      }
-    }
-
-    val operation = new Extended_Query_Operation(
+    operation = new Extended_Query_Operation(
       PIDE.editor, view, AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
       status => {
         if (status == Extended_Query_Operation.Status.failed)
-          complete(Left("Verification unavailable (import iq.Isar_Explore to enable)"))
+          lifecycle.complete(Left("Verification unavailable (import iq.Isar_Explore to enable)"))
         // Do NOT complete on finished — wait for output callback
       },
       (snapshot, cmdResults, output) => {
-        completionLock.synchronized {
-          if (!completed) {
+        outputLock.synchronized {
+          if (!lifecycle.isCompleted) {
             val errors = output.filter(e => e.name == Markup.ERROR_MESSAGE || e.name == Markup.ERROR)
             if (errors.nonEmpty) {
               val errorMsg = errors.map(e => XML.content(e).trim).mkString("\n").take(200)
-              complete(Left(if (errorMsg.nonEmpty) errorMsg else "proof method failed"))
+              lifecycle.complete(Left(if (errorMsg.nonEmpty) errorMsg else "proof method failed"))
             } else {
               val text = output.map(XML.content(_).trim).filter(_.nonEmpty).mkString("\n")
               if (text.nonEmpty) {
                 val elapsed = System.currentTimeMillis() - startTime
-                complete(Right(parseStepResult(text, elapsed)))
+                lifecycle.complete(Right(parseStepResult(text, elapsed)))
               }
             }
           }
@@ -217,16 +202,15 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       }
     )
 
-    timeoutThread = Isabelle_Thread.fork(name = "step-timeout") {
-      try {
-        Thread.sleep(timeoutMs)
-        complete(Left("timeout"))
-        GUI_Thread.later { operation.deactivate() }
-      } catch { case _: InterruptedException => }
+    lifecycle.forkTimeout(name = "step-timeout", timeoutMs = timeoutMs)(Left("timeout"))
+
+    try {
+      operation.activate()
+      operation.apply_query_at_command(command, List(proofText))
+    } catch {
+      case ex: Exception =>
+        lifecycle.complete(Left(s"verification setup failed: ${ex.getMessage}"))
     }
-    
-    operation.activate()
-    operation.apply_query_at_command(command, List(proofText))
   }
 
   /** Parse the PROOF_COMPLETE/PROOF_STATE header from isar_explore output. */
@@ -267,30 +251,25 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       callback(Left("I/Q unavailable"))
     } else {
 
-    val completionLock = new Object()
-    @volatile var completed = false
+    val outputLock = new Object()
     val results = scala.collection.mutable.ListBuffer[String]()
+    var operation: Extended_Query_Operation = null
+    val lifecycle = new IQOperationLifecycle[Either[String, List[String]]](
+      onComplete = callback,
+      deactivate = () => Option(operation).foreach(_.deactivate())
+    )
 
-    def completeWith(result: Either[String, List[String]]): Unit = {
-      completionLock.synchronized {
-        if (!completed) {
-          completed = true
-          callback(result)
-        }
-      }
-    }
-
-    val operation = new Extended_Query_Operation(
+    operation = new Extended_Query_Operation(
       PIDE.editor, view, AssistantConstants.IQ_OPERATION_FIND_THEOREMS,
       status => {
         if (status == Extended_Query_Operation.Status.finished ||
             status == Extended_Query_Operation.Status.failed) {
-          completeWith(Right(results.synchronized { results.toList }))
+          lifecycle.complete(Right(results.synchronized { results.toList }))
         }
       },
       (snapshot, cmdResults, output) => {
-        completionLock.synchronized {
-          if (!completed) {
+        outputLock.synchronized {
+          if (!lifecycle.isCompleted) {
             // Parse theorem results - format is typically "theorem_name: statement"
             val text = output.map(XML.content(_)).mkString("\n")
             results.synchronized {
@@ -304,16 +283,17 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       }
     )
 
-    operation.activate()
-    // find_theorems args: limit, allow_dups, query
-    operation.apply_query_at_command(command, List(limit.toString, "false", pattern))
+    lifecycle.forkTimeout(name = "find-theorems-timeout", timeoutMs = timeoutMs) {
+      Right(results.synchronized { results.toList })
+    }
 
-    Isabelle_Thread.fork(name = "find-theorems-timeout") {
-      try {
-        Thread.sleep(timeoutMs)
-        completeWith(Right(results.synchronized { results.toList }))
-        GUI_Thread.later { operation.deactivate() }
-      } catch { case _: InterruptedException => /* early completion */ }
+    try {
+      operation.activate()
+      // find_theorems args: limit, allow_dups, query
+      operation.apply_query_at_command(command, List(limit.toString, "false", pattern))
+    } catch {
+      case ex: Exception =>
+        lifecycle.complete(Left(s"find_theorems setup failed: ${ex.getMessage}"))
     }
     }
   }
@@ -339,30 +319,25 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       callback(Left("I/Q unavailable"))
     } else {
 
-    val completionLock = new Object()
-    @volatile var completed = false
+    val outputLock = new Object()
     val output = new StringBuilder
+    var operation: Extended_Query_Operation = null
+    val lifecycle = new IQOperationLifecycle[Either[String, String]](
+      onComplete = callback,
+      deactivate = () => Option(operation).foreach(_.deactivate())
+    )
 
-    def completeWith(result: Either[String, String]): Unit = {
-      completionLock.synchronized {
-        if (!completed) {
-          completed = true
-          callback(result)
-        }
-      }
-    }
-
-    val operation = new Extended_Query_Operation(
+    operation = new Extended_Query_Operation(
       PIDE.editor, view, AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
       status => {
         if (status == Extended_Query_Operation.Status.finished ||
             status == Extended_Query_Operation.Status.failed) {
-          completeWith(Right(output.synchronized { output.toString }))
+          lifecycle.complete(Right(output.synchronized { output.toString }))
         }
       },
       (snapshot, cmdResults, results) => {
-        completionLock.synchronized {
-          if (!completed) {
+        outputLock.synchronized {
+          if (!lifecycle.isCompleted) {
             val text = results.map(XML.content(_)).mkString("\n")
             if (text.nonEmpty) output.synchronized { output.append(text).append("\n") }
           }
@@ -370,15 +345,16 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       }
     )
 
-    operation.activate()
-    operation.apply_query_at_command(command, queryArgs)
+    lifecycle.forkTimeout(name = "iq-query-timeout", timeoutMs = timeoutMs) {
+      Right(output.synchronized { output.toString })
+    }
 
-    Isabelle_Thread.fork(name = "iq-query-timeout") {
-      try {
-        Thread.sleep(timeoutMs)
-        completeWith(Right(output.synchronized { output.toString }))
-        GUI_Thread.later { operation.deactivate() }
-      } catch { case _: InterruptedException => /* early completion */ }
+    try {
+      operation.activate()
+      operation.apply_query_at_command(command, queryArgs)
+    } catch {
+      case ex: Exception =>
+        lifecycle.complete(Left(s"query setup failed: ${ex.getMessage}"))
     }
     }
   }
@@ -436,33 +412,29 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     } else {
 
     val startTime = System.currentTimeMillis()
-    val completionLock = new Object()
-    @volatile var completed = false
+    val outputLock = new Object()
     val results = scala.collection.mutable.ListBuffer[SledgehammerResult]()
 
     // Pattern to match sledgehammer output: "Try this: by simp (0.5 ms)"
     val tryThisPattern = """Try this:\s*(.+?)\s*\((\d+(?:\.\d+)?)\s*(ms|s)\)""".r
 
-    def completeWith(result: Either[String, List[SledgehammerResult]]): Unit = {
-      completionLock.synchronized {
-        if (!completed) {
-          completed = true
-          callback(result)
-        }
-      }
-    }
+    var operation: Extended_Query_Operation = null
+    val lifecycle = new IQOperationLifecycle[Either[String, List[SledgehammerResult]]](
+      onComplete = callback,
+      deactivate = () => Option(operation).foreach(_.deactivate())
+    )
 
-    val operation = new Extended_Query_Operation(
+    operation = new Extended_Query_Operation(
       PIDE.editor, view, AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
       status => {
         if (status == Extended_Query_Operation.Status.finished ||
             status == Extended_Query_Operation.Status.failed) {
-          completeWith(Right(results.synchronized { results.toList }))
+          lifecycle.complete(Right(results.synchronized { results.toList }))
         }
       },
       (snapshot, cmdResults, output) => {
-        completionLock.synchronized {
-          if (!completed) {
+        outputLock.synchronized {
+          if (!lifecycle.isCompleted) {
             val text = output.map(XML.content(_)).mkString("\n")
             results.synchronized {
               for (m <- tryThisPattern.findAllMatchIn(text)) {
@@ -478,16 +450,16 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       }
     )
 
-    operation.activate()
-    operation.apply_query_at_command(command, List("sledgehammer"))
+    lifecycle.forkTimeout(name = "sledgehammer-timeout", timeoutMs = timeoutMs) {
+      Right(results.synchronized { results.toList })
+    }
 
-    // Timeout check
-    Isabelle_Thread.fork(name = "sledgehammer-timeout") {
-      try {
-        Thread.sleep(timeoutMs)
-        completeWith(Right(results.synchronized { results.toList }))
-        GUI_Thread.later { operation.deactivate() }
-      } catch { case _: InterruptedException => /* early completion */ }
+    try {
+      operation.activate()
+      operation.apply_query_at_command(command, List("sledgehammer"))
+    } catch {
+      case ex: Exception =>
+        lifecycle.complete(Left(s"sledgehammer setup failed: ${ex.getMessage}"))
     }
     }
   }
