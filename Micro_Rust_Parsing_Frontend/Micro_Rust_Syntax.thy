@@ -266,6 +266,11 @@ syntax
   \<comment>\<open>Standard if-then-else conditional\<close>
   "_urust_if_then_else" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if/ _/ / {/ _/ }/ else/ {/ _/ }"[20,0,0]21)
+  \<comment>\<open>Rust-style else-if conditional (desugared to nested ifs)\<close>
+  "_urust_if_then_else_if" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if/ _/ / {/ _/ }/ else if/ _/ / {/ _/ }"[20,0,20,0]21)
+  "_urust_if_then_else_if_else" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if/ _/ / {/ _/ }/ else if/ _/ / {/ _/ }/ else/ _"[20,0,20,0,11]21)
   \<comment>\<open>Standard if-then conditional\<close>
   "_urust_if_then" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if/ _/ / {/ _/ }"[20,0]20)
@@ -304,6 +309,12 @@ syntax
   "_urust_sequence_if_then_else"
     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if/ _/ / {/ _/ }/ else/ {/ _/ }/ _" [20,0,0,10]10)
+  "_urust_sequence_if_then_else_if"
+    :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if/ _/ / {/ _/ }/ else if/ _/ / {/ _/ }/ _" [20,0,20,0,10]10)
+  "_urust_sequence_if_then_else_if_else"
+    :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("if/ _/ / {/ _/ }/ else if/ _/ / {/ _/ }/ else/ _/ _" [20,0,20,0,11,10]10)
   "_urust_sequence_if_then"
     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if/ _/ / {/ _/ }/ _" [20,0,10]10)
@@ -524,7 +535,13 @@ syntax
      (infixr ">>=" 40)
 
 translations
+  "_urust_if_then_else_if c t c' t'" => "_urust_if_then_else c t (_urust_if_then c' t')"
+  "_urust_if_then_else_if_else c t c' t' e" => "_urust_if_then_else c t (_urust_if_then_else c' t' e)"
   "_urust_sequence_if_then_else c t e next" => "_urust_sequence (_urust_if_then_else c t e) next"
+  "_urust_sequence_if_then_else_if c t c' t' next" =>
+    "_urust_sequence (_urust_if_then_else_if c t c' t') next"
+  "_urust_sequence_if_then_else_if_else c t c' t' e next" =>
+    "_urust_sequence (_urust_if_then_else_if_else c t c' t' e) next"
   "_urust_sequence_if_then c t next" => "_urust_sequence (_urust_if_then c t) next"
   "_urust_sequence_for_loop x iter body next" => "_urust_sequence (_urust_for_loop x iter body) next"
   "_urust_sequence_if_let ptrn exp this next" => "_urust_sequence (_urust_if_let ptrn exp this) next"

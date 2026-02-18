@@ -412,6 +412,34 @@ value[simp]\<open>\<lbrakk>
   ((if True { 0 } else { 1 }, True), if False { (2 as u32, 3 as u32) } else { (4, 5) })
 \<rbrakk>\<close>
 
+subsubsection\<open>Else-If Conditionals\<close>
+
+term\<open>\<lbrakk>
+  if False {
+    \<llangle>0 :: 32 word\<rrangle>
+  } else if True {
+    \<llangle>1 :: 32 word\<rrangle>
+  } else {
+    \<llangle>2 :: 32 word\<rrangle>
+  }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if False {
+    \<llangle>0 :: 32 word\<rrangle>
+  } else if False {
+    \<llangle>1 :: 32 word\<rrangle>
+  } else if True {
+    \<llangle>2 :: 32 word\<rrangle>
+  } else {
+    \<llangle>3 :: 32 word\<rrangle>
+  }
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  assert!((if False { False } else if True { True } else { False }))
+\<rbrakk>\<close>
+
 subsubsection\<open>One-Armed Conditionals\<close>
 
 term\<open>\<lbrakk>
@@ -455,6 +483,17 @@ term\<open>\<lbrakk>
 
 term\<open>\<lbrakk>
   if True {
+    ()
+  } else {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  if False {
+    ()
+  } else if True {
     ()
   } else {
     ()
