@@ -21,6 +21,10 @@ or collaboratively conduct interactive theorem proving using Isabelle. See [iq](
 
 [I/P](ip) -- short for Isabelle/Proxy -- runs the Isabelle ML prover on a remote machine while keeping Isabelle/jEdit local. It requires no Isabelle source changes and includes a jEdit plugin for remote status monitoring. See [ip](ip) for more information.
 
+## I/R
+
+[I/R](ir) -- short for Isabelle/REPL -- provides interactive theory exploration outside of jEdit, from the command line or programmatically via TCP and MCP. See [ir](ir) for more information.
+
 ## Isabelle Assistant
 
 [Isabelle Assistant](isabelle-assistant) is an LLM-powered proof assistant for Isabelle/jEdit, built on [AWS Bedrock](https://aws.amazon.com/bedrock/). It provides autonomous proof search, interactive chat with LaTeX rendering, proof suggestions, code explanation, refactoring, and more — all integrated into the Isabelle/jEdit IDE. When combined with [I/Q](iq), generated proofs are automatically verified against Isabelle before display. See [isabelle-assistant](isabelle-assistant) for more information.

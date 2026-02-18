@@ -1,0 +1,113 @@
+name: I/R
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  basic:
+    name: Basic test (HOL)
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Isabelle
+      uses: ./.github/actions/setup-isabelle-action
+
+    - name: Install dependencies
+      run: |
+        apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv > /dev/null
+        pip3 install --break-system-packages prompt_toolkit
+
+    - name: Set Isabelle environment
+      run: |
+        ISABELLE_BIN=/home/isabelle/Isabelle/bin/isabelle
+        echo "ISABELLE=$ISABELLE_BIN" >> $GITHUB_ENV
+
+    - name: Build HOL heap
+      run: $ISABELLE build -b HOL
+
+    - name: Test explore.ML via console
+      run: python3 ir/test_console.py --isabelle $ISABELLE --session HOL
+
+    - name: Test repl.py TCP server
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL
+
+  segment_storage:
+    name: Build heap with intermediate states
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv > /dev/null
+        pip3 install --break-system-packages prompt_toolkit
+
+    - name: Set Isabelle environment
+      run: |
+        ISABELLE=/home/isabelle/Isabelle/bin/isabelle
+        ISABELLE_HOME=$($ISABELLE getenv -b ISABELLE_HOME)
+        ISABELLE_HOME_USER=$($ISABELLE getenv -b ISABELLE_HOME_USER)
+        echo "ISABELLE=$ISABELLE" >> $GITHUB_ENV
+        echo "ISABELLE_HOME=$ISABELLE_HOME" >> $GITHUB_ENV
+        echo "ISABELLE_HOME_USER=$ISABELLE_HOME_USER" >> $GITHUB_ENV
+
+    - name: Create dummy session
+      run: |
+        mkdir -p /tmp/seg_test
+        cp segment_storage.ML /tmp/seg_test/
+        cat > /tmp/seg_test/ROOT <<'EOF'
+        session Seg_Test = HOL +
+          theories Test_Seg
+        EOF
+        sed -i 's/^        //' /tmp/seg_test/ROOT
+        cat > /tmp/seg_test/Test_Seg.thy <<'EOF'
+        theory Test_Seg imports Main begin
+        declare [[ML_write_global = true]]
+        ML_file "segment_storage.ML"
+        declare [[ML_write_global = false]]
+        end
+        EOF
+        sed -i 's/^        //' /tmp/seg_test/Test_Seg.thy
+
+    - name: "A: Build without option — expect no source"
+      run: |
+        $ISABELLE build -d /tmp/seg_test -b Seg_Test
+        output=$(printf 'use "%s";' "$PWD/ir/explore.ML" \
+          | $ISABELLE console -d /tmp/seg_test -l Seg_Test -n 2>&1)
+        echo "$output"
+        echo "$output" | grep -q "source commands not available"
+
+    - name: "B: Register option as false — expect no source"
+      run: |
+        mkdir -p "$ISABELLE_HOME_USER/etc"
+        echo 'option store_segments : bool = false for build' \
+          >> "$ISABELLE_HOME_USER/etc/options"
+        $ISABELLE build -d /tmp/seg_test -c -b Seg_Test
+        output=$(printf 'use "%s";' "$PWD/ir/explore.ML" \
+          | $ISABELLE console -d /tmp/seg_test -l Seg_Test -n 2>&1)
+        echo "$output"
+        echo "$output" | grep -q "source commands not available"
+
+    - name: "C: Build with store_segments=true — expect source"
+      run: |
+        $ISABELLE build -d /tmp/seg_test -c -b -o store_segments=true Seg_Test
+        output=$(printf 'use "%s";' "$PWD/ir/explore.ML" \
+          | $ISABELLE console -d /tmp/seg_test -l Seg_Test -n 2>&1)
+        echo "$output"
+        echo "$output" | grep -q "source commands available"
+        echo "$output" | grep -qv "not available"

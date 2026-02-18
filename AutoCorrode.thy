@@ -22,5 +22,9 @@ theory AutoCorrode
     "Shallow_Separation_Logic.Shallow_Separation_Logic"
 begin
 
+declare [[ML_write_global = true]]
+ML_file \<open>segment_storage.ML\<close>
+declare [[ML_write_global = false]]
+
 end
 (*>*)
