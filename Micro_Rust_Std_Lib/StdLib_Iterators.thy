@@ -49,7 +49,7 @@ context reference
 begin
 
 definition iter_mut ::
-  \<open>('a, 'b, 'v list) ref \<Rightarrow> ('s, ('s, ('a, 'b, 'v) ref, 'abort, 'i prompt, 'o prompt_output) iterator, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
+  \<open>('a, 'b, 'v list) Global_Store.ref \<Rightarrow> ('s, ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i prompt, 'o prompt_output) iterator, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
   where
   \<open>iter_mut ref \<equiv> FunctionBody \<lbrakk>
     let xs = *ref;

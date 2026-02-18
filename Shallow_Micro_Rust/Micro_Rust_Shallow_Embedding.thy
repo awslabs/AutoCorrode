@@ -479,6 +479,10 @@ translations
 
   "_shallow (_urust_identifier ident)"
     \<rightharpoonup> "CONST literal (_shallow_identifier_as_literal ident)"
+  "_shallow (_urust_true)"
+    \<rightharpoonup> "_urust_shallow_bool_true"
+  "_shallow (_urust_false)"
+    \<rightharpoonup> "_urust_shallow_bool_false"
 
   "_shallow (_urust_field_access exp fld)"
     \<rightharpoonup> "_urust_shallow_field_access (_shallow exp) (_shallow_identifier_as_field fld)"
@@ -912,12 +916,70 @@ ML\<open>
       val mk_arg_pat = fn p => mk \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_pattern\<close> $ p
       val mk_pair = mk \<^const_syntax>\<open>Pair\<close>
       val mk_tnil = mk \<^const_syntax>\<open>TNil\<close>
+      val mk_nil = mk \<^const_syntax>\<open>Nil\<close>
+      val mk_cons = mk \<^const_syntax>\<open>Cons\<close>
+      val mk_shallow = fn t => mk \<^syntax_const>\<open>_shallow\<close> $ t
+      val mk_pat_literal = fn e => mk \<^syntax_const>\<open>_urust_shallow_match_pattern_literal\<close> $ e
+      val mk_literal_expr = fn v => mk \<^const_syntax>\<open>literal\<close> $ v
+      fun mk_bit_syntax b = mk (if b = 1 then \<^const_syntax>\<open>True\<close> else \<^const_syntax>\<open>False\<close>)
+      fun mk_bits_syntax len = map mk_bit_syntax o Integer.radicify 2 len
+      fun plain_strings_of str = map fst (Lexicon.explode_string (str, Position.none))
+      fun ascii_ord_of c =
+        if Symbol.is_ascii c then ord c
+        else if c = "\<newline>" then 10
+        else error ("Bad character in string token: " ^ quote c)
+      fun mk_char_syntax i = Term.list_comb (mk \<^const_syntax>\<open>Char\<close>, mk_bits_syntax 8 i)
+      fun mk_string_syntax [] = mk \<^const_syntax>\<open>Nil\<close>
+        | mk_string_syntax (c :: cs) =
+            mk \<^const_syntax>\<open>Cons\<close> $ mk_char_syntax (ascii_ord_of c) $ mk_string_syntax cs
+      fun string_token_to_hol t =
+        (case t of
+          Free (str, _) => (mk \<^const_syntax>\<open>String.implode\<close>) $ mk_string_syntax (plain_strings_of str)
+        | _ => error ("_shallow_match_arg: expected string token, got: " ^ Syntax.string_of_term ctxt t))
+
+      fun shallow_expr_of t =
+        (case t of
+          Const (\<^syntax_const>\<open>_urust_literal\<close>, _) $ v =>
+            mk_literal_expr v
+        | Const (\<^syntax_const>\<open>_urust_string_token\<close>, _) $ s =>
+            mk_literal_expr (string_token_to_hol s)
+        | Const (\<^syntax_const>\<open>_urust_match_pattern_true\<close>, _) =>
+            mk_literal_expr (mk \<^const_syntax>\<open>True\<close>)
+        | Const (\<^syntax_const>\<open>_urust_match_pattern_false\<close>, _) =>
+            mk_literal_expr (mk \<^const_syntax>\<open>False\<close>)
+        | Const (\<^syntax_const>\<open>_urust_match_pattern_string\<close>, _) $ s =>
+            mk_literal_expr (string_token_to_hol s)
+        | Const (\<^syntax_const>\<open>_urust_match_pattern_literal\<close>, _) $ v =>
+            mk_literal_expr v
+        | Const (\<^syntax_const>\<open>_urust_match_pattern_num_const\<close>, _) $ n =>
+            mk_literal_expr n
+        | _ => mk_shallow t)
 
       fun tuple_args_destruct (Const (\<^syntax_const>\<open>_urust_let_pattern_tuple_base_pair\<close>, _) $ a $ b) = [a, b]
         | tuple_args_destruct (Const (\<^syntax_const>\<open>_urust_let_pattern_tuple_app\<close>, _) $ a $ rest) =
             a :: tuple_args_destruct rest
         | tuple_args_destruct t =
             error ("_shallow_match_arg: invalid tuple args: " ^ Syntax.string_of_term ctxt t)
+
+      fun slice_args_destruct (Const (\<^syntax_const>\<open>_urust_match_pattern_slice_args_empty\<close>, _)) = []
+        | slice_args_destruct (Const (\<^syntax_const>\<open>_urust_match_pattern_slice_args_single\<close>, _) $ a) = [a]
+        | slice_args_destruct (Const (\<^syntax_const>\<open>_urust_match_pattern_slice_args_app\<close>, _) $ a $ rest) =
+            a :: slice_args_destruct rest
+        | slice_args_destruct t =
+            error ("_shallow_match_arg: invalid slice args: " ^ Syntax.string_of_term ctxt t)
+
+      fun is_slice_rest (Const (\<^syntax_const>\<open>_urust_match_pattern_slice_rest\<close>, _)) = true
+        | is_slice_rest _ = false
+
+      fun split_slice_rest elems =
+        let
+          fun go pref [] = (rev pref, NONE, [])
+            | go pref (x :: xs) =
+                if is_slice_rest x then (rev pref, SOME (), xs)
+                else go (x :: pref) xs
+        in
+          go [] elems
+        end
 
       fun mk_args_single a = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_args_single\<close> $ a
       fun mk_args_app a b = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_args_app\<close> $ a $ b
@@ -961,6 +1023,14 @@ ML\<open>
                 mk \<^syntax_const>\<open>_urust_shallow_match_pattern_zero\<close>
             | Const (\<^syntax_const>\<open>_urust_match_pattern_one\<close>, _) =>
                 mk \<^syntax_const>\<open>_urust_shallow_match_pattern_one\<close>
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_true\<close>, _) =>
+                mk_pat_literal (mk_literal_expr (mk \<^const_syntax>\<open>True\<close>))
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_false\<close>, _) =>
+                mk_pat_literal (mk_literal_expr (mk \<^const_syntax>\<open>False\<close>))
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_string\<close>, _) $ s =>
+                mk_pat_literal (mk_literal_expr (string_token_to_hol s))
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_literal\<close>, _) $ lit =>
+                mk_pat_literal (mk_literal_expr lit)
             | Const (\<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close>, _) $ id =>
                 let
                   val id' = the_default id (resolve_constructor_id ctxt id)
@@ -973,6 +1043,20 @@ ML\<open>
                 in
                   mk_pat_with_args id' (shallow_match_args_of args)
                 end
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_as\<close>, _) $ id $ p =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_as\<close> $ id $ shallow_match_pattern_of p
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_borrow\<close>, _) $ p =>
+                shallow_match_pattern_of p
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_borrow_mut\<close>, _) $ p =>
+                shallow_match_pattern_of p
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_range\<close>, _) $ lo $ hi =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_range\<close> $ shallow_expr_of lo $ shallow_expr_of hi
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_range_eq\<close>, _) $ lo $ hi =>
+                mk \<^syntax_const>\<open>_urust_shallow_match_pattern_range_eq\<close> $ shallow_expr_of lo $ shallow_expr_of hi
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_slice_empty\<close>, _) =>
+                mk_pat_no_args mk_nil
+            | Const (\<^syntax_const>\<open>_urust_match_pattern_slice\<close>, _) $ args =>
+                shallow_slice_pattern_of args
             | Const (\<^syntax_const>\<open>_urust_match_pattern_struct\<close>, _) $ id $ fields =>
                 let
                   val (ctor, sels) = resolve_struct_constructor ctxt id
@@ -1021,6 +1105,32 @@ ML\<open>
                 shallow_match_pattern_of p
             | _ =>
                 error ("_shallow_match_arg: invalid pattern: " ^ Syntax.string_of_term ctxt pat))
+
+      and shallow_slice_pattern_of args =
+            let
+              val elems = slice_args_destruct args
+              val (prefix, rest_opt, suffix) = split_slice_rest elems
+              val _ = suffix
+
+              fun mk_closed [] = mk_pat_no_args mk_nil
+                | mk_closed (p :: ps) =
+                    mk_pat_with_args mk_cons
+                      (mk_args_app (shallow_match_arg_of p)
+                        (mk_args_single (mk_arg_pat (mk_closed ps))))
+
+              fun mk_open [] = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>
+                | mk_open (p :: ps) =
+                    mk_pat_with_args mk_cons
+                      (mk_args_app (shallow_match_arg_of p)
+                        (mk_args_single (mk_arg_pat (mk_open ps))))
+            in
+              (case rest_opt of
+                NONE => mk_closed elems
+              | SOME _ =>
+                  \<comment>\<open>TODO(#66): suffix constraints after \<^verbatim>\<open>..\<close> are not yet modeled.
+                      We currently preserve the prefix and accept any tail.\<close>
+                  mk_open prefix)
+            end
 
       and shallow_match_args_of args =
             (case args of

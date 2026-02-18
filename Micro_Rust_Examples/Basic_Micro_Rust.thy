@@ -333,7 +333,7 @@ of \<^verbatim>\<open>Reference\<close>, we can indeed write functions operating
 context reference
 begin
 
-definition add_one_to_ref :: \<open>(_, _, 64 word) ref \<Rightarrow> ('s, unit, _, _, _) function_body\<close> where
+definition add_one_to_ref :: \<open>(_, _, 64 word) Global_Store.ref \<Rightarrow> ('s, unit, _, _, _) function_body\<close> where
   \<open>add_one_to_ref ptr \<equiv> FunctionBody \<lbrakk>
      let val = *ptr; \<comment>\<open>Reading requires explicit dereferencing\<close>
      let new_val = val + 1;

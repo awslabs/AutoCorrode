@@ -76,7 +76,7 @@ into a symbolic execution goal \<^verbatim>\<open>\<Delta> \<turnstile> WP e _\<
   done
 
 text\<open>Let's make this a bit more interesting, and verify the classic \<^verbatim>\<open>swap\<close> function\<close>
-definition swap_ref :: \<open>('addr, 'gv, 'v) ref \<Rightarrow> ('addr, 'gv, 'v) ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition swap_ref :: \<open>('addr, 'gv, 'v) Global_Store.ref \<Rightarrow> ('addr, 'gv, 'v) Global_Store.ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>swap_ref rA rB \<equiv> FunctionBody \<lbrakk>
      let oldA = *rA;
      let oldB = *rB;
@@ -86,7 +86,7 @@ definition swap_ref :: \<open>('addr, 'gv, 'v) ref \<Rightarrow> ('addr, 'gv, 'v
 
 text\<open>The contract of \<^term>\<open>swap_ref\<close> might differ slightly from what you'd expect, specifically
 in the arguments of the points-to connective \<^verbatim>\<open>\<mapsto>\<close>. \<^term>\<open>l \<mapsto>\<langle>s\<rangle> g\<down>v\<close> describes the resource where we
-partially own (indicated by share \<^term>\<open>s :: share\<close>) a location \<^term>\<open>l :: ('addr, 'gv, 'v) ref\<close> that
+partially own (indicated by share \<^term>\<open>s :: share\<close>) a location \<^term>\<open>l :: ('addr, 'gv, 'v) Global_Store.ref\<close> that
 points to a 'global' value \<^term>\<open>g :: 'gv\<close>, which we currently read/interpret as a value
 \<^term>\<open>v :: 'v\<close>. You can think of \<^term>\<open>g :: 'gv\<close> being a bitwise representation of an actual
 value \<^term>\<open>v :: 'v\<close>, where \<^term>\<open>g :: 'gv\<close> might comprise bitfields for other values. Writing
@@ -94,7 +94,7 @@ to this location will only change the bits related to \<^term>\<open>v :: 'v\<cl
 This effect is captured with the \<^term>\<open>l \<mapsto>\<langle>s\<rangle> (\<lambda>_. w) \<sqdot> (g\<down>v)\<close> resource, which describes that
 we (partially) own a location \<^term>\<open>l\<close> that points to a 'global' value \<^term>\<open>g\<close>, but field \<^term>\<open>v\<close>
 of that global value has been overwritten with new content \<^term>\<open>w\<close>.\<close>
-definition swap_ref_contract :: \<open>('addr, 'gv, 'v) ref \<Rightarrow> ('addr, 'gv, 'v) ref \<Rightarrow> 'gv \<Rightarrow> 'gv \<Rightarrow> 'v \<Rightarrow> 'v \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
+definition swap_ref_contract :: \<open>('addr, 'gv, 'v) Global_Store.ref \<Rightarrow> ('addr, 'gv, 'v) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> 'gv \<Rightarrow> 'v \<Rightarrow> 'v \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>swap_ref_contract lref rref lg rg lval rval \<equiv>
     let pre  = lref \<mapsto>\<langle>\<top>\<rangle> lg\<down>lval \<star> rref \<mapsto>\<langle>\<top>\<rangle> rg\<down>rval in
     let post = \<lambda> _.

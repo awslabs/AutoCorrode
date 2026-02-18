@@ -46,8 +46,8 @@ lemma array_index_spec [crush_specs]:
 
 context reference begin
 
-definition slice_index :: \<open>('a, 'b, 'v list) ref \<Rightarrow> 'w::{len} word \<Rightarrow>
-        ('s, ('a, 'b, 'v) ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition slice_index :: \<open>('a, 'b, 'v list) Global_Store.ref \<Rightarrow> 'w::{len} word \<Rightarrow>
+        ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>slice_index r i \<equiv> FunctionBody \<lbrakk>
      let ls = *r;
      if \<llangle>unat i\<rrangle> < \<llangle>length\<rrangle>\<^sub>1(ls) {
@@ -72,7 +72,7 @@ lemma slice_index_spec [crush_specs]:
   done
 
 definition slice_index_array ::
-  \<open>('a, 'b, ('v, 'l::{len}) array) ref \<Rightarrow> 'w::{len} word \<Rightarrow> ('s, ('a, 'b, 'v) ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
+  \<open>('a, 'b, ('v, 'l::{len}) array) Global_Store.ref \<Rightarrow> 'w::{len} word \<Rightarrow> ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
   where \<open>slice_index_array r idx \<equiv> FunctionBody (
      if unat idx < LENGTH('l) then
          literal (focus_nth_array (unat idx) r)
@@ -94,8 +94,8 @@ lemma slice_index_array_spec [crush_specs]:
   apply crush_base
   done
 
-definition slice_index_vector :: \<open>('a, 'b, ('v, 'l::{len}) vector) ref \<Rightarrow> 'w::{len} word \<Rightarrow>
-      ('s, ('a, 'b, 'v) ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition slice_index_vector :: \<open>('a, 'b, ('v, 'l::{len}) vector) Global_Store.ref \<Rightarrow> 'w::{len} word \<Rightarrow>
+      ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>slice_index_vector r idx \<equiv> FunctionBody \<lbrakk>
      let v = *r;
      if \<llangle>unat idx\<rrangle> < \<llangle>vector_len v\<rrangle> {
@@ -123,8 +123,8 @@ lemma slice_index_vector_spec [crush_specs]:
 the following does not work anymore. Once we actually use subrange slices, this needs to be
 revisited.\<close>
 (*
-definition slice_index_range :: \<open>('a, 'b, 'v list) ref \<Rightarrow> 'w::{len} word range \<Rightarrow>
-    ('s, ('a, 'b, 'v list) ref, 'abort, 'i, 'o) function_body\<close> where
+definition slice_index_range :: \<open>('a, 'b, 'v list) Global_Store.ref \<Rightarrow> 'w::{len} word range \<Rightarrow>
+    ('s, ('a, 'b, 'v list) Global_Store.ref, 'abort, 'i, 'o) function_body\<close> where
   \<open>slice_index_range r rng \<equiv> FunctionBody (
     bind (call (dereference_fun r)) (\<lambda>xs.
     case rng of

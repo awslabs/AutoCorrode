@@ -68,7 +68,7 @@ and typing would consist of encoding/decoding byte strings as as concrete types.
 
 text\<open>Before going into further details, here is the example of the \<^verbatim>\<open>swap\<close> function:\<close>
 
-definition swap_ref :: \<open>('addr, 'gv, 'v) ref \<Rightarrow> ('addr, 'gv, 'v) ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition swap_ref :: \<open>('addr, 'gv, 'v) Global_Store.ref \<Rightarrow> ('addr, 'gv, 'v) Global_Store.ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>swap_ref rA rB \<equiv> FunctionBody \<lbrakk>
      let oldA = *rA;
      let oldB = *rB;
@@ -137,15 +137,15 @@ First, the empty heap:\<close>
 definition h\<^sub>0 :: heap_ex_ty where \<open>h\<^sub>0 \<equiv> mem_from_alist []\<close>
 value[code] h\<^sub>0
 
-text\<open>Next, we need two typed references in \<^typ>\<open>(nat, heap_ex_gv, 'a) ref\<close>, which is
+text\<open>Next, we need two typed references in \<^typ>\<open>(nat, heap_ex_gv, 'a) Global_Store.ref\<close>, which is
 essentially a combination of a raw reference in \<^typ>\<open>(nat, heap_ex_gv) gref\<close>, and a 'focus'. In general,
 a focus is a means to go from the fixed global value type to varying 'local' value types, but in our
 case, we just use the global value type directly, and hence resort to the identity focus.\<close>
 
-definition ref0 :: \<open>(nat, heap_ex_gv, heap_ex_gv) ref\<close> where
+definition ref0 :: \<open>(nat, heap_ex_gv, heap_ex_gv) Global_Store.ref\<close> where
   \<open>ref0 \<equiv> make_focused (make_gref 0) focus_id\<close>
 
-definition ref1 :: \<open>(nat, heap_ex_gv, heap_ex_gv) ref\<close> where
+definition ref1 :: \<open>(nat, heap_ex_gv, heap_ex_gv) Global_Store.ref\<close> where
   \<open>ref1 \<equiv> make_focused (make_gref 1) focus_id\<close>
 
 text\<open>Let's try to run the function. This functions are essentially uRust \<^verbatim>\<open>expression\<close>s, we
@@ -233,11 +233,11 @@ relating the global and local value type. While in the abstract-heap example, th
 here we use a focus representing little/big endian decoder/encoders of \<^verbatim>\<open>32 word\<close> as \<^verbatim>\<open>byte list\<close>.
 The theory \<^file>\<open>../Byte_Level_Encoding/Byte_Encoding_Word_Nat.thy\<close> provides foci for standard little/big-endian encoding
 of words and nats.\<close>
-definition pref_le :: \<open>(raw_pmem_region, 8 word list, 32 word) ref\<close>
+definition pref_le :: \<open>(raw_pmem_region, 8 word list, 32 word) Global_Store.ref\<close>
     where \<open>pref_le \<equiv> make_focused (make_gref (make_raw_pmem_region 0x0000000FF1C8 4))
                                               word32_byte_list_focus_le\<close>
 
-definition pref_be :: \<open>(raw_pmem_region, 8 word list, 32 word) ref\<close>
+definition pref_be :: \<open>(raw_pmem_region, 8 word list, 32 word) Global_Store.ref\<close>
    where \<open>pref_be \<equiv> make_focused (make_gref (make_raw_pmem_region 0xDEADBEEF0 4))
                                               word32_byte_list_focus_be\<close>
 
@@ -291,7 +291,7 @@ adhoc_overloading store_dereference_const \<rightleftharpoons> raw_pmem_trie_der
 
 text\<open>With this, we can make sense of the \<^verbatim>\<open>swap_ref\<close> function outside of any locale:\<close>
 
-definition swap_ref :: \<open>(raw_pmem_region, byte list, 'v) ref \<Rightarrow> (raw_pmem_region, byte list, 'v) ref
+definition swap_ref :: \<open>(raw_pmem_region, byte list, 'v) Global_Store.ref \<Rightarrow> (raw_pmem_region, byte list, 'v) Global_Store.ref
    \<Rightarrow> (unit tagged_physical_memory, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>swap_ref rA rB \<equiv> FunctionBody \<lbrakk>
      let oldA = *rA;

@@ -823,7 +823,7 @@ ML\<open>local
   (* is_points_to should detect points_to predicates from all interpretations,
      and for the unnamed one, we should also be able to use the usual points_to syntax. *)
   val _ = assert     (is_points_to_raw @{term \<open>(r :: ('a2, 'b2) gref) \<mapsto>\<langle>sh\<rangle> g\<close>})
-  val _ = assert_not (is_points_to_raw @{term \<open>(r :: ('a2, 'b2, _) ref) \<mapsto>\<langle>sh\<rangle> g\<down>v\<close>})
+  val _ = assert_not (is_points_to_raw @{term \<open>(r :: ('a2, 'b2, _) Global_Store.ref) \<mapsto>\<langle>sh\<rangle> g\<down>v\<close>})
   val _ = assert     (is_points_to_raw @{term \<open>refA.points_to_raw r sh g\<close>})
   val _ = assert_not (is_points_to_raw @{term \<open>refA.points_to r sh g v\<close>})
   val _ = assert     (is_points_to_raw @{term \<open>refB.points_to_raw r sh g\<close>})
@@ -832,7 +832,7 @@ ML\<open>local
   val _ = assert_not (is_points_to_raw @{term \<open>points_to r sh g v\<close>})
 
   val _ = assert_not (is_points_to @{term \<open>(r :: ('a2, 'b2) gref) \<mapsto>\<langle>sh\<rangle> g\<close>})
-  val _ = assert     (is_points_to @{term \<open>(r :: ('a2, 'b2, _) ref) \<mapsto>\<langle>sh\<rangle> g\<down>v\<close>})
+  val _ = assert     (is_points_to @{term \<open>(r :: ('a2, 'b2, _) Global_Store.ref) \<mapsto>\<langle>sh\<rangle> g\<down>v\<close>})
   val _ = assert_not (is_points_to @{term \<open>refA.points_to_raw r sh g\<close>})
   val _ = assert     (is_points_to @{term \<open>refA.points_to r sh g v\<close>})
   val _ = assert_not (is_points_to @{term \<open>refB.points_to_raw r sh g\<close>})

@@ -282,10 +282,10 @@ subsection\<open>Assignment Operators\<close>
 subsubsection\<open>Simple Assignment\<close>
 
 context
-  fixes r :: \<open>('s, 'b, integer) ref\<close>
+  fixes r :: \<open>('s, 'b, integer) Global_Store.ref\<close>
 begin
 
-private definition dummy_dereference_assign :: \<open>('s, 'b, 'v) ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
+private definition dummy_dereference_assign :: \<open>('s, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
   \<open>dummy_dereference_assign \<equiv> undefined\<close>
 
 adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference_assign
@@ -766,6 +766,80 @@ term\<open>\<lbrakk>
   } else {
     assert!(False);
     ()
+  }
+\<rbrakk>\<close>
+
+subsubsection\<open>Extended Rust-Style Pattern Forms\<close>
+
+term\<open>\<lbrakk>
+  let y = match \<llangle>True\<rrangle> {
+    true \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    false \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>1 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let y = match \<llangle>String.implode ''ok''\<rrangle> {
+    "ok" \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>1 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let y = match \<llangle>CHR ''a''\<rrangle> {
+    \<llangle>CHR ''a''\<rrangle> \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>1 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let y = match Some(\<llangle>7 :: 32 word\<rrangle>) {
+    whole @ Some(v) \<Rightarrow> v,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>7 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+text\<open>Note: Rust-style pattern binders @{text "ref p"} and @{text "ref mut p"} are currently
+not supported in this frontend, because they conflict with existing syntax around references
+and function parameters in this Isabelle embedding.\<close>
+
+term\<open>\<lbrakk>
+  let y = match Some(\<llangle>7 :: 32 word\<rrangle>) {
+    Some(&v) \<Rightarrow> v,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>7 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let y = match Some(\<llangle>7 :: 32 word\<rrangle>) {
+    Some(& mut v) \<Rightarrow> v,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>7 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+text\<open>Range patterns are lowered in the shallow embedding, but concrete parser-level
+coverage for the Rust-style syntax is exercised separately in frontend-focused tests.\<close>
+
+term\<open>\<lbrakk>
+  let y = match \<llangle>[7 :: 32 word, 8, 9]\<rrangle> {
+    [head, ..] \<Rightarrow> head,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>7 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+text\<open>Current slice-rest lowering is partial: patterns with a suffix after @{text ".."}
+elaborate, but only the prefix before @{text ".."} is currently enforced.\<close>
+term\<open>\<lbrakk>
+  match \<llangle>[1 :: 32 word, 2, 3, 4]\<rrangle> {
+    [a, b, .., z] \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
   }
 \<rbrakk>\<close>
 
@@ -1336,7 +1410,7 @@ term\<open>\<lbrakk>
 subsubsection\<open>Borrow Syntax\<close>
 
 context
-  fixes r :: \<open>('s, 'b, integer) ref\<close>
+  fixes r :: \<open>('s, 'b, integer) Global_Store.ref\<close>
   fixes x y :: \<open>32 word\<close>
 begin
 term \<open>\<lbrakk> &r \<rbrakk>\<close>
@@ -1354,10 +1428,10 @@ term\<open>\<lbrakk>
 subsubsection\<open>Dereference\<close>
 
 context
-  fixes r :: \<open>('s, 'b, integer) ref\<close>
+  fixes r :: \<open>('s, 'b, integer) Global_Store.ref\<close>
 begin
 
-private definition dummy_dereference_ref :: \<open>('s, 'b, 'v) ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
+private definition dummy_dereference_ref :: \<open>('s, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
   \<open>dummy_dereference_ref \<equiv> undefined\<close>
 
 adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference_ref
@@ -1370,10 +1444,10 @@ end
 subsubsection\<open>Double Dereference\<close>
 
 context
-  fixes rr :: \<open>('s, 'b, ('s, 'b, integer) ref) ref\<close>
+  fixes rr :: \<open>('s, 'b, ('s, 'b, integer) Global_Store.ref) Global_Store.ref\<close>
 begin
 
-private definition dummy_dereference_ref2 :: \<open>('s, 'b, 'v) ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
+private definition dummy_dereference_ref2 :: \<open>('s, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
   \<open>dummy_dereference_ref2 \<equiv> undefined\<close>
 
 adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference_ref2
@@ -1427,12 +1501,12 @@ end
 subsubsection\<open>Field Assignment Through Lenses\<close>
 
 context
-  fixes r :: \<open>('s, 'b, integer) ref\<close>
-  fixes s :: \<open>('s, 'b, testrec2) ref\<close>
-  fixes f :: \<open>('s, 'b, integer) ref \<Rightarrow> integer \<Rightarrow> ('s, unit, unit, unit, unit) function_body\<close>
+  fixes r :: \<open>('s, 'b, integer) Global_Store.ref\<close>
+  fixes s :: \<open>('s, 'b, testrec2) Global_Store.ref\<close>
+  fixes f :: \<open>('s, 'b, integer) Global_Store.ref \<Rightarrow> integer \<Rightarrow> ('s, unit, unit, unit, unit) function_body\<close>
 begin
 
-private definition dummy_dereference_field :: \<open>('s, 'b, 'v) ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
+private definition dummy_dereference_field :: \<open>('s, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, 'v, unit, unit, unit) function_body\<close> where
   \<open>dummy_dereference_field \<equiv> undefined\<close>
 
 adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference_field

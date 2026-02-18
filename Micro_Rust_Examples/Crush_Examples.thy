@@ -897,7 +897,7 @@ begin
 adhoc_overloading store_update_const \<rightleftharpoons>
   update_fun
 
-definition swap_ref :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> ('s, unit, unit, 'abort, 'i prompt, 'o prompt_output) expression\<close> where
+definition swap_ref :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, unit, unit, 'abort, 'i prompt, 'o prompt_output) expression\<close> where
   \<open>swap_ref rA rB \<equiv> \<lbrakk>
      let oldA = *rA;
      let oldB = *rB;
@@ -911,7 +911,7 @@ lemma swap_ref_correct:
   fixes \<Gamma> :: \<open>('s, 'abort, 'i, 'o) striple_context\<close>
     and gA gB :: 'b
     and vA vB :: 'v
-    and rA rB :: \<open>('a, 'b, 'v) ref\<close>
+    and rA rB :: \<open>('a, 'b, 'v) Global_Store.ref\<close>
   shows \<open>\<Gamma> ;   \<comment>\<open>Initial reference contents\<close>
               rA \<mapsto> \<langle>\<top>\<rangle> gA\<down>vA \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB\<down>vB
             \<turnstile> swap_ref rA rB
@@ -933,7 +933,7 @@ lemma
   fixes \<Gamma> :: \<open>('s, 'abort, 'i, 'o) striple_context\<close>
     and gA gB :: 'b
     and vA vB :: 'v
-    and rA rB :: \<open>('a, 'b, 'v) ref\<close>
+    and rA rB :: \<open>('a, 'b, 'v) Global_Store.ref\<close>
   shows \<open>\<Gamma> ;   \<comment>\<open>Initial reference contents\<close>
               rA \<mapsto> \<langle>\<top>\<rangle> gA\<down>vA \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB\<down>vB
             \<turnstile> swap_ref rA rB
@@ -1032,7 +1032,7 @@ text\<open>Normally, we would not reason about individual \<mu>Rust expressions,
 specifications and contracts to do so. We illustrate this in the example of the above
 reference-swapping code wrapped into a function:\<close>
 
-definition swap_ref_fun :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition swap_ref_fun :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>swap_ref_fun rA rB \<equiv> FunctionBody \<lbrakk>
      let oldA = *rA;
      let oldB = *rB;
@@ -1044,7 +1044,7 @@ text\<open>The contract for a uRust function is usually captured in a separate d
 \<^verbatim>\<open>function_contract\<close>. In this case:\<close>
 
 definition swap_ref_fun_contract ::
-   \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
+   \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
   where \<open>swap_ref_fun_contract rA rB gA vA gB vB \<equiv>
      let pre = rA \<mapsto> \<langle>\<top>\<rangle> gA\<down>vA \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB\<down>vB in
      let post = \<lambda>_. (\<Squnion>gA' gB'. rA \<mapsto> \<langle>\<top>\<rangle> gA'\<down>vB \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB'\<down>vA) in
@@ -1071,7 +1071,7 @@ lemma swap_ref_fun_spec:
 
 text\<open>Next, imagine we write a higher-level function which relies on \<^verbatim>\<open>swap_ref_fun\<close>.\<close>
 
-definition rotate_ref3 :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition rotate_ref3 :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>rotate_ref3 rA rB rC \<equiv> FunctionBody \<lbrakk>
      swap_ref_fun (rA, rB);
      swap_ref_fun (rB, rC);
@@ -1080,7 +1080,7 @@ definition rotate_ref3 :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref
 text\<open>Next, we write the contract for \<^verbatim>\<open>rotate_ref3\<close>:\<close>
 
 definition rotate_ref3_contract ::
-   \<open>('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> ('a, 'b, 'v) ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
+   \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
   where \<open>rotate_ref3_contract rA rB rC gA vA gB vB gC vC \<equiv>
      let pre = rA \<mapsto> \<langle>\<top>\<rangle> gA\<down>vA \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB\<down>vB \<star> rC \<mapsto>\<langle>\<top>\<rangle> gC\<down>vC in
      let post = \<lambda>_. (\<Squnion>gA' gB' gC'. rA \<mapsto> \<langle>\<top>\<rangle> gA'\<down>vB \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB'\<down>vC \<star> rC \<mapsto>\<langle>\<top>\<rangle> gC'\<down>vA) in
@@ -1191,14 +1191,14 @@ adhoc_overloading store_update_const \<rightleftharpoons>
 
 text\<open>Overwrite one structure field, return the other:\<close>
 
-definition write_foo_read_bar :: \<open>('a, 'b, test_record) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition write_foo_read_bar :: \<open>('a, 'b, test_record) Global_Store.ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>write_foo_read_bar ptr \<equiv> FunctionBody \<lbrakk>
      ptr.foo = 42;
      *(ptr.bar)
   \<rbrakk>\<close>
 
 definition write_foo_read_bar_contract ::
-   \<open>('a, 'b, test_record) ref \<Rightarrow> 'b \<Rightarrow> test_record \<Rightarrow> ('s, int, 'abort) function_contract\<close>
+   \<open>('a, 'b, test_record) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> test_record \<Rightarrow> ('s, int, 'abort) function_contract\<close>
   where \<open>write_foo_read_bar_contract r g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v in
      let post = \<lambda>t. \<langle>t = test_record.bar v\<rangle> \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(test_record.update_foo (\<lambda>_. 42) v)) in
@@ -1270,7 +1270,7 @@ lemma write_foo_read_bar_spec':
 
 text\<open>Clear many structure fields, return another:\<close>
 
-definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition test_record2_zeroize :: \<open>('a, 'b, test_record2) Global_Store.ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>test_record2_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
      ptr.f0 = 3;
      ptr.f1 = 3;
@@ -1356,7 +1356,7 @@ definition test_record2_zeroize :: \<open>('a, 'b, test_record2) ref \<Rightarro
   )\<rbrakk>\<close>
 
 definition test_record2_zeroize_contract ::
-   \<open>('a, 'b, test_record2) ref \<Rightarrow> 'b \<Rightarrow> test_record2 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
+   \<open>('a, 'b, test_record2) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> test_record2 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
   where \<open>test_record2_zeroize_contract r g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v in
      let post = \<lambda>t. \<langle>t = test_record2.f20 v\<rangle> \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(
@@ -1396,13 +1396,13 @@ lemma test_record2_zeroize_contract_spec:
 
 text\<open>Another similar stress test, but this time using array accesses behind a function wrapper.\<close>
 
-definition test_record3_zero_field :: \<open>('a, 'b, test_record3) ref \<Rightarrow> 64 word \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition test_record3_zero_field :: \<open>('a, 'b, test_record3) Global_Store.ref \<Rightarrow> 64 word \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>test_record3_zero_field r i \<equiv> FunctionBody \<lbrakk>
      r.data[i] = 0
   \<rbrakk>\<close>
 
 definition test_record3_zero_field_contract ::
-   \<open>('a, 'b, test_record3) ref \<Rightarrow> 64 word \<Rightarrow> 'b \<Rightarrow> test_record3 \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
+   \<open>('a, 'b, test_record3) Global_Store.ref \<Rightarrow> 64 word \<Rightarrow> 'b \<Rightarrow> test_record3 \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>test_record3_zero_field_contract r i g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v \<star> \<langle>i < 20\<rangle> in
      let zero_ith_pure :: test_record3 \<Rightarrow> test_record3 = (\<lambda>t. t \<lparr> data := array_update (data t) (unat i) 0 \<rparr> ) in
@@ -1423,7 +1423,7 @@ proof (crush_boot f: test_record3_zero_field_def contract: test_record3_zero_fie
     by crush_base
 qed
 
-definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+definition test_record3_zeroize :: \<open>('a, 'b, test_record3) Global_Store.ref \<Rightarrow> ('s, int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>test_record3_zeroize ptr \<equiv> FunctionBody \<lbrakk>(
      ptr.test_record3_zero_field(0);
      ptr.test_record3_zero_field(1);
@@ -1489,7 +1489,7 @@ definition test_record3_zeroize :: \<open>('a, 'b, test_record3) ref \<Rightarro
   )\<rbrakk>\<close>
 
 definition test_record3_zeroize_contract ::
-   \<open>('a, 'b, test_record3) ref \<Rightarrow> 'b \<Rightarrow> test_record3 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
+   \<open>('a, 'b, test_record3) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> test_record3 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
   where \<open>test_record3_zeroize_contract r g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v in
      let zero_data_pure :: test_record3 \<Rightarrow> test_record3 = (\<lambda>t. t \<lparr> data := array_constant 0 \<rparr> ) in

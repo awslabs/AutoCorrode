@@ -247,6 +247,11 @@ syntax
   \<comment>\<open>Add mutable binding\<close>
   "_urust_bind_mutable" :: "urust_identifier \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
     ("let/ mut/ _/ =/ _;// _" [1000,20,10]10)
+  \<comment>\<open>Boolean literals as expressions\<close>
+  "_urust_true" :: \<open>urust\<close>
+    ("true" 1000)
+  "_urust_false" :: \<open>urust\<close>
+    ("false" 1000)
   \<comment>\<open>Standard if-then-else conditional\<close>
   "_urust_if_then_else" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if/ _/ / {/ _/ }/ else/ {/ _/ }"[20,0,0]21)
@@ -338,6 +343,16 @@ syntax
     ("0" 1000)
   "_urust_match_pattern_one" :: \<open>urust_pattern\<close>
     ("1" 1000)
+  "_urust_match_pattern_true" :: \<open>urust_pattern\<close>
+    ("true" 1000)
+  "_urust_match_pattern_false" :: \<open>urust_pattern\<close>
+    ("false" 1000)
+  "_urust_match_pattern_string" :: \<open>string_token \<Rightarrow> urust_pattern\<close>
+    ("_" [1000]1000)
+  \<comment>\<open>Generic literal pattern. Useful as a fallback for values without dedicated token syntax
+      (e.g. chars as \<^verbatim>\<open>\<llangle>CHR ''a''\<rrangle>\<close>).\<close>
+  "_urust_match_pattern_literal" :: \<open>'a \<Rightarrow> urust_pattern\<close>
+    ("\<llangle>_\<rrangle>" [1000]1000)
   "_urust_match_pattern_constr_with_args" :: \<open>urust_identifier \<Rightarrow> urust_pattern_args \<Rightarrow> urust_pattern\<close>
     ("_ '(_')"[1000,100]1000)
   "_urust_match_pattern_args_single" :: \<open>urust_pattern \<Rightarrow> urust_pattern_args\<close>
@@ -356,6 +371,8 @@ syntax
     ("_")
   "_urust_match_pattern_slice_args_app" :: \<open>urust_pattern \<Rightarrow> urust_pattern_slice_args \<Rightarrow> urust_pattern_slice_args\<close>
     ("_,/ _"[1000,100]100)
+  "_urust_match_pattern_slice_rest" :: \<open>urust_pattern\<close>
+    (".." 1000)
 
   \<comment>\<open>Struct patterns: Foo { foo: p, goo: q }\<close>
   "_urust_match_pattern_struct" :: \<open>urust_identifier \<Rightarrow> urust_pattern_struct_fields \<Rightarrow> urust_pattern\<close>
@@ -373,6 +390,26 @@ syntax
   \<comment>\<open>Grouped patterns: (p)\<close>
   "_urust_match_pattern_grouped" :: \<open>urust_pattern \<Rightarrow> urust_pattern\<close>
     ("'(_')" [1000]1000)
+  \<comment>\<open>\<^verbatim>\<open>id @ pat\<close> alias pattern\<close>
+  "_urust_match_pattern_as" :: \<open>urust_identifier \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("_ @/ _" [1000, 1000] 1000)
+  \<comment>\<open>Binding mode annotations. Current semantics are a frontend-only desugaring and do not
+      model borrow-checking behavior. We intentionally do not support Rust's @{text "ref"} and
+      @{text "ref mut"} pattern binders here, because they collide with existing `ref` syntax
+      used pervasively in this development.\<close>
+  "_urust_match_pattern_borrow" :: \<open>urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("&_" [1000]1000)
+  "_urust_match_pattern_borrow_mut" :: \<open>urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("& mut _" [1000]1000)
+  \<comment>\<open>Range patterns (currently lowered to guarded matches in the shallow embedding).\<close>
+  "_urust_match_pattern_range" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    (infix \<open>..\<close> 41)
+  "_urust_match_pattern_range_eq" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    (infix \<open>..=\<close> 41)
+  "_urust_match_pattern_range" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("range'_pat'(_,/ _')" [1000,1000]1000)
+  "_urust_match_pattern_range_eq" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
+    ("range'_pat'_inc'(_,/ _')" [1000,1000]1000)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
        https://doc.rust-lang.org/reference/expressions.html\<close>
@@ -595,6 +632,10 @@ let
         a :: slice_args_destruct bs
     | slice_args_destruct ast = raise Ast.AST ("slice_args_destruct", [ast])
 
+  fun has_slice_rest [] = false
+    | has_slice_rest (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice_rest\<close> :: _) = true
+    | has_slice_rest (_ :: xs) = has_slice_rest xs
+
   fun mk_list_pattern [] = mk_pat_no_args nil_id
     | mk_list_pattern (a :: as') =
         mk_pat_with_args cons_id (mk_args_app a (mk_args_single (mk_list_pattern as')))
@@ -603,7 +644,14 @@ let
     | slice_empty_pattern_tr xs =
         mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice_empty\<close>) xs
 
-  fun slice_pattern_tr [args] = mk_list_pattern (slice_args_destruct args)
+  fun slice_pattern_tr [args] =
+        let
+          val elems = slice_args_destruct args
+        in
+          if has_slice_rest elems
+          then mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice\<close>) [args]
+          else mk_list_pattern elems
+        end
     | slice_pattern_tr xs =
         mk (Ast.Constant \<^syntax_const>\<open>_urust_match_pattern_slice\<close>) xs
 in

@@ -44,15 +44,15 @@ definition gref_map :: \<open>('a \<Rightarrow> 'b) \<Rightarrow> ('a, 'v) gref 
   where \<open>gref_map f r \<equiv> make_gref (f (gref_address r))\<close>
 
 abbreviation ll_ptr_as_ref' ::
-  \<open>('caddr, 'gv) gref \<Rightarrow> ('addr, 'gv, ('caddr, 'gv, 't) ll_node_raw) ref\<close> where
+  \<open>('caddr, 'gv) gref \<Rightarrow> ('addr, 'gv, ('caddr, 'gv, 't) ll_node_raw) Global_Store.ref\<close> where
   \<open>ll_ptr_as_ref' r \<equiv> make_focused (gref_map (prism_embed caddr_prism) r) ll_focus\<close>
 
 abbreviation \<open>ll_ptr_as_ref \<equiv> Option.map_option ll_ptr_as_ref'\<close>
 
 \<comment>\<open>Bounded reversal of linked lists of uRust references\<close>
 definition reverse_unlink :: \<open>64 word \<Rightarrow> ('caddr, 'gv) gref option \<Rightarrow>
-      ('addr, 'gv, ('caddr, 'gv) gref option) ref \<Rightarrow>
-      ('addr, 'gv, ('caddr, 'gv) gref option) ref \<Rightarrow>
+      ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref \<Rightarrow>
+      ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref \<Rightarrow>
       ('s, ('caddr, 'gv) gref option \<times> ('caddr, 'gv) gref option \<times> tnil, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>reverse_unlink n orig cur_raw last_raw \<equiv> FunctionBody \<lbrakk>
       last_raw = None;
@@ -98,8 +98,8 @@ by (induction ds; cases ll; auto intro: ucincl_intros)
 definition reverse_unlink_contract ::
    \<open>64 word
    \<Rightarrow> ('caddr, 'gv) gref option
-   \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) ref
-   \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) ref
+   \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref
+   \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref
    \<Rightarrow> 't list
    \<Rightarrow> ('caddr, 'gv) gref option
    \<Rightarrow> ('s, ('caddr, 'gv) gref option \<times> ('caddr, 'gv) gref option \<times> tnil, 'abort) function_contract\<close> where

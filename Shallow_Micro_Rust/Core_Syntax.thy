@@ -187,6 +187,10 @@ syntax
     ("\<guillemotleft>_\<guillemotright>")
   "_urust_shallow_match_pattern_constr_with_args" :: \<open>logic \<Rightarrow> urust_shallow_match_pattern_args \<Rightarrow> urust_shallow_match_pattern\<close>
     ("\<guillemotleft>_\<guillemotright> '(_')"[0,100]100)
+  "_urust_shallow_match_pattern_literal" :: \<open>logic \<Rightarrow> urust_shallow_match_pattern\<close>
+  "_urust_shallow_match_pattern_range" :: \<open>logic \<Rightarrow> logic \<Rightarrow> urust_shallow_match_pattern\<close>
+  "_urust_shallow_match_pattern_range_eq" :: \<open>logic \<Rightarrow> logic \<Rightarrow> urust_shallow_match_pattern\<close>
+  "_urust_shallow_match_pattern_as" :: \<open>logic \<Rightarrow> urust_shallow_match_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
   "_urust_shallow_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_shallow_match_pattern_arg\<close>
     ("_")
   "_urust_shallow_match_pattern_arg_dummy" :: \<open>urust_shallow_match_pattern_arg\<close>
@@ -256,7 +260,7 @@ syntax
     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close>
     ("\<star>_ \<leftarrow> (_)" [100,20]15)
   "_urust_shallow_store_ref_new"
-    :: \<open>('s, ('a, 'b, 'v) ref, 'abort, 'i, 'o) function_body\<close>
+    :: \<open>('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i, 'o) function_body\<close>
     ("Ref::new")
   "_urust_shallow_store_dereference"
     :: \<open>'a \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close>
@@ -316,13 +320,13 @@ the syntax to an undefined generic constant, and use adhoc-overloading for type-
 consts
   unwrap :: \<open>'a \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body\<close>
   expect :: \<open>'a \<Rightarrow> String.literal \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body\<close>
-  store_update_const :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close>
-  store_reference_const :: \<open>'v \<Rightarrow> ('s, ('a, 'b, 'v) ref, 'abort, 'i, 'o) function_body\<close>
+  store_update_const :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close>
+  store_reference_const :: \<open>'v \<Rightarrow> ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i, 'o) function_body\<close>
   store_dereference_const :: \<open>'a \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close>
   index_const :: \<open>'a \<Rightarrow> 'idx \<Rightarrow> ('s,'b, 'abort, 'i, 'o) function_body\<close>
   negation_const :: \<open>('s,'v,'c, 'abort, 'i, 'o) expression \<Rightarrow> ('s,'v,'c, 'abort, 'i, 'o) expression\<close>
   propagate_const :: \<open>('s,'v,'c, 'abort, 'i, 'o) expression \<Rightarrow> ('s,'w,'c, 'abort, 'i, 'o) expression\<close>
-  assign_add_const :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'w \<Rightarrow> ('s,unit, 'abort, 'i, 'o) function_body\<close>
+  assign_add_const :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'w \<Rightarrow> ('s,unit, 'abort, 'i, 'o) function_body\<close>
 
 syntax
   "_urust_shallow_match_convert_branches" :: \<open>urust_shallow_match_branches \<Rightarrow> case_basic_branches\<close>
@@ -646,6 +650,63 @@ let
     Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_args_app\<close> $ arg $ rest;
   fun mk_arg_pattern pat =
     Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_pattern\<close> $ pat;
+  fun mk_anon_raw_value () =
+    Syntax.const \<^syntax_const>\<open>_anonymous_var\<close>;
+  fun mk_anon_expr () =
+    Syntax.const \<^const_syntax>\<open>literal\<close> $ mk_anon_raw_value ();
+  fun mk_guard_eq lit =
+    Syntax.const \<^const_syntax>\<open>urust_eq\<close> $ mk_anon_expr () $ lit;
+  fun mk_guard_ge lo =
+    Syntax.const \<^const_syntax>\<open>comp_ge\<close> $ mk_anon_expr () $ lo;
+  fun mk_guard_gt lo =
+    Syntax.const \<^const_syntax>\<open>comp_gt\<close> $ mk_anon_expr () $ lo;
+  fun mk_guard_le hi =
+    Syntax.const \<^const_syntax>\<open>comp_le\<close> $ mk_anon_expr () $ hi;
+  fun mk_guard_lt hi =
+    Syntax.const \<^const_syntax>\<open>comp_lt\<close> $ mk_anon_expr () $ hi;
+  fun mk_guard_conj g1 g2 =
+    Syntax.const \<^const_syntax>\<open>urust_conj\<close> $ g1 $ g2;
+  fun extend_guard NONE g = SOME g
+    | extend_guard (SOME g0) g = SOME (mk_guard_conj g0 g);
+
+  fun binding_name_of ctxt id =
+    (case id of
+      Free (name, _) => name
+    | Const (name, _) => Long_Name.base_name name
+    | _ => case_error ("invalid alias pattern binder: " ^ Syntax.string_of_term ctxt id));
+
+  fun mk_alias_rhs ctxt id rhs =
+    let
+      val alias = binding_name_of ctxt id;
+    in
+      Syntax.const \<^const_syntax>\<open>bind\<close> $
+        (Syntax.const \<^const_syntax>\<open>literal\<close> $ mk_anon_raw_value ()) $
+        Abs (alias, dummyT, rhs)
+    end;
+
+  fun normalize_extended_pattern ctxt (pat, guard_opt, rhs) =
+    (case pat of
+      Const ("_urust_shallow_match_pattern_as", _) $ id $ inner =>
+        normalize_extended_pattern ctxt (inner, guard_opt, mk_alias_rhs ctxt id rhs)
+    | Const ("_urust_shallow_match_pattern_literal", _) $ lit =>
+        (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+         extend_guard guard_opt (mk_guard_eq lit),
+         rhs)
+    | Const ("_urust_shallow_match_pattern_range", _) $ lo $ hi =>
+        let val g = mk_guard_conj (mk_guard_ge lo) (mk_guard_lt hi)
+        in
+          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+           extend_guard guard_opt g,
+           rhs)
+        end
+    | Const ("_urust_shallow_match_pattern_range_eq", _) $ lo $ hi =>
+        let val g = mk_guard_conj (mk_guard_ge lo) (mk_guard_le hi)
+        in
+          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+           extend_guard guard_opt g,
+           rhs)
+        end
+    | _ => (pat, guard_opt, rhs));
 
   \<comment>\<open>Expand disjunctive patterns into a list of patterns.
      For example: Some(x) | None becomes [Some(x), None]
@@ -833,7 +894,7 @@ let
 
   fun urust_shallow_match_tr ctxt [exp, branches] =
         let
-          val branch_list = branches_to_list ctxt branches;
+          val branch_list = map (normalize_extended_pattern ctxt) (branches_to_list ctxt branches);
         in
           if has_guard branch_list then
             let val case_expr = process_branches ctxt branch_list

@@ -61,7 +61,7 @@ text\<open>Lifting the raw reference operations to typed ones using foci:\<close
 definition reference_fun ::
   \<open>('b, 'v) prism \<Rightarrow>
    'v \<Rightarrow>
-   ('s, ('a, 'b, 'v) ref, 'abort, 'i, 'o) function_body\<close> where
+   ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i, 'o) function_body\<close> where
   [all_reference_defs']: \<open>reference_fun p e \<equiv> FunctionBody \<lbrakk>
        let r = reference_raw_fun (\<llangle>prism_embed p e\<rrangle>);
        \<llangle>make_ref_typed_from_untyped\<rrangle>\<^sub>2(r, \<llangle>prism_to_focus p\<rrangle>)
@@ -79,17 +79,17 @@ definition modify_raw_fun :: \<open>('a, 'b) gref \<Rightarrow> ('b \<Rightarrow
      update_raw_fun(r, \<llangle>f\<rrangle>\<^sub>1(g))
   \<rbrakk>\<close>
 
-definition modify_fun :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close> where
+definition modify_fun :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close> where
   [all_reference_defs']: \<open>modify_fun ref f \<equiv> FunctionBody \<lbrakk>
      modify_raw_fun (\<llangle>untype_ref\<rrangle>\<^sub>1(ref), \<llangle>focus_modify (get_focus ref) f\<rrangle>)
   \<rbrakk>\<close>
 
-definition update_fun :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close> where
+definition update_fun :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort, 'i, 'o) function_body\<close> where
   [all_reference_defs']: \<open>update_fun ref v \<equiv> FunctionBody \<lbrakk>
      modify_fun(ref, \<llangle>\<lambda>_. v\<rrangle>)
    \<rbrakk>\<close>
 
-definition dereference_fun :: \<open>('a, 'b, 'v) ref \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close> where
+definition dereference_fun :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close> where
   [all_reference_defs']: \<open>dereference_fun ref \<equiv> FunctionBody \<lbrakk>
       let b = dereference_raw_fun(\<llangle>untype_ref\<rrangle>\<^sub>1(ref));
       match (\<llangle>focus_view (\<integral> ref) b\<rrangle>) {
@@ -102,7 +102,7 @@ definition ro_dereference_fun ::
       \<open>('a, 'b, 'v) ro_ref \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close> where
   [all_reference_defs']: \<open>ro_dereference_fun r \<equiv> FunctionBody \<lbrakk> dereference_fun(\<llangle>unsafe_ref_from_ro_ref\<rrangle>\<^sub>1(r)) \<rbrakk>\<close>
 
-definition is_valid_ref_for :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'b set \<Rightarrow> bool\<close>
+definition is_valid_ref_for :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'b set \<Rightarrow> bool\<close>
   where \<open>is_valid_ref_for r P \<equiv> focus_dom (get_focus r) \<subseteq> P\<close>
 
 lemma is_valid_ref_for_compose[focus_intros]:
@@ -110,16 +110,16 @@ lemma is_valid_ref_for_compose[focus_intros]:
   shows \<open>is_valid_ref_for (focus_reference f r) P\<close> 
   using assms by (simp add: is_valid_ref_for_def focus_factors_trans focus_focused_get_focus)
 
-abbreviation points_to_localizes :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> bool\<close> where
+abbreviation points_to_localizes :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> bool\<close> where
   \<open>points_to_localizes r b v \<equiv> is_valid_ref_for r (gref_can_store (unwrap_focused r)) 
                                 \<and> focus_view (get_focus r) b = Some v\<close>
 
-definition points_to :: \<open>('a, 'b, 'v) ref \<Rightarrow> share \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 's assert\<close> where
+definition points_to :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> share \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 's assert\<close> where
   [all_reference_defs']: \<open>points_to r sh b v \<equiv> points_to_raw (unwrap_focused r) sh b \<star> \<langle>points_to_localizes r b v\<rangle>\<close>
 
 notation points_to ("(_) \<mapsto> \<langle>_\<rangle>/_/ \<down>/ _" [69,0,69,69]70)
 
-abbreviation points_to_modified :: \<open>('a, 'b, 'v) ref \<Rightarrow> share \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 's assert\<close> where
+abbreviation points_to_modified :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> share \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 's assert\<close> where
   \<open>points_to_modified r sh op b v \<equiv> points_to r sh (focus_modify (get_focus r) op b) (op v) \<star>
    \<langle>points_to_localizes r b v\<rangle>\<close>
 
@@ -131,20 +131,20 @@ definition modify_raw_contract :: \<open>('a, 'b) gref \<Rightarrow> 'b \<Righta
      let post = \<lambda>_. (points_to_raw r \<top> (f g)) in
      make_function_contract pre post\<close>
 
-definition update_contract :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close> where 
+definition update_contract :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close> where 
   [all_reference_defs']: \<open>update_contract r g0 v0 v \<equiv>
      let pre = points_to r \<top> g0 v0 in
      let post = \<lambda>_. points_to_modified r \<top> (\<lambda>_. v) g0 v0 in
      make_function_contract pre post\<close>
 
-definition modify_contract :: \<open>('a, 'b, 'v) ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> ('s, unit, 'abort) function_contract\<close> 
+definition modify_contract :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('v \<Rightarrow> 'v) \<Rightarrow> ('s, unit, 'abort) function_contract\<close> 
   where [all_reference_defs']: \<open>modify_contract r g0 v0 f \<equiv>
      let pre = points_to r \<top> g0 v0 in
      let post = \<lambda>_. (points_to_modified r \<top> f g0 v0) in
      make_function_contract pre post\<close>
 
 definition dereference_contract 
-  :: \<open>('a, 'b, 'v) ref \<Rightarrow> share \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('s, 'v, 'abort) function_contract\<close> where 
+  :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> share \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> ('s, 'v, 'abort) function_contract\<close> where 
   [all_reference_defs']: \<open>dereference_contract r sh g v \<equiv>
      let pre = points_to r sh g v in
      let post = \<lambda>v'. (points_to r sh g v \<star> \<langle>v=v'\<rangle>) in
@@ -157,7 +157,7 @@ definition ro_dereference_contract
      let post = \<lambda>v'. points_to (unsafe_ref_from_ro_ref r) sh g v \<star> \<langle>v=v'\<rangle> in
      make_function_contract pre post\<close>
 
-definition reference_contract :: \<open>('b, 'v) prism \<Rightarrow> 'v \<Rightarrow> ('s, ('a, 'b, 'v) ref, 'abort) function_contract\<close> where 
+definition reference_contract :: \<open>('b, 'v) prism \<Rightarrow> 'v \<Rightarrow> ('s, ('a, 'b, 'v) Global_Store.ref, 'abort) function_contract\<close> where 
   [all_reference_defs']: \<open>reference_contract p v \<equiv>
      let pre = can_alloc_reference in
      let post = \<lambda>r. points_to r \<top> (prism_embed p v) v \<star> \<langle>\<integral>r = prism_to_focus p\<rangle> \<star> can_alloc_reference in

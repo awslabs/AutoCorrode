@@ -172,15 +172,15 @@ text\<open>Pointer to head of linked list\<close>
 definition ll_head :: \<open>(NonNullRaw, byte list) gref option\<close> where
   \<open>ll_head \<equiv> Some (make_gref test_page_ptr)\<close>
 text\<open>Pointer to scratch memory needed by linked list reversal\<close>
-private definition tmp0_ref :: \<open>(raw_pmem_region, byte list, (NonNullRaw, byte list) gref option) ref\<close> where
+private definition tmp0_ref :: \<open>(raw_pmem_region, byte list, (NonNullRaw, byte list) gref option) Global_Store.ref\<close> where
   \<open>tmp0_ref \<equiv> make_focused (make_gref (make_raw_pmem_region (test_page + 0x38) 8)) ref_gref_opt_focus\<close>
-private definition tmp1_ref :: \<open>(raw_pmem_region, byte list, (NonNullRaw, byte list) gref option) ref\<close> where
+private definition tmp1_ref :: \<open>(raw_pmem_region, byte list, (NonNullRaw, byte list) gref option) Global_Store.ref\<close> where
   \<open>tmp1_ref \<equiv> make_focused (make_gref (make_raw_pmem_region (test_page + 0x40) 8)) ref_gref_opt_focus\<close>
 
 \<comment>\<open>\<^verbatim>\<open>
 definition reverse_unlink :: \<open>64 word \<Rightarrow> ('caddr, 'gv) gref option
-  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) ref
-  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) ref
+  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref
+  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref
   \<Rightarrow> ('s, ('caddr, 'gv) gref option \<times> ('caddr, 'gv) gref option) function_body\<close> where
   \<open>reverse_unlink n orig cur_raw last_raw \<equiv> FunctionBody \<lbrakk>
       last_raw = None;

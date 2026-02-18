@@ -255,10 +255,10 @@ abbreviation project :: \<open>'b \<Rightarrow> 'v option\<close> where
 abbreviation embed :: \<open>'v \<Rightarrow> 'b\<close> where
   \<open>embed b \<equiv> prism_embed prism b\<close>
 
-definition cast :: \<open>('a, 'b) gref \<Rightarrow> ('a, 'b, 'v) ref\<close>
+definition cast :: \<open>('a, 'b) gref \<Rightarrow> ('a, 'b, 'v) Global_Store.ref\<close>
   where \<open>cast gref \<equiv> make_ref_typed_from_untyped gref (prism_to_focus prism)\<close>
 
-definition new :: \<open>'v \<Rightarrow> ('s, ('a, 'b, 'v) ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
+definition new :: \<open>'v \<Rightarrow> ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i prompt, 'o prompt_output) function_body\<close>
   where \<open>new x \<equiv> reference_fun prism x\<close>
 
 definition \<open>focus = prism_to_focus prism\<close>

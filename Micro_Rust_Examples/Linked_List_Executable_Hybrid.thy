@@ -297,8 +297,8 @@ definition ll_head :: \<open>(NonNullRaw, gv) gref option\<close> where
 
 \<comment>\<open>\<^verbatim>\<open>
 definition reverse_unlink :: \<open>64 word \<Rightarrow> ('caddr, 'gv) gref option
-  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) ref
-  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) ref
+  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref
+  \<Rightarrow> ('addr, 'gv, ('caddr, 'gv) gref option) Global_Store.ref
   \<Rightarrow> ('s, ('caddr, 'gv) gref option \<times> ('caddr, 'gv) gref option) function_body\<close> where
   \<open>reverse_unlink n orig cur_raw last_raw \<equiv> FunctionBody \<lbrakk>
       last_raw = None;
