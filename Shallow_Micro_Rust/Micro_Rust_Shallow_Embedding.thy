@@ -271,6 +271,7 @@ syntax
   "_shallow_match_arg" :: \<open>urust_pattern \<Rightarrow> urust_shallow_match_pattern_arg\<close>
   "_shallow_let_pattern" :: \<open>urust_pattern \<Rightarrow> pttrns\<close>
   "_shallow_let_pattern_args" :: \<open>urust_let_pattern_args \<Rightarrow> pttrns\<close>
+  "_urust_struct_expr_to_args" :: \<open>urust_struct_expr_fields \<Rightarrow> urust_args\<close>
 
   "_string_token_to_hol" :: \<open>string_token \<Rightarrow> logic\<close>
 
@@ -407,6 +408,13 @@ translations
     \<rightharpoonup> "_urust_shallow_fun_with_args (_shallow_apply_params (_shallow f) params) (_shallow args)"
   "_shallow (_urust_funcall_with_args (_urust_callable_with_params (_urust_callable_struct f id) params) args)"
     \<rightharpoonup> "_urust_shallow_fun_with_args (_shallow_apply_params (_shallow_identifier_as_function id) params) (_shallow (_urust_args_app f args))"
+
+  "_urust_struct_expr_to_args (_urust_struct_expr_fields_single (_urust_struct_expr_field fld e))"
+    \<rightharpoonup> "_urust_args_single e"
+  "_urust_struct_expr_to_args (_urust_struct_expr_fields_app (_urust_struct_expr_field fld e) rest)"
+    \<rightharpoonup> "_urust_args_app e (_urust_struct_expr_to_args rest)"
+  "_shallow (_urust_struct_expr id fields)"
+    \<rightharpoonup> "_shallow (_urust_funcall_with_args (_urust_callable_id id) (_urust_struct_expr_to_args fields))"
 
   "_shallow (_urust_args_app a bs)"
     \<rightharpoonup> "_urust_shallow_args_app (_shallow a) (_shallow bs)"
@@ -904,6 +912,84 @@ ML\<open>
       tr ts
     end;
 
+  fun struct_expr_tr ctxt ts =
+    let
+      val mk = Syntax.const
+      fun mk_antiquotation t = mk \<^syntax_const>\<open>_urust_antiquotation\<close> $ t
+      fun mk_callable_lifted ctor arity =
+        if arity >= 0 andalso arity <= 10 then
+          mk_antiquotation (mk ("lift_fun" ^ Int.toString arity) $ ctor)
+        else
+          error ("struct expression: constructor arity " ^ Int.toString arity ^
+            " is unsupported (max 10)")
+      fun mk_args [e] = mk \<^syntax_const>\<open>_urust_args_single\<close> $ e
+        | mk_args (e :: es) = mk \<^syntax_const>\<open>_urust_args_app\<close> $ e $ mk_args es
+        | mk_args [] = error "struct expression: empty field list"
+
+      fun struct_field_destruct
+            (Const (\<^syntax_const>\<open>_urust_struct_expr_field\<close>, _) $ fld $ e) =
+              (canonical_name (dest_ident_name ctxt fld), e)
+        | struct_field_destruct t =
+            error ("struct expression: invalid field syntax: " ^ Syntax.string_of_term ctxt t)
+
+      fun struct_fields_destruct
+            (Const (\<^syntax_const>\<open>_urust_struct_expr_fields_single\<close>, _) $ fld) =
+              [struct_field_destruct fld]
+        | struct_fields_destruct
+            (Const (\<^syntax_const>\<open>_urust_struct_expr_fields_app\<close>, _) $ fld $ rest) =
+              struct_field_destruct fld :: struct_fields_destruct rest
+        | struct_fields_destruct t =
+            error ("struct expression: invalid field list syntax: " ^ Syntax.string_of_term ctxt t)
+
+      fun tr [id, fields] =
+        let
+          val (ctor, sels) = resolve_struct_constructor ctxt id
+          val ctor_name =
+            (case term_name_of ctor of
+              SOME n => canonical_name n
+            | NONE => dest_ident_name ctxt id)
+          val selector_names = map (canonical_name o dest_ident_name ctxt) sels
+          val field_entries = struct_fields_destruct fields
+          val field_names = map fst field_entries
+          fun is_optional_selector s = (s = "more")
+          val duplicate_fields = Library.duplicates (op =) field_names
+          val _ =
+            if null duplicate_fields then ()
+            else error ("struct expression for " ^ quote ctor_name ^ " has duplicate field(s): " ^
+              space_implode ", " duplicate_fields)
+          val extra_fields =
+            filter (fn f => not (member (op =) selector_names f)) field_names
+          val missing_fields =
+            filter (fn s =>
+              not (member (op =) field_names s) andalso not (is_optional_selector s)) selector_names
+          val _ =
+            if null extra_fields then ()
+            else error ("struct expression for " ^ quote ctor_name ^ " has unknown field(s): " ^
+              space_implode ", " extra_fields)
+          val _ =
+            if null missing_fields then ()
+            else error ("struct expression for " ^ quote ctor_name ^ " is missing field(s): " ^
+              space_implode ", " missing_fields)
+          val ordered_exprs =
+            map (fn s =>
+              (case AList.lookup (op =) field_entries s of
+                SOME e => e
+              | NONE =>
+                  if is_optional_selector s then
+                    mk_antiquotation (Syntax.const \<^const_syntax>\<open>undefined\<close>)
+                  else error ("internal error: struct field lookup failed for " ^ quote s))) selector_names
+          val callable = mk_callable_lifted ctor (length ordered_exprs)
+        in
+          if null ordered_exprs then
+            mk \<^syntax_const>\<open>_urust_funcall_no_args\<close> $ callable
+          else
+            mk \<^syntax_const>\<open>_urust_funcall_with_args\<close> $ callable $ mk_args ordered_exprs
+        end
+        | tr args = Term.list_comb (mk \<^syntax_const>\<open>_urust_struct_expr\<close>, args)
+    in
+      tr ts
+    end;
+
   fun shallow_match_arg_tr ctxt ts =
     let
       val pat =
@@ -1165,7 +1251,8 @@ ML\<open>
       tr ts
     end;
 
-  val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_urust_match_pattern_struct\<close>, struct_pattern_tr),
+  val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_urust_struct_expr\<close>, struct_expr_tr),
+                                                (\<^syntax_const>\<open>_urust_match_pattern_struct\<close>, struct_pattern_tr),
                                                 (\<^syntax_const>\<open>_shallow_match_pattern\<close>, shallow_match_pattern_tr),
                                                 (\<^syntax_const>\<open>_shallow_match_arg\<close>, shallow_match_arg_tr)]);
 \<close>

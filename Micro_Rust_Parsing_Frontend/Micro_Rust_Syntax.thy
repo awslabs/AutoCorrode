@@ -50,6 +50,8 @@ nonterminal urust_fun_literal
 nonterminal urust_lhs
 nonterminal urust_antiquotation
 nonterminal urust_tuple_args
+nonterminal urust_struct_expr_fields
+nonterminal urust_struct_expr_field
 
 nonterminal urust_match_branch \<comment> \<open>A single branch of a match statement\<close>
 nonterminal urust_match_branches \<comment> \<open>Comma-separate lists of match branches\<close>
@@ -227,6 +229,15 @@ syntax
     ("_'.4" [998]998)
   "_urust_tuple_index_5" :: "urust \<Rightarrow> urust"
     ("_'.5" [998]998)
+  \<comment>\<open>Struct expressions: Foo { foo: a, goo: b }\<close>
+  "_urust_struct_expr" :: \<open>urust_identifier \<Rightarrow> urust_struct_expr_fields \<Rightarrow> urust\<close>
+    ("_/ {/ _/ }" [1000, 0] 1000)
+  "_urust_struct_expr_field" :: \<open>urust_identifier \<Rightarrow> urust \<Rightarrow> urust_struct_expr_field\<close>
+    ("_ :/ _" [1000, 0] 1000)
+  "_urust_struct_expr_fields_single" :: \<open>urust_struct_expr_field \<Rightarrow> urust_struct_expr_fields\<close>
+    ("_")
+  "_urust_struct_expr_fields_app" :: \<open>urust_struct_expr_field \<Rightarrow> urust_struct_expr_fields \<Rightarrow> urust_struct_expr_fields\<close>
+    ("_,/ _" [1000, 100] 100)
   \<comment>\<open>We have very basic support for tuple patterns: identifiers and tuple destruction\<close>
   "_urust_let_pattern_tuple" :: "urust_let_pattern_args \<Rightarrow> urust_pattern"
     ("'(_')")

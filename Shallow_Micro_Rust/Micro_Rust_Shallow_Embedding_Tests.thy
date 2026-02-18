@@ -878,6 +878,16 @@ record struct_pattern_rec =
   rec_foo :: "32 word"
   rec_goo :: "32 word"
 
+definition foo_struct_expr_lift where
+  "foo_struct_expr_lift \<equiv> lift_fun2 Foo"
+
+notation_nano_rust_function foo_struct_expr_lift ("Foo")
+
+definition struct_pattern_dr_struct_expr_lift where
+  "struct_pattern_dr_struct_expr_lift \<equiv> lift_fun2 make_struct_pattern_dr"
+
+notation_nano_rust_function struct_pattern_dr_struct_expr_lift ("struct_pattern_dr")
+
 term\<open>\<lbrakk>
   match (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>) {
     (a, b) \<Rightarrow> a
@@ -961,6 +971,24 @@ term\<open>\<lbrakk>
     struct_pattern_dr { dr_goo: q, dr_foo: p } \<Rightarrow> p + q
   };
   assert!(res == \<llangle>21 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Struct Expressions\<close>
+
+term\<open>\<lbrakk>
+  Foo { foo: \<llangle>1 :: 32 word\<rrangle>, goo: \<llangle>2 :: 32 word\<rrangle> }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  Foo { goo: \<llangle>2 :: 32 word\<rrangle>, foo: \<llangle>1 :: 32 word\<rrangle> }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  struct_pattern_dr { dr_goo: \<llangle>11 :: 32 word\<rrangle>, dr_foo: \<llangle>10 :: 32 word\<rrangle> }
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  Foo { foo: \<llangle>1 :: 32 word\<rrangle> + \<llangle>2 :: 32 word\<rrangle>, goo: \<llangle>4 :: 32 word\<rrangle> / \<llangle>2 :: 32 word\<rrangle> }
 \<rbrakk>\<close>
 
 subsubsection\<open>Pattern Guards\<close>
