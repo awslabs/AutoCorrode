@@ -63,8 +63,10 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		IQUtilsPathResolutionTest
+	echo "Running I/Q bridge framing tests..."
+	python3 -m unittest discover -s test -p 'test_*.py'
 	echo "I/Q tests passed."
-	
+
 # Documentation checks
 .PHONY: check-docs
 check-docs:

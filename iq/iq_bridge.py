@@ -11,7 +11,7 @@ import json
 import socket
 import time
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 class MCPBridgeWithReconnect:
     def __init__(self):
@@ -19,6 +19,8 @@ class MCPBridgeWithReconnect:
         self.connected = False
         token = os.environ.get("IQ_MCP_AUTH_TOKEN", "").strip()
         self.auth_token = token if token else None
+        self._recv_buffer = b""
+        self._response_queue: List[Dict[str, Any]] = []
 
     def log(self, message: str):
         """Log messages to stderr and file with timestamp."""
@@ -51,6 +53,8 @@ class MCPBridgeWithReconnect:
             self.isabelle_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.isabelle_socket.connect(('localhost', 8765))
             self.connected = True
+            self._recv_buffer = b""
+            self._response_queue = []
             self.log("Connected to Isabelle MCP server")
             return True
 
@@ -63,6 +67,8 @@ class MCPBridgeWithReconnect:
                 except:
                     pass
                 self.isabelle_socket = None
+            self._recv_buffer = b""
+            self._response_queue = []
             return False
 
     def ensure_connection(self) -> bool:
@@ -98,47 +104,56 @@ class MCPBridgeWithReconnect:
                 self.log(f"Forwarded notification {method} (no response expected)")
                 return None
 
-            # For requests, wait for response
-            # Read response as bytes first
-            response_bytes = b""
-
-            # Read first chunk
-            first_chunk = self.isabelle_socket.recv(4096)
-            if not first_chunk:
-                self.log(f"No response for {method} - connection closed")
-                self.connected = False
+            # For requests, read one framed JSON line (newline-delimited JSON),
+            # while preserving any additional complete messages for later.
+            parsed_response = self._read_one_response(method)
+            if parsed_response is None:
                 return None
-
-            response_bytes += first_chunk
-
-            # Read remaining chunks with short timeout
-            self.isabelle_socket.settimeout(0.1)
-            while True:
-                try:
-                    chunk = self.isabelle_socket.recv(4096)
-                    if not chunk:
-                        break
-                    response_bytes += chunk
-                except socket.timeout:
-                    break
-
-            # Reset to blocking mode
-            self.isabelle_socket.settimeout(None)
-
-            # Decode and parse
-            try:
-                response_str = response_bytes.decode('utf-8').strip()
-                parsed_response = json.loads(response_str)
-                self.log(f"Successfully forwarded {method}")
-                return parsed_response
-            except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                self.log(f"Response decode error for {method}: {e}")
-                return None
+            self.log(f"Successfully forwarded {method}")
+            return parsed_response
 
         except Exception as e:
             self.log(f"Error forwarding {method}: {e}")
             self.connected = False
             return None
+
+    def _extract_complete_messages(self, method: str) -> bool:
+        """
+        Extract complete newline-delimited JSON messages from the receive buffer.
+        Returns False on parse/decoding errors, True otherwise.
+        """
+        while b"\n" in self._recv_buffer:
+            raw_line, self._recv_buffer = self._recv_buffer.split(b"\n", 1)
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                decoded = line.decode("utf-8")
+                parsed = json.loads(decoded)
+                if isinstance(parsed, dict):
+                    self._response_queue.append(parsed)
+                else:
+                    self.log(f"Ignoring non-object JSON response for {method}: {decoded[:200]}")
+            except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                self.log(f"Response decode error for {method}: {e}")
+                return False
+        return True
+
+    def _read_one_response(self, method: str) -> Optional[Dict[str, Any]]:
+        """Read exactly one parsed response message from the Isabelle socket."""
+        while True:
+            if self._response_queue:
+                return self._response_queue.pop(0)
+
+            chunk = self.isabelle_socket.recv(4096)
+            if not chunk:
+                self.log(f"No response for {method} - connection closed")
+                self.connected = False
+                return None
+
+            self._recv_buffer += chunk
+            if not self._extract_complete_messages(method):
+                return None
 
     def create_error_response(self, request_id: Any, code: int, message: str) -> Dict[str, Any]:
         """Create a standard JSON-RPC error response."""
