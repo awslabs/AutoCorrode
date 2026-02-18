@@ -59,8 +59,12 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		IQSecurityTest
+	echo "Running I/Q path resolution tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		IQUtilsPathResolutionTest
 	echo "I/Q tests passed."
-
+	
 # Documentation checks
 .PHONY: check-docs
 check-docs:
@@ -95,6 +99,7 @@ $(TEST_CLASSES_DIR):
 
 $(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST_CLASSES_DIR)
 	echo "Compiling I/Q tests..."
+	if [ -z "$(strip $(TEST_SOURCES))" ]; then echo "No test sources found."; touch $@; exit 0; fi
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
 		-classpath "$(CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(TEST_CLASSES_DIR) \

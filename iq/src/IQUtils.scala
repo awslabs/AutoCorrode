@@ -24,8 +24,11 @@ object IQUtils {
   def stripExtension(path: String): String = {
     val file = new File(path)
     val name = file.getName
-    val nameWithoutExt = name.split("\\.").head
-    new File(file.getParent, nameWithoutExt).getPath
+    val dot = name.lastIndexOf('.')
+    val nameWithoutExt = if (dot > 0) name.substring(0, dot) else name
+    val parent = file.getParent
+    if (parent == null || parent.isEmpty) nameWithoutExt
+    else new File(parent, nameWithoutExt).getPath
   }
 
   /**
@@ -41,6 +44,33 @@ object IQUtils {
   }
 
   /**
+   * Auto-completes a partial file path by finding exactly one match among provided candidates.
+   *
+   * @param partialPath The partial file path to match (e.g., "Foo/Bar.thy")
+   * @param candidates Candidate full paths to match against
+   * @return Either the full file path if exactly one match, or an error message
+   */
+  def autoCompleteFilePathFromCandidates(
+    partialPath: String,
+    candidates: List[String],
+    trackedOnly: Boolean = true
+  ): Either[String, String] = {
+    val partialPathNoExt = stripExtension(partialPath).toLowerCase
+    val matches = candidates
+      .filter(fullPath => stripExtension(fullPath).toLowerCase.endsWith(partialPathNoExt))
+      .distinct
+      .sorted
+
+    matches.size match {
+      case 0 =>
+        if (trackedOnly) Left(s"No file found matching '$partialPath'")
+        else Right(partialPath)
+      case 1 => Right(matches.head)
+      case _ => Left(s"Multiple files found matching '$partialPath': ${matches.mkString(", ")}")
+    }
+  }
+
+  /**
    * Auto-completes a partial file path by finding exactly one match among tracked/open files.
    *
    * @param partialPath The partial file path to match (e.g., "Foo/Bar.thy")
@@ -50,29 +80,9 @@ object IQUtils {
     try {
       // Get all tracked files
       val trackedFiles = getAllTrackedFiles()
-
-      // Strip extension from input
-      val partialPathNoExt = stripExtension(partialPath).toLowerCase
-
-      // Create map of files without extensions to original full paths
-      val filesWithoutExt = trackedFiles.map { fullPath =>
-        (stripExtension(fullPath).toLowerCase, fullPath)
-      }.toMap
-
-      // Find matches where the path without extension ends with the partial path
-      val matches = filesWithoutExt.filter { case (pathWithoutExt, _) =>
-        pathWithoutExt.endsWith(partialPathNoExt)
-      }.values.toList
-
-      val resultPath = matches.size match {
-        case 0 =>
-          if (trackedOnly) {
-            return Left(s"No file found matching '$partialPath'")
-          } else {
-            partialPath  // Just return the original path
-          }
-        case 1 => matches.head
-        case _ => return Left(s"Multiple files found matching '$partialPath': ${matches.mkString(", ")}")
+      val resultPath = autoCompleteFilePathFromCandidates(partialPath, trackedFiles, trackedOnly) match {
+        case Left(error) => return Left(error)
+        case Right(path) => path
       }
 
       // Check if file exists (only if allowNonexisting is false)

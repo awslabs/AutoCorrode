@@ -2665,7 +2665,6 @@ end"""
     createFileWithContentCommon(filePath, content, overwriteIfExists, inView = false)
   }
 
-  // Helper methods
   private def getOpenViews(): List[View] = {
     val viewManager = jEdit.getViewManager()
     if (viewManager == null) List.empty
@@ -2676,6 +2675,7 @@ end"""
     }
   }
 
+  // Helper methods
   private def findViewForFile(filePath: String): Option[View] = {
     val views = getOpenViews()
     views.find { view =>
