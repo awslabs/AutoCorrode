@@ -1654,6 +1654,27 @@ begin
 term \<open>\<lbrakk> unsafe { panic!("msg") } \<rbrakk>\<close>
 end
 
+subsubsection\<open>Array and Slice Expression Literals\<close>
+
+term \<open>\<lbrakk> [\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>] \<rbrakk>\<close>
+term \<open>\<lbrakk> &[\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>] \<rbrakk>\<close>
+term \<open>\<lbrakk> [\<llangle>1 :: 32 word\<rrangle> + \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>] \<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let xs = [\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>];
+  assert!(xs[0] == \<llangle>1 :: 32 word\<rrangle>);
+  assert!(xs[2] == \<llangle>3 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let xs = &[\<llangle>4 :: 32 word\<rrangle>, \<llangle>5 :: 32 word\<rrangle>];
+  let s = match xs {
+    [a, b] \<Rightarrow> a + b,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(s == \<llangle>9 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
 subsubsection\<open>Indexing\<close>
 
 context

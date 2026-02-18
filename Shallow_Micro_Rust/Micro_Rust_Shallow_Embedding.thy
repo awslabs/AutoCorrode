@@ -272,6 +272,7 @@ syntax
   "_shallow_let_pattern" :: \<open>urust_pattern \<Rightarrow> pttrns\<close>
   "_shallow_let_pattern_args" :: \<open>urust_let_pattern_args \<Rightarrow> pttrns\<close>
   "_urust_struct_expr_to_args" :: \<open>urust_struct_expr_fields \<Rightarrow> urust_args\<close>
+  "_urust_array_expr_to_shallow" :: \<open>urust_args \<Rightarrow> logic\<close>
 
   "_string_token_to_hol" :: \<open>string_token \<Rightarrow> logic\<close>
 
@@ -415,6 +416,14 @@ translations
     \<rightharpoonup> "_urust_args_app e (_urust_struct_expr_to_args rest)"
   "_shallow (_urust_struct_expr id fields)"
     \<rightharpoonup> "_shallow (_urust_funcall_with_args (_urust_callable_id id) (_urust_struct_expr_to_args fields))"
+  "_shallow (_urust_array_expr_empty)"
+    \<rightharpoonup> "CONST literal ([])" 
+  "_shallow (_urust_array_expr args)"
+    \<rightharpoonup> "_urust_array_expr_to_shallow args"
+  "_urust_array_expr_to_shallow (_urust_args_single a)"
+    \<rightharpoonup> "CONST bindlift2 (CONST List.list.Cons) (_shallow a) (CONST literal ([]))"
+  "_urust_array_expr_to_shallow (_urust_args_app a rest)"
+    \<rightharpoonup> "CONST bindlift2 (CONST List.list.Cons) (_shallow a) (_urust_array_expr_to_shallow rest)"
 
   "_shallow (_urust_args_app a bs)"
     \<rightharpoonup> "_urust_shallow_args_app (_shallow a) (_shallow bs)"
@@ -497,6 +506,10 @@ translations
 
   "_shallow (_urust_propagate exp)"
     \<rightharpoonup> "_urust_shallow_propagate (_shallow exp)"
+  "_shallow (_urust_borrow (_urust_array_expr_empty))"
+    \<rightharpoonup> "_shallow (_urust_array_expr_empty)"
+  "_shallow (_urust_borrow (_urust_array_expr args))"
+    \<rightharpoonup> "_shallow (_urust_array_expr args)"
   "_shallow (_urust_borrow exp)"
     \<rightharpoonup> "CONST bindlift1 (CONST ro_ref_from_ref) (_shallow exp)"
   "_shallow (_urust_borrow_mut exp)"

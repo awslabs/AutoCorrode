@@ -229,6 +229,11 @@ syntax
     ("_'.4" [998]998)
   "_urust_tuple_index_5" :: "urust \<Rightarrow> urust"
     ("_'.5" [998]998)
+  \<comment>\<open>Array literals: [e0, e1, ...]. Lowered to Cons/Nil lists.\<close>
+  "_urust_array_expr_empty" :: \<open>urust\<close>
+    ("'[]")
+  "_urust_array_expr" :: \<open>urust_args \<Rightarrow> urust\<close>
+    ("'[_']")
   \<comment>\<open>Struct expressions: Foo { foo: a, goo: b }\<close>
   "_urust_struct_expr" :: \<open>urust_identifier \<Rightarrow> urust_struct_expr_fields \<Rightarrow> urust\<close>
     ("_/ {/ _/ }" [1000, 0] 1000)
@@ -535,6 +540,9 @@ syntax
      (infixr ">>=" 40)
 
 translations
+  \<comment>\<open>Rust slice literals (&[...]) are currently front-end sugar for list literals.\<close>
+  "_urust_borrow (_urust_array_expr_empty)" => "_urust_array_expr_empty"
+  "_urust_borrow (_urust_array_expr args)" => "_urust_array_expr args"
   "_urust_if_then_else_if c t c' t'" => "_urust_if_then_else c t (_urust_if_then c' t')"
   "_urust_if_then_else_if_else c t c' t' e" => "_urust_if_then_else c t (_urust_if_then_else c' t' e)"
   "_urust_sequence_if_then_else c t e next" => "_urust_sequence (_urust_if_then_else c t e) next"
