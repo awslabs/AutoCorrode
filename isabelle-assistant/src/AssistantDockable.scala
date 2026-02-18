@@ -520,8 +520,8 @@ class AssistantDockable(view: View, position: String) extends Dockable(view, pos
       val newMessages = history.drop(renderedMessageCount)
       val newHtml = newMessages.map { msg =>
         msg.role match {
-          case "user" => createUserMessageHtml(msg.content, ChatAction.formatTime(msg.timestamp))
-          case "tool" =>
+          case ChatAction.User => createUserMessageHtml(msg.content, ChatAction.formatTime(msg.timestamp))
+          case ChatAction.Tool =>
             // Parse tool message content: "toolName|||{json params}"
             val parts = msg.content.split("\\|\\|\\|", 2)
             if (parts.length == 2) {
@@ -567,8 +567,8 @@ class AssistantDockable(view: View, position: String) extends Dockable(view, pos
   private def fullRender(history: List[ChatAction.Message], welcome: String): Unit = {
     val htmlContent = history.map { msg =>
       msg.role match {
-        case "user" => createUserMessageHtml(msg.content, ChatAction.formatTime(msg.timestamp))
-        case "tool" =>
+        case ChatAction.User => createUserMessageHtml(msg.content, ChatAction.formatTime(msg.timestamp))
+        case ChatAction.Tool =>
           val parts = msg.content.split("\\|\\|\\|", 2)
           if (parts.length == 2) {
             try {
@@ -699,7 +699,7 @@ class AssistantDockable(view: View, position: String) extends Dockable(view, pos
   }
 
   /** Create HTML for a tool-use message. Parameters shown inline only, no redundant expandable section. */
-  private def createToolMessageHtml(toolName: String, params: Map[String, Any], timestamp: String): String = {
+  private def createToolMessageHtml(toolName: String, params: ResponseParser.ToolArgs, timestamp: String): String = {
     val border = UIColors.ToolMessage.border
     val tsColor = UIColors.ToolMessage.timestamp
     
@@ -709,7 +709,7 @@ class AssistantDockable(view: View, position: String) extends Dockable(view, pos
     // Format parameters for summary line (don't truncate - show full values inline)
     val paramSummary = if (params.isEmpty) "()" else {
       val formatted = params.map { case (k, v) =>
-        s"$k: ${escapeHtml(v.toString)}"
+        s"$k: ${escapeHtml(ResponseParser.toolValueToDisplay(v))}"
       }.mkString(", ")
       s"($formatted)"
     }
@@ -723,38 +723,8 @@ class AssistantDockable(view: View, position: String) extends Dockable(view, pos
   private def escapeHtml(s: String): String =
     s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-  /** Parse JSON parameters from tool message content. Simple parser for Map[String, Any]. */
-  private def parseToolParams(json: String): Map[String, Any] = {
-    try {
-      val trimmed = json.trim
-      if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return Map.empty
-      
-      val content = trimmed.substring(1, trimmed.length - 1).trim
-      if (content.isEmpty) return Map.empty
-      
-      // Simple JSON parser for string/number/boolean values
-      val params = scala.collection.mutable.Map[String, Any]()
-      val keyValuePattern = """"([^"]+)"\s*:\s*(.+?)(?:,|$)""".r
-      
-      for (m <- keyValuePattern.findAllMatchIn(content)) {
-        val key = m.group(1)
-        val rawValue = m.group(2).trim
-        val value: Any = if (rawValue.startsWith("\"") && rawValue.endsWith("\"")) {
-          rawValue.substring(1, rawValue.length - 1)
-        } else if (rawValue == "true" || rawValue == "false") {
-          rawValue.toBoolean
-        } else {
-          try { rawValue.toInt } catch { case _: Exception =>
-            try { rawValue.toDouble } catch { case _: Exception => rawValue }
-          }
-        }
-        params(key) = value
-      }
-      params.toMap
-    } catch {
-      case _: Exception => Map.empty
-    }
-  }
+  private def parseToolParams(json: String): ResponseParser.ToolArgs =
+    ResponseParser.parseToolArgsJsonObject(json)
 
   private def createWelcomeHtml(): String = {
     val helpId = AssistantDockable.registerAction(() => ChatAction.chat(view, ":help"))

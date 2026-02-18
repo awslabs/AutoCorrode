@@ -4,6 +4,7 @@
 package isabelle.assistant
 
 import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonToken}
+import java.io.StringWriter
 
 /**
  * Parses JSON responses from different Bedrock model providers.
@@ -61,156 +62,105 @@ object ResponseParser {
     if (results.nonEmpty) Some(results.mkString("\n")) else None
   }
 
+  /** Typed tool argument values (avoid Map[String, Any] dynamic dispatch). */
+  enum ToolValue {
+    case StringValue(value: String)
+    case IntValue(value: Int)
+    case DecimalValue(value: Double)
+    case BooleanValue(value: Boolean)
+    case JsonValue(value: String)
+    case NullValue
+  }
+  export ToolValue._
+  type ToolArgs = Map[String, ToolValue]
+
+  def toolValueToDisplay(value: ToolValue): String = value match {
+    case StringValue(v) => v
+    case IntValue(v) => v.toString
+    case DecimalValue(v) => v.toString
+    case BooleanValue(v) => v.toString
+    case JsonValue(v) => v
+    case NullValue => "null"
+  }
+
+  def toolValueToString(value: ToolValue): String = value match {
+    case StringValue(v) => v
+    case IntValue(v) => v.toString
+    case DecimalValue(v) => v.toString
+    case BooleanValue(v) => v.toString
+    case JsonValue(v) => v
+    case NullValue => ""
+  }
+
+  def parseToolArgsJsonObject(json: String): ToolArgs = {
+    val parser = jsonFactory.createParser(json)
+    try {
+      if (parser.nextToken() != JsonToken.START_OBJECT) Map.empty
+      else parseToolArgsObject(parser)
+    } catch {
+      case _: Exception => Map.empty
+    } finally {
+      parser.close()
+    }
+  }
+
+  def toolArgsToJson(args: ToolArgs): String = {
+    val sw = new StringWriter()
+    val gen = jsonFactory.createGenerator(sw)
+    gen.writeStartObject()
+    args.foreach { case (key, value) =>
+      value match {
+        case StringValue(v) => gen.writeStringField(key, v)
+        case IntValue(v) => gen.writeNumberField(key, v)
+        case DecimalValue(v) => gen.writeNumberField(key, v)
+        case BooleanValue(v) => gen.writeBooleanField(key, v)
+        case JsonValue(v) =>
+          gen.writeFieldName(key)
+          gen.writeRawValue(v)
+        case NullValue => gen.writeNullField(key)
+      }
+    }
+    gen.writeEndObject()
+    gen.close()
+    sw.toString
+  }
+
   /** Represents a content block in an Anthropic response. */
   enum ContentBlock {
     case TextBlock(text: String)
-    case ToolUseBlock(id: String, name: String, input: Map[String, Any])
+    case ToolUseBlock(id: String, name: String, input: ToolArgs)
   }
   export ContentBlock._
 
-  /** Parse Anthropic response content blocks and stop_reason.
-   *  Uses a cleaner streaming parser with explicit state tracking.
-   *  
-   *  State machine:
-   *  - Parse top-level fields until we find "content" array or "stop_reason"
-   *  - Inside content array, parse each block object
-   *  - For tool_use blocks, parse the input object recursively
-   */
+  /** Parse Anthropic response content blocks and stop_reason. */
   def parseAnthropicContentBlocks(json: String): (List[ContentBlock], String) = {
     val parser = jsonFactory.createParser(json)
     val blocks = scala.collection.mutable.ListBuffer[ContentBlock]()
     var stopReason = ""
-    
+
     try {
-      // State: toplevel | in_content | in_block | in_input | in_nested
-      enum State { case TopLevel, InContent, InBlock, InInput, InNested }
-      import State._
-      
-      var state = TopLevel
-      var depth = 0  // Track nesting depth for skipping
-      
-      // Current block being parsed
-      var blockType = ""
-      var textVal = ""
-      var toolId = ""
-      var toolName = ""
-      var inputMap = Map.empty[String, Any]
-      var nestedJson: java.io.StringWriter = null
-      var nestedGen: software.amazon.awssdk.thirdparty.jackson.core.JsonGenerator = null
-      var nestedKey = ""
-      
       while (parser.nextToken() != null) {
-        val token = parser.currentToken()
-        
-        (state, token) match {
-          // Top level: look for "content" and "stop_reason"
-          case (TopLevel, JsonToken.FIELD_NAME) =>
-            parser.currentName() match {
-              case "content" =>
-                if (parser.nextToken() == JsonToken.START_ARRAY) state = InContent
-              case "stop_reason" =>
-                parser.nextToken()
-                stopReason = parser.getValueAsString("")
-              case _ => // skip
-            }
-          
-          // Inside content array: parse block objects
-          case (InContent, JsonToken.START_OBJECT) =>
-            state = InBlock
-            blockType = ""; textVal = ""; toolId = ""; toolName = ""; inputMap = Map.empty
-          
-          case (InContent, JsonToken.END_ARRAY) =>
-            state = TopLevel
-          
-          // Inside a content block: extract fields
-          case (InBlock, JsonToken.FIELD_NAME) =>
-            parser.currentName() match {
-              case "type" => parser.nextToken(); blockType = parser.getValueAsString("")
-              case "text" => parser.nextToken(); textVal = parser.getValueAsString("")
-              case "id" => parser.nextToken(); toolId = parser.getValueAsString("")
-              case "name" => parser.nextToken(); toolName = parser.getValueAsString("")
-              case "input" =>
-                if (parser.nextToken() == JsonToken.START_OBJECT) state = InInput
-              case _ => // skip
-            }
-          
-          case (InBlock, JsonToken.END_OBJECT) =>
-            // Emit the completed block
-            blockType match {
-              case "text" if textVal.nonEmpty => blocks += TextBlock(textVal)
-              case "tool_use" if toolId.nonEmpty => blocks += ToolUseBlock(toolId, toolName, inputMap)
-              case _ => // incomplete block, skip
-            }
-            state = InContent
-          
-          // Inside input object: parse key-value pairs
-          case (InInput, JsonToken.FIELD_NAME) =>
-            val key = parser.currentName()
-            val valueToken = parser.nextToken()
-            valueToken match {
-              case JsonToken.VALUE_STRING => inputMap += (key -> parser.getValueAsString(""))
-              case JsonToken.VALUE_NUMBER_INT => inputMap += (key -> parser.getIntValue)
-              case JsonToken.VALUE_NUMBER_FLOAT =>
-                // Coerce whole-number floats (e.g., 188.0) to Int to prevent type confusion
-                val doubleVal = parser.getDoubleValue
-                if (doubleVal.isWhole && doubleVal >= Int.MinValue && doubleVal <= Int.MaxValue)
-                  inputMap += (key -> doubleVal.toInt)
-                else
-                  inputMap += (key -> doubleVal)
-              case JsonToken.VALUE_TRUE => inputMap += (key -> true)
-              case JsonToken.VALUE_FALSE => inputMap += (key -> false)
-              case JsonToken.START_OBJECT | JsonToken.START_ARRAY =>
-                // Serialize nested structure to JSON string
-                nestedKey = key
-                nestedJson = new java.io.StringWriter()
-                nestedGen = jsonFactory.createGenerator(nestedJson)
-                state = InNested
-                depth = 1
-                if (valueToken == JsonToken.START_OBJECT) nestedGen.writeStartObject()
-                else nestedGen.writeStartArray()
-              case _ => // null or other, skip
-            }
-          
-          case (InInput, JsonToken.END_OBJECT) =>
-            state = InBlock
-          
-          // Inside nested structure: copy tokens verbatim
-          case (InNested, JsonToken.START_OBJECT) =>
-            nestedGen.writeStartObject(); depth += 1
-          case (InNested, JsonToken.END_OBJECT) =>
-            depth -= 1
-            nestedGen.writeEndObject()
-            if (depth == 0) {
-              nestedGen.close()
-              inputMap += (nestedKey -> nestedJson.toString)
-              state = InInput
-            }
-          case (InNested, JsonToken.START_ARRAY) =>
-            nestedGen.writeStartArray(); depth += 1
-          case (InNested, JsonToken.END_ARRAY) =>
-            depth -= 1
-            nestedGen.writeEndArray()
-            if (depth == 0) {
-              nestedGen.close()
-              inputMap += (nestedKey -> nestedJson.toString)
-              state = InInput
-            }
-          case (InNested, JsonToken.FIELD_NAME) =>
-            nestedGen.writeFieldName(parser.currentName())
-          case (InNested, JsonToken.VALUE_STRING) =>
-            nestedGen.writeString(parser.getValueAsString(""))
-          case (InNested, JsonToken.VALUE_NUMBER_INT) =>
-            nestedGen.writeNumber(parser.getLongValue)
-          case (InNested, JsonToken.VALUE_NUMBER_FLOAT) =>
-            nestedGen.writeNumber(parser.getDoubleValue)
-          case (InNested, JsonToken.VALUE_TRUE) =>
-            nestedGen.writeBoolean(true)
-          case (InNested, JsonToken.VALUE_FALSE) =>
-            nestedGen.writeBoolean(false)
-          case (InNested, JsonToken.VALUE_NULL) =>
-            nestedGen.writeNull()
-          
-          case _ => // Other states/tokens - skip
+        if (parser.currentToken() == JsonToken.FIELD_NAME) {
+          parser.currentName() match {
+            case "stop_reason" =>
+              parser.nextToken()
+              stopReason = parser.getValueAsString("")
+            case "content" =>
+              if (parser.nextToken() == JsonToken.START_ARRAY) {
+                while (parser.nextToken() != JsonToken.END_ARRAY) {
+                  if (parser.currentToken() == JsonToken.START_OBJECT) {
+                    parseContentBlock(parser).foreach(blocks += _)
+                  } else {
+                    parser.skipChildren()
+                  }
+                }
+              } else {
+                parser.skipChildren()
+              }
+            case _ =>
+              parser.nextToken()
+              parser.skipChildren()
+          }
         }
       }
     } finally {
@@ -218,5 +168,87 @@ object ResponseParser {
     }
     
     (blocks.toList, stopReason)
+  }
+
+  private def parseContentBlock(
+    parser: software.amazon.awssdk.thirdparty.jackson.core.JsonParser
+  ): Option[ContentBlock] = {
+    var blockType = ""
+    var textVal = ""
+    var toolId = ""
+    var toolName = ""
+    var input = Map.empty[String, ToolValue]
+
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      if (parser.currentToken() == JsonToken.FIELD_NAME) {
+        val key = parser.currentName()
+        parser.nextToken()
+        key match {
+          case "type" => blockType = parser.getValueAsString("")
+          case "text" => textVal = parser.getValueAsString("")
+          case "id" => toolId = parser.getValueAsString("")
+          case "name" => toolName = parser.getValueAsString("")
+          case "input" if parser.currentToken() == JsonToken.START_OBJECT =>
+            input = parseToolArgsObject(parser)
+          case _ =>
+            parser.skipChildren()
+        }
+      }
+    }
+
+    blockType match {
+      case "text" if textVal.nonEmpty => Some(TextBlock(textVal))
+      case "tool_use" if toolId.nonEmpty => Some(ToolUseBlock(toolId, toolName, input))
+      case _ => None
+    }
+  }
+
+  private def parseToolArgsObject(
+    parser: software.amazon.awssdk.thirdparty.jackson.core.JsonParser
+  ): ToolArgs = {
+    val args = scala.collection.mutable.Map[String, ToolValue]()
+    while (parser.nextToken() != JsonToken.END_OBJECT) {
+      if (parser.currentToken() == JsonToken.FIELD_NAME) {
+        val key = parser.currentName()
+        parser.nextToken()
+        args += (key -> readToolValue(parser))
+      }
+    }
+    args.toMap
+  }
+
+  private def readToolValue(
+    parser: software.amazon.awssdk.thirdparty.jackson.core.JsonParser
+  ): ToolValue = {
+    parser.currentToken() match {
+      case JsonToken.VALUE_STRING => StringValue(parser.getValueAsString(""))
+      case JsonToken.VALUE_NUMBER_INT =>
+        val longVal = parser.getLongValue
+        if (longVal >= Int.MinValue && longVal <= Int.MaxValue) IntValue(longVal.toInt)
+        else DecimalValue(longVal.toDouble)
+      case JsonToken.VALUE_NUMBER_FLOAT =>
+        val doubleVal = parser.getDoubleValue
+        if (doubleVal.isWhole && doubleVal >= Int.MinValue && doubleVal <= Int.MaxValue)
+          IntValue(doubleVal.toInt)
+        else
+          DecimalValue(doubleVal)
+      case JsonToken.VALUE_TRUE => BooleanValue(true)
+      case JsonToken.VALUE_FALSE => BooleanValue(false)
+      case JsonToken.VALUE_NULL => NullValue
+      case JsonToken.START_OBJECT | JsonToken.START_ARRAY =>
+        JsonValue(serializeCurrentStructure(parser))
+      case _ =>
+        StringValue(parser.getValueAsString(""))
+    }
+  }
+
+  private def serializeCurrentStructure(
+    parser: software.amazon.awssdk.thirdparty.jackson.core.JsonParser
+  ): String = {
+    val sw = new StringWriter()
+    val gen = jsonFactory.createGenerator(sw)
+    gen.copyCurrentStructure(parser)
+    gen.close()
+    sw.toString
   }
 }

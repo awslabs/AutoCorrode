@@ -97,7 +97,8 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     val toolUse = blocks(1).asInstanceOf[ResponseParser.ToolUseBlock]
     toolUse.id shouldBe "toolu_123"
     toolUse.name shouldBe "read_theory"
-    toolUse.input("theory") shouldBe "Foo.thy"
+    toolUse.input("theory") shouldBe ResponseParser.StringValue("Foo.thy")
+    toolUse.input("start_line") shouldBe ResponseParser.IntValue(1)
     stopReason shouldBe "tool_use"
   }
 
@@ -118,7 +119,7 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     val (blocks, _) = ResponseParser.parseAnthropicContentBlocks(json)
     blocks should have length 1
     val tu = blocks.head.asInstanceOf[ResponseParser.ToolUseBlock]
-    tu.input("proof") shouldBe "by simp"
+    tu.input("proof") shouldBe ResponseParser.StringValue("by simp")
   }
 
   test("parseAnthropicContentBlocks should handle tool_use with numeric input") {
@@ -130,9 +131,9 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     }"""
     val (blocks, _) = ResponseParser.parseAnthropicContentBlocks(json)
     val tu = blocks.head.asInstanceOf[ResponseParser.ToolUseBlock]
-    tu.input("theory") shouldBe "Foo"
-    tu.input("start_line") shouldBe 10
-    tu.input("end_line") shouldBe 20
+    tu.input("theory") shouldBe ResponseParser.StringValue("Foo")
+    tu.input("start_line") shouldBe ResponseParser.IntValue(10)
+    tu.input("end_line") shouldBe ResponseParser.IntValue(20)
   }
 
   test("parseAnthropicContentBlocks should handle tool_use with boolean input") {
@@ -144,7 +145,7 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     }"""
     val (blocks, _) = ResponseParser.parseAnthropicContentBlocks(json)
     val tu = blocks.head.asInstanceOf[ResponseParser.ToolUseBlock]
-    tu.input("exact") shouldBe true
+    tu.input("exact") shouldBe ResponseParser.BooleanValue(true)
   }
 
   test("parseAnthropicContentBlocks should handle multiple tool_use blocks") {
@@ -171,8 +172,8 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     val (blocks, _) = ResponseParser.parseAnthropicContentBlocks(json)
     val tu = blocks.head.asInstanceOf[ResponseParser.ToolUseBlock]
     // Nested objects are serialized as JSON strings
-    tu.input("config").toString should include("key")
-    tu.input("config").toString should include("value")
+    ResponseParser.toolValueToDisplay(tu.input("config")) should include("key")
+    ResponseParser.toolValueToDisplay(tu.input("config")) should include("value")
   }
 
   test("parseAnthropicContentBlocks should handle nested array in tool input") {
@@ -184,7 +185,7 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     }"""
     val (blocks, _) = ResponseParser.parseAnthropicContentBlocks(json)
     val tu = blocks.head.asInstanceOf[ResponseParser.ToolUseBlock]
-    tu.input("items").toString should include("1")
+    ResponseParser.toolValueToDisplay(tu.input("items")) should include("1")
   }
 
   test("parseAnthropicContentBlocks should handle missing stop_reason") {
@@ -200,8 +201,8 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     blocks.length shouldBe 1
     blocks.head match {
       case ResponseParser.ToolUseBlock(_, _, input) =>
-        input("line") shouldBe 188  // Int not Double
-        input("valid") shouldBe 25  // Int not Double
+        input("line") shouldBe ResponseParser.IntValue(188)  // Int not Double
+        input("valid") shouldBe ResponseParser.IntValue(25)  // Int not Double
       case _ => fail("Expected ToolUseBlock")
     }
   }
@@ -212,8 +213,8 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     blocks.length shouldBe 1
     blocks.head match {
       case ResponseParser.ToolUseBlock(_, _, input) =>
-        input("temp") shouldBe 0.5  // Double preserved
-        input("ratio") shouldBe 3.14  // Double preserved
+        input("temp") shouldBe ResponseParser.DecimalValue(0.5)  // Double preserved
+        input("ratio") shouldBe ResponseParser.DecimalValue(3.14)  // Double preserved
       case _ => fail("Expected ToolUseBlock")
     }
   }

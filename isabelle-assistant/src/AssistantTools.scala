@@ -194,14 +194,14 @@ object AssistantTools {
   private val THEORY_NAME_PATTERN = """^[A-Za-z0-9_.\-/]+$""".r
 
   /** Sanitize a string argument: trim, limit length, reject control characters. */
-  private def safeStringArg(args: Map[String, Any], key: String, maxLen: Int = MAX_STRING_ARG_LENGTH): String = {
-    val raw = args.getOrElse(key, "").toString
+  private def safeStringArg(args: ResponseParser.ToolArgs, key: String, maxLen: Int = MAX_STRING_ARG_LENGTH): String = {
+    val raw = args.get(key).map(ResponseParser.toolValueToString).getOrElse("")
     val cleaned = raw.filter(c => !c.isControl || c == '\n' || c == '\t')
     cleaned.take(maxLen).trim
   }
 
   /** Validate a theory name argument. */
-  private def safeTheoryArg(args: Map[String, Any]): Either[String, String] = {
+  private def safeTheoryArg(args: ResponseParser.ToolArgs): Either[String, String] = {
     val name = safeStringArg(args, "theory", 200)
     if (name.isEmpty) Left("Error: theory name required")
     else if (THEORY_NAME_PATTERN.findFirstIn(name).isEmpty) Left(s"Error: invalid theory name '$name'")
@@ -213,8 +213,10 @@ object AssistantTools {
    * Called from the agentic loop on a background thread.
    * All arguments are sanitized before use to prevent injection or resource exhaustion.
    */
-  def executeTool(name: String, args: Map[String, Any], view: View): String = {
-    Output.writeln(s"[Assistant] Tool call: $name(${args.map { case (k, v) => s"$k=${v.toString.take(100)}" }.mkString(", ")})")
+  def executeTool(name: String, args: ResponseParser.ToolArgs, view: View): String = {
+    Output.writeln(
+      s"[Assistant] Tool call: $name(${args.map { case (k, v) => s"$k=${ResponseParser.toolValueToDisplay(v).take(100)}" }.mkString(", ")})"
+    )
     AssistantDockable.setStatus(s"[tool] $name...")
     try {
       name match {
@@ -253,7 +255,7 @@ object AssistantTools {
     }
   }
 
-  private def execReadTheory(args: Map[String, Any], view: View): String = {
+  private def execReadTheory(args: ResponseParser.ToolArgs, view: View): String = {
     safeTheoryArg(args) match {
       case Left(err) => err
       case Right(theory) =>
@@ -279,7 +281,7 @@ object AssistantTools {
     if (theories.nonEmpty) theories.mkString("\n") else "No theory files open."
   }
 
-  private def execSearchInTheory(args: Map[String, Any], view: View): String = {
+  private def execSearchInTheory(args: ResponseParser.ToolArgs, view: View): String = {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     safeTheoryArg(args) match {
       case Left(err) => err
@@ -322,7 +324,7 @@ object AssistantTools {
     PrintContextAction.getContextString(view).getOrElse("No local facts in scope.")
   }
 
-  private def execFindTheorems(args: Map[String, Any], view: View): String = {
+  private def execFindTheorems(args: ResponseParser.ToolArgs, view: View): String = {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     if (pattern.isEmpty) "Error: pattern required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
@@ -365,7 +367,7 @@ object AssistantTools {
     }
   }
 
-  private def execVerifyProof(args: Map[String, Any], view: View): String = {
+  private def execVerifyProof(args: ResponseParser.ToolArgs, view: View): String = {
     val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
     if (proof.isEmpty) "Error: proof required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
@@ -526,7 +528,7 @@ object AssistantTools {
     result
   }
 
-  private def execGetErrors(args: Map[String, Any], view: View): String = {
+  private def execGetErrors(args: ResponseParser.ToolArgs, view: View): String = {
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
 
@@ -580,7 +582,7 @@ object AssistantTools {
     }
   }
 
-  private def execGetDefinitions(args: Map[String, Any], view: View): String = {
+  private def execGetDefinitions(args: ResponseParser.ToolArgs, view: View): String = {
     val names = safeStringArg(args, "names", MAX_STRING_ARG_LENGTH)
     if (names.isEmpty) "Error: names required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
@@ -608,7 +610,7 @@ object AssistantTools {
     }
   }
 
-  private def execExecuteStep(args: Map[String, Any], view: View): String = {
+  private def execExecuteStep(args: ResponseParser.ToolArgs, view: View): String = {
     val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
     if (proof.isEmpty) "Error: proof required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
@@ -646,7 +648,7 @@ object AssistantTools {
     }
   }
 
-  private def execTraceSimplifier(args: Map[String, Any], view: View): String = {
+  private def execTraceSimplifier(args: ResponseParser.ToolArgs, view: View): String = {
     val method = safeStringArg(args, "method", 50)
     val effectiveMethod = if (method.isEmpty || method == "simp") "simp" else method
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
@@ -725,7 +727,7 @@ object AssistantTools {
     result
   }
 
-  private def execSearchAllTheories(args: Map[String, Any], view: View): String = {
+  private def execSearchAllTheories(args: ResponseParser.ToolArgs, view: View): String = {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     if (pattern.isEmpty) "Error: pattern required"
     else {
@@ -752,7 +754,7 @@ object AssistantTools {
     }
   }
 
-  private def execGetDependencies(args: Map[String, Any], view: View): String = {
+  private def execGetDependencies(args: ResponseParser.ToolArgs, view: View): String = {
     safeTheoryArg(args) match {
       case Left(err) => err
       case Right(theory) =>
@@ -774,7 +776,7 @@ object AssistantTools {
     }
   }
 
-  private def execGetWarnings(args: Map[String, Any], view: View): String = {
+  private def execGetWarnings(args: ResponseParser.ToolArgs, view: View): String = {
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
 
@@ -828,7 +830,7 @@ object AssistantTools {
     }
   }
 
-  private def execSetCursorPosition(args: Map[String, Any], view: View): String = {
+  private def execSetCursorPosition(args: ResponseParser.ToolArgs, view: View): String = {
     val line = intArg(args, "line", -1)
     if (line <= 0) "Error: line must be a positive integer"
     else {
@@ -853,7 +855,7 @@ object AssistantTools {
     }
   }
 
-  private def execEditTheory(args: Map[String, Any], view: View): String = {
+  private def execEditTheory(args: ResponseParser.ToolArgs, view: View): String = {
     val operation = safeStringArg(args, "operation", 50).toLowerCase
     val text = safeStringArg(args, "text", MAX_STRING_ARG_LENGTH)
     val startLine = intArg(args, "start_line", -1)
@@ -915,7 +917,7 @@ object AssistantTools {
     }
   }
 
-  private def execTryMethods(args: Map[String, Any], view: View): String = {
+  private def execTryMethods(args: ResponseParser.ToolArgs, view: View): String = {
     val methodsStr = safeStringArg(args, "methods", MAX_STRING_ARG_LENGTH)
     if (methodsStr.isEmpty) "Error: methods required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
@@ -958,7 +960,7 @@ object AssistantTools {
     }
   }
 
-  private def execGetEntities(args: Map[String, Any], view: View): String = {
+  private def execGetEntities(args: ResponseParser.ToolArgs, view: View): String = {
     safeTheoryArg(args) match {
       case Left(err) => err
       case Right(theory) =>
@@ -999,7 +1001,7 @@ object AssistantTools {
     }
   }
 
-  private def execWebSearch(args: Map[String, Any]): String = {
+  private def execWebSearch(args: ResponseParser.ToolArgs): String = {
     val query = safeStringArg(args, "query", MAX_PATTERN_ARG_LENGTH)
     if (query.isEmpty) "Error: query required"
     else {
@@ -1043,7 +1045,7 @@ object AssistantTools {
     }
   }
 
-  private def execCreateTheory(args: Map[String, Any], view: View): String = {
+  private def execCreateTheory(args: ResponseParser.ToolArgs, view: View): String = {
     val name = safeStringArg(args, "name", 200)
     val imports = safeStringArg(args, "imports", 500)
     val content = safeStringArg(args, "content", MAX_STRING_ARG_LENGTH)
@@ -1077,7 +1079,7 @@ object AssistantTools {
     }
   }
 
-  private def execOpenTheory(args: Map[String, Any], view: View): String = {
+  private def execOpenTheory(args: ResponseParser.ToolArgs, view: View): String = {
     val path = safeStringArg(args, "path", 1000)
     if (path.isEmpty) "Error: path required"
     else {
@@ -1167,12 +1169,17 @@ object AssistantTools {
   private def findBuffer(normalized: String): Option[org.gjt.sp.jedit.buffer.JEditBuffer] =
     MenuContext.findTheoryBuffer(normalized)
 
-  private def intArg(args: Map[String, Any], key: String, default: Int): Int = {
+  private def intArg(args: ResponseParser.ToolArgs, key: String, default: Int): Int = {
     args.get(key) match {
-      case Some(d: Double) if !d.isWhole =>
+      case Some(ResponseParser.DecimalValue(d)) if !d.isWhole =>
         throw new IllegalArgumentException(s"Parameter '$key' must be an integer, got decimal value: $d")
-      case Some(n: Number) => n.intValue()
-      case Some(s: String) => try { s.toInt } catch { case _: NumberFormatException => default }
+      case Some(ResponseParser.DecimalValue(d)) => d.toInt
+      case Some(ResponseParser.IntValue(i)) => i
+      case Some(ResponseParser.StringValue(s)) =>
+        try { s.toInt } catch { case _: NumberFormatException => default }
+      case Some(ResponseParser.BooleanValue(_)) | Some(ResponseParser.JsonValue(_)) |
+          Some(ResponseParser.NullValue) =>
+        default
       case _ => default
     }
   }

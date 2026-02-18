@@ -21,7 +21,28 @@ import scala.jdk.CollectionConverters._
  * and help text, preventing drift between the two.
  */
 object ChatAction {
-  case class Message(role: String, content: String, timestamp: LocalDateTime, rawHtml: Boolean = false, transient: Boolean = false)
+  enum ChatRole(val wireValue: String) {
+    case User extends ChatRole("user")
+    case Assistant extends ChatRole("assistant")
+    case Tool extends ChatRole("tool")
+  }
+  object ChatRole {
+    def fromWire(value: String): Option[ChatRole] = value match {
+      case "user" => Some(User)
+      case "assistant" => Some(Assistant)
+      case "tool" => Some(Tool)
+      case _ => None
+    }
+  }
+  export ChatRole._
+
+  case class Message(
+    role: ChatRole,
+    content: String,
+    timestamp: LocalDateTime,
+    rawHtml: Boolean = false,
+    transient: Boolean = false
+  )
   
   // Bounded history using immutable List with lock for thread-safety
   private val maxHistory = AssistantConstants.MAX_ACCUMULATED_MESSAGES
@@ -76,8 +97,12 @@ object ChatAction {
     history = (history :+ message).takeRight(maxHistory)
   }
 
-  def addMessage(role: String, content: String): Unit =
+  def addMessage(role: ChatRole, content: String): Unit =
     addMessage(Message(role, content, LocalDateTime.now()))
+
+  /** Backward-compatible adapter for call sites still passing wire-role strings. */
+  def addMessage(role: String, content: String): Unit =
+    addMessage(ChatRole.fromWire(role).getOrElse(Assistant), content)
 
   def clearHistory(): Unit = historyLock.synchronized {
     history = Nil
@@ -115,18 +140,18 @@ object ChatAction {
       }
 
       systemPromptOpt.foreach { systemPrompt =>
-        addMessage(Message("user", userMessage, LocalDateTime.now()))
+        addMessage(Message(User, userMessage, LocalDateTime.now()))
         AssistantDockable.showConversation(getHistory)
         AssistantDockable.setStatus(AssistantConstants.STATUS_THINKING)
 
-        val messagesForApi = getHistory.filterNot(_.transient).map(m => (m.role, m.content))
+        val messagesForApi = getHistory.filterNot(_.transient).map(m => (m.role.wireValue, m.content))
 
         Isabelle_Thread.fork(name = "assistant-chat") {
           try {
             BedrockClient.setCurrentView(view)
             val response = BedrockClient.invokeChat(systemPrompt, messagesForApi)
             GUI_Thread.later {
-              addMessage(Message("assistant", response, LocalDateTime.now()))
+              addMessage(Message(Assistant, response, LocalDateTime.now()))
               AssistantDockable.showConversation(getHistory)
               AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
             }
@@ -141,7 +166,7 @@ object ChatAction {
                   retryChatInternal(view, systemPrompt, messagesForApi)
                 }
                 val retryId = AssistantDockable.registerAction(retryAction)
-                ChatAction.addMessage("assistant", s"Error: $errorMsg\n\n{{ACTION:$retryId:Retry}}")
+                ChatAction.addMessage(Assistant, s"Error: $errorMsg\n\n{{ACTION:$retryId:Retry}}")
                 AssistantDockable.showConversation(ChatAction.getHistory)
               }
           }
@@ -157,7 +182,7 @@ object ChatAction {
         BedrockClient.setCurrentView(view)
         val response = BedrockClient.invokeChat(systemPrompt, messagesForApi)
         GUI_Thread.later {
-          addMessage(Message("assistant", response, LocalDateTime.now()))
+          addMessage(Message(Assistant, response, LocalDateTime.now()))
           AssistantDockable.showConversation(getHistory)
           AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         }
@@ -177,7 +202,7 @@ object ChatAction {
     val cmd = parts(0).toLowerCase
     val arg = if (parts.length > 1) parts(1) else ""
 
-    addMessage(Message("user", input, LocalDateTime.now()))
+    addMessage(Message(User, input, LocalDateTime.now()))
     AssistantDockable.showConversation(getHistory)
 
     dispatch.get(cmd) match {
@@ -212,7 +237,7 @@ object ChatAction {
       |• <code>Theory.thy:lemma_name</code> — named element<br/>
       |• <code>cursor+5</code>, <code>cursor-3</code> — relative offset
       |</div></div>""".stripMargin
-    addMessage(Message("assistant", table + targetHelp, LocalDateTime.now(), rawHtml = true))
+    addMessage(Message(Assistant, table + targetHelp, LocalDateTime.now(), rawHtml = true))
     AssistantDockable.showConversation(getHistory)
   }
 
@@ -537,32 +562,22 @@ object ChatAction {
   }
 
   def addResponse(content: String): Unit = {
-    addMessage(Message("assistant", content, LocalDateTime.now()))
+    addMessage(Message(Assistant, content, LocalDateTime.now()))
     AssistantDockable.showConversation(getHistory)
   }
 
   /** Add a display-only message that appears in chat but is NOT sent to the LLM. */
   def addTransient(content: String): Unit = {
-    addMessage(Message("assistant", content, LocalDateTime.now(), transient = true))
+    addMessage(Message(Assistant, content, LocalDateTime.now(), transient = true))
     AssistantDockable.showConversation(getHistory)
   }
 
   /** Add a tool-use message showing which tool is being called with what parameters.
     * Format: "toolName|||{json params}" - transient so it doesn't get sent to LLM. */
-  def addToolMessage(toolName: String, params: Map[String, Any]): Unit = {
-    // Simple JSON serialization for display purposes
-    val jsonParams = params.map { case (k, v) =>
-      val valueStr = v match {
-        case s: String => s""""${s.replace("\"", "\\\"")}""""
-        case n: Number => n.toString
-        case b: Boolean => b.toString
-        case other => s""""${other.toString.replace("\"", "\\\"")}""""
-      }
-      s""""$k": $valueStr"""
-    }.mkString("{", ", ", "}")
-    
+  def addToolMessage(toolName: String, params: ResponseParser.ToolArgs): Unit = {
+    val jsonParams = ResponseParser.toolArgsToJson(params)
     val content = s"$toolName|||$jsonParams"
-    addMessage(Message("tool", content, LocalDateTime.now(), transient = true))
+    addMessage(Message(Tool, content, LocalDateTime.now(), transient = true))
     AssistantDockable.showConversation(getHistory)
   }
 

@@ -157,7 +157,7 @@ object BedrockClient {
       Option(org.gjt.sp.jedit.jEdit.getActiveView).foreach(setCurrentView)
       // System prompt is empty here — invokeChatInternal prepends getSystemPrompt automatically
       // Take atomic snapshot of history before constructing messages to avoid races
-      val history = ChatAction.getHistorySnapshot.filterNot(_.transient).map(m => (m.role, m.content))
+      val history = ChatAction.getHistorySnapshot.filterNot(_.transient).map(m => (m.role.wireValue, m.content))
       val messages = history :+ ("user", prompt)
       retryWithBackoff(maxRetries) {
         invokeChatInternal("", messages)
@@ -355,7 +355,7 @@ object BedrockClient {
     var finalText = ""
     var continue = true
     // Stuck-loop detection: track last 3 tool calls to detect repetitive behavior
-    val recentCalls = scala.collection.mutable.Queue[(String, Map[String, Any])]()
+    val recentCalls = scala.collection.mutable.Queue[(String, ResponseParser.ToolArgs)]()
     val LOOP_DETECTION_WINDOW = 3
 
     while (continue) {
@@ -452,10 +452,14 @@ object BedrockClient {
         g.writeStringField("name", name)
         g.writeObjectFieldStart("input")
         for ((k, v) <- input) v match {
-          case s: String => g.writeStringField(k, s)
-          case n: Number => g.writeNumberField(k, n.doubleValue())
-          case b: java.lang.Boolean => g.writeBooleanField(k, b)
-          case other => g.writeStringField(k, other.toString)
+          case ResponseParser.StringValue(s) => g.writeStringField(k, s)
+          case ResponseParser.IntValue(n) => g.writeNumberField(k, n)
+          case ResponseParser.DecimalValue(n) => g.writeNumberField(k, n)
+          case ResponseParser.BooleanValue(b) => g.writeBooleanField(k, b)
+          case ResponseParser.JsonValue(json) =>
+            g.writeFieldName(k)
+            g.writeRawValue(json)
+          case ResponseParser.NullValue => g.writeNullField(k)
         }
         g.writeEndObject()
         g.writeEndObject()

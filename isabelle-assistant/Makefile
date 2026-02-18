@@ -11,6 +11,7 @@ JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
+SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
@@ -84,6 +85,7 @@ $(CLASSES_DIR)/.libs: $(LIB_JARS) | $(CLASSES_DIR)
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling..."
 	$(JAVA_ENV) $(SCALAC) \
+		$(SCALAC_FLAGS) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
@@ -117,6 +119,7 @@ test: build fetch-test-deps check-test-sanity verify-test-coverage
 	echo "Compiling tests..."
 	mkdir -p $(TEST_CLASSES_DIR)
 	$(JAVA_ENV) $(SCALAC) \
+		$(SCALAC_FLAGS) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH):$(CLASSES_DIR):$(TEST_CLASSPATH)" \
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
@@ -196,6 +199,7 @@ debug:
 	echo "JEDIT_JAR     = $(JEDIT_JAR)"
 	echo "ISABELLE_JAR  = $(ISABELLE_JAR)"
 	echo "SCALA_HOME    = $(SCALA_HOME)"
+	echo "SCALAC_FLAGS  = $(SCALAC_FLAGS)"
 	echo "JAVA_HOME     = $(JAVA_HOME)"
 	echo "JAVA          = $(JAVA)"
 	echo "JAR           = $(JAR)"

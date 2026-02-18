@@ -31,8 +31,8 @@ class ChatActionTest extends AnyFunSuite with Matchers {
 
   test("transient messages should be filterable") {
     ChatAction.clearHistory()
-    ChatAction.addMessage(ChatAction.Message("user", "regular", java.time.LocalDateTime.now()))
-    ChatAction.addMessage(ChatAction.Message("assistant", "transient", java.time.LocalDateTime.now(), transient = true))
+    ChatAction.addMessage(ChatAction.Message(ChatAction.User, "regular", java.time.LocalDateTime.now()))
+    ChatAction.addMessage(ChatAction.Message(ChatAction.Assistant, "transient", java.time.LocalDateTime.now(), transient = true))
     
     val all = ChatAction.getHistorySnapshot
     all.length shouldBe 2
