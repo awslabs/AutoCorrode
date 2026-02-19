@@ -25,7 +25,6 @@ import org.gjt.sp.jedit.View
   * thread-safe methods for updating the UI from background threads.
   */
 object AssistantDockable {
-  @volatile private var instance: Option[AssistantDockable] = None
   private val insertActions =
     new java.util.concurrent.ConcurrentHashMap[String, () => Unit]()
   private val insertActionOrder =
@@ -35,13 +34,6 @@ object AssistantDockable {
   @volatile private var _cancelled = false
   @volatile private var _busy = false
   @volatile private var _busyStartTime = 0L
-
-  def setInstance(d: AssistantDockable): Unit = synchronized {
-    instance = Some(d)
-  }
-  def clearInstance(d: AssistantDockable): Unit = synchronized {
-    if (instance.contains(d)) instance = None
-  }
 
   def isCancelled: Boolean = _cancelled
 
@@ -91,7 +83,7 @@ object AssistantDockable {
   }
 
   def showConversation(history: List[ChatAction.Message]): Unit =
-    instance.foreach(d => GUI_Thread.later { d.displayConversation(history) })
+    AssistantEventBus.publish(AssistantEvent.ShowConversation(history))
 
   def setStatus(status: String): Unit = {
     val wasBusy = _busy
@@ -99,26 +91,26 @@ object AssistantDockable {
       status != AssistantConstants.STATUS_READY && status != AssistantConstants.STATUS_CANCELLED && !status
         .startsWith("Error")
     if (_busy && !wasBusy) _busyStartTime = System.currentTimeMillis()
-    instance.foreach(d => GUI_Thread.later { d.updateStatus(status) })
+    AssistantEventBus.publish(AssistantEvent.StatusUpdate(status))
   }
 
   def setBadge(badge: VerificationBadge.BadgeType): Unit =
-    instance.foreach(d => GUI_Thread.later { d.updateBadge(badge) })
+    AssistantEventBus.publish(AssistantEvent.BadgeUpdate(badge))
 
   def refreshIQStatus(): Unit =
-    instance.foreach(d => GUI_Thread.later { d.updateIQStatus() })
+    AssistantEventBus.publish(AssistantEvent.IQStatusRefresh())
 
   def refreshModelLabel(): Unit =
-    instance.foreach(d => GUI_Thread.later { d.updateModelLabel() })
+    AssistantEventBus.publish(AssistantEvent.ModelLabelRefresh())
 
   /** Global teardown hook used from plugin stop to avoid leaked dockable
     * state/subscriptions.
     */
   def shutdown(): Unit = {
-    val current = synchronized { instance }
-    current.foreach(_.disposeDockable())
+    // Notify bus that dockable is effectively dead by pushing cancelled status?
+    // In event-bus architecture, instances clean themselves up. We just clear
+    // the static state actions.
     synchronized {
-      instance = None
       clearInsertActions()
       _cancelled = false
       _busy = false
@@ -134,7 +126,21 @@ object AssistantDockable {
 class AssistantDockable(view: View, position: String)
     extends Dockable(view, position) {
 
-  AssistantDockable.setInstance(this)
+  private val eventBusListener: AssistantEvent => Unit = {
+    case AssistantEvent.StatusUpdate(status) =>
+      GUI_Thread.later { updateStatus(status) }
+    case AssistantEvent.BadgeUpdate(badge) =>
+      GUI_Thread.later { updateBadge(badge) }
+    case AssistantEvent.ShowConversation(history) =>
+      GUI_Thread.later { displayConversation(history) }
+    case AssistantEvent.IQStatusRefresh() =>
+      GUI_Thread.later { updateIQStatus() }
+    case AssistantEvent.ModelLabelRefresh() =>
+      GUI_Thread.later { updateModelLabel() }
+    case _ => // Optional Catch-all
+  }
+  AssistantEventBus.subscribe(eventBusListener)
+
   private[this] val statusSubscription =
     AssistantStatusSubscription.create(
       PIDE.session,
@@ -579,7 +585,7 @@ class AssistantDockable(view: View, position: String)
     if (!disposed) {
       disposed = true
       statusSubscription.stop()
-      AssistantDockable.clearInstance(this)
+      AssistantEventBus.unsubscribe(eventBusListener)
     }
   }
 
