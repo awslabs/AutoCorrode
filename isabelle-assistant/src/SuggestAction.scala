@@ -504,9 +504,9 @@ object SuggestAction {
             numberedPattern.findFirstMatchIn(line).map(_.group(1).trim)
           )
           .filter(s =>
-            s.startsWith("by ") || s.startsWith("apply ") || s.startsWith(
-              "using "
-            ) || s.startsWith("proof")
+            CommandMatcher
+              .findMatchingKeyword(s, IsabelleKeywords.proofMethods)
+              .isDefined
           )
           .toList
       }
@@ -519,9 +519,9 @@ object SuggestAction {
           .extractCodeBlocks(response)
           .flatMap(_.linesIterator.map(_.trim).filter(_.nonEmpty))
           .filter(s =>
-            s.startsWith("by ") || s.startsWith("apply ") || s.startsWith(
-              "using "
-            ) || s.startsWith("proof")
+            CommandMatcher
+              .findMatchingKeyword(s, IsabelleKeywords.proofMethods)
+              .isDefined
           )
       }
 

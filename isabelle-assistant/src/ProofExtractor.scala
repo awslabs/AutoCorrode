@@ -8,12 +8,18 @@ import isabelle.jedit._
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import scala.util.boundary, boundary.break
 
-/** Extracts proof blocks (lemma..qed) from PIDE command structure and detects apply-style proofs. */
+/** Extracts proof blocks (lemma..qed) from PIDE command structure and detects
+  * apply-style proofs.
+  */
 object ProofExtractor {
   private val proofStarters = IsabelleKeywords.proofStarters
-  private val proofEnders = IsabelleKeywords.proofClosers ++ Set("by")
+  private val proofEnders =
+    IsabelleKeywords.proofClosers ++ IsabelleKeywords.proofMethods
 
-  def getProofBlockAtOffset(buffer: JEditBuffer, offset: Int): Option[String] = {
+  def getProofBlockAtOffset(
+      buffer: JEditBuffer,
+      offset: Int
+  ): Option[String] = {
     try {
       Document_Model.get_model(buffer).flatMap { model =>
         val snapshot = Document_Model.snapshot(model)
@@ -45,7 +51,12 @@ object ProofExtractor {
             }
 
             if (startIdx >= 0 && endIdx >= 0)
-              Some(commands.slice(startIdx, endIdx + 1).map(_._1.source).mkString("\n"))
+              Some(
+                commands
+                  .slice(startIdx, endIdx + 1)
+                  .map(_._1.source)
+                  .mkString("\n")
+              )
             else None
           }
         }
@@ -56,8 +67,7 @@ object ProofExtractor {
   }
 
   def isApplyStyleProof(proofText: String): Boolean =
-    proofText.linesIterator.exists(line => {
-      val trimmed = line.trim
-      trimmed == "apply" || trimmed.startsWith("apply ") || trimmed.startsWith("apply(")
-    })
+    proofText.linesIterator.exists(line =>
+      CommandMatcher.startsWithKeyword(line, "apply")
+    )
 }
