@@ -1,2 +1,11 @@
 dependencies/
 *.thy~
+
+# IDE / Build Tools
+.metals/
+.bloop/
+.scala-build/
+.vscode/
+
+# Other
+Conformance_Testing/

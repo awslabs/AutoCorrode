@@ -10,21 +10,21 @@ import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import scala.collection.mutable.ListBuffer
 
-/**
- * Proof suggestion pipeline combining LLM suggestions with optional Sledgehammer
- * results. Candidates are collected in parallel, optionally verified via I/Q,
- * ranked by verification status and timing, then displayed with insert links.
- */
+/** Proof suggestion pipeline combining LLM suggestions with optional
+  * Sledgehammer results. Candidates are collected in parallel, optionally
+  * verified via I/Q, ranked by verification status and timing, then displayed
+  * with insert links.
+  */
 object SuggestAction {
   sealed trait CandidateSource
   case object LLM extends CandidateSource
   case object Sledgehammer extends CandidateSource
 
   case class Candidate(
-    proof: String,
-    source: CandidateSource,
-    badge: VerificationBadge.BadgeType = VerificationBadge.Unverified,
-    timeMs: Option[Long] = None
+      proof: String,
+      source: CandidateSource,
+      badge: VerificationBadge.BadgeType = VerificationBadge.Unverified,
+      timeMs: Option[Long] = None
   )
 
   def suggest(view: View, buffer: JEditBuffer, offset: Int): Unit = {
@@ -33,7 +33,7 @@ object SuggestAction {
     val commandStr = s":suggest ${TargetParser.formatTarget(target)}"
     ChatAction.addMessage("user", commandStr)
     AssistantDockable.showConversation(ChatAction.getHistory)
-    
+
     suggestInternal(view, buffer, offset)
   }
 
@@ -41,95 +41,144 @@ object SuggestAction {
   def suggestFromChat(view: View, buffer: JEditBuffer, offset: Int): Unit =
     suggestInternal(view, buffer, offset)
 
-  private def suggestInternal(view: View, buffer: JEditBuffer, offset: Int): Unit = {
-    ErrorHandler.withErrorHandling("suggest operation") {
-      val commandText = CommandExtractor.getCommandAtOffset(buffer, offset)
-      val goalState = GoalExtractor.getGoalState(buffer, offset)
+  private def suggestInternal(
+      view: View,
+      buffer: JEditBuffer,
+      offset: Int
+  ): Unit = {
+    ErrorHandler
+      .withErrorHandling("suggest operation") {
+        val commandText = CommandExtractor.getCommandAtOffset(buffer, offset)
+        val goalState = GoalExtractor.getGoalState(buffer, offset)
 
-      (commandText, goalState) match {
-        case (None, _) =>
-          GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor position")
-        case (_, None) =>
-          GUI.warning_dialog(view, "Isabelle Assistant", "No goal state available")
-        case (Some(cmd), Some(goal)) =>
-          val commandObj = IQIntegration.getCommandAtOffset(buffer, offset)
-          val canVerify = IQAvailable.isAvailable && AssistantOptions.getVerifySuggestions && commandObj.isDefined
-          val useSledgehammer = AssistantOptions.getUseSledgehammer && IQAvailable.isAvailable && commandObj.isDefined
+        (commandText, goalState) match {
+          case (None, _) =>
+            GUI.warning_dialog(
+              view,
+              "Isabelle Assistant",
+              "No command at cursor position"
+            )
+          case (_, None) =>
+            GUI.warning_dialog(
+              view,
+              "Isabelle Assistant",
+              "No goal state available"
+            )
+          case (Some(cmd), Some(goal)) =>
+            val commandObj = IQIntegration.getCommandAtOffset(buffer, offset)
+            val canVerify =
+              IQAvailable.isAvailable && AssistantOptions.getVerifySuggestions && commandObj.isDefined
+            val useSledgehammer =
+              AssistantOptions.getUseSledgehammer && IQAvailable.isAvailable && commandObj.isDefined
 
-          AssistantDockable.setStatus("Generating suggestions...")
+            AssistantDockable.setStatus("Generating suggestions...")
 
-          Isabelle_Thread.fork(name = "assistant-suggest") {
-            ErrorHandler.withErrorHandling("suggestion generation") {
-              Output.writeln(s"[Assistant] Starting suggestion collection...")
-              val candidates = collectCandidates(view, cmd, goal, commandObj, useSledgehammer)
-              Output.writeln(s"[Assistant] Collected ${candidates.length} candidates")
-              
-              val verified = if (canVerify) {
-                Output.writeln(s"[Assistant] Starting verification...")
-                verifyCandidates(view, commandObj.get, candidates)
-              } else candidates
-              
-              Output.writeln(s"[Assistant] After verification: ${verified.length} candidates")
-              val ranked = rankCandidates(verified)
-              Output.writeln(s"[Assistant] Displaying ${ranked.length} ranked candidates")
+            Isabelle_Thread.fork(name = "assistant-suggest") {
+              ErrorHandler
+                .withErrorHandling("suggestion generation") {
+                  Output.writeln(
+                    s"[Assistant] Starting suggestion collection..."
+                  )
+                  val candidates = collectCandidates(
+                    view,
+                    cmd,
+                    goal,
+                    commandObj,
+                    useSledgehammer
+                  )
+                  Output.writeln(
+                    s"[Assistant] Collected ${candidates.length} candidates"
+                  )
 
-              GUI_Thread.later {
-                displayResults(view, ranked)
-                AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-              }
-            }.recover {
-              case ex =>
-                GUI_Thread.later {
-                  AssistantDockable.setStatus("Error: " + ex.getMessage)
-                  GUI.error_dialog(view, "Suggest Error", ex.getMessage)
+                  val verified = if (canVerify) {
+                    Output.writeln(s"[Assistant] Starting verification...")
+                    verifyCandidates(view, commandObj.get, candidates)
+                  } else candidates
+
+                  Output.writeln(
+                    s"[Assistant] After verification: ${verified.length} candidates"
+                  )
+                  val ranked = rankCandidates(verified)
+                  Output.writeln(
+                    s"[Assistant] Displaying ${ranked.length} ranked candidates"
+                  )
+
+                  GUI_Thread.later {
+                    displayResults(view, ranked)
+                    AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+                  }
+                }
+                .recover { case ex =>
+                  GUI_Thread.later {
+                    AssistantDockable.setStatus("Error: " + ex.getMessage)
+                    GUI.error_dialog(view, "Suggest Error", ex.getMessage)
+                  }
                 }
             }
-          }
+        }
       }
-    }.recover {
-      case ex =>
+      .recover { case ex =>
         GUI.error_dialog(view, "Suggest Error", ex.getMessage)
-    }
+      }
   }
 
   private def collectCandidates(
-    view: View,
-    commandText: String,
-    goalState: String,
-    commandObj: Option[Command],
-    useSledgehammer: Boolean
+      view: View,
+      commandText: String,
+      goalState: String,
+      commandObj: Option[Command],
+      useSledgehammer: Boolean
   ): List[Candidate] = {
-    import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
+    import java.util.concurrent.{
+      ConcurrentLinkedQueue,
+      CountDownLatch,
+      TimeUnit
+    }
     import java.util.concurrent.atomic.AtomicBoolean
     import scala.jdk.CollectionConverters._
-    
+
     val results = new ConcurrentLinkedQueue[Candidate]()
     val useIQ = IQAvailable.isAvailable && commandObj.isDefined
     val sledgeCompleted = new AtomicBoolean(false)
-    
+
     // Prepare context information
     val contextInfo = prepareContextInfo(view, commandObj, goalState, useIQ)
-    
+
     val taskCount = if (useSledgehammer) 2 else 1
     val latch = new CountDownLatch(taskCount)
-    Output.writeln(s"[Assistant] Starting $taskCount tasks, sledgehammer=$useSledgehammer")
+    Output.writeln(
+      s"[Assistant] Starting $taskCount tasks, sledgehammer=$useSledgehammer"
+    )
 
     // Start LLM task
     startLLMTask(commandText, goalState, contextInfo, results, latch)
 
     // Start Sledgehammer task if enabled
     if (useSledgehammer && commandObj.isDefined) {
-      startSledgehammerTask(view, commandObj.get, results, latch, sledgeCompleted)
+      startSledgehammerTask(
+        view,
+        commandObj.get,
+        results,
+        latch,
+        sledgeCompleted
+      )
     }
 
     // Wait for completion
-    val waited = latch.await(AssistantConstants.SUGGESTION_COLLECTION_TIMEOUT, TimeUnit.MILLISECONDS)
-    Output.writeln(s"[Assistant] Latch done, waited=$waited, results count: ${results.size}")
+    val waited = latch.await(
+      AssistantConstants.SUGGESTION_COLLECTION_TIMEOUT,
+      TimeUnit.MILLISECONDS
+    )
+    Output.writeln(
+      s"[Assistant] Latch done, waited=$waited, results count: ${results.size}"
+    )
     // Deduplicate by proof text, preferring Sledgehammer (verified) over LLM (unverified)
     deduplicateCandidates(results.asScala.toList)
   }
 
-  private[assistant] def deduplicateCandidates(candidates: List[Candidate]): List[Candidate] =
+  private[assistant] def deduplicateCandidates(
+      candidates: List[Candidate]
+  ): List[Candidate] =
     candidates
       .groupBy(_.proof)
       .values
@@ -138,7 +187,11 @@ object SuggestAction {
       }
       .toList
 
-  private def getCurrentTarget(view: View, buffer: JEditBuffer, offset: Int): TargetParser.Target = {
+  private def getCurrentTarget(
+      view: View,
+      buffer: JEditBuffer,
+      offset: Int
+  ): TargetParser.Target = {
     val textArea = view.getTextArea
     val selection = textArea.getSelectedText
     if (selection != null && selection.trim.nonEmpty) {
@@ -149,7 +202,12 @@ object SuggestAction {
     }
   }
 
-  private def prepareContextInfo(view: View, commandObj: Option[Command], goalState: String, useIQ: Boolean): String = {
+  private def prepareContextInfo(
+      view: View,
+      commandObj: Option[Command],
+      goalState: String,
+      useIQ: Boolean
+  ): String = {
     if (!useIQ) ""
     else {
       // Run context facts and relevant theorems in parallel
@@ -167,70 +225,89 @@ object SuggestAction {
         theoremsLatch.countDown()
       }
 
-      factsLatch.await(AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
-      theoremsLatch.await(AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS, java.util.concurrent.TimeUnit.MILLISECONDS)
+      factsLatch.await(
+        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+        java.util.concurrent.TimeUnit.MILLISECONDS
+      )
+      theoremsLatch.await(
+        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+        java.util.concurrent.TimeUnit.MILLISECONDS
+      )
 
       List(contextFacts, relevantTheorems).filter(_.nonEmpty).mkString("\n\n")
     }
   }
 
   private def startLLMTask(
-    commandText: String, 
-    goalState: String, 
-    contextInfo: String, 
-    results: java.util.concurrent.ConcurrentLinkedQueue[Candidate], 
-    latch: CountDownLatch
+      commandText: String,
+      goalState: String,
+      contextInfo: String,
+      results: java.util.concurrent.ConcurrentLinkedQueue[Candidate],
+      latch: CountDownLatch
   ): Unit = {
     Isabelle_Thread.fork(name = "suggest-llm") {
       try {
         val subs = Map(
           "command" -> commandText,
           "goal_state" -> goalState
-        ) ++ (if (contextInfo.nonEmpty) Map("relevant_theorems" -> contextInfo) else Map.empty)
-        
+        ) ++ (if (contextInfo.nonEmpty) Map("relevant_theorems" -> contextInfo)
+              else Map.empty)
+
         Output.writeln(s"[Assistant] Suggest - Goal state:\n$goalState")
         Output.writeln(s"[Assistant] Suggest - Context:\n$contextInfo")
-        
+
         val prompt = PromptLoader.load("suggest_proof_step.md", subs)
         Output.writeln(s"[Assistant] Suggest - Prompt length: ${prompt.length}")
-        
+
         val response = BedrockClient.invokeInContext(prompt)
         Output.writeln(s"[Assistant] Suggest - LLM response:\n$response")
-        
+
         val suggestions = parseLLMSuggestions(response)
-        Output.writeln(s"[Assistant] Suggest - Parsed ${suggestions.length} suggestions: $suggestions")
-        
+        Output.writeln(
+          s"[Assistant] Suggest - Parsed ${suggestions.length} suggestions: $suggestions"
+        )
+
         suggestions.foreach(s => results.add(Candidate(s, LLM)))
-        Output.writeln(s"[Assistant] Added ${suggestions.length} LLM candidates, total now: ${results.size}")
-      } catch { 
-        case ex: Exception => 
+        Output.writeln(
+          s"[Assistant] Added ${suggestions.length} LLM candidates, total now: ${results.size}"
+        )
+      } catch {
+        case ex: Exception =>
           Output.writeln(s"[Assistant] Suggest - LLM error: ${ex.getMessage}")
-      }
-      finally { 
-        latch.countDown() 
-        Output.writeln(s"[Assistant] LLM task done, latch count: ${latch.getCount}")
+      } finally {
+        latch.countDown()
+        Output.writeln(
+          s"[Assistant] LLM task done, latch count: ${latch.getCount}"
+        )
       }
     }
   }
 
   private def startSledgehammerTask(
-    view: View, 
-    command: Command, 
-    results: java.util.concurrent.ConcurrentLinkedQueue[Candidate], 
-    latch: CountDownLatch, 
-    sledgeCompleted: java.util.concurrent.atomic.AtomicBoolean
+      view: View,
+      command: Command,
+      results: java.util.concurrent.ConcurrentLinkedQueue[Candidate],
+      latch: CountDownLatch,
+      sledgeCompleted: java.util.concurrent.atomic.AtomicBoolean
   ): Unit = {
-    val guardStarted = new java.util.concurrent.CountDownLatch(1)
-    
     GUI_Thread.later {
       IQIntegration.runSledgehammerAsync(
-        view, command, AssistantOptions.getSledgehammerTimeout,
+        view,
+        command,
+        AssistantOptions.getSledgehammerTimeout,
         {
           case Right(sledgeResults) =>
             if (sledgeCompleted.compareAndSet(false, true)) {
               sledgeResults.foreach(r =>
-                results.add(Candidate(r.proofMethod, Sledgehammer,
-                  VerificationBadge.Sledgehammer(Some(r.timeMs)), Some(r.timeMs))))
+                results.add(
+                  Candidate(
+                    r.proofMethod,
+                    Sledgehammer,
+                    VerificationBadge.Sledgehammer(Some(r.timeMs)),
+                    Some(r.timeMs)
+                  )
+                )
+              )
               latch.countDown()
             }
           case Left(_) =>
@@ -239,14 +316,17 @@ object SuggestAction {
             }
         }
       )
-      // Signal that sledgehammer operation has been submitted
-      guardStarted.countDown()
     }
-    
-    // Timeout guard — waits for GUI_Thread.later to execute first
-    Isabelle_Thread.fork(name = "sledge-guard") {
-      guardStarted.await(5, java.util.concurrent.TimeUnit.SECONDS)
-      Thread.sleep(AssistantOptions.getSledgehammerTimeout + AssistantConstants.SLEDGEHAMMER_GUARD_TIMEOUT)
+
+    // Async timeout guard — uses a scheduled executor to trip the latch instead of blocking a thread
+    val p = scala.concurrent.Promise[Unit]()
+    TimeoutGuard.scheduleTimeout(
+      p,
+      AssistantOptions.getSledgehammerTimeout + AssistantConstants.SLEDGEHAMMER_GUARD_TIMEOUT
+    )
+
+    import scala.concurrent.ExecutionContext.Implicits.global
+    p.future.recover { case _ =>
       if (sledgeCompleted.compareAndSet(false, true)) {
         latch.countDown()
       }
@@ -254,65 +334,122 @@ object SuggestAction {
   }
 
   private def getContextFacts(view: View, command: Command): String = {
-    ErrorHandler.withErrorHandling("context facts retrieval", Some(AssistantConstants.CONTEXT_FETCH_TIMEOUT)) {
-      val latch = new CountDownLatch(1)
-      @volatile var contextResult = ""
+    ErrorHandler
+      .withErrorHandling(
+        "context facts retrieval",
+        Some(AssistantConstants.CONTEXT_FETCH_TIMEOUT)
+      ) {
+        val latch = new CountDownLatch(1)
+        @volatile var contextResult = ""
 
-      GUI_Thread.later {
-        PrintContextAction.runPrintContextAsync(view, command, AssistantConstants.CONTEXT_FETCH_TIMEOUT, { result =>
-          result match {
-            case Right(output) if output.trim.nonEmpty && !output.contains("No local facts") =>
-              contextResult = "Local facts:\n" + output.trim
-            case _ =>
-          }
-          latch.countDown()
-        })
+        GUI_Thread.later {
+          PrintContextAction.runPrintContextAsync(
+            view,
+            command,
+            AssistantConstants.CONTEXT_FETCH_TIMEOUT,
+            { result =>
+              result match {
+                case Right(output)
+                    if output.trim.nonEmpty && !output
+                      .contains("No local facts") =>
+                  contextResult = "Local facts:\n" + output.trim
+                case _ =>
+              }
+              latch.countDown()
+            }
+          )
+        }
+
+        latch.await(
+          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+          TimeUnit.MILLISECONDS
+        )
+        contextResult
       }
-
-      latch.await(AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS, TimeUnit.MILLISECONDS)
-      contextResult
-    }.getOrElse("")
+      .getOrElse("")
   }
 
-  private def findRelevantTheorems(view: View, command: Command, goalState: String): String = {
+  private def findRelevantTheorems(
+      view: View,
+      command: Command,
+      goalState: String
+  ): String = {
     // Use PIDE markup from GoalExtractor to get actual constants from the goal,
     // rather than regex extraction from rendered text which can give false positives.
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    
-    val constantsFromMarkup = GoalExtractor.analyzeGoal(buffer, offset)
+
+    val constantsFromMarkup = GoalExtractor
+      .analyzeGoal(buffer, offset)
       .map(_.constants.take(AssistantConstants.MAX_CONSTANTS_FOR_FIND_THEOREMS))
       .getOrElse(Nil)
-    
+
     // Fallback to regex extraction if PIDE markup didn't provide constants
     val constants = if (constantsFromMarkup.nonEmpty) {
-      Output.writeln(s"[Assistant] Using constants from PIDE markup: ${constantsFromMarkup.mkString(", ")}")
+      Output.writeln(
+        s"[Assistant] Using constants from PIDE markup: ${constantsFromMarkup.mkString(", ")}"
+      )
       constantsFromMarkup
     } else {
       // Fallback: extract from goal text (original heuristic)
       val skipWords = Set(
-        "goal", "subgoal", "subgoals", "proof", "have", "show", "using", "by",
-        "True", "False", "undefined", "THE", "SOME", "ALL", "EX",
-        "if", "then", "else", "let", "in", "case", "of", "where",
-        "and", "or", "not", "for", "assumes", "shows", "fixes", "obtains"
+        "goal",
+        "subgoal",
+        "subgoals",
+        "proof",
+        "have",
+        "show",
+        "using",
+        "by",
+        "True",
+        "False",
+        "undefined",
+        "THE",
+        "SOME",
+        "ALL",
+        "EX",
+        "if",
+        "then",
+        "else",
+        "let",
+        "in",
+        "case",
+        "of",
+        "where",
+        "and",
+        "or",
+        "not",
+        "for",
+        "assumes",
+        "shows",
+        "fixes",
+        "obtains"
       )
       val identPattern = """[A-Za-z][A-Za-z0-9_'.]*""".r
       val fromText = goalState.linesIterator
         .flatMap(line => identPattern.findAllIn(line.trim))
         .filter(w => w.length > 2 && !skipWords.contains(w))
-        .filter(w => w.contains("_") || w.head.isLower || w.head.isUpper && w.drop(1).exists(_.isLower))
+        .filter(w =>
+          w.contains("_") || w.head.isLower || w.head.isUpper && w
+            .drop(1)
+            .exists(_.isLower)
+        )
         .toSet
         .take(AssistantConstants.MAX_CONSTANTS_FOR_FIND_THEOREMS)
         .toList
-      Output.writeln(s"[Assistant] Using constants from text heuristic: ${fromText.mkString(", ")}")
+      Output.writeln(
+        s"[Assistant] Using constants from text heuristic: ${fromText.mkString(", ")}"
+      )
       fromText
     }
 
     // Build separate name: criteria for each constant — find_theorems expects
     // individual search criteria, not a single space-joined pattern.
     val criteria = constants.map(c => s"""name: "$c"""").toList
-    Output.writeln(s"[Assistant] find_theorems criteria: ${criteria.mkString(", ")}")
-    
+    Output.writeln(
+      s"[Assistant] find_theorems criteria: ${criteria.mkString(", ")}"
+    )
+
     if (criteria.isEmpty) ""
     else {
       val limit = AssistantOptions.getFindTheoremsLimit
@@ -322,15 +459,24 @@ object SuggestAction {
       @volatile var theorems: List[String] = Nil
 
       GUI_Thread.later {
-        IQIntegration.runFindTheoremsAsync(view, command, pattern, limit, timeout, {
-          case Right(results) =>
-            Output.writeln(s"[Assistant] find_theorems found ${results.length} results")
-            theorems = results.take(limit)
-            latch.countDown()
-          case Left(err) =>
-            Output.writeln(s"[Assistant] find_theorems error: $err")
-            latch.countDown()
-        })
+        IQIntegration.runFindTheoremsAsync(
+          view,
+          command,
+          pattern,
+          limit,
+          timeout,
+          {
+            case Right(results) =>
+              Output.writeln(
+                s"[Assistant] find_theorems found ${results.length} results"
+              )
+              theorems = results.take(limit)
+              latch.countDown()
+            case Left(err) =>
+              Output.writeln(s"[Assistant] find_theorems error: $err")
+              latch.countDown()
+          }
+        )
       }
 
       latch.await(timeout + 1000, TimeUnit.MILLISECONDS)
@@ -342,40 +488,62 @@ object SuggestAction {
     // Primary format: SUGGESTION: <method>
     val suggestionPattern = """SUGGESTION:\s*(.+)""".r
     val primary = response.linesIterator
-      .flatMap(line => suggestionPattern.findFirstMatchIn(line).map(_.group(1).trim))
+      .flatMap(line =>
+        suggestionPattern.findFirstMatchIn(line).map(_.group(1).trim)
+      )
       .filter(_.nonEmpty)
       .toList
 
     // Fallback: numbered list items like "1. by simp" or "- by auto"
-    val fallback = if (primary.nonEmpty) Nil else {
-      val numberedPattern = """^\s*(?:\d+[.)]\s*|[-*]\s*)(.+)""".r
-      response.linesIterator
-        .flatMap(line => numberedPattern.findFirstMatchIn(line).map(_.group(1).trim))
-        .filter(s => s.startsWith("by ") || s.startsWith("apply ") || s.startsWith("using ") || s.startsWith("proof"))
-        .toList
-    }
+    val fallback =
+      if (primary.nonEmpty) Nil
+      else {
+        val numberedPattern = """^\s*(?:\d+[.)]\s*|[-*]\s*)(.+)""".r
+        response.linesIterator
+          .flatMap(line =>
+            numberedPattern.findFirstMatchIn(line).map(_.group(1).trim)
+          )
+          .filter(s =>
+            s.startsWith("by ") || s.startsWith("apply ") || s.startsWith(
+              "using "
+            ) || s.startsWith("proof")
+          )
+          .toList
+      }
 
     // Fallback: extract from markdown code blocks
-    val fromBlocks = if (primary.nonEmpty || fallback.nonEmpty) Nil else {
-      SendbackHelper.extractCodeBlocks(response)
-        .flatMap(_.linesIterator.map(_.trim).filter(_.nonEmpty))
-        .filter(s => s.startsWith("by ") || s.startsWith("apply ") || s.startsWith("using ") || s.startsWith("proof"))
-    }
+    val fromBlocks =
+      if (primary.nonEmpty || fallback.nonEmpty) Nil
+      else {
+        SendbackHelper
+          .extractCodeBlocks(response)
+          .flatMap(_.linesIterator.map(_.trim).filter(_.nonEmpty))
+          .filter(s =>
+            s.startsWith("by ") || s.startsWith("apply ") || s.startsWith(
+              "using "
+            ) || s.startsWith("proof")
+          )
+      }
 
-    (primary ++ fallback ++ fromBlocks)
-      .distinct
+    (primary ++ fallback ++ fromBlocks).distinct
       .take(AssistantOptions.getMaxVerifyCandidates)
   }
 
-  private def verifyCandidates(view: View, command: Command, candidates: List[Candidate]): List[Candidate] = {
+  private def verifyCandidates(
+      view: View,
+      command: Command,
+      candidates: List[Candidate]
+  ): List[Candidate] = {
     val timeout = AssistantOptions.getVerificationTimeout
     val maxCandidates = AssistantOptions.getMaxVerifyCandidates
-    val (alreadyVerified, toVerify) = candidates.partition(_.source == Sledgehammer)
+    val (alreadyVerified, toVerify) =
+      candidates.partition(_.source == Sledgehammer)
 
     // Verify candidates in parallel
     val verifyList = toVerify.take(maxCandidates)
     val latch = new CountDownLatch(verifyList.length)
-    val results = new java.util.concurrent.ConcurrentHashMap[String, Candidate]()
+    val results =
+      new java.util.concurrent.ConcurrentHashMap[String, Candidate]()
 
     for (candidate <- verifyList) {
       GUI_Thread.later {
@@ -383,36 +551,58 @@ object SuggestAction {
           results.put(candidate.proof, candidate)
           latch.countDown()
         } else {
-          IQIntegration.verifyProofAsync(view, command, candidate.proof, timeout, {
-            case IQIntegration.ProofSuccess(timeMs, _) =>
-              results.put(candidate.proof, candidate.copy(badge = VerificationBadge.Verified(Some(timeMs)), timeMs = Some(timeMs)))
-              latch.countDown()
-            case IQIntegration.ProofFailure(error) =>
-              results.put(candidate.proof, candidate.copy(badge = VerificationBadge.Failed(error.take(30))))
-              latch.countDown()
-            case IQIntegration.ProofTimeout =>
-              results.put(candidate.proof, candidate.copy(badge = VerificationBadge.Failed("timeout")))
-              latch.countDown()
-            case _ =>
-              results.put(candidate.proof, candidate)
-              latch.countDown()
-          })
+          IQIntegration.verifyProofAsync(
+            view,
+            command,
+            candidate.proof,
+            timeout,
+            {
+              case IQIntegration.ProofSuccess(timeMs, _) =>
+                results.put(
+                  candidate.proof,
+                  candidate.copy(
+                    badge = VerificationBadge.Verified(Some(timeMs)),
+                    timeMs = Some(timeMs)
+                  )
+                )
+                latch.countDown()
+              case IQIntegration.ProofFailure(error) =>
+                results.put(
+                  candidate.proof,
+                  candidate.copy(badge =
+                    VerificationBadge.Failed(error.take(30))
+                  )
+                )
+                latch.countDown()
+              case IQIntegration.ProofTimeout =>
+                results.put(
+                  candidate.proof,
+                  candidate.copy(badge = VerificationBadge.Failed("timeout"))
+                )
+                latch.countDown()
+              case _ =>
+                results.put(candidate.proof, candidate)
+                latch.countDown()
+            }
+          )
         }
       }
     }
 
     latch.await(timeout + 2000, java.util.concurrent.TimeUnit.MILLISECONDS)
-    alreadyVerified ++ verifyList.map(c => Option(results.get(c.proof)).getOrElse(c))
+    alreadyVerified ++ verifyList.map(c =>
+      Option(results.get(c.proof)).getOrElse(c)
+    )
   }
 
   def rankCandidates(candidates: List[Candidate]): List[Candidate] = {
     def priority(c: Candidate): Int = c.badge match {
-      case VerificationBadge.Verified(_) => 0
+      case VerificationBadge.Verified(_)     => 0
       case VerificationBadge.Sledgehammer(_) => 1
-      case VerificationBadge.Unverified => 2
-      case VerificationBadge.Verifying => 3
-      case VerificationBadge.Failed(_) => 4
-      case VerificationBadge.EisbachMissing => 5
+      case VerificationBadge.Unverified      => 2
+      case VerificationBadge.Verifying       => 3
+      case VerificationBadge.Failed(_)       => 4
+      case VerificationBadge.EisbachMissing  => 5
     }
     candidates.sortBy(c => (priority(c), c.timeMs.getOrElse(Long.MaxValue)))
   }
@@ -422,23 +612,34 @@ object SuggestAction {
       AssistantDockable.respondInChat("No suggestions found.")
     } else {
 
-    val verifiedCount = candidates.count(_.badge.isInstanceOf[VerificationBadge.Verified])
-    val sledgeCount = candidates.count(_.badge.isInstanceOf[VerificationBadge.Sledgehammer])
+      val verifiedCount =
+        candidates.count(_.badge.isInstanceOf[VerificationBadge.Verified])
+      val sledgeCount =
+        candidates.count(_.badge.isInstanceOf[VerificationBadge.Sledgehammer])
 
-    val sb = new StringBuilder(s"Found ${candidates.length} suggestions ($verifiedCount verified, $sledgeCount sledgehammer):\n\n")
-    for (c <- candidates) {
-      val (icon, timing, tag) = c.badge match {
-        case VerificationBadge.Verified(t) => ("[ok]", t.map(ms => s" (${ms}ms)").getOrElse(""), "")
-        case VerificationBadge.Sledgehammer(t) => ("[sledgehammer]", t.map(ms => s" (${ms}ms)").getOrElse(""), " [sledgehammer]")
-        case VerificationBadge.Unverified => ("?", "", " [unverified]")
-        case VerificationBadge.Failed(r) => ("[FAIL]", "", if (r.nonEmpty) s" ($r)" else "")
-        case _ => ("?", "", "")
+      val sb = new StringBuilder(
+        s"Found ${candidates.length} suggestions ($verifiedCount verified, $sledgeCount sledgehammer):\n\n"
+      )
+      for (c <- candidates) {
+        val (icon, timing, tag) = c.badge match {
+          case VerificationBadge.Verified(t) =>
+            ("[ok]", t.map(ms => s" (${ms}ms)").getOrElse(""), "")
+          case VerificationBadge.Sledgehammer(t) =>
+            (
+              "[sledgehammer]",
+              t.map(ms => s" (${ms}ms)").getOrElse(""),
+              " [sledgehammer]"
+            )
+          case VerificationBadge.Unverified => ("?", "", " [unverified]")
+          case VerificationBadge.Failed(r)  =>
+            ("[FAIL]", "", if (r.nonEmpty) s" ($r)" else "")
+          case _ => ("?", "", "")
+        }
+        val id = InsertHelper.registerInsertAction(view, c.proof)
+        sb.append(s"$icon `${c.proof}`$timing$tag {{INSERT:$id}}\n")
       }
-      val id = InsertHelper.registerInsertAction(view, c.proof)
-      sb.append(s"$icon `${c.proof}`$timing$tag {{INSERT:$id}}\n")
-    }
-    ChatAction.addMessage("assistant", sb.toString)
-    AssistantDockable.showConversation(ChatAction.getHistory)
+      ChatAction.addMessage("assistant", sb.toString)
+      AssistantDockable.showConversation(ChatAction.getHistory)
     }
   }
 }
