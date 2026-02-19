@@ -16,14 +16,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Setup Isabelle
+      uses: ./.github/actions/setup-isabelle-action
+
     - name: Install build tools
-      run: apt-get update -qq && apt-get install -y -qq make curl > /dev/null
+      run: apt-get update -qq && apt-get install -y -qq make curl rustc cargo > /dev/null
 
     - name: Set Isabelle environment
       run: |
-        ISABELLE_HOME=$(/home/isabelle/Isabelle/bin/isabelle getenv -b ISABELLE_HOME)
-        echo "ISABELLE_HOME=$ISABELLE_HOME" >> $GITHUB_ENV
-        JAVA_HOME=$(/home/isabelle/Isabelle/bin/isabelle getenv -b JAVA_HOME)
+        JAVA_HOME=$($ISABELLE_HOME/bin/isabelle getenv -b JAVA_HOME)
         echo "JAVA_HOME=$JAVA_HOME" >> $GITHUB_ENV
         echo "$JAVA_HOME/bin" >> $GITHUB_PATH
 
@@ -46,3 +47,7 @@ jobs:
       run: |
         cd ip/ip_plugin
         make build ISABELLE_HOME=$ISABELLE_HOME
+
+    - name: Run conformance gate
+      run: |
+        make conformance ISABELLE_HOME=$ISABELLE_HOME

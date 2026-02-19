@@ -593,9 +593,25 @@ lemma urust_eval_action_add_no_wrap [urust_eval_action_simps]:
     and \<open>((\<Gamma>, \<lbrakk> x + y \<rbrakk>) \<diamondop>\<^sub>v \<sigma>) =
             (if (unat x + unat y < 2 ^ LENGTH('l)) then {(x + y, \<sigma>)} else {})\<close>
     and \<open>((\<Gamma>, \<lbrakk> x + y \<rbrakk>) \<diamondop>\<^sub>r \<sigma>) = {}\<close>
-  by (auto simp add: word_add_no_wrap_def urust_eval_action_bind micro_rust_simps
-    urust_eval_action_literal urust_eval_action_abort  word_add_no_wrap_core_def Let_def
-    word_add_no_wrap_as_urust_def urust_eval_action_call word_op_no_wrap_pure_def option_unwrap_expr_def)
+proof -
+  show \<open>((\<Gamma>, \<lbrakk> x + y \<rbrakk>) \<diamondop>\<^sub>a \<sigma>) =
+      (if (unat x + unat y < 2 ^ LENGTH('l)) then {} else { (Panic overflow_err_msg, \<sigma>) })\<close>
+    by (simp add: word_add_no_wrap_def urust_eval_action_bind micro_rust_simps
+      urust_eval_action_literal urust_eval_action_abort word_add_no_wrap_core_def Let_def
+      word_add_no_wrap_as_urust_def urust_eval_action_call word_add_no_wrap_pure_def
+      word_op_no_wrap_pure_def option_unwrap_expr_def split: option.splits if_splits)
+  show \<open>((\<Gamma>, \<lbrakk> x + y \<rbrakk>) \<diamondop>\<^sub>v \<sigma>) =
+      (if (unat x + unat y < 2 ^ LENGTH('l)) then {(x + y, \<sigma>)} else {})\<close>
+    by (simp add: word_add_no_wrap_def urust_eval_action_bind micro_rust_simps
+      urust_eval_action_literal urust_eval_action_abort word_add_no_wrap_core_def Let_def
+      word_add_no_wrap_as_urust_def urust_eval_action_call word_add_no_wrap_pure_def
+      word_op_no_wrap_pure_def option_unwrap_expr_def split: option.splits if_splits)
+  show \<open>((\<Gamma>, \<lbrakk> x + y \<rbrakk>) \<diamondop>\<^sub>r \<sigma>) = {}\<close>
+    by (simp add: word_add_no_wrap_def urust_eval_action_bind micro_rust_simps
+      urust_eval_action_literal urust_eval_action_abort word_add_no_wrap_core_def Let_def
+      word_add_no_wrap_as_urust_def urust_eval_action_call word_add_no_wrap_pure_def
+      word_op_no_wrap_pure_def option_unwrap_expr_def split: option.splits if_splits)
+qed
 
 corollary urust_eval_predicate_add_no_wrap [urust_eval_predicate_simps]:
   fixes x y :: \<open>'l::{len} word\<close>
@@ -611,9 +627,25 @@ lemma urust_eval_action_mul_no_wrap [urust_eval_action_simps]:
     and \<open>((\<Gamma>, \<lbrakk> x * y \<rbrakk>) \<diamondop>\<^sub>v \<sigma>) =
             (if (unat x * unat y < 2 ^ LENGTH('l)) then {(x * y, \<sigma>)} else {})\<close>
     and \<open>((\<Gamma>, \<lbrakk> x * y \<rbrakk>) \<diamondop>\<^sub>r \<sigma>) = {}\<close>
-by (auto simp add: word_mul_no_wrap_def urust_eval_action_bind micro_rust_simps
-  urust_eval_action_literal urust_eval_action_abort word_mul_no_wrap_core_def Let_def
-  word_mul_no_wrap_as_urust_def urust_eval_action_call word_op_no_wrap_pure_def option_unwrap_expr_def)
+proof -
+  show \<open>((\<Gamma>, \<lbrakk> x * y \<rbrakk>) \<diamondop>\<^sub>a \<sigma>) =
+      (if (unat x * unat y < 2 ^ LENGTH('l)) then {} else { (Panic overflow_err_msg, \<sigma>) })\<close>
+    by (simp add: word_mul_no_wrap_def urust_eval_action_bind micro_rust_simps
+      urust_eval_action_literal urust_eval_action_abort word_mul_no_wrap_core_def Let_def
+      word_mul_no_wrap_as_urust_def urust_eval_action_call word_mul_no_wrap_pure_def
+      word_op_no_wrap_pure_def option_unwrap_expr_def split: option.splits if_splits)
+  show \<open>((\<Gamma>, \<lbrakk> x * y \<rbrakk>) \<diamondop>\<^sub>v \<sigma>) =
+      (if (unat x * unat y < 2 ^ LENGTH('l)) then {(x * y, \<sigma>)} else {})\<close>
+    by (simp add: word_mul_no_wrap_def urust_eval_action_bind micro_rust_simps
+      urust_eval_action_literal urust_eval_action_abort word_mul_no_wrap_core_def Let_def
+      word_mul_no_wrap_as_urust_def urust_eval_action_call word_mul_no_wrap_pure_def
+      word_op_no_wrap_pure_def option_unwrap_expr_def split: option.splits if_splits)
+  show \<open>((\<Gamma>, \<lbrakk> x * y \<rbrakk>) \<diamondop>\<^sub>r \<sigma>) = {}\<close>
+    by (simp add: word_mul_no_wrap_def urust_eval_action_bind micro_rust_simps
+      urust_eval_action_literal urust_eval_action_abort word_mul_no_wrap_core_def Let_def
+      word_mul_no_wrap_as_urust_def urust_eval_action_call word_mul_no_wrap_pure_def
+      word_op_no_wrap_pure_def option_unwrap_expr_def split: option.splits if_splits)
+qed
 
 corollary urust_eval_predicate_mul_no_wrap [urust_eval_predicate_simps]:
   fixes x y :: \<open>'l::{len} word\<close>
