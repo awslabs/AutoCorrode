@@ -619,7 +619,9 @@ object ProofLoop {
             invokeLLMWithTimeout(PromptLoader.load("prove_refine.md", subs))
           )
           if (refinement.nonEmpty) candidates.add(refinement)
-        } catch { case _: Exception => }
+        } catch {
+          case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+        }
         latch.countDown()
       }
     }
@@ -1115,7 +1117,9 @@ object ProofLoop {
             buffer.endCompoundEdit()
           }
         }
-      } catch { case _: Exception => }
+      } catch {
+        case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+      }
       latch.countDown()
     }
     latch.await(
@@ -1177,7 +1181,9 @@ object ProofLoop {
                 p.trySuccess(hasErrors)
               }
             }
-          } catch { case _: Exception => }
+          } catch {
+            case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+          }
         }
       }
     )
@@ -1206,7 +1212,9 @@ object ProofLoop {
             p.trySuccess(errors.exists(_._2))
           }
         }
-      } catch { case _: Exception => }
+      } catch {
+        case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+      }
     }
 
     try {
@@ -1234,7 +1242,9 @@ object ProofLoop {
     GUI_Thread.later {
       try {
         view.getBuffer.undo(view.getTextArea)
-      } catch { case _: Exception => }
+      } catch {
+        case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+      }
       latch.countDown()
     }
     latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
@@ -1313,7 +1323,9 @@ object ProofLoop {
             invokeLLMWithTimeout(PromptLoader.load("prove_fill.md", subs))
           )
           if (code.nonEmpty) fills.add(code)
-        } catch { case _: Exception => }
+        } catch {
+          case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+        }
         fillLatch.countDown()
       }
     }
@@ -1524,7 +1536,9 @@ object ProofLoop {
               PromptLoader.load("prove_diagnose.md", subs)
             )
           )
-        } catch { case _: Exception => }
+        } catch {
+          case ex: Exception => ErrorHandler.logSilentError("ProofLoop", ex)
+        }
       }
       reportResult(
         view,
