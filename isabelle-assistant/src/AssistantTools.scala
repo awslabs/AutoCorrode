@@ -1752,13 +1752,13 @@ object AssistantTools {
         s"""<div style='margin:2px 0 2px 12px;'>
          |<a href='action:insert:$actionId' style='text-decoration:none;color:${UIColors.AskUser.optionLetter};font-weight:bold;'>$label.</a>
          |<a href='action:insert:$actionId' style='text-decoration:none;color:${UIColors.AskUser.optionText};margin-left:8px;'>
-         |${escapeHtml(opt)}</a>
+         |${HtmlUtil.escapeHtml(opt)}</a>
          |</div>""".stripMargin
       }
       .mkString("\n")
 
     val contextHtml = if (context.nonEmpty) {
-      s"<div style='font-size:10pt;color:${UIColors.AskUser.contextText};margin:4px 0 8px;font-style:italic;'>${escapeHtml(context)}</div>"
+      s"<div style='font-size:10pt;color:${UIColors.AskUser.contextText};margin:4px 0 8px;font-style:italic;'>${HtmlUtil.escapeHtml(context)}</div>"
     } else ""
 
     // Match the message bubble pattern: white background + colored left border only
@@ -1768,14 +1768,11 @@ object AssistantTools {
        |<div style='font-size:10pt;color:${UIColors.AskUser.title};margin-bottom:3px;'>
        |<b>Assistant needs your input</b></div>
        |<div style='font-size:12pt;margin-bottom:6px;'>
-       |${escapeHtml(question)}</div>
+       |${HtmlUtil.escapeHtml(question)}</div>
        |$contextHtml
        |$optionButtons
        |</div>""".stripMargin
   }
-
-  private def escapeHtml(s: String): String =
-    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
   /** Extract messages (errors or warnings) from an entire buffer with line
     * numbers. Uses Isabelle's canonical Rendering.text_messages() API to

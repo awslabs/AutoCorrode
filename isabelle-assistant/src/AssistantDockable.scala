@@ -78,7 +78,7 @@ object AssistantDockable {
         s"$text\n\n```action:$id\n$code\n```"
       case None => text
     }
-    ChatAction.addMessage("assistant", content)
+    ChatAction.addMessage(ChatAction.Assistant, content)
     showConversation(ChatAction.getHistory)
   }
 
@@ -134,7 +134,7 @@ class AssistantDockable(view: View, position: String)
     case AssistantEvent.ShowConversation(history) =>
       GUI_Thread.later { displayConversation(history) }
     case AssistantEvent.IQStatusRefresh() =>
-      GUI_Thread.later { updateIQStatus() }
+      GUI_Thread.later { updateAssistantStatus() }
     case AssistantEvent.ModelLabelRefresh() =>
       GUI_Thread.later { updateModelLabel() }
     case _ => // Optional Catch-all
@@ -237,73 +237,45 @@ class AssistantDockable(view: View, position: String)
     (iqStatus, model)
   }
 
+  /** Apply consistent top-bar button styling (font, border, background, hover).
+    */
+  private def styleTopButton(btn: JButton): Unit = {
+    btn.setFocusPainted(false)
+    btn.setFont(btn.getFont.deriveFont(11f))
+    btn.setBorder(
+      BorderFactory.createCompoundBorder(
+        BorderFactory.createLineBorder(
+          java.awt.Color.decode(UIColors.TopButton.border),
+          1,
+          true
+        ),
+        BorderFactory.createEmptyBorder(2, 8, 2, 8)
+      )
+    )
+    btn.setBackground(java.awt.Color.decode(UIColors.TopButton.background))
+    btn.setForeground(javax.swing.UIManager.getColor("Button.foreground"))
+    btn.setCursor(
+      java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
+    )
+    btn.addMouseListener(new java.awt.event.MouseAdapter {
+      override def mouseEntered(e: java.awt.event.MouseEvent): Unit =
+        btn.setBackground(
+          java.awt.Color.decode(UIColors.TopButton.hoverBackground)
+        )
+      override def mouseExited(e: java.awt.event.MouseEvent): Unit =
+        btn.setBackground(java.awt.Color.decode(UIColors.TopButton.background))
+    })
+  }
+
   private def createControlElements(): (JLabel, JButton, JButton) = {
     val status = new JLabel(AssistantConstants.STATUS_READY)
 
-    // Style Cancel button
     val cancel = new JButton("Cancel")
     cancel.setVisible(false)
-    cancel.setFocusPainted(false)
-    cancel.setFont(cancel.getFont.deriveFont(11f))
-    cancel.setBorder(
-      BorderFactory.createCompoundBorder(
-        BorderFactory.createLineBorder(
-          java.awt.Color.decode(UIColors.TopButton.border),
-          1,
-          true
-        ),
-        BorderFactory.createEmptyBorder(2, 8, 2, 8)
-      )
-    )
-    cancel.setBackground(java.awt.Color.decode(UIColors.TopButton.background))
-    cancel.setForeground(javax.swing.UIManager.getColor("Button.foreground"))
-    cancel.setCursor(
-      java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-    )
-    cancel.addMouseListener(new java.awt.event.MouseAdapter {
-      override def mouseEntered(e: java.awt.event.MouseEvent): Unit = {
-        cancel.setBackground(
-          java.awt.Color.decode(UIColors.TopButton.hoverBackground)
-        )
-      }
-      override def mouseExited(e: java.awt.event.MouseEvent): Unit = {
-        cancel.setBackground(
-          java.awt.Color.decode(UIColors.TopButton.background)
-        )
-      }
-    })
+    styleTopButton(cancel)
 
-    // Style Clear button
     val clear = new JButton("Clear")
-    clear.setFocusPainted(false)
-    clear.setFont(clear.getFont.deriveFont(11f))
-    clear.setBorder(
-      BorderFactory.createCompoundBorder(
-        BorderFactory.createLineBorder(
-          java.awt.Color.decode(UIColors.TopButton.border),
-          1,
-          true
-        ),
-        BorderFactory.createEmptyBorder(2, 8, 2, 8)
-      )
-    )
-    clear.setBackground(java.awt.Color.decode(UIColors.TopButton.background))
-    clear.setForeground(javax.swing.UIManager.getColor("Button.foreground"))
-    clear.setCursor(
-      java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-    )
-    clear.addMouseListener(new java.awt.event.MouseAdapter {
-      override def mouseEntered(e: java.awt.event.MouseEvent): Unit = {
-        clear.setBackground(
-          java.awt.Color.decode(UIColors.TopButton.hoverBackground)
-        )
-      }
-      override def mouseExited(e: java.awt.event.MouseEvent): Unit = {
-        clear.setBackground(
-          java.awt.Color.decode(UIColors.TopButton.background)
-        )
-      }
-    })
+    styleTopButton(clear)
 
     (status, cancel, clear)
   }
@@ -669,7 +641,8 @@ class AssistantDockable(view: View, position: String)
                 try {
                   val toolName = parts(0)
                   val paramsJson = parts(1)
-                  val params = parseToolParams(paramsJson)
+                  val params =
+                    ResponseParser.parseToolArgsJsonObject(paramsJson)
                   createToolMessageHtml(
                     toolName,
                     params,
@@ -745,7 +718,7 @@ class AssistantDockable(view: View, position: String)
             try {
               val toolName = parts(0)
               val paramsJson = parts(1)
-              val params = parseToolParams(paramsJson)
+              val params = ResponseParser.parseToolArgsJsonObject(paramsJson)
               createToolMessageHtml(
                 toolName,
                 params,
@@ -850,8 +823,6 @@ class AssistantDockable(view: View, position: String)
     iqStatusLabel.setText(AssistantSupport.statusText(status))
   }
 
-  def updateIQStatus(): Unit = updateAssistantStatus()
-
   private def showAssistantHelp(): Unit = {
     val buffer = view.getBuffer
     JOptionPane.showMessageDialog(
@@ -889,19 +860,42 @@ class AssistantDockable(view: View, position: String)
     modelLabel.setToolTipText(tooltip)
   }
 
+  /** Shared chat bubble wrapper — used by user, assistant, and tool message
+    * renderers.
+    */
+  private def messageBubbleHtml(
+      border: String,
+      headerHtml: String,
+      bodyHtml: String,
+      copyContent: Option[String] = None
+  ): String = {
+    val copyLink = copyContent match {
+      case Some(raw) =>
+        val encoded = java.net.URLEncoder.encode(raw, "UTF-8")
+        val copyColor = UIColors.CopyButton.color
+        s"""<a href='action:copy:$encoded' style='position:absolute;top:6px;right:8px;text-decoration:none;color:$copyColor;opacity:0.6;font-size:10pt;font-weight:normal;' onmouseover='this.style.opacity="1.0"' onmouseout='this.style.opacity="0.6"' title='Copy message'>Copy</a>"""
+      case None => ""
+    }
+    val posStyle = if (copyContent.isDefined) "position:relative;" else ""
+    s"""<div style='margin:6px 0;padding:8px 10px;background:white;border-left:4px solid $border;border-radius:3px;overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);$posStyle'>
+       |$copyLink
+       |$headerHtml
+       |<div>$bodyHtml</div>
+       |</div>""".stripMargin
+  }
+
   private def createUserMessageHtml(
       content: String,
       timestamp: String
   ): String = {
-    val border = UIColors.ChatBubble.userBorder
     val tsColor = UIColors.ChatBubble.userTimestamp
-    val copyColor = UIColors.CopyButton.color
-    val encodedContent = java.net.URLEncoder.encode(content, "UTF-8")
-    s"""<div style='margin:6px 0;padding:8px 10px;background:white;border-left:4px solid $border;border-radius:3px;overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);position:relative;'>
-       |<a href='action:copy:$encodedContent' style='position:absolute;top:6px;right:8px;text-decoration:none;color:$copyColor;opacity:0.6;font-size:10pt;font-weight:normal;' onmouseover='this.style.opacity="1.0"' onmouseout='this.style.opacity="0.6"' title='Copy message'>Copy</a>
-       |<div style='font-size:10pt;color:$tsColor;margin-bottom:3px;'><b>You</b> · $timestamp</div>
-       |<div>${MarkdownRenderer.toBodyHtml(content)}</div>
-       |</div>""".stripMargin
+    messageBubbleHtml(
+      border = UIColors.ChatBubble.userBorder,
+      headerHtml =
+        s"<div style='font-size:10pt;color:$tsColor;margin-bottom:3px;'><b>You</b> · $timestamp</div>",
+      bodyHtml = MarkdownRenderer.toBodyHtml(content),
+      copyContent = Some(content)
+    )
   }
 
   private def createAssistantMessageHtml(
@@ -938,13 +932,13 @@ class AssistantDockable(view: View, position: String)
         UIColors.ChatBubble.assistantTimestamp
       )
     }
-    val copyColor = UIColors.CopyButton.color
-    val encodedContent = java.net.URLEncoder.encode(content, "UTF-8")
-    s"""<div style='margin:6px 0;padding:8px 10px;background:white;border-left:4px solid $border;border-radius:3px;overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);position:relative;'>
-       |<a href='action:copy:$encodedContent' style='position:absolute;top:6px;right:8px;text-decoration:none;color:$copyColor;opacity:0.6;font-size:10pt;font-weight:normal;' onmouseover='this.style.opacity="1.0"' onmouseout='this.style.opacity="0.6"' title='Copy message'>Copy</a>
-       |<div style='font-size:10pt;color:$tsColor;margin-bottom:3px;'><b>Assistant</b> · $timestamp</div>
-       |<div>$body</div>
-       |</div>""".stripMargin
+    messageBubbleHtml(
+      border = border,
+      headerHtml =
+        s"<div style='font-size:10pt;color:$tsColor;margin-bottom:3px;'><b>Assistant</b> · $timestamp</div>",
+      bodyHtml = body,
+      copyContent = Some(content)
+    )
   }
 
   /** Create HTML for a tool-use message. Parameters shown inline only, no
@@ -967,23 +961,21 @@ class AssistantDockable(view: View, position: String)
       else {
         val formatted = params
           .map { case (k, v) =>
-            s"$k: ${escapeHtml(ResponseParser.toolValueToDisplay(v))}"
+            s"$k: ${HtmlUtil.escapeHtml(ResponseParser.toolValueToDisplay(v))}"
           }
           .mkString(", ")
         s"($formatted)"
       }
 
-    s"""<div style='margin:6px 0;padding:8px 10px;background:white;border-left:4px solid $border;border-radius:3px;overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:$tsColor;margin-bottom:3px;'><b>Tool</b> · $timestamp</div>
-       |<div style='font-family:${MarkdownRenderer.codeFont};font-size:11pt;'><b>$displayName</b><span style='color:#888;font-weight:normal;'>$paramSummary</span></div>
-       |</div>""".stripMargin
+    val bodyHtml =
+      s"<div style='font-family:${MarkdownRenderer.codeFont};font-size:11pt;'><b>$displayName</b><span style='color:#888;font-weight:normal;'>$paramSummary</span></div>"
+    messageBubbleHtml(
+      border = border,
+      headerHtml =
+        s"<div style='font-size:10pt;color:$tsColor;margin-bottom:3px;'><b>Tool</b> · $timestamp</div>",
+      bodyHtml = bodyHtml
+    )
   }
-
-  private def escapeHtml(s: String): String =
-    s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-  private def parseToolParams(json: String): ResponseParser.ToolArgs =
-    ResponseParser.parseToolArgsJsonObject(json)
 
   private def createWelcomeHtml(): String = {
     val helpId =

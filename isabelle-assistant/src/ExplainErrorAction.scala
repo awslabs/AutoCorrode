@@ -11,7 +11,7 @@ import org.gjt.sp.jedit.buffer.JEditBuffer
 /** Extracts and explains PIDE error messages at cursor using LLM with goal/definition context. */
 object ExplainErrorAction {
   def explainError(view: View): Unit = {
-    ChatAction.addMessage("user", ":explain-error")
+    ChatAction.addMessage(ChatAction.User, ":explain-error")
     AssistantDockable.showConversation(ChatAction.getHistory)
 
     val buffer = view.getBuffer

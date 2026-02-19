@@ -102,13 +102,10 @@ object ResponseParser {
     case NullValue       => "null"
   }
 
+  /** Convert a ToolValue to a raw string. NullValue maps to empty string. */
   def toolValueToString(value: ToolValue): String = value match {
-    case StringValue(v)  => v
-    case IntValue(v)     => v.toString
-    case DecimalValue(v) => v.toString
-    case BooleanValue(v) => v.toString
-    case JsonValue(v)    => v
-    case NullValue       => ""
+    case NullValue => ""
+    case other     => toolValueToDisplay(other)
   }
 
   def parseToolArgsJsonObject(json: String): ToolArgs = {
@@ -117,7 +114,8 @@ object ResponseParser {
       if (parser.nextToken() != JsonToken.START_OBJECT) Map.empty
       else parseToolArgsObject(parser)
     } catch {
-      case _: Exception => Map.empty
+      case ex: Exception =>
+        ErrorHandler.logSilentError("parseToolArgsJsonObject", ex); Map.empty
     } finally {
       parser.close()
     }
@@ -306,7 +304,8 @@ object ResponseParser {
       }
       result
     } catch {
-      case _: Exception => None
+      case ex: Exception =>
+        ErrorHandler.logSilentError("parseStringField", ex); None
     } finally {
       parser.close()
     }
@@ -331,7 +330,7 @@ object ResponseParser {
         }
       }
     } catch {
-      case _: Exception => // ignore
+      case ex: Exception => ErrorHandler.logSilentError("parseStringList", ex)
     } finally {
       parser.close()
     }

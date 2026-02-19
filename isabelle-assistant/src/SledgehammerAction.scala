@@ -10,7 +10,7 @@ import org.gjt.sp.jedit.View
 /** Runs Sledgehammer via I/Q and displays found proof methods with insert links. */
 object SledgehammerAction {
   def run(view: View): Unit = {
-    ChatAction.addMessage("user", ":sledgehammer")
+    ChatAction.addMessage(ChatAction.User, ":sledgehammer")
     AssistantDockable.showConversation(ChatAction.getHistory)
     
     val buffer = view.getBuffer
@@ -48,7 +48,7 @@ object SledgehammerAction {
       })
       sb.append(s"[sledgehammer] `${r.proofMethod}` (${r.timeMs}ms) {{INSERT:$id}}\n")
     }
-    ChatAction.addMessage("assistant", sb.toString)
+    ChatAction.addMessage(ChatAction.Assistant, sb.toString)
     AssistantDockable.showConversation(ChatAction.getHistory)
   }
 }

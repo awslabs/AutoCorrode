@@ -27,7 +27,7 @@ object ActionHelper {
   )(body: => String)(
     onSuccess: String => Unit,
     onError: String => Unit = msg => {
-      ChatAction.addMessage("assistant", s"Error: $msg")
+      ChatAction.addMessage(ChatAction.Assistant, s"Error: $msg")
       AssistantDockable.showConversation(ChatAction.getHistory)
       AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
     }
@@ -49,7 +49,7 @@ object ActionHelper {
   def runAndRespond(name: String, status: String = AssistantConstants.STATUS_THINKING)(body: => String): Unit =
     runAsync(name, status)(body)(
       response => {
-        ChatAction.addMessage("assistant", response)
+        ChatAction.addMessage(ChatAction.Assistant, response)
         AssistantDockable.showConversation(ChatAction.getHistory)
         AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
       }

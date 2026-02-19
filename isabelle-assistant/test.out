@@ -1,0 +1,295 @@
+Building I/Q plugin...
+Plugin built successfully!
+JAR file: /Users/dominic/Programming.nosync/AutoCorrode/iq/build/iq_plugin.jar
+Plugin built successfully: /Users/dominic/Programming.nosync/AutoCorrode/isabelle-assistant/build/isabelle_assistant.jar
+Compiling tests...
+Running tests...
+[36mDiscovery starting.[0m
+[36mDiscovery completed in 81 milliseconds.[0m
+[36mRun starting. Expected test count is: 251[0m
+[32mErrorHandlerTest:[0m
+[32m- validateInput should reject null input (6 milliseconds)[0m
+[32m- validateInput should reject empty input (0 milliseconds)[0m
+[32m- validateInput should accept valid input (0 milliseconds)[0m
+[32m- makeUserFriendly should convert timeout errors (1 millisecond)[0m
+[32m- makeUserFriendly should handle null message (0 milliseconds)[0m
+[32m- truncateError should handle long messages (0 milliseconds)[0m
+[32mExplainActionTest:[0m
+[32m- extractName from definition (2 milliseconds)[0m
+[32m- extractName from fun (1 millisecond)[0m
+[32m- extractName from lemma (0 milliseconds)[0m
+[32m- extractName from theorem (0 milliseconds)[0m
+[32m- extractName from corollary (1 millisecond)[0m
+[32m- extractName from datatype (0 milliseconds)[0m
+[32m- extractName from abbreviation (0 milliseconds)[0m
+[32m- extractName from primrec (0 milliseconds)[0m
+[32m- extractName with locale qualifier (0 milliseconds)[0m
+[32m- extractName with primed identifier (0 milliseconds)[0m
+[32m- extractName returns None for non-definition (0 milliseconds)[0m
+[32mAssistantToolsTest:[0m
+[32m- tool definitions should have unique names (5 milliseconds)[0m
+[32m- all tools should have non-empty descriptions (1 millisecond)[0m
+[32m- required params should have descriptions (0 milliseconds)[0m
+[32m- tool param types should be valid JSON schema types (2 milliseconds)[0m
+[32m- expected tools should be defined (0 milliseconds)[0m
+[32m- read_theory should require theory param (0 milliseconds)[0m
+[32m- verify_proof should require proof param (0 milliseconds)[0m
+[32m- run_nitpick should exist and require no params (0 milliseconds)[0m
+[32m- run_quickcheck should exist and require no params (0 milliseconds)[0m
+[32m- get_type should exist and require no params (0 milliseconds)[0m
+[32m- get_command_text should exist and require no params (1 millisecond)[0m
+[32m- get_errors should exist with optional scope param (0 milliseconds)[0m
+[32m- get_definitions should exist and require names param (0 milliseconds)[0m
+[32m- execute_step should exist and require proof param (0 milliseconds)[0m
+[32m- trace_simplifier should exist with optional method param (0 milliseconds)[0m
+[32m- all tools should have exactly 29 entries (1 millisecond)[0m
+[32m- tool names should follow naming convention (0 milliseconds)[0m
+[32m- no tool should have duplicate param names (0 milliseconds)[0m
+[32m- all required params should be of string or integer type (1 millisecond)[0m
+[32m- tools with no params should have empty param list not null (0 milliseconds)[0m
+[32m- tools with optional params should not mark them as required (0 milliseconds)[0m
+[32m- search_in_theory should have exactly 2 required and 1 optional param (0 milliseconds)[0m
+[32m- find_theorems should have 1 required and 1 optional param (0 milliseconds)[0m
+[32m- integer params should be for pagination, limits, or line numbers (0 milliseconds)[0m
+[32m- all string params should have non-empty descriptions (1 millisecond)[0m
+[32m- tools descriptions should mention I/Q requirement if needed (0 milliseconds)[0m
+[32m- tools not requiring I/Q should not mention it (1 millisecond)[0m
+[32m- get_proof_context should mention I/Q in description (0 milliseconds)[0m
+[32m- get_proof_block should exist and require no params (0 milliseconds)[0m
+[32m- get_context_info should exist and require no params (0 milliseconds)[0m
+[32m- search_all_theories should exist with required pattern and optional max_results (0 milliseconds)[0m
+[32m- get_dependencies should exist and require theory param (0 milliseconds)[0m
+[32m- get_warnings should exist with optional scope param (0 milliseconds)[0m
+[32m- set_cursor_position should exist and require line param (0 milliseconds)[0m
+[32m- navigation and diagnostic tools should not require I/Q (0 milliseconds)[0m
+[32m- tools with integer params for line numbers should validate properly (1 millisecond)[0m
+[32m- search tools should all have pattern param (0 milliseconds)[0m
+[32m- dependency tool should have theory param (0 milliseconds)[0m
+[32m- edit_theory should exist with required params (0 milliseconds)[0m
+[32m- edit_theory should have optional end_line and text params (0 milliseconds)[0m
+[32m- try_methods should exist and require methods param (0 milliseconds)[0m
+[32m- get_entities should exist and require theory param (0 milliseconds)[0m
+[32m- web_search should exist with required query and optional max_results (0 milliseconds)[0m
+[32m- create_theory should exist with required name param (1 millisecond)[0m
+[32m- open_theory should exist and require path param (0 milliseconds)[0m
+[32m- write tools should not mention I/Q (0 milliseconds)[0m
+[32m- batch tools should mention efficiency (0 milliseconds)[0m
+[32m- web_search should not require I/Q (0 milliseconds)[0m
+[32m- ask_user should exist with required question and options params (1 millisecond)[0m
+[32m- ask_user should have optional context param (0 milliseconds)[0m
+[32m- ask_user should not require I/Q (0 milliseconds)[0m
+[32m- ask_user description should mention multiple-choice and blocking behavior (0 milliseconds)[0m
+[32m- ask_user description should encourage sparing use (1 millisecond)[0m
+[32mPayloadBuilderTest:[0m
+[32m- isProvider should detect anthropic (11 milliseconds)[0m
+[32m- isProvider should detect meta (0 milliseconds)[0m
+[32m- isProvider should detect mistral (0 milliseconds)[0m
+[32m- isProvider should detect amazon (0 milliseconds)[0m
+[32m- isProvider should handle CRIS-prefixed IDs (1 millisecond)[0m
+[32m- isProvider should reject mismatches (0 milliseconds)[0m
+[32m- isLlama3OrLater should detect Llama 3 (0 milliseconds)[0m
+[32m- isLlama3OrLater should detect Llama 4 (0 milliseconds)[0m
+[32m- isLlama3OrLater should reject Llama 2 (0 milliseconds)[0m
+[32m- isLlama3OrLater should default to false for unrecognised version (0 milliseconds)[0m
+[32m- buildPayload for Anthropic should include anthropic_version and messages array (4 milliseconds)[0m
+[32m- buildPayload for Anthropic with system prompt should include system field (0 milliseconds)[0m
+[32m- buildPayload for Anthropic with empty system prompt should not include system field (1 millisecond)[0m
+[32m- buildPayload for Meta Llama 3+ should use begin_of_text format (0 milliseconds)[0m
+[32m- buildPayload for Meta Llama 2 should use simple prompt format (0 milliseconds)[0m
+[32m- buildPayload for Mistral should use INST format (1 millisecond)[0m
+[32m- buildPayload for Amazon Titan should use inputText format (0 milliseconds)[0m
+[32m- buildPayload for unknown provider should use generic messages format (0 milliseconds)[0m
+[32m- buildChatPayload for Anthropic should include system prompt separately (1 millisecond)[0m
+[32m- buildChatPayload should handle multiple messages (0 milliseconds)[0m
+[32m- buildChatPayload for Llama 3 should include system in prompt header (0 milliseconds)[0m
+[32m- buildPayload should properly escape special characters (1 millisecond)[0m
+[32m- writeJson should produce valid JSON (0 milliseconds)[0m
+[32mProofLoopTest:[0m
+[32m- inductionCandidatesForTest should produce 4 candidates per free variable (4 milliseconds)[0m
+[32m- findReplacementForTest should extract replacement between old/new proof text (0 milliseconds)[0m
+[32m- findReplacementForTest should return unknown marker when no sorry is present (0 milliseconds)[0m
+[32mBedrockClientTest:[0m
+[32m- ErrorHandler.makeUserFriendly handles credential errors (0 milliseconds)[0m
+[32m- ErrorHandler.makeUserFriendly handles network errors (0 milliseconds)[0m
+[32m- ErrorHandler.makeUserFriendly handles throttling (0 milliseconds)[0m
+[32m- ErrorHandler.makeUserFriendly handles model not found (0 milliseconds)[0m
+[32m- ErrorHandler.makeUserFriendly handles JSON parse errors (0 milliseconds)[0m
+[32m- ErrorHandler.sanitize truncates long strings (0 milliseconds)[0m
+[32m- ErrorHandler.sanitize handles null (0 milliseconds)[0m
+[32mLLMResponseCacheTest:[0m
+[32m- cache should store and retrieve entries (1 millisecond)[0m
+[32m- cache should return None for missing entries (0 milliseconds)[0m
+[32m- cache should not store known error responses (0 milliseconds)[0m
+[32m- cache should enforce max size with LRU eviction (1 millisecond)[0m
+[32m- cache stats should report entry count (0 milliseconds)[0m
+[32m- cache should report zero entries after clear (0 milliseconds)[0m
+[32mGoalExtractorTest:[0m
+[32m- analyzeGoalFromMessages should extract free vars/constants/subgoals from PIDE markup (11 milliseconds)[0m
+[32m- analyzeGoalFromMessages should use fallback vars when FREE/fixed markup absent (0 milliseconds)[0m
+[32m- analyzeGoalFromMessages should return None for empty/blank output (0 milliseconds)[0m
+[32m- isInProofContextFromKeywords should correctly track opener/closer depth (0 milliseconds)[0m
+[32mIQOperationLifecycleTest:[0m
+[32m- complete should invoke callback and deactivate exactly once (184 milliseconds)[0m
+[32m- non-timeout completion should win over timeout watcher (307 milliseconds)[0m
+[32m- timeout completion should deactivate exactly once and ignore late completions (104 milliseconds)[0m
+[32mMarkdownRendererTest:[0m
+[32m- bold rendering (57 milliseconds)[0m
+[32m- italic rendering (0 milliseconds)[0m
+[32m- inline code rendering (0 milliseconds)[0m
+[32m- nested bold and italic (0 milliseconds)[0m
+[32m- code fence rendering (0 milliseconds)[0m
+[32m- heading rendering (1 millisecond)[0m
+[32m- bullet list rendering (0 milliseconds)[0m
+[32m- HTML escaping (0 milliseconds)[0m
+[32m- action code block (4 milliseconds)[0m
+[32mSuggestActionTest:[0m
+[32m- deduplicateCandidates should keep one candidate per proof text (4 milliseconds)[0m
+[32m- deduplicateCandidates should prefer sledgehammer candidate for duplicate proof (1 millisecond)[0m
+[32m- rankCandidates should prioritize verified candidates (2 milliseconds)[0m
+[32mBedrockModelsTest:[0m
+[32m- applyCrisPrefix adds us. for anthropic (1 millisecond)[0m
+[32m- applyCrisPrefix adds eu. for eu regions (0 milliseconds)[0m
+[32m- applyCrisPrefix does not double-prefix (0 milliseconds)[0m
+[32m- applyCrisPrefix skips non-CRIS providers (0 milliseconds)[0m
+[32m- applyCrisPrefix handles meta provider (0 milliseconds)[0m
+[32m- applyCrisPrefix handles mistral provider (0 milliseconds)[0m
+[32m- getModels returns empty when no cache (1 millisecond)[0m
+[32mAssistantStatusSubscriptionTest:[0m
+[32m- start should be idempotent (1 millisecond)[0m
+[32m- stop should be idempotent (0 milliseconds)[0m
+[32m- restart should not duplicate callbacks (1 millisecond)[0m
+[32mProofTextUtilTest:[0m
+[32m- extractCode should extract from markdown fences (1 millisecond)[0m
+[32m- extractCode should handle bare proof methods (1 millisecond)[0m
+[32m- stripGoalRestatement should remove goal prefix (1 millisecond)[0m
+[32m- cleanProofText should remove trailing junk after closing keywords (0 milliseconds)[0m
+[32m- countSorries should count unfilled sorries (0 milliseconds)[0m
+[32m- countUnfilled should count marked sorries (0 milliseconds)[0m
+[32m- splitAtSorry should split at nth sorry (0 milliseconds)[0m
+[32m- replaceSorry should replace nth sorry (1 millisecond)[0m
+[32m- markSorry should add markers (0 milliseconds)[0m
+[32m- sorryify should replace by clauses with sorry (1 millisecond)[0m
+[32m- sorryify should skip by inside cartouches (0 milliseconds)[0m
+[32m- isStructurallyComplete should detect qed on final line (0 milliseconds)[0m
+[32m- isStructurallyComplete should detect done on final line (0 milliseconds)[0m
+[32m- isStructurallyComplete should detect by line (0 milliseconds)[0m
+[32m- isStructurallyComplete should handle single-line by (0 milliseconds)[0m
+[32m- isStructurallyComplete should reject incomplete proofs (0 milliseconds)[0m
+[32m- extractLemmaStatement should extract statement without proof (0 milliseconds)[0m
+[32m- extractLemmaName should parse lemma name (1 millisecond)[0m
+[32m- extractVarsFromStatement should find variable names (0 milliseconds)[0m
+[32m- findReplacement should identify what was replaced (0 milliseconds)[0m
+[32mErrorHandlerExtendedTest:[0m
+[32m- withErrorHandling should handle successful operations (1 millisecond)[0m
+[32m- withErrorHandling should handle exceptions (3 milliseconds)[0m
+[32m- withErrorHandling elapsed limit should fail after slow operation (205 milliseconds)[0m
+[32m- withManagedResource should properly cleanup resources (4 milliseconds)[0m
+[32m- resource registry should track and cleanup resources (0 milliseconds)[0m
+[32mSendbackHelperTest:[0m
+[32m- extractCodeBlocks from markdown (0 milliseconds)[0m
+[32m- extractCodeBlocks empty on no fences (0 milliseconds)[0m
+[32m- stripCodeFences extracts first block (0 milliseconds)[0m
+[32m- stripCodeFences returns original when no fences (0 milliseconds)[0m
+[32mSuggestActionParserTest:[0m
+[31m- parseLLMSuggestions should parse SUGGESTION: format *** FAILED *** (22 milliseconds)[0m
+[31m  List() did not contain element "by simp" (SuggestActionParserTest.scala:23)[0m
+[31m- parseLLMSuggestions should handle extra whitespace in SUGGESTION: lines *** FAILED *** (0 milliseconds)[0m
+[31m  List() did not contain element "by (simp add: foo_def)" (SuggestActionParserTest.scala:32)[0m
+[31m- parseLLMSuggestions should fall back to numbered list *** FAILED *** (0 milliseconds)[0m
+[31m  List() did not contain element "by simp" (SuggestActionParserTest.scala:41)[0m
+[31m- parseLLMSuggestions should fall back to markdown code blocks *** FAILED *** (0 milliseconds)[0m
+[31m  List() did not contain element "by simp" (SuggestActionParserTest.scala:49)[0m
+[31m- parseLLMSuggestions should deduplicate suggestions *** FAILED *** (2 milliseconds)[0m
+[31m  0 was not equal to 1 (SuggestActionParserTest.scala:57)[0m
+[32m- parseLLMSuggestions should return empty for no recognizable suggestions (0 milliseconds)[0m
+[31m- parseLLMSuggestions should filter non-proof items from numbered lists *** FAILED *** (0 milliseconds)[0m
+[31m  List() did not contain element "by simp" (SuggestActionParserTest.scala:71)[0m
+[32m- rankCandidates should sort Verified before Unverified (0 milliseconds)[0m
+[32m- rankCandidates should sort Sledgehammer before Unverified but after Verified (0 milliseconds)[0m
+[32m- rankCandidates should sort Failed last (0 milliseconds)[0m
+[32m- rankCandidates should sort by time within same badge type (1 millisecond)[0m
+[32mPromptLoaderTest:[0m
+[32m- assistantHomeFrom should return home when environment is set (0 milliseconds)[0m
+[32m- assistantHomeFrom should warn and return None when environment is missing (0 milliseconds)[0m
+[32m- loadSystemPromptFromHome should concatenate sorted markdown files only (5 milliseconds)[0m
+[32m- loadSystemPromptFromHome should return empty when home missing or system dir absent (0 milliseconds)[0m
+[32m- renderTemplate should substitute placeholders deterministically (10 milliseconds)[0m
+[32mChatActionTest:[0m
+[32m- clearHistory should reset message count (3 milliseconds)[0m
+[32m- addMessage should append to history (7 milliseconds)[0m
+[32m- history should respect max size limit (14 milliseconds)[0m
+[32m- transient messages should be filterable (1 millisecond)[0m
+[32m- formatTime should produce HH:mm format (0 milliseconds)[0m
+[32m- commandNames should include all dispatch entries (3 milliseconds)[0m
+[32m- getHistory and getHistorySnapshot should return same result (0 milliseconds)[0m
+[32m- history should be thread-safe with concurrent adds (2 milliseconds)[0m
+[32mAssistantOptionsTest:[0m
+[32m- normalizeKey should lowercase and convert hyphens to underscores (0 milliseconds)[0m
+[32m- known settings and aliases should resolve (3 milliseconds)[0m
+[32m- parseSnapshot should sanitize invalid region/model values (0 milliseconds)[0m
+[32m- parseSnapshot should clamp numeric values to configured bounds (0 milliseconds)[0m
+[32m- parseSnapshot should fall back to defaults for non-numeric values (0 milliseconds)[0m
+[32m- parseSnapshot should honor boolean flags and defaults (0 milliseconds)[0m
+[32m- parseSnapshot should default maxToolIterations to None (unlimited) (0 milliseconds)[0m
+[32m- parseSnapshot should parse valid maxToolIterations values (0 milliseconds)[0m
+[32m- parseSnapshot should treat empty/0/none/unlimited as unlimited (0 milliseconds)[0m
+[32m- parseSnapshot should clamp maxToolIterations to valid range (1 millisecond)[0m
+[32mResponseParserTest:[0m
+[32m- parseResponse should extract text from Anthropic response (4 milliseconds)[0m
+[32m- parseResponse should extract generation from Meta response (0 milliseconds)[0m
+[32m- parseResponse should extract outputText from Amazon Titan response (0 milliseconds)[0m
+[32m- parseResponse should extract text from generic response (0 milliseconds)[0m
+[32m- parseResponse should throw on null input (1 millisecond)[0m
+[32m- parseResponse should throw on empty input (0 milliseconds)[0m
+[32m- parseResponse should throw on whitespace-only input (0 milliseconds)[0m
+[32m- parseResponse should throw on JSON with no text field (0 milliseconds)[0m
+[32m- parseResponse should handle CRIS-prefixed model IDs (0 milliseconds)[0m
+[32m- parseResponse should collect multiple text blocks from Anthropic (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should parse text-only response (1 millisecond)[0m
+[32m- parseAnthropicContentBlocks should parse tool_use response (4 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle empty content array (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle tool_use with string input (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle tool_use with numeric input (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle tool_use with boolean input (1 millisecond)[0m
+[32m- parseAnthropicContentBlocks should handle multiple tool_use blocks (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle nested object in tool input (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle nested array in tool input (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should handle missing stop_reason (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should coerce whole-number floats to Int (0 milliseconds)[0m
+[32m- parseAnthropicContentBlocks should preserve actual decimal values (1 millisecond)[0m
+[32mIQIntegrationTest:[0m
+[32m- VerificationResult enum should have all expected cases (1 millisecond)[0m
+[32m- ProofSuccess should store timing information (0 milliseconds)[0m
+[32m- ProofFailure should store error message (0 milliseconds)[0m
+[32m- SledgehammerResult should store method and timing (1 millisecond)[0m
+[32m- ProofStepResult should track completion status (0 milliseconds)[0m
+[32m- getIsarExploreImportSuggestion should provide helpful guidance (2 milliseconds)[0m
+[32m- IQStatus enum should have connected and disconnected states (1 millisecond)[0m
+[32m- parseStepResult should parse PROOF_COMPLETE header (0 milliseconds)[0m
+[32m- parseStepResult should parse PROOF_STATE header with subgoal count (0 milliseconds)[0m
+[32m- parseStepResult should return opaque legacy result without PROOF_* header (0 milliseconds)[0m
+[32m- parseStepResult should handle malformed PROOF_STATE header (0 milliseconds)[0m
+[32m- parseStepResult should treat empty output as completed proof (0 milliseconds)[0m
+[32mTargetParserTest:[0m
+[32m- parse cursor keywords (1 millisecond)[0m
+[32m- parse selection keyword (0 milliseconds)[0m
+[32m- parse file:line (0 milliseconds)[0m
+[32m- parse file:range (1 millisecond)[0m
+[32m- parse named element (1 millisecond)[0m
+[32m- parse relative position (0 milliseconds)[0m
+[32m- reject invalid target (0 milliseconds)[0m
+[32m- formatTarget round-trips (0 milliseconds)[0m
+[32mVerificationCacheTest:[0m
+[32m- cache clear should reset size to zero (0 milliseconds)[0m
+[32m- cache should round-trip by composite key (1 millisecond)[0m
+[32m- cache keys should include node/id/source to avoid collisions (0 milliseconds)[0m
+[32m- cache should evict oldest entries beyond max size (1 millisecond)[0m
+[32m- cache should provide stats (0 milliseconds)[0m
+[32m- cache policy should only cache successful verification (1 millisecond)[0m
+[32m- result classification should mark transient unavailability outcomes (0 milliseconds)[0m
+[32m- failure classification should distinguish infrastructure from semantic failures (0 milliseconds)[0m
+[36mRun completed in 1 second, 186 milliseconds.[0m
+[36mTotal number of tests run: 251[0m
+[36mSuites: completed 25, aborted 0[0m
+[36mTests: succeeded 245, failed 6, canceled 0, ignored 0, pending 0[0m
+[31m*** 6 TESTS FAILED ***[0m

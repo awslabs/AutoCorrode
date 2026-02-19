@@ -18,7 +18,7 @@ object SuggestTacticAction {
   }
 
   def suggest(view: View, proofPattern: String): Unit = {
-    ChatAction.addMessage("user", ":suggest-tactic selection")
+    ChatAction.addMessage(ChatAction.User, ":suggest-tactic selection")
     AssistantDockable.showConversation(ChatAction.getHistory)
     
     val hasEisbach = AssistantSupport.hasEisbach(view.getBuffer)
@@ -66,7 +66,7 @@ object SuggestTacticAction {
     val methodId = AssistantDockable.registerAction(() =>
       view.getBuffer.insert(view.getTextArea.getCaretPosition, methodLine))
     sb.append(s"`$methodLine`$badgeStr {{INSERT:$methodId}}")
-    ChatAction.addMessage("assistant", sb.toString)
+    ChatAction.addMessage(ChatAction.Assistant, sb.toString)
     AssistantDockable.showConversation(ChatAction.getHistory)
     AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
   }

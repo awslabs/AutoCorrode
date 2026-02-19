@@ -26,13 +26,13 @@ object GenerateRulesAction {
   }
 
   def generateIntro(view: View, definitionText: String): Unit = {
-    ChatAction.addMessage("user", ":generate-intro selection")
+    ChatAction.addMessage(ChatAction.User, ":generate-intro selection")
     AssistantDockable.showConversation(ChatAction.getHistory)
     generateInternal(view, definitionText, "generate_intro_rule.md", "intro")
   }
   
   def generateElim(view: View, definitionText: String): Unit = {
-    ChatAction.addMessage("user", ":generate-elim selection")
+    ChatAction.addMessage(ChatAction.User, ":generate-elim selection")
     AssistantDockable.showConversation(ChatAction.getHistory)
     generateInternal(view, definitionText, "generate_elim_rule.md", "elim")
   }

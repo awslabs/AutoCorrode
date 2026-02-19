@@ -20,7 +20,7 @@ object RefactorAction {
   }
 
   def refactor(view: View, proofText: String): Unit = {
-    ChatAction.addMessage("user", ":refactor selection")
+    ChatAction.addMessage(ChatAction.User, ":refactor selection")
     AssistantDockable.showConversation(ChatAction.getHistory)
 
     val buffer = view.getBuffer

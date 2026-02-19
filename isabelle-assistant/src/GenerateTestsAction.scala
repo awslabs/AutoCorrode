@@ -18,7 +18,7 @@ object GenerateTestsAction {
   }
 
   def generate(view: View, definitionText: String): Unit = {
-    ChatAction.addMessage("user", ":generate-tests selection")
+    ChatAction.addMessage(ChatAction.User, ":generate-tests selection")
     AssistantDockable.showConversation(ChatAction.getHistory)
     generateInternal(view, definitionText)
   }

@@ -10,7 +10,7 @@ import org.gjt.sp.jedit.View
 object SuggestStrategyAction {
   
   def suggest(view: View): Unit = {
-    ChatAction.addMessage("user", ":suggest-strategy")
+    ChatAction.addMessage(ChatAction.User, ":suggest-strategy")
     AssistantDockable.showConversation(ChatAction.getHistory)
     
     val buffer = view.getBuffer

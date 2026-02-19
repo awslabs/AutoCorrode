@@ -54,7 +54,7 @@ object GenerateDocAction {
   }
 
   def generate(view: View, commandText: String, commandType: String): Unit = {
-    ChatAction.addMessage("user", ":generate-doc")
+    ChatAction.addMessage(ChatAction.User, ":generate-doc")
     AssistantDockable.showConversation(ChatAction.getHistory)
     generateInternal(view, commandText, commandType)
   }

@@ -11,7 +11,7 @@ object ExplainAction {
   
   def explain(view: View, commandText: String): Unit = {
     val target = getCurrentTarget(view)
-    ChatAction.addMessage("user", s":explain ${TargetParser.formatTarget(target)}")
+    ChatAction.addMessage(ChatAction.User, s":explain ${TargetParser.formatTarget(target)}")
     AssistantDockable.showConversation(ChatAction.getHistory)
     
     ActionHelper.runAndRespond("assistant-explain", "Explaining code...") {

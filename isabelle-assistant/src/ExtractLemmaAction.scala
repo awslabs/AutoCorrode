@@ -36,7 +36,7 @@ object ExtractLemmaAction {
   }
 
   def extract(view: View, selectedText: String): Unit = {
-    ChatAction.addMessage("user", ":extract selection")
+    ChatAction.addMessage(ChatAction.User, ":extract selection")
     AssistantDockable.showConversation(ChatAction.getHistory)
 
     val buffer = view.getBuffer
@@ -82,7 +82,7 @@ object ExtractLemmaAction {
               showResult(view, result, VerificationBadge.Unverified)
             case None =>
               GUI_Thread.later {
-                ChatAction.addMessage("assistant", response);
+                ChatAction.addMessage(ChatAction.Assistant, response);
                 AssistantDockable.showConversation(ChatAction.getHistory)
                 AssistantDockable.setStatus("Could not parse extraction result")
               }

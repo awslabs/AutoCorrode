@@ -63,7 +63,7 @@ object TryMethodsAction {
           sb.append(s"? `$method`\n")
       }
     }
-    ChatAction.addMessage("assistant", sb.toString)
+    ChatAction.addMessage(ChatAction.Assistant, sb.toString)
     AssistantDockable.showConversation(ChatAction.getHistory)
   }
 }

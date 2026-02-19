@@ -15,7 +15,7 @@ class ChatActionTest extends AnyFunSuite with Matchers {
 
   test("addMessage should append to history") {
     ChatAction.clearHistory()
-    ChatAction.addMessage("user", "test message")
+    ChatAction.addMessage(ChatAction.User, "test message")
     ChatAction.getHistorySnapshot.length shouldBe 1
     ChatAction.getHistorySnapshot.head.content shouldBe "test message"
   }
@@ -24,7 +24,7 @@ class ChatActionTest extends AnyFunSuite with Matchers {
     ChatAction.clearHistory()
     val overLimit = AssistantConstants.MAX_ACCUMULATED_MESSAGES + 10
     for (i <- 1 to overLimit) {
-      ChatAction.addMessage("user", s"message $i")
+      ChatAction.addMessage(ChatAction.User, s"message $i")
     }
     ChatAction.getHistorySnapshot.length should be <= AssistantConstants.MAX_ACCUMULATED_MESSAGES
   }
@@ -60,7 +60,7 @@ class ChatActionTest extends AnyFunSuite with Matchers {
 
   test("getHistory and getHistorySnapshot should return same result") {
     ChatAction.clearHistory()
-    ChatAction.addMessage("user", "test")
+    ChatAction.addMessage(ChatAction.User, "test")
     ChatAction.getHistory shouldBe ChatAction.getHistorySnapshot
   }
 
@@ -69,7 +69,7 @@ class ChatActionTest extends AnyFunSuite with Matchers {
     val threads = (1 to 10).map { i =>
       new Thread(() => {
         for (j <- 1 to 10) {
-          ChatAction.addMessage("user", s"thread-$i-msg-$j")
+          ChatAction.addMessage(ChatAction.User, s"thread-$i-msg-$j")
         }
       })
     }

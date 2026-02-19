@@ -19,7 +19,7 @@ object FindTheoremsAction {
     if (patternOpt.isEmpty) ()
     else {
       val pattern = patternOpt.get
-      ChatAction.addMessage("user", s":find $pattern")
+      ChatAction.addMessage(ChatAction.User, s":find $pattern")
       AssistantDockable.showConversation(ChatAction.getHistory)
       
       if (!IQAvailable.isAvailable) {
@@ -73,7 +73,7 @@ object FindTheoremsAction {
           sb.append(s"* $line\n")
         }
       }
-      ChatAction.addMessage("assistant", sb.toString)
+      ChatAction.addMessage(ChatAction.Assistant, sb.toString)
       AssistantDockable.showConversation(ChatAction.getHistory)
     }
   }

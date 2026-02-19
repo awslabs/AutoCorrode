@@ -31,7 +31,7 @@ object SuggestAction {
     // Emit command to chat
     val target = getCurrentTarget(view, buffer, offset)
     val commandStr = s":suggest ${TargetParser.formatTarget(target)}"
-    ChatAction.addMessage("user", commandStr)
+    ChatAction.addMessage(ChatAction.User, commandStr)
     AssistantDockable.showConversation(ChatAction.getHistory)
 
     suggestInternal(view, buffer, offset)
@@ -618,7 +618,7 @@ object SuggestAction {
         val id = InsertHelper.registerInsertAction(view, c.proof)
         sb.append(s"$icon `${c.proof}`$timing$tag {{INSERT:$id}}\n")
       }
-      ChatAction.addMessage("assistant", sb.toString)
+      ChatAction.addMessage(ChatAction.Assistant, sb.toString)
       AssistantDockable.showConversation(ChatAction.getHistory)
     }
   }
