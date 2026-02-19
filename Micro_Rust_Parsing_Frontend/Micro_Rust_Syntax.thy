@@ -172,6 +172,19 @@ syntax
   "_urust_antiquotation" :: "'a \<Rightarrow> urust_antiquotation"
     ("\<epsilon>'\<open>//_'\<close>"[0]1000)
   "" :: \<open>urust_antiquotation \<Rightarrow> urust\<close> ("_")
+  \<comment>\<open>Place expressions (valid assignment/update LHS forms).\<close>
+  "_urust_lhs_identifier" :: "urust_identifier \<Rightarrow> urust_lhs"
+    ("_" [0]1000)
+  "_urust_lhs_parens" :: "urust_lhs \<Rightarrow> urust_lhs"
+    ("'(_')" [0]999)
+  "_urust_lhs_deref" :: \<open>urust_lhs \<Rightarrow> urust_lhs\<close>
+    ("*_" [200]100)
+  "_urust_lhs_field_access" :: \<open>urust_lhs \<Rightarrow> urust_identifier \<Rightarrow> urust_lhs\<close>
+    ("_._" [99,1000]100)
+  "_urust_lhs_index" :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust_lhs\<close>
+    ("_/ '[_']" [100,0]100)
+  "_urust_lhs_antiquotation" :: \<open>urust_antiquotation \<Rightarrow> urust_lhs\<close>
+  "_urust_lhs_as_urust" :: \<open>urust_lhs \<Rightarrow> urust\<close>
   \<comment>\<open>Introducing an explicit scope within a Micro Rust program\<close>
   "_urust_scoping" :: "urust \<Rightarrow> urust"
     ("{/ _/ }"[0]1000)
@@ -508,38 +521,46 @@ syntax
   "_urust_range_eq" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     (infix \<open>..=\<close> 41)
 
-  "_urust_assign" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+  "_urust_assign" :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
     (infixr "=" 40)
 
   "_urust_assign_add"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "+=" 40)
   "_urust_assign_minus"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "-=" 40)
   "_urust_assign_mul"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "*=" 40)
   "_urust_assign_mod"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "%=" 40)
   "_urust_word_assign_and"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "&=" 40)
   "_urust_word_assign_or"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "|=" 40)
   "_urust_word_assign_xor"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "^=" 40)
   "_urust_word_assign_shift_left"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr "<<=" 40)
   "_urust_word_assign_shift_right"
-     :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+     :: \<open>urust_lhs \<Rightarrow> urust \<Rightarrow> urust\<close>
      (infixr ">>=" 40)
 
 translations
+  "_urust_lhs_as_urust (_urust_lhs_identifier id)" => "_urust_identifier id"
+  "_urust_lhs_as_urust (_urust_lhs_parens lhs)" => "_urust_parens (_urust_lhs_as_urust lhs)"
+  "_urust_lhs_as_urust (_urust_lhs_deref lhs)" => "_urust_deref (_urust_lhs_as_urust lhs)"
+  "_urust_lhs_as_urust (_urust_lhs_field_access lhs fld)" =>
+    "_urust_field_access (_urust_lhs_as_urust lhs) fld"
+  "_urust_lhs_as_urust (_urust_lhs_index lhs idx)" =>
+    "_urust_index (_urust_lhs_as_urust lhs) idx"
+  "_urust_lhs_as_urust (_urust_lhs_antiquotation a)" => "_urust_antiquotation a"
   \<comment>\<open>Rust slice literals (&[...]) are currently front-end sugar for list literals.\<close>
   "_urust_borrow (_urust_array_expr_empty)" => "_urust_array_expr_empty"
   "_urust_borrow (_urust_array_expr args)" => "_urust_array_expr args"
@@ -592,6 +613,8 @@ It is immediately removed after parsing.\<close>
   "_urust_temporary_field_access_long" :: \<open>urust \<Rightarrow> urust_temporary_long_identifier \<Rightarrow> urust\<close>
     ("_._" [99,1000]100)
   "_urust_temporary_identifier_long" :: \<open>urust_temporary_long_identifier \<Rightarrow> urust\<close>
+    ("_" [0]1000)
+  "_urust_temporary_lhs_identifier_long" :: \<open>urust_temporary_long_identifier \<Rightarrow> urust_lhs\<close>
     ("_" [0]1000)
 
 experiment
@@ -731,8 +754,12 @@ access to the components of the long ID.\<close>
 ML\<open>
   fun ast_urust_identifier ast =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier\<close>) [ast]
+  fun ast_urust_lhs_identifier ast =
+     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_lhs_identifier\<close>) [ast]
   fun ast_urust_field_access func obj  =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_field_access\<close>) [obj, func]
+  fun ast_urust_lhs_field_access func obj  =
+     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_lhs_field_access\<close>) [obj, func]
   fun ast_urust_callable_struct func obj  =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_callable_struct\<close>) [obj, func]
 
@@ -744,6 +771,10 @@ ML\<open>
 
   fun long_id_field_access_into_urust head projections =
      let val res = fold ast_urust_field_access projections head
+     in res end
+
+  fun long_id_field_access_into_lhs head projections =
+     let val res = fold ast_urust_lhs_field_access projections head
      in res end
 \<close>
 parse_ast_translation\<open>
@@ -784,11 +815,20 @@ let
      in res end
    | convert_temporary_field_access_long args =
       Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_field_access_long\<close>) args
+
+  fun convert_temporary_lhs_identifier_long [Ast.Appl (head :: projections)] =
+     let val head = ast_urust_lhs_identifier head
+         val res = fold ast_urust_lhs_field_access projections head
+         val _ = debug_result "lhs id" res
+     in res end
+   | convert_temporary_lhs_identifier_long args =
+      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_lhs_identifier_long\<close>) args
 in
   [(\<^syntax_const>\<open>_urust_temporary_identifier_long\<close>,      K convert_temporary_identifier_long),
    (\<^syntax_const>\<open>_urust_temporary_callable_id_long\<close>,     K convert_temporary_callable_id_long),
    (\<^syntax_const>\<open>_urust_temporary_callable_struct_long\<close>, K convert_temporary_callable_struct_long),
-   (\<^syntax_const>\<open>_urust_temporary_field_access_long\<close>,    K convert_temporary_field_access_long) ]
+   (\<^syntax_const>\<open>_urust_temporary_field_access_long\<close>,    K convert_temporary_field_access_long),
+   (\<^syntax_const>\<open>_urust_temporary_lhs_identifier_long\<close>,   K convert_temporary_lhs_identifier_long) ]
 end
 \<close>
 

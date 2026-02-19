@@ -292,8 +292,21 @@ adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference
 
 term \<open>\<lbrakk> r = 10 \<rbrakk>\<close>
 term \<open>\<lbrakk> r = *r \<rbrakk>\<close>
+term \<open>\<lbrakk> (r) = *r \<rbrakk>\<close>
 
 no_adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference_assign
+end
+
+subsubsection\<open>Place Assignment Forms\<close>
+
+context
+  fixes a b :: \<open>32 word\<close>
+begin
+term \<open>\<lbrakk>
+  let mut x = a;
+  (*x) = b;
+  *x
+\<rbrakk>\<close>
 end
 
 subsubsection\<open>Add-Assign\<close>
