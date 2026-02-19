@@ -1144,6 +1144,24 @@ ML\<open>
           Free (str, _) => (mk \<^const_syntax>\<open>String.implode\<close>) $ mk_string_syntax (plain_strings_of str)
         | _ => error ("_shallow_match_arg: expected string token, got: " ^ Syntax.string_of_term ctxt t))
 
+      fun parse_num_token tok =
+        (case try (Lexicon.read_num #> #value) tok of
+          SOME n => n
+        | NONE =>
+            (case try (Lexicon.read_num #> #value) (Long_Name.base_name tok) of
+              SOME n => n
+            | NONE => error ("_shallow_match_arg: bad numeral token: " ^ quote tok)))
+
+      fun num_const_to_hol t =
+        (case try Numeral.dest_num_syntax t of
+          SOME n => Numeral.mk_number_syntax n
+        | NONE =>
+            (case t of
+              Const (\<^syntax_const>\<open>_constrain\<close>, _) $ u $ _ => num_const_to_hol u
+            | Free (num, _) => Numeral.mk_number_syntax (parse_num_token num)
+            | Const (num, _) => Numeral.mk_number_syntax (parse_num_token num)
+            | _ => error ("_shallow_match_arg: expected numeral token, got: " ^ Syntax.string_of_term ctxt t)))
+
       fun shallow_expr_of t =
         (case t of
           Const (\<^syntax_const>\<open>_urust_literal\<close>, _) $ v =>
@@ -1159,7 +1177,7 @@ ML\<open>
         | Const (\<^syntax_const>\<open>_urust_match_pattern_literal\<close>, _) $ v =>
             mk_literal_expr v
         | Const (\<^syntax_const>\<open>_urust_match_pattern_num_const\<close>, _) $ n =>
-            mk_literal_expr n
+            mk_literal_expr (num_const_to_hol n)
         | _ => mk_shallow t)
 
       fun tuple_args_destruct (Const (\<^syntax_const>\<open>_urust_let_pattern_tuple_base_pair\<close>, _) $ a $ b) = [a, b]
@@ -1192,6 +1210,7 @@ ML\<open>
       fun mk_args_app a b = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_args_app\<close> $ a $ b
       fun mk_pat_no_args c = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_no_args\<close> $ c
       fun mk_pat_with_args c args = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_constr_with_args\<close> $ c $ args
+      fun mk_pat_slice_suffix p = mk \<^syntax_const>\<open>_urust_shallow_match_pattern_slice_suffix\<close> $ p
 
       fun mk_pair_pat arg1 pat2 =
             mk_pat_with_args mk_pair
@@ -1317,7 +1336,6 @@ ML\<open>
             let
               val elems = slice_args_destruct args
               val (prefix, rest_opt, suffix) = split_slice_rest elems
-              val _ = suffix
 
               fun mk_closed [] = mk_pat_no_args mk_nil
                 | mk_closed (p :: ps) =
@@ -1330,13 +1348,24 @@ ML\<open>
                     mk_pat_with_args mk_cons
                       (mk_args_app (shallow_match_arg_of p)
                         (mk_args_single (mk_arg_pat (mk_open ps))))
+
+              fun mk_open_with_tail [] tail_pat = tail_pat
+                | mk_open_with_tail (p :: ps) tail_pat =
+                    mk_pat_with_args mk_cons
+                      (mk_args_app (shallow_match_arg_of p)
+                        (mk_args_single (mk_arg_pat (mk_open_with_tail ps tail_pat))))
             in
               (case rest_opt of
                 NONE => mk_closed elems
-              | SOME _ =>
-                  \<comment>\<open>TODO(#66): suffix constraints after \<^verbatim>\<open>..\<close> are not yet modeled.
-                      We currently preserve the prefix and accept any tail.\<close>
-                  mk_open prefix)
+                | SOME _ =>
+                    if null suffix then
+                      mk_open prefix
+                    else
+                      let
+                        val suffix_rev_pat = mk_closed (rev suffix)
+                      in
+                        mk_open_with_tail prefix (mk_pat_slice_suffix suffix_rev_pat)
+                      end)
             end
 
       and shallow_match_args_of args =

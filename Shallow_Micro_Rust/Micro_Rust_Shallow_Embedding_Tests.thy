@@ -878,7 +878,23 @@ term\<open>\<lbrakk>
 text\<open>Range patterns are lowered in the shallow embedding, but concrete parser-level
 coverage for the Rust-style syntax is exercised separately in frontend-focused tests.\<close>
 
-term\<open>\<lbrakk>
+value[simp]\<open>\<lbrakk>
+  let y = match Some(\<llangle>7 :: nat\<rrangle>) {
+    Some(5..=7) \<Rightarrow> \<llangle>1 :: nat\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
+  };
+  assert!(y == \<llangle>1 :: nat\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let y = match Some(\<llangle>7 :: nat\<rrangle>) {
+    Some(5..7) \<Rightarrow> \<llangle>1 :: nat\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
+  };
+  assert!(y == \<llangle>0 :: nat\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
   let y = match \<llangle>[7 :: 32 word, 8, 9]\<rrangle> {
     [head, ..] \<Rightarrow> head,
     _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
@@ -886,13 +902,44 @@ term\<open>\<lbrakk>
   assert!(y == \<llangle>7 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
 
-text\<open>Current slice-rest lowering is partial: patterns with a suffix after @{text ".."}
-elaborate, but only the prefix before @{text ".."} is currently enforced.\<close>
 term\<open>\<lbrakk>
-  match \<llangle>[1 :: 32 word, 2, 3, 4]\<rrangle> {
-    [a, b, .., z] \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+  let y = match \<llangle>[1 :: 32 word, 2, 3, 4]\<rrangle> {
+    [a, b, .., y, z] \<Rightarrow> y + z,
     _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
-  }
+  };
+  assert!(y == \<llangle>7 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let y = match \<llangle>[1 :: 32 word, 2, 3]\<rrangle> {
+    [a, b, .., y, z] \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>0 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let y = match \<llangle>[1 :: 32 word, 2, 3]\<rrangle> {
+    [.., y, z] \<Rightarrow> y + z,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>5 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let y = match Some(Some(True)) {
+    Some(Some(True)) \<Rightarrow> \<llangle>1 :: 32 word\<rrangle>,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>1 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let y = match Some(Some(\<llangle>7 :: 32 word\<rrangle>)) {
+    Some(whole @ Some(v)) \<Rightarrow> v,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(y == \<llangle>7 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
 
 subsubsection\<open>Nested Patterns\<close>

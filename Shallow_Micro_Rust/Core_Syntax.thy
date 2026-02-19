@@ -191,6 +191,9 @@ syntax
   "_urust_shallow_match_pattern_range" :: \<open>logic \<Rightarrow> logic \<Rightarrow> urust_shallow_match_pattern\<close>
   "_urust_shallow_match_pattern_range_eq" :: \<open>logic \<Rightarrow> logic \<Rightarrow> urust_shallow_match_pattern\<close>
   "_urust_shallow_match_pattern_as" :: \<open>logic \<Rightarrow> urust_shallow_match_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
+  \<comment>\<open>Internal marker used by slice-rest lowering: stores the reversed suffix pattern
+      that must match against the reversed remainder list.\<close>
+  "_urust_shallow_match_pattern_slice_suffix" :: \<open>urust_shallow_match_pattern \<Rightarrow> urust_shallow_match_pattern\<close>
   "_urust_shallow_match_pattern_arg_id" :: \<open>id \<Rightarrow> urust_shallow_match_pattern_arg\<close>
     ("_")
   "_urust_shallow_match_pattern_arg_dummy" :: \<open>urust_shallow_match_pattern_arg\<close>
@@ -650,24 +653,45 @@ let
     Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_args_app\<close> $ arg $ rest;
   fun mk_arg_pattern pat =
     Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_pattern\<close> $ pat;
+  fun mk_arg_id id =
+    Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_arg_id\<close> $ id;
   fun mk_anon_raw_value () =
     Syntax.const \<^syntax_const>\<open>_anonymous_var\<close>;
   fun mk_anon_expr () =
     Syntax.const \<^const_syntax>\<open>literal\<close> $ mk_anon_raw_value ();
-  fun mk_guard_eq lit =
-    Syntax.const \<^const_syntax>\<open>urust_eq\<close> $ mk_anon_expr () $ lit;
-  fun mk_guard_ge lo =
-    Syntax.const \<^const_syntax>\<open>comp_ge\<close> $ mk_anon_expr () $ lo;
-  fun mk_guard_gt lo =
-    Syntax.const \<^const_syntax>\<open>comp_gt\<close> $ mk_anon_expr () $ lo;
-  fun mk_guard_le hi =
-    Syntax.const \<^const_syntax>\<open>comp_le\<close> $ mk_anon_expr () $ hi;
-  fun mk_guard_lt hi =
-    Syntax.const \<^const_syntax>\<open>comp_lt\<close> $ mk_anon_expr () $ hi;
+  fun mk_expr_of_id id =
+    Syntax.const \<^const_syntax>\<open>literal\<close> $ id;
+  fun mk_rev_expr_on expr =
+    Syntax.const \<^const_syntax>\<open>bindlift1\<close> $
+      Syntax.const \<^const_syntax>\<open>List.rev\<close> $ expr;
+  fun mk_guard_eq_on expr lit =
+    Syntax.const \<^const_syntax>\<open>urust_eq\<close> $ expr $ lit;
+  fun mk_guard_ge_on expr lo =
+    Syntax.const \<^const_syntax>\<open>comp_ge\<close> $ expr $ lo;
+  fun mk_guard_gt_on expr lo =
+    Syntax.const \<^const_syntax>\<open>comp_gt\<close> $ expr $ lo;
+  fun mk_guard_le_on expr hi =
+    Syntax.const \<^const_syntax>\<open>comp_le\<close> $ expr $ hi;
+  fun mk_guard_lt_on expr hi =
+    Syntax.const \<^const_syntax>\<open>comp_lt\<close> $ expr $ hi;
+  fun mk_guard_eq lit = mk_guard_eq_on (mk_anon_expr ()) lit;
+  fun mk_guard_ge lo = mk_guard_ge_on (mk_anon_expr ()) lo;
+  fun mk_guard_gt lo = mk_guard_gt_on (mk_anon_expr ()) lo;
+  fun mk_guard_le hi = mk_guard_le_on (mk_anon_expr ()) hi;
+  fun mk_guard_lt hi = mk_guard_lt_on (mk_anon_expr ()) hi;
   fun mk_guard_conj g1 g2 =
     Syntax.const \<^const_syntax>\<open>urust_conj\<close> $ g1 $ g2;
   fun extend_guard NONE g = SOME g
     | extend_guard (SOME g0) g = SOME (mk_guard_conj g0 g);
+  fun mk_bool_expr b =
+    Syntax.const \<^const_syntax>\<open>literal\<close> $
+      (if b then Syntax.const \<^const_syntax>\<open>True\<close> else Syntax.const \<^const_syntax>\<open>False\<close>);
+  fun fresh_binding_id used stem =
+    let
+      val (name, used') = Name.variant stem used
+    in
+      (Free (name, dummyT), used')
+    end;
 
   fun binding_name_of ctxt id =
     (case id of
@@ -683,30 +707,6 @@ let
         (Syntax.const \<^const_syntax>\<open>literal\<close> $ mk_anon_raw_value ()) $
         Abs (alias, dummyT, rhs)
     end;
-
-  fun normalize_extended_pattern ctxt (pat, guard_opt, rhs) =
-    (case pat of
-      Const ("_urust_shallow_match_pattern_as", _) $ id $ inner =>
-        normalize_extended_pattern ctxt (inner, guard_opt, mk_alias_rhs ctxt id rhs)
-    | Const ("_urust_shallow_match_pattern_literal", _) $ lit =>
-        (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
-         extend_guard guard_opt (mk_guard_eq lit),
-         rhs)
-    | Const ("_urust_shallow_match_pattern_range", _) $ lo $ hi =>
-        let val g = mk_guard_conj (mk_guard_ge lo) (mk_guard_lt hi)
-        in
-          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
-           extend_guard guard_opt g,
-           rhs)
-        end
-    | Const ("_urust_shallow_match_pattern_range_eq", _) $ lo $ hi =>
-        let val g = mk_guard_conj (mk_guard_ge lo) (mk_guard_le hi)
-        in
-          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
-           extend_guard guard_opt g,
-           rhs)
-        end
-    | _ => (pat, guard_opt, rhs));
 
   \<comment>\<open>Expand disjunctive patterns into a list of patterns.
      For example: Some(x) | None becomes [Some(x), None]
@@ -859,6 +859,33 @@ let
   fun mk_wildcard_pat () =
     Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>;
 
+  fun pattern_requires_nested_elaboration pat =
+    let
+      fun requires pat =
+        (case pat of
+          Const ("_urust_shallow_match_pattern_as", _) $ _ $ _ => true
+        | Const ("_urust_shallow_match_pattern_num_const", _) $ _ => true
+        | Const ("_urust_shallow_match_pattern_literal", _) $ _ => true
+        | Const ("_urust_shallow_match_pattern_range", _) $ _ $ _ => true
+        | Const ("_urust_shallow_match_pattern_range_eq", _) $ _ $ _ => true
+        | Const ("_urust_shallow_match_pattern_slice_suffix", _) $ _ => true
+        | Const ("_urust_shallow_match_pattern_disjunction", _) $ _ $ _ => true
+        | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ _ $ args => args_requires args
+        | _ => false)
+      and args_requires args =
+        (case args of
+          Const ("_urust_shallow_match_pattern_args_single", _) $ arg => arg_requires arg
+        | Const ("_urust_shallow_match_pattern_args_app", _) $ arg $ rest =>
+            arg_requires arg orelse args_requires rest
+        | _ => false)
+      and arg_requires arg =
+        (case arg of
+          Const ("_urust_shallow_match_pattern_arg_pattern", _) $ p => requires p
+        | _ => false)
+    in
+      requires pat
+    end;
+
   fun process_branches ctxt [] = case_error "empty match branches"
     | process_branches ctxt [(pat, guard_opt, rhs)] =
         (case guard_opt of
@@ -890,18 +917,142 @@ let
             rhs'
           else
             mk_case_term ctxt [(pat, rhs'), (mk_wildcard_pat (), rest_case)]
-        end;
+        end
+
+  fun compile_match_branches ctxt exp branch_list =
+    let
+      val normalized = map (normalize_branch ctxt) branch_list
+    in
+      if has_guard normalized then
+        let val case_expr = process_branches ctxt normalized
+        in Syntax.const \<^const_syntax>\<open>bind\<close> $ exp $ mk_case_abs case_expr
+        end
+      else
+        mk_match_term ctxt exp (map (fn (pat, _, rhs) => (pat, rhs)) normalized)
+    end
+
+  and mk_nested_match_guard ctxt expr pat =
+    compile_match_branches ctxt expr
+      [(pat, NONE, mk_bool_expr true), (mk_wildcard_pat (), NONE, mk_bool_expr false)]
+
+  and mk_nested_match_extract ctxt expr pat rhs =
+    compile_match_branches ctxt expr
+      [(pat, NONE, rhs), (mk_wildcard_pat (), NONE, Syntax.const \<^const_syntax>\<open>undefined\<close>)]
+
+  and normalize_pattern_for_nested ctxt used pat =
+    (case pat of
+      Const ("_urust_shallow_match_pattern_constr_with_args", _) $ id $ args =>
+        let
+          val (args', guards, wrappers, used') = normalize_args_for_nested ctxt used args
+        in
+          (mk_constr_with_args id args', guards, wrappers, used')
+        end
+    | _ => (pat, [], [], used))
+
+  and normalize_args_for_nested ctxt used args =
+    (case args of
+      Const ("_urust_shallow_match_pattern_args_single", _) $ arg =>
+        let
+          val (arg', guards, wrappers, used') = normalize_arg_for_nested ctxt used arg
+        in
+          (mk_args_single arg', guards, wrappers, used')
+        end
+    | Const ("_urust_shallow_match_pattern_args_app", _) $ arg $ rest =>
+        let
+          val (arg', guards0, wrappers0, used0) = normalize_arg_for_nested ctxt used arg
+          val (rest', guards1, wrappers1, used1) = normalize_args_for_nested ctxt used0 rest
+        in
+          (mk_args_app arg' rest', guards0 @ guards1, wrappers0 @ wrappers1, used1)
+        end
+    | _ => (args, [], [], used))
+
+  and normalize_arg_for_nested ctxt used arg =
+    (case arg of
+      Const ("_urust_shallow_match_pattern_arg_pattern", _) $ pat =>
+        (case pat of
+          Const ("_urust_shallow_match_pattern_slice_suffix", _) $ suffix_rev_pat =>
+          let
+            val (tmp_id, used') = fresh_binding_id used "pat"
+            val tmp_expr = mk_expr_of_id tmp_id
+            val rev_tmp_expr = mk_rev_expr_on tmp_expr
+            val guard = mk_nested_match_guard ctxt rev_tmp_expr suffix_rev_pat
+            val wrapper = (fn rhs => mk_nested_match_extract ctxt rev_tmp_expr suffix_rev_pat rhs)
+          in
+            (mk_arg_id tmp_id, [guard], [wrapper], used')
+          end
+        | _ =>
+            if pattern_requires_nested_elaboration pat then
+              let
+                val (tmp_id, used') = fresh_binding_id used "pat"
+                val tmp_expr = mk_expr_of_id tmp_id
+                val guard = mk_nested_match_guard ctxt tmp_expr pat
+                val wrapper = (fn rhs => mk_nested_match_extract ctxt tmp_expr pat rhs)
+              in
+                (mk_arg_id tmp_id, [guard], [wrapper], used')
+              end
+            else
+              let
+                val (pat', guards, wrappers, used') = normalize_pattern_for_nested ctxt used pat
+              in
+                (mk_arg_pattern pat', guards, wrappers, used')
+              end)
+    | _ => (arg, [], [], used))
+
+  and normalize_extended_pattern ctxt (pat, guard_opt, rhs) =
+    (case pat of
+      Const ("_urust_shallow_match_pattern_as", _) $ id $ inner =>
+        normalize_extended_pattern ctxt (inner, guard_opt, mk_alias_rhs ctxt id rhs)
+    | Const ("_urust_shallow_match_pattern_num_const", _) $ num =>
+        (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+         extend_guard guard_opt (mk_guard_eq (Syntax.const \<^const_syntax>\<open>literal\<close> $ num)),
+         rhs)
+    | Const ("_urust_shallow_match_pattern_literal", _) $ lit =>
+        (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+         extend_guard guard_opt (mk_guard_eq lit),
+         rhs)
+    | Const ("_urust_shallow_match_pattern_range", _) $ lo $ hi =>
+        let val g = mk_guard_conj (mk_guard_ge lo) (mk_guard_lt hi)
+        in
+          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+           extend_guard guard_opt g,
+           rhs)
+        end
+    | Const ("_urust_shallow_match_pattern_range_eq", _) $ lo $ hi =>
+        let val g = mk_guard_conj (mk_guard_ge lo) (mk_guard_le hi)
+        in
+          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+           extend_guard guard_opt g,
+           rhs)
+        end
+    | Const ("_urust_shallow_match_pattern_slice_suffix", _) $ suffix_rev_pat =>
+        let
+          val rev_expr = mk_rev_expr_on (mk_anon_expr ())
+          val g = mk_nested_match_guard ctxt rev_expr suffix_rev_pat
+          val rhs' = mk_nested_match_extract ctxt rev_expr suffix_rev_pat rhs
+        in
+          (Syntax.const \<^syntax_const>\<open>_urust_shallow_match_pattern_other\<close>,
+           extend_guard guard_opt g,
+           rhs')
+        end
+    | _ => (pat, guard_opt, rhs))
+
+  and normalize_branch ctxt (pat, guard_opt, rhs) =
+    let
+      val (pat0, guard0, rhs0) = normalize_extended_pattern ctxt (pat, guard_opt, rhs)
+      val used0 =
+        Term.declare_free_names rhs0 (Term.declare_free_names pat0 Name.context)
+      val (pat1, nested_guards, nested_wrappers, _) = normalize_pattern_for_nested ctxt used0 pat0
+      val guard1 = fold (fn g => fn acc => extend_guard acc g) nested_guards guard0
+      val rhs1 = fold_rev (fn w => fn acc => w acc) nested_wrappers rhs0
+    in
+      (pat1, guard1, rhs1)
+    end;
 
   fun urust_shallow_match_tr ctxt [exp, branches] =
         let
-          val branch_list = map (normalize_extended_pattern ctxt) (branches_to_list ctxt branches);
+          val branch_list = branches_to_list ctxt branches;
         in
-          if has_guard branch_list then
-            let val case_expr = process_branches ctxt branch_list
-            in Syntax.const \<^const_syntax>\<open>bind\<close> $ exp $ mk_case_abs case_expr
-            end
-          else
-            mk_match_term ctxt exp (map (fn (pat, _, rhs) => (pat, rhs)) branch_list)
+          compile_match_branches ctxt exp branch_list
         end
     | urust_shallow_match_tr ctxt args =
         case_error ("_urust_shallow_match: unexpected arguments: " ^ Syntax.string_of_term ctxt

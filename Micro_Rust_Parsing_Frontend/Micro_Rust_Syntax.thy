@@ -470,10 +470,6 @@ syntax
     (infix \<open>..\<close> 41)
   "_urust_match_pattern_range_eq" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
     (infix \<open>..=\<close> 41)
-  "_urust_match_pattern_range" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
-    ("range'_pat'(_,/ _')" [1000,1000]1000)
-  "_urust_match_pattern_range_eq" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
-    ("range'_pat'_inc'(_,/ _')" [1000,1000]1000)
 
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
        https://doc.rust-lang.org/reference/expressions.html\<close>
