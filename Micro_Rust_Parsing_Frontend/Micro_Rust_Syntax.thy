@@ -242,6 +242,26 @@ syntax
     ("_'.4" [998]998)
   "_urust_tuple_index_5" :: "urust \<Rightarrow> urust"
     ("_'.5" [998]998)
+  "_urust_tuple_index_6" :: "urust \<Rightarrow> urust"
+    ("_'.6" [998]998)
+  "_urust_tuple_index_7" :: "urust \<Rightarrow> urust"
+    ("_'.7" [998]998)
+  "_urust_tuple_index_8" :: "urust \<Rightarrow> urust"
+    ("_'.8" [998]998)
+  "_urust_tuple_index_9" :: "urust \<Rightarrow> urust"
+    ("_'.9" [998]998)
+  "_urust_tuple_index_10" :: "urust \<Rightarrow> urust"
+    ("_'.10" [998]998)
+  "_urust_tuple_index_11" :: "urust \<Rightarrow> urust"
+    ("_'.11" [998]998)
+  "_urust_tuple_index_12" :: "urust \<Rightarrow> urust"
+    ("_'.12" [998]998)
+  "_urust_tuple_index_13" :: "urust \<Rightarrow> urust"
+    ("_'.13" [998]998)
+  "_urust_tuple_index_14" :: "urust \<Rightarrow> urust"
+    ("_'.14" [998]998)
+  "_urust_tuple_index_15" :: "urust \<Rightarrow> urust"
+    ("_'.15" [998]998)
   \<comment>\<open>Array literals: [e0, e1, ...]. Lowered to Cons/Nil lists.\<close>
   "_urust_array_expr_empty" :: \<open>urust\<close>
     ("'[]")
@@ -419,6 +439,10 @@ syntax
     ("_/ {/ _/ }" [1000, 0] 1000)
   "_urust_match_pattern_struct_field" :: \<open>urust_identifier \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern_struct_field\<close>
     ("_ :/ _" [1000, 100] 1000)
+  "_urust_match_pattern_struct_field_short" :: \<open>urust_identifier \<Rightarrow> urust_pattern_struct_field\<close>
+    ("_" [1000]1000)
+  "_urust_match_pattern_struct_rest" :: \<open>urust_pattern_struct_field\<close>
+    ("..")
   "_urust_match_pattern_struct_fields_single" :: \<open>urust_pattern_struct_field \<Rightarrow> urust_pattern_struct_fields\<close>
     ("_")
   "_urust_match_pattern_struct_fields_app" :: \<open>urust_pattern_struct_field \<Rightarrow> urust_pattern_struct_fields \<Rightarrow> urust_pattern_struct_fields\<close>
@@ -564,6 +588,8 @@ translations
   \<comment>\<open>Rust slice literals (&[...]) are currently front-end sugar for list literals.\<close>
   "_urust_borrow (_urust_array_expr_empty)" => "_urust_array_expr_empty"
   "_urust_borrow (_urust_array_expr args)" => "_urust_array_expr args"
+  "_urust_borrow_mut (_urust_array_expr_empty)" => "_urust_array_expr_empty"
+  "_urust_borrow_mut (_urust_array_expr args)" => "_urust_array_expr args"
   "_urust_if_then_else_if c t c' t'" => "_urust_if_then_else c t (_urust_if_then c' t')"
   "_urust_if_then_else_if_else c t c' t' e" => "_urust_if_then_else c t (_urust_if_then_else c' t' e)"
   "_urust_sequence_if_then_else c t e next" => "_urust_sequence (_urust_if_then_else c t e) next"

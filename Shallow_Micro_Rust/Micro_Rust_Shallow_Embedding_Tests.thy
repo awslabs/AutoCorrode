@@ -1025,6 +1025,22 @@ term\<open>\<lbrakk>
   assert!(res == \<llangle>21 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
 
+term\<open>\<lbrakk>
+  let res = match \<llangle>Foo (12 :: 32 word) 34\<rrangle> {
+    Foo { foo, goo } \<Rightarrow> foo + goo,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>46 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let res = match \<llangle>Foo (12 :: 32 word) 34\<rrangle> {
+    Foo { foo, .. } \<Rightarrow> foo,
+    _ \<Rightarrow> \<llangle>0 :: 32 word\<rrangle>
+  };
+  assert!(res == \<llangle>12 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
 subsubsection\<open>Struct Expressions\<close>
 
 term\<open>\<lbrakk>
@@ -1272,6 +1288,16 @@ value[simp]\<open>\<lbrakk>
   assert!(tup.3 == 3);
   assert!(tup.4 == 4);
   assert!(tup.5 == 5);
+\<rbrakk>\<close>
+
+value[simp]\<open>\<lbrakk>
+  let tup = (\<llangle>0 :: 32 word\<rrangle>, \<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>,
+             \<llangle>4 :: 32 word\<rrangle>, \<llangle>5 :: 32 word\<rrangle>, \<llangle>6 :: 32 word\<rrangle>, \<llangle>7 :: 32 word\<rrangle>,
+             \<llangle>8 :: 32 word\<rrangle>, \<llangle>9 :: 32 word\<rrangle>, \<llangle>10 :: 32 word\<rrangle>, \<llangle>11 :: 32 word\<rrangle>,
+             \<llangle>12 :: 32 word\<rrangle>, \<llangle>13 :: 32 word\<rrangle>, \<llangle>14 :: 32 word\<rrangle>, \<llangle>15 :: 32 word\<rrangle>);
+  assert!(tup.6 == \<llangle>6 :: 32 word\<rrangle>);
+  assert!(tup.10 == \<llangle>10 :: 32 word\<rrangle>);
+  assert!(tup.15 == \<llangle>15 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
 
 value[simp]\<open>\<lbrakk>
@@ -1631,6 +1657,12 @@ term\<open>\<lbrakk> assert!(b); a_value as u16\<rbrakk>\<close>
 term\<open>\<lbrakk> assert!(a_value as usize == a_value as usize); a_value as u16\<rbrakk>\<close>
 term \<open>\<lbrakk> assert_eq!(x, y) \<rbrakk>\<close>
 term \<open>\<lbrakk> assert_ne!(x, y) \<rbrakk>\<close>
+term \<open>\<lbrakk> assert!(b, "ignored assertion message") \<rbrakk>\<close>
+term \<open>\<lbrakk> debug_assert!(b, "ignored debug assertion message", x) \<rbrakk>\<close>
+term \<open>\<lbrakk> assert_eq!(x, y, "ignored assert_eq message", x) \<rbrakk>\<close>
+term \<open>\<lbrakk> assert_ne!(x, y, "ignored assert_ne message", y) \<rbrakk>\<close>
+term \<open>\<lbrakk> debug_assert_eq!(x, y, "ignored debug_assert_eq message") \<rbrakk>\<close>
+term \<open>\<lbrakk> debug_assert_ne!(x, y, "ignored debug_assert_ne message") \<rbrakk>\<close>
 end
 
 subsubsection\<open>Error Macros\<close>
@@ -1645,6 +1677,14 @@ term \<open>\<lbrakk> unimplemented!(nm) \<rbrakk>\<close>
 term \<open>\<lbrakk> todo!("oh no!") \<rbrakk>\<close>
 term \<open>\<lbrakk> fatal!("yikes!") \<rbrakk>\<close>
 term \<open>\<lbrakk> fatal!( \<llangle>''yikes!''\<rrangle> ) \<rbrakk>\<close>
+term \<open>\<lbrakk> panic!() \<rbrakk>\<close>
+term \<open>\<lbrakk> unimplemented!() \<rbrakk>\<close>
+term \<open>\<lbrakk> todo!() \<rbrakk>\<close>
+term \<open>\<lbrakk> fatal!() \<rbrakk>\<close>
+term \<open>\<lbrakk> panic!("first", msg) \<rbrakk>\<close>
+term \<open>\<lbrakk> unimplemented!("first", msg) \<rbrakk>\<close>
+term \<open>\<lbrakk> todo!("first", msg) \<rbrakk>\<close>
+term \<open>\<lbrakk> fatal!("first", msg) \<rbrakk>\<close>
 end
 
 subsubsection\<open>Logging\<close>
@@ -1671,6 +1711,8 @@ subsubsection\<open>Array and Slice Expression Literals\<close>
 
 term \<open>\<lbrakk> [\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>] \<rbrakk>\<close>
 term \<open>\<lbrakk> &[\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>] \<rbrakk>\<close>
+term \<open>\<lbrakk> & mut [\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>] \<rbrakk>\<close>
+term \<open>\<lbrakk> & mut [] \<rbrakk>\<close>
 term \<open>\<lbrakk> [\<llangle>1 :: 32 word\<rrangle> + \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>] \<rbrakk>\<close>
 
 value[simp]\<open>\<lbrakk>

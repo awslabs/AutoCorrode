@@ -480,6 +480,26 @@ translations
     \<rightleftharpoons> "CONST tuple_index_4 (_shallow arg)"
   "_shallow (_urust_tuple_index_5 arg)"
     \<rightleftharpoons> "CONST tuple_index_5 (_shallow arg)"
+  "_shallow (_urust_tuple_index_6 arg)"
+    \<rightleftharpoons> "CONST tuple_index_6 (_shallow arg)"
+  "_shallow (_urust_tuple_index_7 arg)"
+    \<rightleftharpoons> "CONST tuple_index_7 (_shallow arg)"
+  "_shallow (_urust_tuple_index_8 arg)"
+    \<rightleftharpoons> "CONST tuple_index_8 (_shallow arg)"
+  "_shallow (_urust_tuple_index_9 arg)"
+    \<rightleftharpoons> "CONST tuple_index_9 (_shallow arg)"
+  "_shallow (_urust_tuple_index_10 arg)"
+    \<rightleftharpoons> "CONST tuple_index_10 (_shallow arg)"
+  "_shallow (_urust_tuple_index_11 arg)"
+    \<rightleftharpoons> "CONST tuple_index_11 (_shallow arg)"
+  "_shallow (_urust_tuple_index_12 arg)"
+    \<rightleftharpoons> "CONST tuple_index_12 (_shallow arg)"
+  "_shallow (_urust_tuple_index_13 arg)"
+    \<rightleftharpoons> "CONST tuple_index_13 (_shallow arg)"
+  "_shallow (_urust_tuple_index_14 arg)"
+    \<rightleftharpoons> "CONST tuple_index_14 (_shallow arg)"
+  "_shallow (_urust_tuple_index_15 arg)"
+    \<rightleftharpoons> "CONST tuple_index_15 (_shallow arg)"
   "_shallow_let_pattern (_urust_let_pattern_tuple args)"
     \<rightleftharpoons> "_shallow_let_pattern_args args"
   "_shallow_let_pattern_args (_urust_let_pattern_tuple_base_pair fst_pat snd_pat)"
@@ -509,6 +529,10 @@ translations
   "_shallow (_urust_borrow (_urust_array_expr_empty))"
     \<rightharpoonup> "_shallow (_urust_array_expr_empty)"
   "_shallow (_urust_borrow (_urust_array_expr args))"
+    \<rightharpoonup> "_shallow (_urust_array_expr args)"
+  "_shallow (_urust_borrow_mut (_urust_array_expr_empty))"
+    \<rightharpoonup> "_shallow (_urust_array_expr_empty)"
+  "_shallow (_urust_borrow_mut (_urust_array_expr args))"
     \<rightharpoonup> "_shallow (_urust_array_expr args)"
   "_shallow (_urust_borrow exp)"
     \<rightharpoonup> "CONST bindlift1 (CONST ro_ref_from_ref) (_shallow exp)"
@@ -555,20 +579,58 @@ translations
   "_shallow_apply_params f (_urust_param_single p)"
     \<rightharpoonup> "f p"
 
-  (* Explicit translations for specific macro forms. More may be added as needed *)
+  (* Explicit translations for specific macro forms. *)
+  "_shallow (_urust_macro_no_args (URUST_CONST panic))"
+    \<rightharpoonup> "CONST panic (CONST String.implode [])"
+  "_shallow (_urust_macro_no_args (URUST_CONST unimplemented))"
+    \<rightharpoonup> "CONST unimplemented (CONST String.implode [])"
+  "_shallow (_urust_macro_no_args (URUST_CONST todo))"
+    \<rightharpoonup> "CONST unimplemented (CONST String.implode [])"
+  "_shallow (_urust_macro_no_args (URUST_CONST fatal))"
+    \<rightharpoonup> "CONST fatal (CONST String.implode [])"
+
   "_shallow (_urust_macro_with_args
       (URUST_CONST assert) (_urust_args_single exp))"
+    \<rightharpoonup> "CONST assert (_shallow exp)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST assert) (_urust_args_app exp rest))"
     \<rightharpoonup> "CONST assert (_shallow exp)"
   "_shallow (_urust_macro_with_args
       (URUST_CONST debug_assert) (_urust_args_single exp))"
     \<rightharpoonup> "CONST assert (_shallow exp)"
   "_shallow (_urust_macro_with_args
+      (URUST_CONST debug_assert) (_urust_args_app exp rest))"
+    \<rightharpoonup> "CONST assert (_shallow exp)"
+
+  "_shallow (_urust_macro_with_args
       (URUST_CONST assert_ne) (_urust_args_app expA (_urust_args_single expB)))"
+    \<rightharpoonup> "CONST assert_ne (_shallow expA) (_shallow expB)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST assert_ne) (_urust_args_app expA (_urust_args_app expB rest)))"
     \<rightharpoonup> "CONST assert_ne (_shallow expA) (_shallow expB)"
   "_shallow (_urust_macro_with_args
       (URUST_CONST assert_eq) (_urust_args_app expA (_urust_args_single expB)))"
     \<rightharpoonup> "CONST assert_eq (_shallow expA) (_shallow expB)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST assert_eq) (_urust_args_app expA (_urust_args_app expB rest)))"
+    \<rightharpoonup> "CONST assert_eq (_shallow expA) (_shallow expB)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST debug_assert_ne) (_urust_args_app expA (_urust_args_single expB)))"
+    \<rightharpoonup> "CONST assert_ne (_shallow expA) (_shallow expB)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST debug_assert_ne) (_urust_args_app expA (_urust_args_app expB rest)))"
+    \<rightharpoonup> "CONST assert_ne (_shallow expA) (_shallow expB)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST debug_assert_eq) (_urust_args_app expA (_urust_args_single expB)))"
+    \<rightharpoonup> "CONST assert_eq (_shallow expA) (_shallow expB)"
+  "_shallow (_urust_macro_with_args
+      (URUST_CONST debug_assert_eq) (_urust_args_app expA (_urust_args_app expB rest)))"
+    \<rightharpoonup> "CONST assert_eq (_shallow expA) (_shallow expB)"
 
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST panic) (_urust_args_app first rest))"
+    \<rightharpoonup> "_shallow (_urust_macro_with_args
+       (URUST_CONST panic) (_urust_args_single first))"
   "_shallow (_urust_macro_with_args
        (URUST_CONST panic) (_urust_args_single (_urust_identifier a)))"
     \<rightharpoonup> "CONST panic (_shallow_identifier_as_literal a)"
@@ -580,6 +642,10 @@ translations
     \<rightharpoonup> "CONST panic (_string_token_to_hol str)"
 
   "_shallow (_urust_macro_with_args
+       (URUST_CONST unimplemented) (_urust_args_app first rest))"
+    \<rightharpoonup> "_shallow (_urust_macro_with_args
+       (URUST_CONST unimplemented) (_urust_args_single first))"
+  "_shallow (_urust_macro_with_args
        (URUST_CONST unimplemented) (_urust_args_single (_urust_identifier a)))"
     \<rightharpoonup> "CONST unimplemented (_shallow_identifier_as_literal a)"
   "_shallow (_urust_macro_with_args
@@ -590,9 +656,23 @@ translations
     \<rightharpoonup> "CONST unimplemented (_string_token_to_hol str)"
 
   "_shallow (_urust_macro_with_args
+       (URUST_CONST todo) (_urust_args_app first rest))"
+    \<rightharpoonup> "_shallow (_urust_macro_with_args
+       (URUST_CONST todo) (_urust_args_single first))"
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST todo) (_urust_args_single (_urust_identifier a)))"
+    \<rightharpoonup> "CONST unimplemented (_shallow_identifier_as_literal a)"
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST todo) (_urust_args_single (_urust_literal x)))"
+    \<rightharpoonup> "CONST unimplemented (CONST String.implode x)"
+  "_shallow (_urust_macro_with_args
        (URUST_CONST todo) (_urust_args_single (_urust_string_token str)))"
     \<rightharpoonup> "CONST unimplemented (_string_token_to_hol str)"
 
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST fatal) (_urust_args_app first rest))"
+    \<rightharpoonup> "_shallow (_urust_macro_with_args
+       (URUST_CONST fatal) (_urust_args_single first))"
   "_shallow (_urust_macro_with_args
        (URUST_CONST fatal) (_urust_args_single (_urust_identifier a)))"
     \<rightharpoonup> "CONST fatal (_shallow_identifier_as_literal a)"
@@ -865,19 +945,43 @@ ML\<open>
       fun mk_args [p] = mk \<^syntax_const>\<open>_urust_match_pattern_args_single\<close> $ p
         | mk_args (p :: ps) = mk \<^syntax_const>\<open>_urust_match_pattern_args_app\<close> $ p $ mk_args ps
         | mk_args [] = error "struct pattern: empty field list"
+      fun mk_pattern_shorthand fld =
+        mk \<^syntax_const>\<open>_urust_match_pattern_constr_no_args\<close> $ fld
 
       fun struct_field_destruct
             (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_field\<close>, _) $ fld $ p) =
-              (canonical_name (dest_ident_name ctxt fld), p)
+              (SOME (canonical_name (dest_ident_name ctxt fld), p), false)
+        | struct_field_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_field_short\<close>, _) $ fld) =
+              (SOME (canonical_name (dest_ident_name ctxt fld), mk_pattern_shorthand fld), false)
+        | struct_field_destruct
+            (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_rest\<close>, _)) =
+              (NONE, true)
         | struct_field_destruct t =
             error ("struct pattern: invalid field syntax: " ^ Syntax.string_of_term ctxt t)
 
       fun struct_fields_destruct
             (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_fields_single\<close>, _) $ fld) =
-              [struct_field_destruct fld]
+              (case struct_field_destruct fld of
+                (SOME e, has_rest) => ([e], has_rest)
+              | (NONE, has_rest) => ([], has_rest))
         | struct_fields_destruct
             (Const (\<^syntax_const>\<open>_urust_match_pattern_struct_fields_app\<close>, _) $ fld $ rest) =
-              struct_field_destruct fld :: struct_fields_destruct rest
+              let
+                val (entry_opt, has_rest0) = struct_field_destruct fld
+                val (rest_entries, has_rest1) = struct_fields_destruct rest
+                val _ =
+                  if has_rest0 andalso has_rest1 then
+                    error "struct pattern: multiple `..` rest entries"
+                  else
+                    ()
+                val entries =
+                  (case entry_opt of
+                    SOME e => e :: rest_entries
+                  | NONE => rest_entries)
+              in
+                (entries, has_rest0 orelse has_rest1)
+              end
         | struct_fields_destruct t =
             error ("struct pattern: invalid field list syntax: " ^ Syntax.string_of_term ctxt t)
 
@@ -889,7 +993,7 @@ ML\<open>
               SOME n => canonical_name n
             | NONE => dest_ident_name ctxt id)
           val selector_names = map (canonical_name o dest_ident_name ctxt) sels
-          val field_entries = struct_fields_destruct fields
+          val (field_entries, is_open) = struct_fields_destruct fields
           val field_names = map fst field_entries
           fun is_optional_selector s = (s = "more")
           val duplicate_fields = Library.duplicates (op =) field_names
@@ -900,8 +1004,11 @@ ML\<open>
           val extra_fields =
             filter (fn f => not (member (op =) selector_names f)) field_names
           val missing_fields =
-            filter (fn s =>
-              not (member (op =) field_names s) andalso not (is_optional_selector s)) selector_names
+            if is_open then
+              []
+            else
+              filter (fn s =>
+                not (member (op =) field_names s) andalso not (is_optional_selector s)) selector_names
           val _ =
             if null extra_fields then ()
             else error ("struct pattern for " ^ quote ctor_name ^ " has unknown field(s): " ^
@@ -915,7 +1022,8 @@ ML\<open>
               (case AList.lookup (op =) field_entries s of
                 SOME p => p
               | NONE =>
-                  if is_optional_selector s then Syntax.const \<^syntax_const>\<open>_urust_match_pattern_other\<close>
+                  if is_optional_selector s orelse is_open then
+                    Syntax.const \<^syntax_const>\<open>_urust_match_pattern_other\<close>
                   else error ("internal error: struct field lookup failed for " ^ quote s))) selector_names
         in
           mk \<^syntax_const>\<open>_urust_match_pattern_constr_with_args\<close> $ ctor $ mk_args ordered_pats
