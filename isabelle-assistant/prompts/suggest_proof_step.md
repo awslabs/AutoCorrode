@@ -40,13 +40,16 @@ Goal: `⊢ P ∧ Q ⟹ Q ∧ P` → `by blast`
 Goal: `⊢ map f (map g xs) = map (f ∘ g) xs` → `by (induction xs) simp_all`
 Goal: `⊢ ∃x. x + 1 = n + 1` → `by (rule exI[where x=n]) simp`
 
-Provide AT MOST 5 suggestions (3-5 is ideal) ranked by likelihood of success. Each suggestion MUST be on its own line in this EXACT format (no extra text, no markdown, no numbering):
+Provide AT MOST 5 suggestions (3-5 is ideal) ranked by likelihood of success. You MUST respond with exactly a single JSON object containing a "suggestions" array:
 
-SUGGESTION: <method>
+```json
+{
+  "suggestions": [
+    "by simp",
+    "by auto",
+    "by (induction x) simp_all"
+  ]
+}
+```
 
-Example output:
-SUGGESTION: by simp
-SUGGESTION: by auto
-SUGGESTION: by (induction x) simp_all
-
-CRITICAL: Do NOT wrap suggestions in markdown code fences (```). Do NOT add numbering (1., 2., etc.). Do NOT add explanatory text. Each line must start with "SUGGESTION: " followed immediately by the proof method.
+CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.

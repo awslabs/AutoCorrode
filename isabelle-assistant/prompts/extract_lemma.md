@@ -23,17 +23,13 @@ Extract the selected proof steps into a separate lemma.
 ```
 {{/goal_state}}
 
-Create a self-contained lemma capturing what the selected steps prove. Update the original proof to use it.
+You MUST respond with exactly a single JSON object containing two fields, ensuring newlines and quotes are properly escaped:
 
-Output exactly two labeled blocks:
-
-### EXTRACTED_LEMMA
-```isabelle
-lemma name: "statement"
-  <proof>
+```json
+{
+  "extracted_lemma": "lemma name: \"statement\"\n  <proof>",
+  "updated_proof": "<original lemma updated to use extracted lemma>"
+}
 ```
 
-### UPDATED_PROOF
-```isabelle
-<original lemma updated to use extracted lemma>
-```
+CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.

@@ -485,47 +485,27 @@ object SuggestAction {
   }
 
   def parseLLMSuggestions(response: String): List[String] = {
-    // Primary format: SUGGESTION: <method>
-    val suggestionPattern = """SUGGESTION:\s*(.+)""".r
-    val primary = response.linesIterator
-      .flatMap(line =>
-        suggestionPattern.findFirstMatchIn(line).map(_.group(1).trim)
-      )
+    val jsonOpt = ResponseParser.extractJsonObjectString(response)
+    val suggestions = jsonOpt
+      .flatMap { json =>
+        val obj = ResponseParser.parseToolArgsJsonObject(json)
+        obj.get("suggestions") match {
+          case Some(ResponseParser.JsonValue(arrayJson)) =>
+            Some(ResponseParser.parseStringList(arrayJson))
+          case _ => None
+        }
+      }
+      .getOrElse(Nil)
+
+    suggestions
+      .map(_.trim)
       .filter(_.nonEmpty)
-      .toList
-
-    // Fallback: numbered list items like "1. by simp" or "- by auto"
-    val fallback =
-      if (primary.nonEmpty) Nil
-      else {
-        val numberedPattern = """^\s*(?:\d+[.)]\s*|[-*]\s*)(.+)""".r
-        response.linesIterator
-          .flatMap(line =>
-            numberedPattern.findFirstMatchIn(line).map(_.group(1).trim)
-          )
-          .filter(s =>
-            CommandMatcher
-              .findMatchingKeyword(s, IsabelleKeywords.proofMethods)
-              .isDefined
-          )
-          .toList
-      }
-
-    // Fallback: extract from markdown code blocks
-    val fromBlocks =
-      if (primary.nonEmpty || fallback.nonEmpty) Nil
-      else {
-        SendbackHelper
-          .extractCodeBlocks(response)
-          .flatMap(_.linesIterator.map(_.trim).filter(_.nonEmpty))
-          .filter(s =>
-            CommandMatcher
-              .findMatchingKeyword(s, IsabelleKeywords.proofMethods)
-              .isDefined
-          )
-      }
-
-    (primary ++ fallback ++ fromBlocks).distinct
+      .filter(s =>
+        CommandMatcher
+          .findMatchingKeyword(s, IsabelleKeywords.proofMethods)
+          .isDefined
+      )
+      .distinct
       .take(AssistantOptions.getMaxVerifyCandidates)
   }
 

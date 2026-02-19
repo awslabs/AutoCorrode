@@ -21,4 +21,12 @@ Common issues to check:
 - Using `have` where `show` is needed (or vice versa)
 - Proof methods that work in apply-style but need adjustment in Isar
 
-Fix the proof. Wrap the output in ```isabelle code fences.
+Fix the proof. You MUST respond with exactly a single JSON object containing the refactored code, ensuring newlines and quotes are properly escaped:
+
+```json
+{
+  "code": "lemma foo:\nproof\n  ...\nqed"
+}
+```
+
+CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.

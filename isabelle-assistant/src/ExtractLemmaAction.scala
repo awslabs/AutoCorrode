@@ -124,22 +124,17 @@ object ExtractLemmaAction {
   private def parseExtractionResponse(
       response: String
   ): Option[ExtractionResult] = {
-    // Flexible parsing: allow optional whitespace, different heading levels, and variations
-    val extractedPattern =
-      """(?i)#+ *EXTRACTED[_ ]LEMMA\s*```(?:isabelle)?\s*\n([\s\S]*?)```""".r
-    val updatedPattern =
-      """(?i)#+ *UPDATED[_ ]PROOF\s*```(?:isabelle)?\s*\n([\s\S]*?)```""".r
-
-    for {
-      em <- extractedPattern.findFirstMatchIn(response)
-      um <- updatedPattern.findFirstMatchIn(response)
-    } yield {
-      val extracted = em.group(1).trim
-      val name = """(?:lemma|theorem)\s+(\w+)""".r
-        .findFirstMatchIn(extracted)
-        .map(_.group(1))
-        .getOrElse("extracted")
-      ExtractionResult(extracted, um.group(1).trim, name)
+    ResponseParser.extractJsonObjectString(response).flatMap { json =>
+      for {
+        lemma <- ResponseParser.parseStringField(json, "extracted_lemma")
+        proof <- ResponseParser.parseStringField(json, "updated_proof")
+      } yield {
+        val name = """(?:lemma|theorem)\s+(\w+)""".r
+          .findFirstMatchIn(lemma)
+          .map(_.group(1))
+          .getOrElse("extracted")
+        ExtractionResult(lemma.trim, proof.trim, name)
+      }
     }
   }
 

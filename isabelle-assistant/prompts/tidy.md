@@ -54,4 +54,12 @@ lemma
 
 Do NOT change proof structure, methods, or convert apply-style to Isar.
 
-Output ONLY the tidied Isabelle code, wrapped in ```isabelle code fences.
+You MUST respond with exactly a single JSON object containing the tidied code, ensuring newlines and quotes are properly escaped:
+
+```json
+{
+  "code": "lemma foo: ‹P ⟹ Q›\n..."
+}
+```
+
+CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.

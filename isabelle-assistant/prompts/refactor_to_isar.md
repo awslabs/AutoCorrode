@@ -66,6 +66,12 @@ next
 qed
 ```
 
-Preserve the mathematical content exactly. Each `apply` step should become a named intermediate fact where possible. Output ONLY the refactored Isabelle code from the lemma statement through `qed`.
+Preserve the mathematical content exactly. Each `apply` step should become a named intermediate fact where possible. You MUST respond with exactly a single JSON object containing the refactored code, ensuring newlines and quotes are properly escaped:
 
-Wrap the output in ```isabelle code fences.
+```json
+{
+  "code": "lemma foo:\nproof\n  ...\nqed"
+}
+```
+
+CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.

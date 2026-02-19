@@ -6,20 +6,29 @@ package isabelle.assistant
 import isabelle._
 import org.gjt.sp.jedit.View
 
-/** Cleans up Isabelle code via LLM (cartouches, formatting) with optional I/Q verification and retry. */
+/** Cleans up Isabelle code via LLM (cartouches, formatting) with optional I/Q
+  * verification and retry.
+  */
 object TidyAction {
   def tidy(view: View): Unit = {
     val buffer = view.getBuffer
     val textArea = view.getTextArea
     val selection = textArea.getSelectedText
 
-    val code = if (selection != null && selection.trim.nonEmpty) selection
-    else CommandExtractor.getCommandAtOffset(buffer, textArea.getCaretPosition).getOrElse("")
+    val code =
+      if (selection != null && selection.trim.nonEmpty) selection
+      else
+        CommandExtractor
+          .getCommandAtOffset(buffer, textArea.getCaretPosition)
+          .getOrElse("")
 
     if (code.isEmpty) {
-      ChatAction.addResponse("No code to tidy. Select text or place cursor on a command.")
+      ChatAction.addResponse(
+        "No code to tidy. Select text or place cursor on a command."
+      )
     } else {
-      val commandOpt = IQIntegration.getCommandAtOffset(buffer, textArea.getCaretPosition)
+      val commandOpt =
+        IQIntegration.getCommandAtOffset(buffer, textArea.getCaretPosition)
       val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
 
       AssistantDockable.setBadge(VerificationBadge.Verifying)
@@ -33,12 +42,24 @@ object TidyAction {
             showResult(view, response, VerificationBadge.Unverified)
           } else {
             GUI_Thread.later {
-              VerifyWithRetry.verify(view, commandOpt.get,
-                extractCode(response), response, 1,
-                retryPrompt = (failed, error) => PromptLoader.load("tidy_retry.md",
-                  Map("code" -> code, "failed_attempt" -> failed, "error" -> error)),
+              VerifyWithRetry.verify(
+                view,
+                commandOpt.get,
+                extractCode(response),
+                response,
+                1,
+                retryPrompt = (failed, error) =>
+                  PromptLoader.load(
+                    "tidy_retry.md",
+                    Map(
+                      "code" -> code,
+                      "failed_attempt" -> failed,
+                      "error" -> error
+                    )
+                  ),
                 extractCode = extractCode,
-                showResult = (resp, badge) => showResult(view, resp, badge))
+                showResult = (resp, badge) => showResult(view, resp, badge)
+              )
             }
           }
         } catch {
@@ -52,16 +73,26 @@ object TidyAction {
     }
   }
 
-  private def showResult(view: View, response: String, badge: VerificationBadge.BadgeType): Unit = {
+  private def showResult(
+      view: View,
+      response: String,
+      badge: VerificationBadge.BadgeType
+  ): Unit = {
     val code = extractCode(response)
     AssistantDockable.setBadge(badge)
-    AssistantDockable.respondInChat("Tidied code:", 
-      Some((code, InsertHelper.createInsertAction(view, code))))
+    AssistantDockable.respondInChat(
+      "Tidied code:",
+      Some((code, InsertHelper.createInsertAction(view, code)))
+    )
     AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
   }
 
   private def extractCode(response: String): String = {
-    val blocks = SendbackHelper.extractCodeBlocks(response)
-    if (blocks.nonEmpty) blocks.mkString("\n") else response
+    ResponseParser
+      .extractJsonObjectString(response)
+      .flatMap { json =>
+        ResponseParser.parseStringField(json, "code").map(_.trim)
+      }
+      .getOrElse(response)
   }
 }
