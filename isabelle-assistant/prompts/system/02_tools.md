@@ -41,7 +41,7 @@ When using Anthropic Claude models, you have access to tools that let you read t
 - **trace_simplifier**: Trace simplifier operations to understand rewriting
 
 ## Theory Editing & Creation
-- **edit_theory**: Insert, replace, or delete text in theory files. Use `read_theory` first to see what you're editing. For multi-line text, include literal `\n` newline characters in your text parameter.
+- **edit_theory**: Insert, replace, or delete text in theory files. Use `read_theory` first to see what you're editing. For multi-line text, use actual newline characters in your JSON strings (the standard `\n` escape sequence). The tool automatically handles newline preservation - you don't need to add extra newlines. After every edit, the tool returns the surrounding context to help you verify the change.
 - **create_theory**: Create new theory files with proper header and imports
 - **open_theory**: Open existing theory files that aren't currently open
 
@@ -64,5 +64,8 @@ When using Anthropic Claude models, you have access to tools that let you read t
 - Use `execute_step` to explore what happens when you apply a proof method — don't just guess, actually try it and inspect the result
 - Always use `read_theory` before `edit_theory` to understand what you're changing
 - When checking for complete error-freedom, use `set_cursor_position` to move to end of file first, then call `get_errors`
+- The `edit_theory` tool returns context after each edit showing the surrounding lines - use this to verify your change worked correctly before proceeding
+- If you're making multiple edits to the same file, be aware that line numbers shift after inserts/deletes - read the context returned by each edit to get the new line numbers
+- For `get_errors` and `get_warnings`, you can use `scope='cursor'` to check errors at the current position, or `scope='all'` (default) to check the entire buffer
 
 Note: These tools are only available with Anthropic models. For other model providers, rely on context in user's message.

@@ -437,6 +437,19 @@ object AssistantTools {
         g.writeObjectFieldStart(p.name)
         g.writeStringField("type", p.typ)
         g.writeStringField("description", p.description)
+        // Add enum constraints for specific parameters
+        if (tool.name == "edit_theory" && p.name == "operation") {
+          g.writeArrayFieldStart("enum")
+          g.writeString("insert")
+          g.writeString("replace")
+          g.writeString("delete")
+          g.writeEndArray()
+        } else if ((tool.name == "get_errors" || tool.name == "get_warnings") && p.name == "scope") {
+          g.writeArrayFieldStart("enum")
+          g.writeString("all")
+          g.writeString("cursor")
+          g.writeEndArray()
+        }
         g.writeEndObject()
       }
       g.writeEndObject() // properties
@@ -616,11 +629,19 @@ object AssistantTools {
           case Some(buffer) =>
             val content = buffer.getText(0, buffer.getLength)
             val allLines = content.split("\n")
-            val start = math.max(0, intArg(args, "start_line", 1) - 1)
-            val end = math.min(
-              allLines.length,
-              intArg(args, "end_line", allLines.length)
-            )
+            val startLine = intArg(args, "start_line", 1)
+            val endLine = intArg(args, "end_line", allLines.length)
+            
+            // Validate line numbers
+            if (startLine <= 0) 
+              return "Error: start_line must be a positive integer"
+            if (endLine < startLine)
+              return s"Error: end_line ($endLine) must be >= start_line ($startLine)"
+            if (startLine > allLines.length)
+              return s"Error: start_line $startLine out of range (theory has ${allLines.length} lines)"
+            
+            val start = startLine - 1
+            val end = math.min(allLines.length, endLine)
             val lines = allLines.slice(start, end)
             val header =
               s"Theory $theory (lines ${start + 1}-$end of ${allLines.length}):\n"
@@ -1456,8 +1477,13 @@ object AssistantTools {
         } catch { case ex: Exception => result = s"Error: ${ex.getMessage}" }
         latch.countDown()
       }
-      latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
-      result
+      if (!latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)) {
+        "Error: Operation timed out (GUI thread busy)"
+      } else if (result.isEmpty) {
+        "Error: Operation completed but returned no result"
+      } else {
+        result
+      }
     }
   }
 
@@ -1466,8 +1492,8 @@ object AssistantTools {
       view: View
   ): String = {
     val operation = safeStringArg(args, "operation", 50).toLowerCase
-    val text =
-      safeStringArg(args, "text", MAX_STRING_ARG_LENGTH).replace("\\n", "\n")
+    // Don't replace \\n - Jackson already handles JSON string escaping
+    val text = safeStringArg(args, "text", MAX_STRING_ARG_LENGTH)
     val startLine = intArg(args, "start_line", -1)
     val endLine = intArg(args, "end_line", startLine)
 
@@ -1475,6 +1501,10 @@ object AssistantTools {
       case Left(err)     => err
       case Right(theory) =>
         if (startLine <= 0) "Error: start_line must be a positive integer"
+        else if (operation == "replace" && endLine < startLine)
+          s"Error: end_line ($endLine) must be >= start_line ($startLine)"
+        else if (operation == "delete" && endLine < startLine)
+          s"Error: end_line ($endLine) must be >= start_line ($startLine)"
         else if (!Set("insert", "replace", "delete").contains(operation))
           s"Error: operation must be 'insert', 'replace', or 'delete', got '$operation'"
         else if (
@@ -1504,23 +1534,42 @@ object AssistantTools {
                       operation match {
                         case "insert" =>
                           val offset = buffer.getLineStartOffset(startLine - 1)
-                          buffer.insert(offset, text + "\n")
-                          result =
-                            s"Inserted ${text.linesIterator.size} lines before line $startLine"
+                          // Add newline only if text doesn't already end with one
+                          val finalText = if (text.endsWith("\n")) text else text + "\n"
+                          buffer.insert(offset, finalText)
+                          val numLines = text.count(_ == '\n') + (if (text.endsWith("\n")) 0 else 1)
+                          result = s"Inserted $numLines line(s) before line $startLine"
                         case "replace" =>
                           val startOffset =
                             buffer.getLineStartOffset(startLine - 1)
-                          val endOffset = buffer.getLineEndOffset(endLine - 1)
+                          // Use getLineStartOffset for end to exclude the trailing newline of endLine
+                          val endOffset = 
+                            if (endLine < lineCount) buffer.getLineStartOffset(endLine)
+                            else buffer.getLength
                           buffer.remove(startOffset, endOffset - startOffset)
-                          buffer.insert(startOffset, text)
+                          // Add newline only if text doesn't already end with one
+                          val finalText = if (text.endsWith("\n")) text else text + "\n"
+                          buffer.insert(startOffset, finalText)
                           result = s"Replaced lines $startLine-$endLine"
                         case "delete" =>
                           val startOffset =
                             buffer.getLineStartOffset(startLine - 1)
-                          val endOffset = buffer.getLineEndOffset(endLine - 1)
+                          // Use getLineStartOffset for end to preserve newline structure
+                          val endOffset = 
+                            if (endLine < lineCount) buffer.getLineStartOffset(endLine)
+                            else buffer.getLength
                           buffer.remove(startOffset, endOffset - startOffset)
                           result = s"Deleted lines $startLine-$endLine"
                       }
+                      // Show context after edit: 3 lines before and after
+                      val newLineCount = buffer.getLineCount
+                      val contextStart = math.max(1, startLine - 3)
+                      val contextEnd = math.min(newLineCount, startLine + 5)
+                      val contextLines = (contextStart to contextEnd).map { i =>
+                        val lineText = buffer.getLineText(i - 1)
+                        s"$i: $lineText"
+                      }.mkString("\n")
+                      result += s"\n\nContext (lines $contextStart-$contextEnd of $newLineCount):\n$contextLines"
                     } finally {
                       buffer.endCompoundEdit()
                     }
@@ -1530,11 +1579,14 @@ object AssistantTools {
                 }
                 latch.countDown()
               }
-              latch.await(
+              if (!latch.await(
                 AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
                 TimeUnit.SECONDS
-              )
-              result
+              )) {
+                "Error: Operation timed out (GUI thread busy)"
+              } else {
+                result
+              }
           }
         }
     }
@@ -1634,8 +1686,9 @@ object AssistantTools {
                     if (defKeywords.contains(keyword)) {
                       val lineNum = buffer.getLineOfOffset(cmdOffset) + 1
                       val source = cmd.source.take(100).trim
+                      // Expanded regex to match all entityKeywords
                       val name =
-                        """(?:lemma|theorem|corollary|proposition|definition|abbreviation|fun|function|primrec|datatype|type_synonym|inductive|coinductive)\s+(\w+)""".r
+                        """(?:lemma|theorem|corollary|proposition|schematic_goal|definition|abbreviation|lift_definition|fun|function|primrec|datatype|codatatype|type_synonym|record|typedef|inductive|coinductive|nominal_inductive|locale|class|instantiation|interpretation)\s+([A-Za-z0-9_']+)""".r
                           .findFirstMatchIn(source)
                           .map(_.group(1))
                           .getOrElse("(unnamed)")
@@ -1672,6 +1725,7 @@ object AssistantTools {
         val client = java.net.http.HttpClient
           .newBuilder()
           .connectTimeout(java.time.Duration.ofSeconds(10))
+          .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
           .build()
         val request = java.net.http.HttpRequest
           .newBuilder()
@@ -1715,8 +1769,8 @@ object AssistantTools {
   ): String = {
     val name = safeStringArg(args, "name", 200)
     val imports = safeStringArg(args, "imports", 500)
-    val content =
-      safeStringArg(args, "content", MAX_STRING_ARG_LENGTH).replace("\\n", "\n")
+    // Don't replace \\n - Jackson already handles JSON string escaping
+    val content = safeStringArg(args, "content", MAX_STRING_ARG_LENGTH)
 
     if (name.isEmpty) "Error: name required"
     else if (THEORY_NAME_PATTERN.findFirstIn(name).isEmpty)
@@ -1734,8 +1788,9 @@ object AssistantTools {
             result = s"Error: file $name.thy already exists"
           } else {
             val effectiveImports = if (imports.isEmpty) "Main" else imports
+            // Proper theory header format with begin on its own line
             val theoryContent =
-              s"theory $name imports $effectiveImports begin\n\n${
+              s"theory $name\n  imports $effectiveImports\nbegin\n\n${
                   if (content.nonEmpty) content + "\n\n" else ""
                 }end\n"
 
@@ -1749,11 +1804,14 @@ object AssistantTools {
         } catch { case ex: Exception => result = s"Error: ${ex.getMessage}" }
         latch.countDown()
       }
-      latch.await(
+      if (!latch.await(
         AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
         TimeUnit.SECONDS
-      )
-      result
+      )) {
+        "Error: Operation timed out (GUI thread busy)"
+      } else {
+        result
+      }
     }
   }
 
@@ -2180,7 +2238,12 @@ object AssistantTools {
     try {
       Document_Model.get_model(buffer).flatMap { model =>
         val snapshot = Document_Model.snapshot(model)
-        val range = Text.Range(offset, offset + 1)
+        // Expand search to entire command span like extractErrorAtOffset does
+        val command = IQIntegration.getCommandAtOffset(buffer, offset)
+        val range = command match {
+          case Some(cmd) => cmd.range
+          case None => Text.Range(offset, offset + 1)  // Fallback to single char
+        }
         val warnings = snapshot.cumulate(
           range,
           List.empty[String],

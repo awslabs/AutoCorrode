@@ -352,11 +352,11 @@ object BedrockClient {
     msgBuf ++= initialMessages
 
     var iteration = 0
-    var finalText = ""
+    val textParts = scala.collection.mutable.ListBuffer[String]()
     var continue = true
-    // Stuck-loop detection: track last 3 tool calls to detect repetitive behavior
-    val recentCalls = scala.collection.mutable.Queue[(String, ResponseParser.ToolArgs)]()
-    val LOOP_DETECTION_WINDOW = 3
+    // Improved stuck-loop detection: track last 6 tool calls (window of 6)
+    val recentCalls = scala.collection.mutable.Queue[String]()
+    val LOOP_DETECTION_WINDOW = 6
 
     while (continue) {
       iteration += 1
@@ -368,8 +368,29 @@ object BedrockClient {
         case None => false
       }
       if (hitLimit) {
+        // Send a message to the model informing it we've hit the limit
+        Output.warning(s"[Assistant] Hit max tool iteration limit ($iteration iterations)")
+        msgBuf += (("user", "You have reached the maximum tool iteration limit. Please provide a summary of what you've learned and any conclusions you can make without additional tool calls."))
+        
+        // Make one final call to get the model's summary
+        val payload = PayloadBuilder.buildAnthropicToolPayload(systemPrompt, msgBuf.toList, temperature, maxTokens)
+        val request = InvokeModelRequest.builder()
+          .modelId(modelId)
+          .body(SdkBytes.fromUtf8String(payload))
+          .build()
+        
+        enforceRateLimit()
+        try {
+          val response = getClient.invokeModel(request)
+          val responseJson = response.body().asUtf8String()
+          val (blocks, _) = ResponseParser.parseAnthropicContentBlocks(responseJson)
+          val summaryText = blocks.collect { case ResponseParser.TextBlock(t) => t }
+          if (summaryText.nonEmpty) textParts ++= summaryText
+        } catch {
+          case ex: Exception => 
+            Output.warning(s"[Assistant] Final summary call failed: ${ex.getMessage}")
+        }
         continue = false
-        // We've hit the limit, exit with whatever text we have
       } else {
         val payload = PayloadBuilder.buildAnthropicToolPayload(systemPrompt, msgBuf.toList, temperature, maxTokens)
         val request = InvokeModelRequest.builder()
@@ -383,12 +404,14 @@ object BedrockClient {
         val (blocks, stopReason) = ResponseParser.parseAnthropicContentBlocks(responseJson)
 
         // Collect text from this response
-        val textParts = blocks.collect { case ResponseParser.TextBlock(t) => t }
+        val currentTextParts = blocks.collect { case ResponseParser.TextBlock(t) => t }
         val toolUses = blocks.collect { case t: ResponseParser.ToolUseBlock => t }
+
+        // Append (not replace) text parts from this iteration
+        if (currentTextParts.nonEmpty) textParts ++= currentTextParts
 
         if (toolUses.isEmpty) {
           // No tool calls — we're done
-          finalText = textParts.mkString("\n")
           continue = false
         } else {
           // Append assistant message with the raw response content
@@ -398,13 +421,24 @@ object BedrockClient {
           val view = _currentView.getOrElse(throw new RuntimeException("No view available for tool execution"))
           val iterStr = maxIter.map(_.toString).getOrElse("∞")
           val resultBlocks = toolUses.map { tu =>
-            // Stuck-loop detection: check if we're repeating the same tool call
-            recentCalls.enqueue((tu.name, tu.input))
+            // Enhanced stuck-loop detection: track tool name + key params (not full args)
+            val signature = s"${tu.name}:${tu.input.get("theory").map(ResponseParser.toolValueToString).getOrElse("")}:${tu.input.get("operation").map(ResponseParser.toolValueToString).getOrElse("")}"
+            recentCalls.enqueue(signature)
             if (recentCalls.length > LOOP_DETECTION_WINDOW) recentCalls.dequeue()
-            if (recentCalls.length == LOOP_DETECTION_WINDOW && recentCalls.forall(_ == recentCalls.head)) {
-              val (name, args) = recentCalls.head
-              Output.warning(s"[Assistant] Detected stuck loop: $name called ${LOOP_DETECTION_WINDOW} times with same arguments")
-              throw new RuntimeException(s"Stuck in loop: tool '$name' called repeatedly with no progress. Try a different approach.")
+            
+            // Check for exact repetition (3+ identical calls in window)
+            if (recentCalls.length >= 3 && recentCalls.takeRight(3).distinct.size == 1) {
+              Output.warning(s"[Assistant] Detected stuck loop: same tool signature '${recentCalls.last}' called 3+ times")
+              throw new RuntimeException(s"Stuck in loop: tool '${tu.name}' called repeatedly with no progress. Try a different approach.")
+            }
+            
+            // Check for alternating pattern (A-B-A-B or A-B-C-A-B-C)
+            if (recentCalls.length >= 4) {
+              val last4 = recentCalls.takeRight(4).toList
+              if (last4(0) == last4(2) && last4(1) == last4(3)) {
+                Output.warning(s"[Assistant] Detected alternating loop: ${last4(0)} <-> ${last4(1)}")
+                throw new RuntimeException(s"Stuck in alternating loop between tools. Try a different approach.")
+              }
             }
             
             Output.writeln(s"[Assistant] Tool use ($iteration/$iterStr): ${tu.name}")
@@ -416,24 +450,28 @@ object BedrockClient {
               }
             }
             val result = AssistantTools.executeToolWithPermission(tu.name, tu.input, view)
+
+            // Display tool result in chat UI
+            GUI_Thread.later {
+              ChatAction.addTransient(s"→ Tool result: ${result.take(200)}${if (result.length > 200) "..." else ""}")
+            }
             (tu.id, result)
           }
 
           // Append user message with tool results
           msgBuf += (("user", toolResultsJson(resultBlocks)))
-
-          // Accumulate text from intermediate responses
-          if (textParts.nonEmpty) finalText = textParts.mkString("\n")
         }
       }
     }
 
+    val finalText = textParts.mkString("\n\n")
     if (finalText.isEmpty) {
       Output.warning("[Assistant] Tool-use loop completed without text response")
-      finalText = "I processed the request using tools but could not generate a text summary. Please try again or rephrase your question."
+      "I processed the request using tools but could not generate a text summary. Please try again or rephrase your question."
+    } else {
+      Output.writeln(s"[Assistant] Tool loop completed in $iteration iterations, response: ${finalText.length} chars")
+      finalText
     }
-    Output.writeln(s"[Assistant] Tool loop completed in $iteration iterations, response: ${finalText.length} chars")
-    finalText
   }
 
   /** Serialize content blocks as a JSON array string for the assistant message. */

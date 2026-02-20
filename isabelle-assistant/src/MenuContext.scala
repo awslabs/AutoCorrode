@@ -32,11 +32,20 @@ object MenuContext {
     }
   }
 
-  /** Find an open theory buffer by name (with or without .thy suffix). */
+  /** Find an open theory buffer by name (with or without .thy suffix). 
+    * Uses proper path matching to avoid matching substring theory names. */
   def findTheoryBuffer(theoryName: String): Option[JEditBuffer] = {
     val normalized = if (theoryName.endsWith(".thy")) theoryName else s"$theoryName.thy"
     val buffers = org.gjt.sp.jedit.jEdit.getBufferManager().getBuffers().asScala
-    buffers.find(b => b.getPath != null && b.getPath.endsWith(normalized))
+    buffers.find { b =>
+      if (b.getPath == null) false
+      else {
+        val path = b.getPath
+        // Match if path ends with /theoryName or exactly equals theoryName
+        path.endsWith("/" + normalized) || path.endsWith("\\" + normalized) || 
+        java.io.File(path).getName == normalized
+      }
+    }
   }
 
   case class Context(
