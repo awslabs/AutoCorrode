@@ -1,10 +1,31 @@
-<!-- Variables: proof_pattern (required), context (optional) -->
+<!-- Variables: proof_pattern (required), goal_state (optional), local_facts (optional), relevant_theorems (optional), context (optional) -->
 You are an Isabelle/HOL expert (Isabelle2025-2). Generate an Eisbach method that automates this proof pattern.
 
 ## Proof Pattern
 ```isabelle
 {{proof_pattern}}
 ```
+{{#goal_state}}
+
+## Goal State At Cursor
+```
+{{goal_state}}
+```
+{{/goal_state}}
+{{#local_facts}}
+
+## Local Facts
+```
+{{local_facts}}
+```
+{{/local_facts}}
+{{#relevant_theorems}}
+
+## Potentially Relevant Facts (MePo/find_theorems)
+```
+{{relevant_theorems}}
+```
+{{/relevant_theorems}}
 {{#context}}
 
 ## Context

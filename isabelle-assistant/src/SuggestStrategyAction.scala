@@ -21,12 +21,21 @@ object SuggestStrategyAction {
       GUI.warning_dialog(view, "Isabelle Assistant", "No goal at cursor")
     } else {
       val command = CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
+      val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
     
       ActionHelper.runAndRespond("assistant-suggest-strategy", "Analyzing goal...") {
-        val relevantLemmas = PrintContextAction.getContextString(view)
-        val defContext = ContextFetcher.getContext(view, 3000)
+        val bundle =
+          ProofContextSupport.collect(
+            view,
+            offset,
+            commandOpt,
+            goalState,
+            includeDefinitions = true
+          )
         val subs = Map("goal_state" -> goalState.get, "command" -> command) ++
-          relevantLemmas.map("relevant_lemmas" -> _) ++ defContext.map("context" -> _)
+          bundle.localFactsOpt.map("local_facts" -> _) ++
+          bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+          bundle.definitionsOpt.map("context" -> _)
         val prompt = PromptLoader.load("suggest_strategy.md", subs)
         BedrockClient.invokeInContext(prompt)
       }

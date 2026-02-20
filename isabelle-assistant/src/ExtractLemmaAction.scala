@@ -24,7 +24,10 @@ object ExtractLemmaAction {
       selectedText: String,
       fullProofBlock: String,
       lemmaStatement: String,
-      goalStateAtSelection: Option[String]
+      goalStateAtSelection: Option[String],
+      localFacts: Option[String] = None,
+      relevantTheorems: Option[String] = None,
+      definitions: Option[String] = None
   )
 
   /** Chat command handler: extract selected text as lemma. */
@@ -62,24 +65,43 @@ object ExtractLemmaAction {
 
       Isabelle_Thread.fork(name = "assistant-extract") {
         try {
+          val bundle =
+            ProofContextSupport.collect(
+              view,
+              selStart,
+              commandOpt,
+              ctx.goalStateAtSelection,
+              includeDefinitions = true
+            )
+          val enrichedCtx = ctx.copy(
+            localFacts = bundle.localFactsOpt,
+            relevantTheorems = bundle.relevantTheoremsOpt,
+            definitions = bundle.definitionsOpt
+          )
+
           val prompt = PromptLoader.load(
             "extract_lemma.md",
             Map(
-              "selected_text" -> ctx.selectedText,
-              "full_proof" -> ctx.fullProofBlock,
-              "lemma_statement" -> ctx.lemmaStatement,
-              "goal_state" -> ctx.goalStateAtSelection.getOrElse("")
+              "selected_text" -> enrichedCtx.selectedText,
+              "full_proof" -> enrichedCtx.fullProofBlock,
+              "lemma_statement" -> enrichedCtx.lemmaStatement,
+              "goal_state" -> enrichedCtx.goalStateAtSelection.getOrElse("")
             )
+              ++ enrichedCtx.localFacts.map("local_facts" -> _) ++
+              enrichedCtx.relevantTheorems.map("relevant_theorems" -> _) ++
+              enrichedCtx.definitions.map("context" -> _)
           )
 
           val response = BedrockClient.invokeInContext(prompt)
           parseExtractionResponse(response) match {
             case Some(result) if canVerify =>
               GUI_Thread.later {
-                startVerification(view, commandOpt.get, ctx, result, 1)
+                startVerification(view, commandOpt.get, enrichedCtx, result, 1)
               }
             case Some(result) =>
-              showResult(view, result, VerificationBadge.Unverified)
+              GUI_Thread.later {
+                showResult(view, result, VerificationBadge.Unverified)
+              }
             case None =>
               GUI_Thread.later {
                 ChatAction.addMessage(ChatAction.Assistant, response);
@@ -152,69 +174,84 @@ object ExtractLemmaAction {
       s"Verifying extracted lemma (attempt $attempt/$maxRetries)..."
     )
 
-    IQIntegration.verifyProofAsync(
-      view,
-      command,
-      result.extractedLemma,
-      timeout,
-      {
-        case IQIntegration.ProofSuccess(_, _) =>
-          AssistantDockable.setStatus("Verifying updated proof...")
-          IQIntegration.verifyProofAsync(
-            view,
-            command,
-            result.updatedProof,
-            timeout,
-            {
-              case IQIntegration.ProofSuccess(timeMs, _) =>
-                showResult(
-                  view,
-                  result,
-                  VerificationBadge.Verified(Some(timeMs))
-                )
-              case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
-                retryInBackground(
-                  view,
-                  command,
-                  ctx,
-                  result,
-                  s"Updated proof failed: $error",
-                  attempt,
-                  maxRetries
-                )
-              case IQIntegration.ProofFailure(error) =>
-                showResult(
-                  view,
-                  result,
-                  VerificationBadge.Failed(
-                    s"Updated proof failed: ${error.take(50)}"
-                  )
-                )
-              case _ =>
-                showResult(view, result, VerificationBadge.Unverified)
+    GUI_Thread.later {
+      IQIntegration.verifyProofAsync(
+        view,
+        command,
+        result.extractedLemma,
+        timeout,
+        {
+          case IQIntegration.ProofSuccess(_, _) =>
+            GUI_Thread.later {
+              AssistantDockable.setStatus("Verifying updated proof...")
+              IQIntegration.verifyProofAsync(
+                view,
+                command,
+                result.updatedProof,
+                timeout,
+                {
+                  case IQIntegration.ProofSuccess(timeMs, _) =>
+                    GUI_Thread.later {
+                      showResult(
+                        view,
+                        result,
+                        VerificationBadge.Verified(Some(timeMs))
+                      )
+                    }
+                  case IQIntegration.ProofFailure(error)
+                      if attempt < maxRetries =>
+                    retryInBackground(
+                      view,
+                      command,
+                      ctx,
+                      result,
+                      s"Updated proof failed: $error",
+                      attempt,
+                      maxRetries
+                    )
+                  case IQIntegration.ProofFailure(error) =>
+                    GUI_Thread.later {
+                      showResult(
+                        view,
+                        result,
+                        VerificationBadge.Failed(
+                          s"Updated proof failed: ${error.take(50)}"
+                        )
+                      )
+                    }
+                  case _ =>
+                    GUI_Thread.later {
+                      showResult(view, result, VerificationBadge.Unverified)
+                    }
+                }
+              )
             }
-          )
 
-        case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
-          retryInBackground(
-            view,
-            command,
-            ctx,
-            result,
-            s"Extracted lemma failed: $error",
-            attempt,
-            maxRetries
-          )
-        case IQIntegration.ProofFailure(error) =>
-          showResult(
-            view,
-            result,
-            VerificationBadge.Failed(s"Lemma failed: ${error.take(50)}")
-          )
-        case _ =>
-          showResult(view, result, VerificationBadge.Unverified)
-      }
-    )
+          case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
+            retryInBackground(
+              view,
+              command,
+              ctx,
+              result,
+              s"Extracted lemma failed: $error",
+              attempt,
+              maxRetries
+            )
+          case IQIntegration.ProofFailure(error) =>
+            GUI_Thread.later {
+              showResult(
+                view,
+                result,
+                VerificationBadge.Failed(s"Lemma failed: ${error.take(50)}")
+              )
+            }
+          case _ =>
+            GUI_Thread.later {
+              showResult(view, result, VerificationBadge.Unverified)
+            }
+        }
+      )
+    }
   }
 
   private def retryInBackground(
@@ -226,7 +263,9 @@ object ExtractLemmaAction {
       attempt: Int,
       maxRetries: Int
   ): Unit = {
-    AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
+    GUI_Thread.later {
+      AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
+    }
 
     Isabelle_Thread.fork(name = "assistant-extract-retry") {
       try {
@@ -234,10 +273,16 @@ object ExtractLemmaAction {
           "extract_lemma_retry.md",
           Map(
             "selected_text" -> ctx.selectedText,
+            "full_proof" -> ctx.fullProofBlock,
+            "lemma_statement" -> ctx.lemmaStatement,
+            "goal_state" -> ctx.goalStateAtSelection.getOrElse(""),
             "failed_lemma" -> failedResult.extractedLemma,
             "failed_proof" -> failedResult.updatedProof,
             "error" -> error
           )
+            ++ ctx.localFacts.map("local_facts" -> _) ++
+            ctx.relevantTheorems.map("relevant_theorems" -> _) ++
+            ctx.definitions.map("context" -> _)
         )
         val response = BedrockClient.invokeNoCache(retryPrompt)
         parseExtractionResponse(response) match {
@@ -273,6 +318,7 @@ object ExtractLemmaAction {
       badge: VerificationBadge.BadgeType
   ): Unit = {
     val code = s"${result.extractedLemma}\n\n${result.updatedProof}"
+    AssistantDockable.setBadge(badge)
     AssistantDockable.respondInChat(
       s"Extracted lemma '${result.lemmaName}':",
       Some(
@@ -284,5 +330,6 @@ object ExtractLemmaAction {
         )
       )
     )
+    AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
   }
 }

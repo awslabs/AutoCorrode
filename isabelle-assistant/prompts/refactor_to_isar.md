@@ -1,4 +1,4 @@
-<!-- Variables: proof (required), context (optional) -->
+<!-- Variables: proof (required), goal_state (optional), local_facts (optional), relevant_theorems (optional), context (optional) -->
 Convert this apply-style proof to structured Isar for Isabelle2025-2.
 
 ```isabelle
@@ -6,11 +6,32 @@ Convert this apply-style proof to structured Isar for Isabelle2025-2.
 ```
 {{#context}}
 
-## Available Context
+## Referenced Definitions
 ```
 {{context}}
 ```
 {{/context}}
+{{#goal_state}}
+
+## Goal State At Cursor
+```
+{{goal_state}}
+```
+{{/goal_state}}
+{{#local_facts}}
+
+## Local Facts
+```
+{{local_facts}}
+```
+{{/local_facts}}
+{{#relevant_theorems}}
+
+## Potentially Relevant Facts (MePo/find_theorems)
+```
+{{relevant_theorems}}
+```
+{{/relevant_theorems}}
 
 ## Isar Proof Structure Guide
 - Use `proof (method)` ... `qed` for the outer structure

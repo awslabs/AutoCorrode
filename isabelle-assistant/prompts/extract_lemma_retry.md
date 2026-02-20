@@ -1,4 +1,4 @@
-<!-- Variables: selected_text (required), failed_lemma (required), failed_proof (required), error (required) -->
+<!-- Variables: selected_text (required), full_proof (required), lemma_statement (required), goal_state (optional), failed_lemma (required), failed_proof (required), error (required), local_facts (optional), relevant_theorems (optional), context (optional) -->
 Lemma extraction failed verification:
 ```
 {{error}}
@@ -7,6 +7,44 @@ Lemma extraction failed verification:
 Selected steps to extract:
 ```isabelle
 {{selected_text}}
+```
+{{#goal_state}}
+
+Goal state at selection:
+```
+{{goal_state}}
+```
+{{/goal_state}}
+{{#local_facts}}
+
+Local facts:
+```
+{{local_facts}}
+```
+{{/local_facts}}
+{{#relevant_theorems}}
+
+Potentially relevant facts (MePo/find_theorems):
+```
+{{relevant_theorems}}
+```
+{{/relevant_theorems}}
+{{#context}}
+
+Referenced definitions:
+```isabelle
+{{context}}
+```
+{{/context}}
+
+Original enclosing lemma statement:
+```isabelle
+{{lemma_statement}}
+```
+
+Full original proof block:
+```isabelle
+{{full_proof}}
 ```
 
 Failed extraction:

@@ -26,25 +26,34 @@ object RefactorAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
     val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
+    val goalState = GoalExtractor.getGoalState(buffer, offset)
     val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
 
     AssistantDockable.setBadge(VerificationBadge.Verifying)
 
     Isabelle_Thread.fork(name = "assistant-refactor") {
       try {
-        // Fetch context information (definitions and relevant lemmas)
-        val context = if (IQAvailable.isAvailable && commandOpt.isDefined) {
-          fetchContext(view, commandOpt.get)
-        } else ""
-
+        val bundle =
+          ProofContextSupport.collect(
+            view,
+            offset,
+            commandOpt,
+            goalState,
+            includeDefinitions = true
+          )
         val subs = Map("proof" -> proofText) ++
-          (if (context.nonEmpty) Map("context" -> context) else Map.empty)
+          goalState.map("goal_state" -> _) ++
+          bundle.localFactsOpt.map("local_facts" -> _) ++
+          bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+          bundle.definitionsOpt.map("context" -> _)
 
         val prompt = PromptLoader.load("refactor_to_isar.md", subs)
         val response = BedrockClient.invokeInContext(prompt)
 
         if (!canVerify) {
-          showResult(view, response, VerificationBadge.Unverified)
+          GUI_Thread.later {
+            showResult(view, response, VerificationBadge.Unverified)
+          }
         } else {
           GUI_Thread.later {
             VerifyWithRetry.verify(
@@ -61,6 +70,10 @@ object RefactorAction {
                     "failed_attempt" -> failed,
                     "error" -> error
                   )
+                    ++ goalState.map("goal_state" -> _) ++
+                    bundle.localFactsOpt.map("local_facts" -> _) ++
+                    bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+                    bundle.definitionsOpt.map("context" -> _)
                 ),
               extractCode = extractCode,
               showResult = (resp, badge) => showResult(view, resp, badge)
@@ -82,8 +95,7 @@ object RefactorAction {
       response: String,
       badge: VerificationBadge.BadgeType
   ): Unit = {
-    val code = SendbackHelper.extractCodeBlocks(response).mkString("\n")
-    val insertable = if (code.nonEmpty) code else response
+    val insertable = extractCode(response)
     AssistantDockable.setBadge(badge)
     AssistantDockable.respondInChat(
       "Refactored to Isar:",
@@ -100,52 +112,12 @@ object RefactorAction {
   }
 
   private def extractCode(response: String): String = {
-    ResponseParser
+    val fromJson = ResponseParser
       .extractJsonObjectString(response)
       .flatMap { json =>
         ResponseParser.parseStringField(json, "code").map(_.trim)
       }
-      .getOrElse(response)
-  }
-
-  private def fetchContext(view: View, command: Command): String = {
-    import java.util.concurrent.{CountDownLatch, TimeUnit}
-
-    // Fetch context facts and relevant theorems in parallel
-    val factsLatch = new CountDownLatch(1)
-    @volatile var contextFacts = ""
-
-    Isabelle_Thread.fork(name = "refactor-context") {
-      ErrorHandler
-        .withErrorHandling(
-          "context facts retrieval",
-          Some(AssistantConstants.CONTEXT_FETCH_TIMEOUT)
-        ) {
-          GUI_Thread.later {
-            PrintContextAction.runPrintContextAsync(
-              view,
-              command,
-              AssistantConstants.CONTEXT_FETCH_TIMEOUT,
-              { result =>
-                result match {
-                  case Right(output)
-                      if output.trim.nonEmpty && !output
-                        .contains("No local facts") =>
-                    contextFacts = "Context:\n" + output.trim
-                  case _ =>
-                }
-                factsLatch.countDown()
-              }
-            )
-          }
-        }
-        .recover { case _ => factsLatch.countDown() }
-    }
-
-    factsLatch.await(
-      AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-      TimeUnit.MILLISECONDS
-    )
-    contextFacts
+    val fromFences = SendbackHelper.extractCodeBlocks(response).mkString("\n").trim
+    fromJson.orElse(Option(fromFences).filter(_.nonEmpty)).getOrElse(response)
   }
 }

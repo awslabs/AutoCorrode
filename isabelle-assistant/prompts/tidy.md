@@ -1,9 +1,37 @@
-<!-- Variables: code (required) -->
+<!-- Variables: code (required), goal_state (optional), local_facts (optional), relevant_theorems (optional), context (optional) -->
 Tidy up this Isabelle code without changing its meaning.
 
 ```isabelle
 {{code}}
 ```
+{{#goal_state}}
+
+## Goal State At Cursor
+```
+{{goal_state}}
+```
+{{/goal_state}}
+{{#local_facts}}
+
+## Local Facts
+```
+{{local_facts}}
+```
+{{/local_facts}}
+{{#relevant_theorems}}
+
+## Potentially Relevant Facts (MePo/find_theorems)
+```
+{{relevant_theorems}}
+```
+{{/relevant_theorems}}
+{{#context}}
+
+## Referenced Definitions
+```isabelle
+{{context}}
+```
+{{/context}}
 
 Apply these transformations:
 - Replace "..." quotes with ‹...› cartouches

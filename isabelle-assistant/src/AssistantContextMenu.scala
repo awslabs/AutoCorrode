@@ -74,6 +74,9 @@ class AssistantContextMenu extends DynamicContextMenuService {
 
           if (ctx.iqAvailable) {
             proofMenu.addSeparator()
+            addItem(proofMenu, "Find Theorems for Goal")(_ =>
+              FindTheoremsAction.findTheoremsForGoal(view)
+            )
             addItem(proofMenu, "Run Sledgehammer")(_ =>
               SledgehammerAction.run(view)
             )

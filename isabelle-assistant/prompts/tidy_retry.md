@@ -1,4 +1,4 @@
-<!-- Variables: code (required), failed_attempt (required), error (required) -->
+<!-- Variables: code (required), failed_attempt (required), error (required), goal_state (optional), local_facts (optional), relevant_theorems (optional), context (optional) -->
 Your tidied code failed verification:
 ```
 {{error}}
@@ -13,6 +13,34 @@ Your attempt:
 ```isabelle
 {{failed_attempt}}
 ```
+{{#goal_state}}
+
+Current goal state:
+```
+{{goal_state}}
+```
+{{/goal_state}}
+{{#local_facts}}
+
+Local facts:
+```
+{{local_facts}}
+```
+{{/local_facts}}
+{{#relevant_theorems}}
+
+Potentially relevant facts (MePo/find_theorems):
+```
+{{relevant_theorems}}
+```
+{{/relevant_theorems}}
+{{#context}}
+
+Referenced definitions:
+```isabelle
+{{context}}
+```
+{{/context}}
 
 Common issues to check:
 - Cartouche conversion changed string delimiters inside proof methods

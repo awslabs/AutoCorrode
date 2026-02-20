@@ -10,6 +10,20 @@ import javax.swing.JOptionPane
 
 /** Searches for theorems via I/Q find_theorems, with free-variable wildcard substitution. */
 object FindTheoremsAction {
+  def findTheoremsForGoal(view: View): Unit = {
+    val buffer = view.getBuffer
+    val offset = view.getTextArea.getCaretPosition
+    GoalExtractor.getGoalState(buffer, offset).flatMap(extractGoalPattern) match {
+      case Some(pattern) => findTheorems(view, Some(pattern))
+      case None =>
+        GUI.warning_dialog(
+          view,
+          "Isabelle Assistant",
+          "No goal at cursor position"
+        )
+    }
+  }
+
   def findTheorems(view: View, initialPattern: Option[String]): Unit = {
     val patternOpt = initialPattern.filter(_.trim.nonEmpty).orElse {
       Option(JOptionPane.showInputDialog(view, "Search pattern:", "Find Theorems", JOptionPane.PLAIN_MESSAGE))
@@ -76,6 +90,24 @@ object FindTheoremsAction {
       ChatAction.addMessage(ChatAction.Assistant, sb.toString)
       AssistantDockable.showConversation(ChatAction.getHistory)
     }
+  }
+
+  private[assistant] def extractGoalPattern(goalState: String): Option[String] = {
+    val lines = goalState.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+    val numbered =
+      lines.collectFirst { case l if l.matches("""^\d+\.\s+.*""") =>
+        l.replaceFirst("""^\d+\.\s*""", "")
+      }
+    val fallback = lines.find(l =>
+      !l.startsWith("goal") &&
+        !l.contains("subgoal") &&
+        !l.startsWith("proof")
+    )
+    numbered
+      .orElse(fallback)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(_.take(AssistantConstants.MAX_RESPONSE_LENGTH))
   }
 
   /** Replace free variables with _ wildcards for find_theorems search.

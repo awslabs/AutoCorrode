@@ -27,19 +27,36 @@ object TidyAction {
         "No code to tidy. Select text or place cursor on a command."
       )
     } else {
-      val commandOpt =
-        IQIntegration.getCommandAtOffset(buffer, textArea.getCaretPosition)
+      val offset = textArea.getCaretPosition
+      val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
+      val goalState = GoalExtractor.getGoalState(buffer, offset)
       val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
 
       AssistantDockable.setBadge(VerificationBadge.Verifying)
 
       Isabelle_Thread.fork(name = "assistant-tidy") {
         try {
-          val prompt = PromptLoader.load("tidy.md", Map("code" -> code))
+          val bundle =
+            ProofContextSupport.collect(
+              view,
+              offset,
+              commandOpt,
+              goalState,
+              includeDefinitions = true
+            )
+          val subs = Map("code" -> code) ++
+            goalState.map("goal_state" -> _) ++
+            bundle.localFactsOpt.map("local_facts" -> _) ++
+            bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+            bundle.definitionsOpt.map("context" -> _)
+
+          val prompt = PromptLoader.load("tidy.md", subs)
           val response = BedrockClient.invokeInContext(prompt)
 
           if (!canVerify) {
-            showResult(view, response, VerificationBadge.Unverified)
+            GUI_Thread.later {
+              showResult(view, response, VerificationBadge.Unverified)
+            }
           } else {
             GUI_Thread.later {
               VerifyWithRetry.verify(
@@ -56,6 +73,10 @@ object TidyAction {
                       "failed_attempt" -> failed,
                       "error" -> error
                     )
+                      ++ goalState.map("goal_state" -> _) ++
+                      bundle.localFactsOpt.map("local_facts" -> _) ++
+                      bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+                      bundle.definitionsOpt.map("context" -> _)
                   ),
                 extractCode = extractCode,
                 showResult = (resp, badge) => showResult(view, resp, badge)
@@ -88,11 +109,12 @@ object TidyAction {
   }
 
   private def extractCode(response: String): String = {
-    ResponseParser
+    val fromJson = ResponseParser
       .extractJsonObjectString(response)
       .flatMap { json =>
         ResponseParser.parseStringField(json, "code").map(_.trim)
       }
-      .getOrElse(response)
+    val fromFences = SendbackHelper.extractCodeBlocks(response).mkString("\n").trim
+    fromJson.orElse(Option(fromFences).filter(_.nonEmpty)).getOrElse(response)
   }
 }

@@ -25,28 +25,32 @@ object SuggestTacticAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
     val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
-    val canVerify = IQAvailable.isAvailable && commandOpt.isDefined && hasEisbach
+    val goalState = GoalExtractor.getGoalState(buffer, offset)
     
     ActionHelper.runAsync("assistant-suggest-tactic", "Generating Eisbach method...") {
-      val context = ContextFetcher.getContext(view, 3000)
-      val subs = Map("proof_pattern" -> proofPattern) ++ context.map("context" -> _)
+      val bundle =
+        ProofContextSupport.collect(
+          view,
+          offset,
+          commandOpt,
+          goalState,
+          includeDefinitions = true
+        )
+      val subs = Map("proof_pattern" -> proofPattern) ++
+        goalState.map("goal_state" -> _) ++
+        bundle.localFactsOpt.map("local_facts" -> _) ++
+        bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+        bundle.definitionsOpt.map("context" -> _)
       val prompt = PromptLoader.load("suggest_tactic.md", subs)
-      val response = BedrockClient.invokeInContext(prompt).trim
+      val response =
+        SendbackHelper.stripCodeFences(BedrockClient.invokeInContext(prompt).trim)
       response.linesIterator.map(_.trim).find(_.startsWith("method ")).getOrElse(response)
     }(
       methodLine => {
-        if (canVerify) {
-          // Verify the generated method definition via I/Q
-          GUI_Thread.later {
-            VerifyWithRetry.verify(view, commandOpt.get,
-              methodLine, methodLine, 1,
-              retryPrompt = (failed, error) => s"Your Eisbach method failed:\n```\n$error\n```\nFailed attempt:\n```\n$failed\n```\nOriginal pattern:\n```isabelle\n$proofPattern\n```\nFix the method. Output ONLY the corrected method line.",
-              extractCode = resp => resp.linesIterator.map(_.trim).find(_.startsWith("method ")).getOrElse(resp),
-              showResult = (resp, badge) => showMethodResult(view, resp, hasEisbach, badge))
-          }
-        } else {
-          showMethodResult(view, methodLine, hasEisbach, VerificationBadge.Unverified)
-        }
+        val badge =
+          if (hasEisbach) VerificationBadge.Unverified
+          else VerificationBadge.EisbachMissing
+        showMethodResult(view, methodLine, hasEisbach, badge)
       }
     )
   }

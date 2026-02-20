@@ -1,4 +1,4 @@
-<!-- Variables: goal_state (required), command (required), relevant_lemmas (optional), context (optional) -->
+<!-- Variables: goal_state (required), command (required), local_facts (optional), relevant_theorems (optional), context (optional) -->
 You are an Isabelle/HOL expert. Analyze this proof goal and suggest the best high-level strategy.
 
 ## Goal State
@@ -10,13 +10,20 @@ You are an Isabelle/HOL expert. Analyze this proof goal and suggest the best hig
 ```isabelle
 {{command}}
 ```
-{{#relevant_lemmas}}
+{{#local_facts}}
 
 ## Relevant Lemmas (local proof context)
 ```
-{{relevant_lemmas}}
+{{local_facts}}
 ```
-{{/relevant_lemmas}}
+{{/local_facts}}
+{{#relevant_theorems}}
+
+## Potentially Relevant Facts (MePo/find_theorems)
+```
+{{relevant_theorems}}
+```
+{{/relevant_theorems}}
 {{#context}}
 
 ## Referenced Definitions
