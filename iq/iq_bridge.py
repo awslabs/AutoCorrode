@@ -19,8 +19,48 @@ class MCPBridgeWithReconnect:
         self.connected = False
         token = os.environ.get("IQ_MCP_AUTH_TOKEN", "").strip()
         self.auth_token = token if token else None
+        self.server_host = os.environ.get("IQ_MCP_BRIDGE_HOST", "localhost").strip() or "localhost"
+        self.server_port = self._parse_positive_int_env("IQ_MCP_BRIDGE_PORT", 8765)
+        self.response_timeout_sec = float(self._parse_positive_int_env("IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC", 30))
+        self.log_max_bytes = self._parse_non_negative_int_env("IQ_MCP_BRIDGE_LOG_MAX_BYTES", 5 * 1024 * 1024)
+        self.log_file = os.environ.get(
+            "IQ_MCP_BRIDGE_LOG_FILE",
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_log.txt"),
+        )
         self._recv_buffer = b""
         self._response_queue: List[Dict[str, Any]] = []
+
+    def _parse_positive_int_env(self, name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            parsed = int(raw)
+            return parsed if parsed > 0 else default
+        except ValueError:
+            return default
+
+    def _parse_non_negative_int_env(self, name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            parsed = int(raw)
+            return parsed if parsed >= 0 else default
+        except ValueError:
+            return default
+
+    def _rotate_log_if_needed(self) -> None:
+        if self.log_max_bytes <= 0:
+            return
+        try:
+            if os.path.exists(self.log_file) and os.path.getsize(self.log_file) >= self.log_max_bytes:
+                rotated = self.log_file + ".1"
+                if os.path.exists(rotated):
+                    os.remove(rotated)
+                os.replace(self.log_file, rotated)
+        except Exception:
+            pass
 
     def log(self, message: str):
         """Log messages to stderr and file with timestamp."""
@@ -32,10 +72,8 @@ class MCPBridgeWithReconnect:
 
         # Also log to file
         try:
-            import os
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            log_file = os.path.join(script_dir, "bridge_log.txt")
-            with open(log_file, "a") as f:
+            self._rotate_log_if_needed()
+            with open(self.log_file, "a", encoding="utf-8") as f:
                 f.write(log_message + "\n")
                 f.flush()
         except Exception:
@@ -51,11 +89,15 @@ class MCPBridgeWithReconnect:
                     pass
 
             self.isabelle_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.isabelle_socket.connect(('localhost', 8765))
+            self.isabelle_socket.settimeout(self.response_timeout_sec)
+            self.isabelle_socket.connect((self.server_host, self.server_port))
             self.connected = True
             self._recv_buffer = b""
             self._response_queue = []
-            self.log("Connected to Isabelle MCP server")
+            self.log(
+                f"Connected to Isabelle MCP server at {self.server_host}:{self.server_port} "
+                f"(response timeout: {self.response_timeout_sec:.0f}s)"
+            )
             return True
 
         except Exception as e:
@@ -97,7 +139,11 @@ class MCPBridgeWithReconnect:
         try:
             # Send request
             request_str = json.dumps(request)
-            self.isabelle_socket.send((request_str + "\n").encode())
+            payload = (request_str + "\n").encode()
+            if hasattr(self.isabelle_socket, "sendall"):
+                self.isabelle_socket.sendall(payload)
+            else:
+                self.isabelle_socket.send(payload)
 
             # For notifications, don't wait for response
             if is_notification:
@@ -149,12 +195,21 @@ class MCPBridgeWithReconnect:
 
     def _read_response_for_id(self, method: str, request_id: Any) -> Optional[Dict[str, Any]]:
         """Read a parsed response with matching JSON-RPC id from the Isabelle socket."""
+        deadline = time.time() + self.response_timeout_sec
         while True:
             queued = self._pop_matching_response(request_id)
             if queued is not None:
                 return queued
 
-            chunk = self.isabelle_socket.recv(4096)
+            if time.time() >= deadline:
+                self.log(f"Timed out waiting for response to {method} (id={request_id})")
+                self.connected = False
+                return None
+
+            try:
+                chunk = self.isabelle_socket.recv(4096)
+            except socket.timeout:
+                continue
             if not chunk:
                 self.log(f"No response for {method} - connection closed")
                 self.connected = False
@@ -162,6 +217,7 @@ class MCPBridgeWithReconnect:
 
             self._recv_buffer += chunk
             if not self._extract_complete_messages(method):
+                self.connected = False
                 return None
 
     def create_error_response(self, request_id: Any, code: int, message: str) -> Dict[str, Any]:

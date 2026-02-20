@@ -5,7 +5,7 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.{jEdit, View}
-import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.Locale
 
 /**
  * Capability-based permission system for LLM tool use.
@@ -63,7 +63,11 @@ object ToolPermissions {
   sealed trait PermissionDecision
   case object Allowed extends PermissionDecision
   case object Denied extends PermissionDecision
-  case class NeedPrompt(toolName: String, resource: Option[String]) extends PermissionDecision
+  case class NeedPrompt(
+      toolName: String,
+      resource: Option[String],
+      details: Option[String]
+  ) extends PermissionDecision
 
   // --- Session State ---
 
@@ -204,6 +208,32 @@ object ToolPermissions {
     }
   }
 
+  private val sensitiveArgTokens =
+    Set("token", "secret", "password", "auth", "credential", "api_key")
+
+  private def isSensitiveArg(argName: String): Boolean = {
+    val lowered = argName.toLowerCase(Locale.ROOT)
+    sensitiveArgTokens.exists(token => lowered.contains(token))
+  }
+
+  private def summarizeArgs(
+      args: ResponseParser.ToolArgs,
+      maxPairs: Int = 4,
+      maxValueLength: Int = 80
+  ): Option[String] = {
+    if (args.isEmpty) return None
+    val summary = args.toList.sortBy(_._1).take(maxPairs).map { case (k, v) =>
+      val value =
+        if (isSensitiveArg(k)) "***"
+        else {
+          val raw = ResponseParser.toolValueToDisplay(v).replace('\n', ' ').trim
+          if (raw.length > maxValueLength) raw.take(maxValueLength) + "..." else raw
+        }
+      s"$k=$value"
+    }
+    Some(summary.mkString(", "))
+  }
+
   // --- Configuration Persistence ---
 
   /** Get the configured permission level for a tool from jEdit properties. */
@@ -261,9 +291,9 @@ object ToolPermissions {
       case Allow => Allowed
       case AskAtFirstUse =>
         if (isSessionAllowed(toolName)) Allowed
-        else NeedPrompt(toolName, extractResource(toolName, args))
+        else NeedPrompt(toolName, extractResource(toolName, args), summarizeArgs(args))
       case AskAlways =>
-        NeedPrompt(toolName, extractResource(toolName, args))
+        NeedPrompt(toolName, extractResource(toolName, args), summarizeArgs(args))
     }
   }
 
@@ -273,18 +303,30 @@ object ToolPermissions {
    * 
    * @param toolName The tool requesting permission
    * @param resource Optional resource identifier (e.g., theory name)
+   * @param details Optional argument summary (sanitized for display)
    * @param view The current jEdit view
    * @return PermissionDecision (Allowed or Denied)
    */
-  def promptUser(toolName: String, resource: Option[String], view: View): PermissionDecision = {
+  def promptUser(
+      toolName: String,
+      resource: Option[String],
+      details: Option[String],
+      view: View
+  ): PermissionDecision = {
     val displayName = toolNameToDisplay(toolName)
     val resourceText = resource.map(r => s" on '$r'").getOrElse("")
     val action = toolDescriptions.getOrElse(toolName, "perform this action")
-    val question = s"Tool '$displayName' wants to $action$resourceText. Allow?"
+    val question = s"Tool '$displayName' wants to $action$resourceText. Allow now?"
     
     val toolDef = AssistantTools.tools.find(_.name == toolName)
-    val context = toolDef.map(_.description).getOrElse("")
     val level = getConfiguredLevel(toolName)
+    val contextLines =
+      List(
+        toolDef.map(_.description).filter(_.nonEmpty),
+        details.map(d => s"Arguments: $d"),
+        Some(s"Policy: ${level.toDisplayString}")
+      ).flatten
+    val context = contextLines.mkString("\n")
     val options =
       if (level == AskAlways)
         List("Allow Once", "Deny (for this session)")

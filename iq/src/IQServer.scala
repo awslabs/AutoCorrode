@@ -11,7 +11,6 @@ import java.net.{InetAddress, ServerSocket, Socket}
 import java.util.Locale
 import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
 import scala.util.{Try, Success, Failure}
-import scala.concurrent.{Future, ExecutionContext}
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
@@ -416,15 +415,14 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
 
   /** The server socket that listens for client connections */
   private var serverSocket: Option[ServerSocket] = None
+  private var acceptThread: Option[Thread] = None
 
   /** Flag indicating whether the server is running */
   private var isRunning = false
 
   /** Thread pool for handling client connections */
-  private val executor: ExecutorService = Executors.newCachedThreadPool()
-
-  /** Execution context for asynchronous operations */
-  private implicit val ec: ExecutionContext = ExecutionContext.fromExecutor(executor)
+  private val executor: ExecutorService =
+    Executors.newFixedThreadPool(securityConfig.maxClientThreads)
 
   // Timestamp formatter for socket logging
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
@@ -483,6 +481,21 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
     }
   }
 
+  private def authorizeReadPath(operation: String, rawPath: String): Either[String, String] = {
+    IQSecurity.resolveReadPath(rawPath, securityConfig.allowedReadRoots) match {
+      case Right(canonicalPath) =>
+        logSecurityEvent(
+          s"ALLOW read op=$operation client=${currentClientAddress()} requested='$rawPath' canonical='${canonicalPath.toString}'"
+        )
+        Right(canonicalPath.toString)
+      case Left(errorMessage) =>
+        logSecurityEvent(
+          s"DENY read op=$operation client=${currentClientAddress()} requested='$rawPath' reason='$errorMessage'"
+        )
+        Left(errorMessage)
+    }
+  }
+
   /**
    * Starts the MCP server.
    *
@@ -507,31 +520,38 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
 
       val authEnabled = securityConfig.authToken.isDefined
       val mutationRoots = securityConfig.allowedMutationRoots.map(_.toString).mkString(", ")
+      val readRoots = securityConfig.allowedReadRoots.map(_.toString).mkString(", ")
       Output.writeln(
         s"I/Q Server starting on ${bindAddress.getHostAddress}:$port " +
-        s"(allow_remote_bind=${securityConfig.allowRemoteBind}, auth_enabled=$authEnabled)"
+        s"(allow_remote_bind=${securityConfig.allowRemoteBind}, auth_enabled=$authEnabled, max_client_threads=${securityConfig.maxClientThreads})"
       )
       logSecurityEvent(s"Allowed mutation roots: $mutationRoots")
+      logSecurityEvent(s"Allowed read roots: $readRoots")
 
-      Future {
-        serverSocket.foreach { socket =>
-          while (isRunning) {
-            try {
-              val clientSocket = socket.accept()
-              Output.writeln(s"MCP Client connected: ${clientSocket.getRemoteSocketAddress}")
+      val thread = new Thread(
+        () =>
+          serverSocket.foreach { socket =>
+            while (isRunning) {
+              try {
+                val clientSocket = socket.accept()
+                Output.writeln(s"MCP Client connected: ${clientSocket.getRemoteSocketAddress}")
 
-              executor.submit(new Runnable {
-                def run(): Unit = handleClient(clientSocket)
-              })
-            } catch {
-              case _: java.net.SocketException if !isRunning =>
-                // Server was stopped, ignore
-              case ex: Exception =>
-                Output.writeln(s"Error accepting client connection: ${ex.getMessage}")
+                executor.submit(new Runnable {
+                  def run(): Unit = handleClient(clientSocket)
+                })
+              } catch {
+                case _: java.net.SocketException if !isRunning =>
+                  // Server was stopped, ignore
+                case ex: Exception =>
+                  Output.writeln(s"Error accepting client connection: ${ex.getMessage}")
+              }
             }
-          }
-        }
-      }
+          },
+        "iq-mcp-accept-loop"
+      )
+      thread.setDaemon(true)
+      thread.start()
+      acceptThread = Some(thread)
 
     } catch {
       case ex: Exception =>
@@ -548,6 +568,17 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
   def stop(): Unit = {
     isRunning = false
     serverSocket.foreach(_.close())
+    serverSocket = None
+    acceptThread.foreach { thread =>
+      thread.interrupt()
+      try {
+        thread.join(1000)
+      } catch {
+        case _: InterruptedException =>
+          Thread.currentThread().interrupt()
+      }
+    }
+    acceptThread = None
     executor.shutdown()
     Output.writeln("I/Q Server stopped")
   }
@@ -944,8 +975,8 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
           "properties" -> Map(
             "mode" -> Map(
               "type" -> "string",
-              "description" -> "Command mode. Possible values are: 'current', to query current proof-step/command. 'line', to query commands in line range.",
-              "enum" -> List("current", "line")
+              "description" -> "Command mode. 'current' queries the command at cursor, 'line' queries a line range, and 'offset' queries a character-offset range.",
+              "enum" -> List("current", "line", "offset")
             ),
             "path" -> Map(
               "type" -> "string",
@@ -958,6 +989,14 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
             "end_line" -> Map(
               "type" -> "integer",
               "description" -> "Only for 'line' mode: End line number (1-based, inclusive; default -1). Negative numbers count from the end of the file (-1 = last line)."
+            ),
+            "start_offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Only for 'offset' mode: Start character offset (0-based, inclusive)."
+            ),
+            "end_offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Only for 'offset' mode: End character offset (0-based, exclusive)."
             ),
             "xml_result_file" -> Map(
               "type" -> "string",
@@ -1018,7 +1057,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
               "description" -> "Maximum time in milliseconds to wait for individual commands to complete (default: 5000)"
             )
           ),
-          "required" -> List("path"),
+          "required" -> List("path", "command", "new_str"),
           "additionalProperties" -> false
         )
       ),
@@ -1319,19 +1358,34 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
         processedFiles
       }
 
+      val (readableTrackedFiles, hiddenCount) = trackedFiles.foldLeft((List.empty[Map[String, Any]], 0)) {
+        case ((acc, hidden), file) =>
+          val path = file.get("path").map(_.toString).getOrElse("")
+          IQSecurity.resolveReadPath(path, securityConfig.allowedReadRoots) match {
+            case Right(_) => (file :: acc, hidden)
+            case Left(_) => (acc, hidden + 1)
+          }
+      }
+      if (hiddenCount > 0) {
+        logSecurityEvent(
+          s"Filtered $hiddenCount tracked file(s) outside allowed read roots for client=${currentClientAddress()}"
+        )
+      }
+      val visibleTrackedFiles = readableTrackedFiles.reverse
+
       // Filter results based on parameters
       val filteredFiles = params.get("filter_open") match {
         case Some(true) =>
-          val filtered = trackedFiles.filter(file => file("is_open").asInstanceOf[Boolean])
+          val filtered = visibleTrackedFiles.filter(file => file("is_open").asInstanceOf[Boolean])
           Output.writeln(s"I/Q Server: Filtered to open files: ${filtered.length}")
           filtered
         case Some(false) =>
-          val filtered = trackedFiles.filter(file => !file("is_open").asInstanceOf[Boolean])
+          val filtered = visibleTrackedFiles.filter(file => !file("is_open").asInstanceOf[Boolean])
           Output.writeln(s"I/Q Server: Filtered to non-open files: ${filtered.length}")
           filtered
         case _ =>
-          Output.writeln(s"I/Q Server: No open filter applied: ${trackedFiles.length}")
-          trackedFiles
+          Output.writeln(s"I/Q Server: No open filter applied: ${visibleTrackedFiles.length}")
+          visibleTrackedFiles
       }
 
       val theoryFilteredFiles = params.get("filter_theory") match {
@@ -1401,7 +1455,11 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       case Some(value: String) if value.trim.nonEmpty =>
         val partialPath = value.trim
         IQUtils.autoCompleteFilePath(partialPath) match {
-          case Right(fullPath) => Some(fullPath)
+          case Right(fullPath) =>
+            authorizeReadPath("get_command_info(path)", fullPath) match {
+              case Right(authorizedPath) => Some(authorizedPath)
+              case Left(errorMsg) => return Right(errorMsg)
+            }
           case Left(errorMsg) => return Right(errorMsg)
         }
       case _ => None
@@ -1467,6 +1525,10 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
 
       case (Some ("current"), filePathOpt, None, None, None, None) => // Current buffer
         val (content, model, caretPos) = getCurrentView()
+        authorizeReadPath("get_command_info(current)", model.node_name.node) match {
+          case Left(errorMsg) => return Right(errorMsg)
+          case Right(_) =>
+        }
 
         filePathOpt match {
           case Some(filePath) =>
@@ -1889,7 +1951,11 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
     val filePath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
         IQUtils.autoCompleteFilePath(path.trim) match {
-          case Right(fullPath) => fullPath
+          case Right(fullPath) =>
+            authorizeReadPath("get_document_info", fullPath) match {
+              case Right(authorizedPath) => authorizedPath
+              case Left(errorMsg) => return Left(errorMsg)
+            }
           case Left(errorMsg) => return Left(errorMsg)
         }
       case _ => return Left("Missing required parameter: path")
@@ -2220,12 +2286,16 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
         }
       case _ => return Left("path parameter is required")
     }
+    val readablePath = authorizeReadPath("open_file", resolvedPath) match {
+      case Right(canonicalPath) => canonicalPath
+      case Left(errorMsg) => return Left(errorMsg)
+    }
     val filePath = if (createIfMissing) {
-      authorizeMutationPath("open_file(create_if_missing=true)", resolvedPath) match {
+      authorizeMutationPath("open_file(create_if_missing=true)", readablePath) match {
         case Right(canonicalPath) => canonicalPath
         case Left(errorMsg) => return Left(errorMsg)
       }
-    } else resolvedPath
+    } else readablePath
     val view = params.getOrElse("view", "true").toString.toBoolean
 
     Output.writeln(s"I/Q Server: Opening file: $filePath, create_if_missing: $createIfMissing, view: $view")
@@ -2303,7 +2373,11 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       val filePath = params.getOrElse("path", "").toString match {
         case path if path.trim.nonEmpty =>
           IQUtils.autoCompleteFilePath(path.trim) match {
-            case Right(fullPath) => fullPath
+            case Right(fullPath) =>
+              authorizeReadPath("read_file", fullPath) match {
+                case Right(authorizedPath) => authorizedPath
+                case Left(errorMsg) => return Left(errorMsg)
+              }
             case Left(errorMsg) => return Left(errorMsg)
           }
         case _ => return Left("path parameter is required")
@@ -2823,7 +2897,11 @@ end"""
       val filePath = params.get("path").map(_.toString) match {
         case Some(path) if path.trim.nonEmpty =>
           IQUtils.autoCompleteFilePath(path.trim) match {
-            case Right(fullPath) => Some(fullPath)
+            case Right(fullPath) =>
+              authorizeReadPath("explore(path)", fullPath) match {
+                case Right(authorizedPath) => Some(authorizedPath)
+                case Left(errorMsg) => return Left(errorMsg)
+              }
             case Left(errorMsg) => return Left(errorMsg)
           }
         case Some(_) => None

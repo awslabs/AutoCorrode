@@ -83,7 +83,42 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
       "edit_theory",
       Map.empty[String, ResponseParser.ToolValue]
     )
-    decision shouldBe ToolPermissions.NeedPrompt("edit_theory", None)
+    decision shouldBe ToolPermissions.NeedPrompt("edit_theory", None, None)
+  }
+
+  test("prompt details should include a sanitized argument summary") {
+    val decision = ToolPermissions.checkPermission(
+      "edit_theory",
+      Map(
+        "theory" -> ResponseParser.StringValue("Scratch"),
+        "operation" -> ResponseParser.StringValue("insert"),
+        "text" -> ResponseParser.StringValue("lemma foo: True by simp")
+      )
+    )
+    decision match {
+      case ToolPermissions.NeedPrompt("edit_theory", Some("Scratch"), Some(details)) =>
+        details should include("operation=insert")
+        details should include("theory=Scratch")
+      case other =>
+        fail(s"Expected prompt decision with details, got: $other")
+    }
+  }
+
+  test("prompt details should redact sensitive argument names") {
+    val decision = ToolPermissions.checkPermission(
+      "web_search",
+      Map(
+        "query" -> ResponseParser.StringValue("isabelle afp"),
+        "auth_token" -> ResponseParser.StringValue("super-secret-token")
+      )
+    )
+    decision match {
+      case ToolPermissions.NeedPrompt("web_search", _, Some(details)) =>
+        details should include("auth_token=***")
+        details should not include "super-secret-token"
+      case other =>
+        fail(s"Expected prompt decision with redacted details, got: $other")
+    }
   }
 
   test("clearSession should reset session state") {

@@ -20,6 +20,9 @@ object IQSecurityTest {
     assertThat(!config.allowRemoteBind, "remote bind should be disabled by default")
     assertThat(config.authToken.isEmpty, "auth token should be disabled by default")
     assertThat(config.allowedMutationRoots.nonEmpty, "default mutation root should be set")
+    assertThat(config.allowedReadRoots.nonEmpty, "default read root should be set")
+    assertThat(config.allowedReadRoots == config.allowedMutationRoots, "default read roots should match mutation roots")
+    assertThat(config.maxClientThreads >= 2, "max client threads should be bounded and positive")
   }
 
   private def testPathAllowlist(): Unit = {
@@ -32,6 +35,18 @@ object IQSecurityTest {
     val outsidePath = root.resolve("..").resolve("escape.thy").normalize().toString
     val outsideResult = IQSecurity.resolveMutationPath(outsidePath, List(root))
     assertThat(outsideResult.isLeft, s"expected out-of-root path to be rejected: $outsideResult")
+  }
+
+  private def testReadPathAllowlist(): Unit = {
+    val root = Files.createTempDirectory("iq-security-read-root").toRealPath()
+
+    val insidePath = root.resolve("session").resolve("Theory.thy").toString
+    val insideResult = IQSecurity.resolveReadPath(insidePath, List(root))
+    assertThat(insideResult.isRight, s"expected in-read-root path to be allowed: $insideResult")
+
+    val outsidePath = root.resolve("..").resolve("outside.thy").normalize().toString
+    val outsideResult = IQSecurity.resolveReadPath(outsidePath, List(root))
+    assertThat(outsideResult.isLeft, s"expected out-of-read-root path to be rejected: $outsideResult")
   }
 
   private def testTokenAuthorization(): Unit = {
@@ -51,6 +66,7 @@ object IQSecurityTest {
   def main(args: Array[String]): Unit = {
     testDefaultConfig()
     testPathAllowlist()
+    testReadPathAllowlist()
     testTokenAuthorization()
     testTokenRedaction()
     println("IQSecurityTest: all tests passed")

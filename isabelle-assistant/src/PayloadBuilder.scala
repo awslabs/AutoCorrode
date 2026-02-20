@@ -3,7 +3,7 @@
 
 package isabelle.assistant
 
-import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonGenerator}
+import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonGenerator, JsonToken}
 import java.io.StringWriter
 
 /**
@@ -198,7 +198,7 @@ object PayloadBuilder {
       for ((role, content) <- messages) {
         g.writeStartObject()
         g.writeStringField("role", role)
-        if (content.trim.startsWith("[")) {
+        if (isAnthropicStructuredContent(content)) {
           g.writeFieldName("content")
           g.writeRawValue(content)
         } else {
@@ -207,6 +207,43 @@ object PayloadBuilder {
         g.writeEndObject()
       }
       g.writeEndArray()
+    }
+  }
+
+  /** Only treat content as raw JSON when it is a valid Anthropic content-block array. */
+  private[assistant] def isAnthropicStructuredContent(content: String): Boolean = {
+    val trimmed = content.trim
+    if (!trimmed.startsWith("[")) return false
+    val parser = jsonFactory.createParser(trimmed)
+    try {
+      if (parser.nextToken() != JsonToken.START_ARRAY) return false
+      var token = parser.nextToken()
+      while (token != null && token != JsonToken.END_ARRAY) {
+        if (token != JsonToken.START_OBJECT) return false
+        var hasValidType = false
+        while (parser.nextToken() != JsonToken.END_OBJECT) {
+          if (parser.currentToken() == JsonToken.FIELD_NAME) {
+            val fieldName = parser.currentName()
+            val valueToken = parser.nextToken()
+            if (
+              fieldName == "type" &&
+              valueToken == JsonToken.VALUE_STRING &&
+              parser.getValueAsString("").trim.nonEmpty
+            ) {
+              hasValidType = true
+            } else {
+              parser.skipChildren()
+            }
+          }
+        }
+        if (!hasValidType) return false
+        token = parser.nextToken()
+      }
+      token == JsonToken.END_ARRAY
+    } catch {
+      case _: Exception => false
+    } finally {
+      parser.close()
     }
   }
 

@@ -128,16 +128,19 @@ test: build fetch-test-deps check-test-sanity verify-test-coverage
 		org.scalatest.tools.Runner -R $(TEST_CLASSES_DIR) -oD
 
 check-test-sanity:
-	@if command -v rg >/dev/null 2>&1; then \
-		! rg -n '\bpending\b' src/test/scala || (echo "ERROR: pending tests are not allowed"; exit 1); \
-		! rg -n '\bignore\s*\(' src/test/scala || (echo "ERROR: ignored tests are not allowed"; exit 1); \
-		! rg -n '\bTODO\b|\bFIXME\b' src/test/scala || (echo "ERROR: TODO/FIXME left in test sources"; exit 1); \
-		! rg -n '\bcatch\b' src/test/scala || (echo "ERROR: catch blocks in tests hide failures; use explicit assertions/intercepts"; exit 1); \
+	@set -eu; \
+	if command -v rg >/dev/null 2>&1; then \
+		if rg -n '^\s*pending\s*($|//)' src/test/scala; then echo "ERROR: pending tests are not allowed"; exit 1; fi; \
+		if rg -n '\.pending\s*(\(|$$)' src/test/scala; then echo "ERROR: pending tests are not allowed"; exit 1; fi; \
+		if rg -n '\bignore\s*\(' src/test/scala; then echo "ERROR: ignored tests are not allowed"; exit 1; fi; \
+		if rg -n '\bTODO\b|\bFIXME\b' src/test/scala; then echo "ERROR: TODO/FIXME left in test sources"; exit 1; fi; \
+		if rg -n '\bcatch\b' src/test/scala; then echo "ERROR: catch blocks in tests hide failures; use explicit assertions/intercepts"; exit 1; fi; \
 	else \
-		! grep -R -n -E '\bpending\b' src/test/scala || (echo "ERROR: pending tests are not allowed"; exit 1); \
-		! grep -R -n -E '\bignore[[:space:]]*\(' src/test/scala || (echo "ERROR: ignored tests are not allowed"; exit 1); \
-		! grep -R -n -E '\bTODO\b|\bFIXME\b' src/test/scala || (echo "ERROR: TODO/FIXME left in test sources"; exit 1); \
-		! grep -R -n -E '\bcatch\b' src/test/scala || (echo "ERROR: catch blocks in tests hide failures; use explicit assertions/intercepts"; exit 1); \
+		if grep -R -n -E '^[[:space:]]*pending[[:space:]]*($$|//)' src/test/scala; then echo "ERROR: pending tests are not allowed"; exit 1; fi; \
+		if grep -R -n -E '\.pending[[:space:]]*(\(|$$)' src/test/scala; then echo "ERROR: pending tests are not allowed"; exit 1; fi; \
+		if grep -R -n -E '\bignore[[:space:]]*\(' src/test/scala; then echo "ERROR: ignored tests are not allowed"; exit 1; fi; \
+		if grep -R -n -E '\bTODO\b|\bFIXME\b' src/test/scala; then echo "ERROR: TODO/FIXME left in test sources"; exit 1; fi; \
+		if grep -R -n -E '\bcatch\b' src/test/scala; then echo "ERROR: catch blocks in tests hide failures; use explicit assertions/intercepts"; exit 1; fi; \
 	fi
 
 verify-test-coverage:

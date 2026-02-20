@@ -192,44 +192,14 @@ object IQUtils {
 
     val firstIndex = normalizedText.indexOf(normalizedSubstring)
     if (firstIndex == -1) {
-      // Debug logging for failed matches - write to temporary files
-      val tempDir = System.getProperty("java.io.tmpdir")
-      val timestamp = System.currentTimeMillis()
-
-      val textFile = s"$tempDir/debug_text_$timestamp.txt"
-      val substringFile = s"$tempDir/debug_substring_$timestamp.txt"
-
-      try {
-        // Write original text and substring (for debugging purposes)
-        java.nio.file.Files.write(java.nio.file.Paths.get(textFile), text.getBytes("UTF-8"))
-        java.nio.file.Files.write(java.nio.file.Paths.get(substringFile), substring.getBytes("UTF-8"))
-
-        Output.writeln(s"I/Q Server: Substring not found in text")
-        Output.writeln(s"I/Q Server: Debug files written:")
-        Output.writeln(s"I/Q Server:   Full text: $textFile")
-        Output.writeln(s"I/Q Server:   Search substring: $substringFile")
-        Output.writeln(s"I/Q Server: Original text length: ${text.length}")
-        Output.writeln(s"I/Q Server: Original substring length: ${substring.length}")
-        Output.writeln(s"I/Q Server: Search text length: ${searchText.length}")
-        Output.writeln(s"I/Q Server: Search substring length: ${searchSubstring.length}")
-        if (offsetAdjustment > 0) {
-          Output.writeln(s"I/Q Server: Applied leading space relaxation: trimmed $offsetAdjustment spaces")
-        }
-        Output.writeln(s"I/Q Server: Looking for: '${searchSubstring.take(100)}...'")
-        Output.writeln(s"I/Q Server: In text starting with: '${searchText.take(100)}...'")
-        Output.writeln(s"I/Q Server: In text ending with: '...${searchText.takeRight(100)}'")
-
-        if (searchText != normalizedText || searchSubstring != normalizedSubstring) {
-          Output.writeln(s"I/Q Server: Unicode normalization would change strings!")
-          Output.writeln(s"I/Q Server: Text normalized: ${searchText != normalizedText}")
-          Output.writeln(s"I/Q Server: Substring normalized: ${searchSubstring != normalizedSubstring}")
-        }
-
-      } catch {
-        case ex: Exception =>
-          Output.writeln(s"I/Q Server: Failed to write debug files: ${ex.getMessage}")
+      Output.writeln(s"I/Q Server: Substring not found in text")
+      Output.writeln(s"I/Q Server: Original text length: ${text.length}")
+      Output.writeln(s"I/Q Server: Original substring length: ${substring.length}")
+      Output.writeln(s"I/Q Server: Search text length: ${searchText.length}")
+      Output.writeln(s"I/Q Server: Search substring length: ${searchSubstring.length}")
+      if (offsetAdjustment > 0) {
+        Output.writeln(s"I/Q Server: Applied leading space relaxation: trimmed $offsetAdjustment spaces")
       }
-
       return Left(SubstringNotFound)
     }
 

@@ -161,6 +161,28 @@ class PayloadBuilderTest extends AnyFunSuite with Matchers {
     payload should include("Hello")
   }
 
+  test("isAnthropicStructuredContent should accept valid content block arrays") {
+    PayloadBuilder.isAnthropicStructuredContent(
+      """[{"type":"text","text":"hello"},{"type":"tool_result","tool_use_id":"x","content":"ok"}]"""
+    ) shouldBe true
+  }
+
+  test("isAnthropicStructuredContent should reject non-JSON and non-block arrays") {
+    PayloadBuilder.isAnthropicStructuredContent("[not valid json") shouldBe false
+    PayloadBuilder.isAnthropicStructuredContent("""[{"text":"missing type"}]""") shouldBe false
+    PayloadBuilder.isAnthropicStructuredContent("""["plain text"]""") shouldBe false
+  }
+
+  test("buildAnthropicToolPayload should serialize bracket-prefixed plain text as string content") {
+    val payload = PayloadBuilder.buildAnthropicToolPayload(
+      "System",
+      List(("user", "[this is plain text, not JSON blocks]")),
+      0.3,
+      2000
+    )
+    payload should include("\"content\":\"[this is plain text, not JSON blocks]\"")
+  }
+
   test("writeJson should produce valid JSON") {
     val json = PayloadBuilder.writeJson { g =>
       g.writeStringField("key", "value")

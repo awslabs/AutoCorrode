@@ -64,6 +64,7 @@ I/Q now defaults to a hardened local-only posture:
 - Loopback bind by default (`IQ_MCP_BIND_HOST=127.0.0.1`).
 - Remote bind is blocked unless explicitly enabled (`IQ_MCP_ALLOW_REMOTE_BIND=true`).
 - Optional request authentication token (`IQ_MCP_AUTH_TOKEN`).
+- Read-oriented tools (`list_files`, `read_file`, `get_command_info`, `get_document_info`, `open_file`, `explore`) are restricted to allowed read roots.
 - Mutating tools (`open_file` with `create_if_missing=true`, `create_file`, `write_file`, `save_file`) are restricted to allowed mutation roots.
 - `get_command_info` with `xml_result_file` is also treated as a mutating operation and must target an allowed mutation root.
 
@@ -73,8 +74,14 @@ Use these environment variables to configure behavior:
 - `IQ_MCP_ALLOW_REMOTE_BIND`: Set to `true` to allow non-loopback bind hosts (default: `false`).
 - `IQ_MCP_AUTH_TOKEN`: If set, every JSON-RPC request must include top-level `auth_token` matching this value.
 - `IQ_MCP_ALLOWED_ROOTS`: Path-list of allowed mutation roots (separator: `:` on Unix). If unset, defaults to the current working directory.
+- `IQ_MCP_ALLOWED_READ_ROOTS`: Path-list of allowed read roots (separator: `:` on Unix). If unset, defaults to `IQ_MCP_ALLOWED_ROOTS`.
+- `IQ_MCP_MAX_CLIENT_THREADS`: Maximum concurrent MCP client handler threads (default: `16`, minimum `2`).
 
-The bundled `iq_bridge.py` automatically forwards `IQ_MCP_AUTH_TOKEN` as `auth_token` on outgoing requests.
+The bundled `iq_bridge.py` automatically forwards `IQ_MCP_AUTH_TOKEN` as `auth_token` on outgoing requests, enforces socket read timeouts, and supports log-file rotation:
+
+- `IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC` (default: `30`)
+- `IQ_MCP_BRIDGE_LOG_MAX_BYTES` (default: `5242880`)
+- `IQ_MCP_BRIDGE_LOG_FILE` (default: `iq/bridge_log.txt`)
 
 ### Connecting to I/Q via an MCP client
 

@@ -511,8 +511,8 @@ object AssistantTools {
       case ToolPermissions.Denied =>
         Output.writeln(s"[Permissions] Tool '$name' denied by policy")
         s"Permission denied: tool '$name' is not allowed."
-      case ToolPermissions.NeedPrompt(toolName, resource) =>
-        ToolPermissions.promptUser(toolName, resource, view) match {
+      case ToolPermissions.NeedPrompt(toolName, resource, details) =>
+        ToolPermissions.promptUser(toolName, resource, details, view) match {
           case ToolPermissions.Allowed =>
             executeTool(name, args, view)
           case ToolPermissions.Denied =>
@@ -534,19 +534,24 @@ object AssistantTools {
   /** Maximum length for search pattern arguments. */
   private val MAX_PATTERN_ARG_LENGTH = 500
 
-  /** Valid theory name pattern. */
-  private val THEORY_NAME_PATTERN = """^[A-Za-z0-9_.\-/]+$""".r
+  /** Valid theory reference pattern (for referring to already-open theories). */
+  private val THEORY_REFERENCE_PATTERN = """^[A-Za-z0-9_.\-/]+$""".r
+
+  /** Valid new theory file name (single file name, no path separators). */
+  private val CREATE_THEORY_NAME_PATTERN = """^[A-Za-z][A-Za-z0-9_']*$""".r
 
   /** Sanitize a string argument: trim, limit length, reject control characters.
     */
   private def safeStringArg(
       args: ResponseParser.ToolArgs,
       key: String,
-      maxLen: Int = MAX_STRING_ARG_LENGTH
+      maxLen: Int = MAX_STRING_ARG_LENGTH,
+      trim: Boolean = true
   ): String = {
     val raw = args.get(key).map(ResponseParser.toolValueToString).getOrElse("")
     val cleaned = raw.filter(c => !c.isControl || c == '\n' || c == '\t')
-    cleaned.take(maxLen).trim
+    val limited = cleaned.take(maxLen)
+    if (trim) limited.trim else limited
   }
 
   /** Validate a theory name argument. */
@@ -555,10 +560,13 @@ object AssistantTools {
   ): Either[String, String] = {
     val name = safeStringArg(args, "theory", 200)
     if (name.isEmpty) Left("Error: theory name required")
-    else if (THEORY_NAME_PATTERN.findFirstIn(name).isEmpty)
+    else if (THEORY_REFERENCE_PATTERN.findFirstIn(name).isEmpty)
       Left(s"Error: invalid theory name '$name'")
     else Right(name)
   }
+
+  private[assistant] def isValidCreateTheoryName(name: String): Boolean =
+    CREATE_THEORY_NAME_PATTERN.findFirstIn(name).isDefined
 
   private[assistant] def normalizeReadRange(
       totalLines: Int,
@@ -1514,8 +1522,11 @@ object AssistantTools {
       view: View
   ): String = {
     val operation = safeStringArg(args, "operation", 50).toLowerCase
-    // Don't replace \\n - Jackson already handles JSON string escaping
-    val text = safeStringArg(args, "text", MAX_STRING_ARG_LENGTH)
+    val text =
+      safeStringArg(args, "text", MAX_STRING_ARG_LENGTH, trim = false).replace(
+        "\\n",
+        "\n"
+      )
     val startLine = intArg(args, "start_line", -1)
     val endLine = intArg(args, "end_line", startLine)
 
@@ -1812,11 +1823,12 @@ object AssistantTools {
   ): String = {
     val name = safeStringArg(args, "name", 200)
     val imports = safeStringArg(args, "imports", 500)
-    // Don't replace \\n - Jackson already handles JSON string escaping
-    val content = safeStringArg(args, "content", MAX_STRING_ARG_LENGTH)
+    val content =
+      safeStringArg(args, "content", MAX_STRING_ARG_LENGTH, trim = false)
+        .replace("\\n", "\n")
 
     if (name.isEmpty) "Error: name required"
-    else if (THEORY_NAME_PATTERN.findFirstIn(name).isEmpty)
+    else if (!isValidCreateTheoryName(name))
       s"Error: invalid theory name '$name'"
     else {
       val latch = new CountDownLatch(1)
@@ -1824,12 +1836,13 @@ object AssistantTools {
       GUI_Thread.later {
         try {
           val currentPath = view.getBuffer.getPath
-          val currentDir = java.io.File(currentPath).getParent
-          val filePath = s"$currentDir/$name.thy"
-
-          if (java.io.File(filePath).exists()) {
-            result = s"Error: file $name.thy already exists"
+          val currentDir = java.nio.file.Paths.get(currentPath).getParent
+          if (currentDir == null) {
+            result = "Error: could not determine current theory directory"
           } else {
+            val normalizedDir = currentDir.toAbsolutePath.normalize()
+            val targetPath = normalizedDir.resolve(s"$name.thy").normalize()
+
             val effectiveImports = if (imports.isEmpty) "Main" else imports
             // Proper theory header format with begin on its own line
             val theoryContent =
@@ -1837,12 +1850,18 @@ object AssistantTools {
                   if (content.nonEmpty) content + "\n\n" else ""
                 }end\n"
 
-            java.nio.file.Files.write(
-              java.nio.file.Paths.get(filePath),
-              theoryContent.getBytes("UTF-8")
-            )
-            org.gjt.sp.jedit.jEdit.openFile(view, filePath)
-            result = s"Created and opened $name.thy"
+            if (targetPath.getParent != normalizedDir) {
+              result = s"Error: invalid theory name '$name'"
+            } else if (java.nio.file.Files.exists(targetPath)) {
+              result = s"Error: file $name.thy already exists"
+            } else {
+              java.nio.file.Files.write(
+                targetPath,
+                theoryContent.getBytes("UTF-8")
+              )
+              org.gjt.sp.jedit.jEdit.openFile(view, targetPath.toString)
+              result = s"Created and opened $name.thy"
+            }
           }
         } catch { case ex: Exception => result = s"Error: ${ex.getMessage}" }
         latch.countDown()

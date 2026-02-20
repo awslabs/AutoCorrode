@@ -14,7 +14,9 @@ case class IQServerSecurityConfig(
   bindHost: String,
   allowRemoteBind: Boolean,
   authToken: Option[String],
-  allowedMutationRoots: List[Path]
+  allowedMutationRoots: List[Path],
+  allowedReadRoots: List[Path],
+  maxClientThreads: Int
 )
 
 object IQSecurity {
@@ -22,9 +24,12 @@ object IQSecurity {
   private val AllowRemoteBindEnv = "IQ_MCP_ALLOW_REMOTE_BIND"
   private val AuthTokenEnv = "IQ_MCP_AUTH_TOKEN"
   private val AllowedRootsEnv = "IQ_MCP_ALLOWED_ROOTS"
+  private val AllowedReadRootsEnv = "IQ_MCP_ALLOWED_READ_ROOTS"
+  private val MaxClientThreadsEnv = "IQ_MCP_MAX_CLIENT_THREADS"
 
   private val TrueValues = Set("1", "true", "yes", "on")
   private val DefaultBindHost = "127.0.0.1"
+  private val DefaultMaxClientThreads = 16
 
   private def parseBoolean(value: String, defaultValue: Boolean): Boolean = {
     val normalized = value.trim.toLowerCase
@@ -51,6 +56,20 @@ object IQSecurity {
     }
   }
 
+  private def parsePathList(raw: Option[String]): List[Path] =
+    raw.toList
+      .flatMap(_.split(java.io.File.pathSeparator).toList)
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .map(path => canonicalizePath(Paths.get(path)))
+
+  private def parsePositiveInt(raw: Option[String], defaultValue: Int): Int = {
+    raw
+      .flatMap(value => Try(value.trim.toInt).toOption)
+      .filter(_ > 0)
+      .getOrElse(defaultValue)
+  }
+
   def fromEnvironment(
     readEnv: String => Option[String] = key => Option(System.getenv(key)),
     cwdProvider: () => String = () => new File(".").getAbsolutePath
@@ -59,25 +78,34 @@ object IQSecurity {
     val allowRemoteBind = readEnv(AllowRemoteBindEnv).exists(v => parseBoolean(v, defaultValue = false))
     val authToken = readEnv(AuthTokenEnv).map(_.trim).filter(_.nonEmpty)
 
-    val configuredRoots = readEnv(AllowedRootsEnv)
-      .toList
-      .flatMap(_.split(java.io.File.pathSeparator).toList)
-      .map(_.trim)
-      .filter(_.nonEmpty)
-      .map(path => canonicalizePath(Paths.get(path)))
+    val configuredMutationRoots = parsePathList(readEnv(AllowedRootsEnv))
 
     val defaultRoot = canonicalizePath(Paths.get(cwdProvider()))
-    val allowedRoots = if (configuredRoots.nonEmpty) configuredRoots.distinct else List(defaultRoot)
+    val allowedMutationRoots =
+      if (configuredMutationRoots.nonEmpty) configuredMutationRoots.distinct
+      else List(defaultRoot)
+    val configuredReadRoots = parsePathList(readEnv(AllowedReadRootsEnv))
+    val allowedReadRoots =
+      if (configuredReadRoots.nonEmpty) configuredReadRoots.distinct
+      else allowedMutationRoots
+    val maxClientThreads =
+      math.max(2, parsePositiveInt(readEnv(MaxClientThreadsEnv), DefaultMaxClientThreads))
 
     IQServerSecurityConfig(
       bindHost = bindHost,
       allowRemoteBind = allowRemoteBind,
       authToken = authToken,
-      allowedMutationRoots = allowedRoots
+      allowedMutationRoots = allowedMutationRoots,
+      allowedReadRoots = allowedReadRoots,
+      maxClientThreads = maxClientThreads
     )
   }
 
-  def resolveMutationPath(rawPath: String, allowedRoots: List[Path]): Either[String, Path] = {
+  private def resolveAuthorizedPath(
+    rawPath: String,
+    allowedRoots: List[Path],
+    rootLabel: String
+  ): Either[String, Path] = {
     val requested = rawPath.trim
     if (requested.isEmpty) return Left("path parameter is required")
 
@@ -90,9 +118,17 @@ object IQSecurity {
       if (isAllowed) Right(canonicalPath)
       else {
         val roots = allowedRoots.map(_.toString).mkString(", ")
-        Left(s"Path '$canonicalPath' is outside allowed mutation roots: $roots")
+        Left(s"Path '$canonicalPath' is outside allowed $rootLabel roots: $roots")
       }
     }
+  }
+
+  def resolveMutationPath(rawPath: String, allowedRoots: List[Path]): Either[String, Path] = {
+    resolveAuthorizedPath(rawPath, allowedRoots, "mutation")
+  }
+
+  def resolveReadPath(rawPath: String, allowedRoots: List[Path]): Either[String, Path] = {
+    resolveAuthorizedPath(rawPath, allowedRoots, "read")
   }
 
   def resolveBindAddress(bindHost: String): Either[String, InetAddress] = {

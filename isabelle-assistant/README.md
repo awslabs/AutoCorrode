@@ -176,6 +176,23 @@ With Anthropic Claude models, the LLM can autonomously use tools during chat:
 | `verify_proof` | Verify a proof method (I/Q) |
 | `run_sledgehammer` | Run automated proof search (I/Q) |
 
+Tool execution is gated by a per-tool permission system with four levels:
+
+- `Allow`: execute without prompt
+- `Ask at First Use`: prompt once per session, then remember the decision
+- `Ask Always`: prompt every time
+- `Deny`: hide tool from the model and reject invocations
+
+Defaults are conservative: read-only tools are `Allow`, I/Q compute tools are `Ask at First Use`, and side-effecting tools (`edit_theory`, `create_theory`, `open_theory`, `web_search`) are `Ask Always`.
+
+Permission prompts include the target resource and a sanitized argument summary so the user can approve with concrete context. Sensitive argument names (for example `*_token`, `*_secret`, `*_password`) are redacted in the prompt summary.
+
+Additional safety checks:
+
+- `create_theory` only accepts valid Isabelle theory file names (no path separators / traversal)
+- file creation is restricted to the current buffer directory
+- `edit_theory` and `create_theory` preserve user-provided leading/trailing whitespace in inserted content
+
 ## Chat Commands
 
 Type `:help` in the chat to see all commands. Commands are prefixed with `:`.
