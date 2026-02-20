@@ -570,6 +570,7 @@ class AssistantDockable(view: View, position: String)
     ChatAction.clearHistory()
     AssistantDockable.clearInsertActions()
     ToolPermissions.clearSession()
+    TaskList.clear()
     htmlPane.setText("")
     badgeContainer.setVisible(false)
     welcomeShown = false

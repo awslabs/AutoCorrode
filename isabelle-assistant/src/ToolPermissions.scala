@@ -132,7 +132,15 @@ object ToolPermissions {
     "web_search" -> AskAlways,
     
     // Meta-tool for user interaction → Always Allow (exempt from permission checks)
-    "ask_user" -> Allow
+    "ask_user" -> Allow,
+    
+    // Task list management → Always Allow (pure in-memory state, no side effects)
+    "task_list_add" -> Allow,
+    "task_list_done" -> Allow,
+    "task_list_irrelevant" -> Allow,
+    "task_list_next" -> Allow,
+    "task_list_show" -> Allow,
+    "task_list_get" -> Allow
   )
 
   /** Human-readable description of what each tool does (for permission prompts). */
@@ -168,20 +176,27 @@ object ToolPermissions {
     "ask_user" -> "ask you questions"
   )
 
+  // --- Tool Name Formatting ---
+
+  /** Convert snake_case tool name to user-friendly PascalCase display name. */
+  private def toolNameToDisplay(toolName: String): String = {
+    toolName.split("_").map(_.capitalize).mkString
+  }
+
   // --- Resource Extraction ---
 
   /** Extract a displayable resource identifier from tool arguments (e.g., theory name, URL). */
-  private def extractResource(toolName: String, args: Map[String, Any]): Option[String] = {
+  private def extractResource(toolName: String, args: ResponseParser.ToolArgs): Option[String] = {
     toolName match {
       case "read_theory" | "search_in_theory" | "edit_theory" | 
            "get_entities" | "get_dependencies" =>
-        args.get("theory").map(_.toString)
+        args.get("theory").map(ResponseParser.toolValueToString)
       case "create_theory" =>
-        args.get("name").map(n => s"$n.thy")
+        args.get("name").map(n => s"${ResponseParser.toolValueToString(n)}.thy")
       case "open_theory" =>
-        args.get("path").map(_.toString)
+        args.get("path").map(ResponseParser.toolValueToString)
       case "web_search" =>
-        args.get("query").map(q => s"query: ${q.toString.take(50)}")
+        args.get("query").map(q => s"query: ${ResponseParser.toolValueToString(q)}")
       case _ => None
     }
   }
@@ -230,7 +245,7 @@ object ToolPermissions {
    * @param args The tool arguments (for resource extraction)
    * @return PermissionDecision
    */
-  def checkPermission(toolName: String, args: Map[String, Any]): PermissionDecision = {
+  def checkPermission(toolName: String, args: ResponseParser.ToolArgs): PermissionDecision = {
     // 1. Check session-scoped denials/allowances
     if (isSessionDenied(toolName)) return Denied
     if (isSessionAllowed(toolName)) return Allowed
@@ -262,9 +277,10 @@ object ToolPermissions {
    * @return PermissionDecision (Allowed or Denied)
    */
   def promptUser(toolName: String, resource: Option[String], view: View): PermissionDecision = {
+    val displayName = toolNameToDisplay(toolName)
     val resourceText = resource.map(r => s" on '$r'").getOrElse("")
     val action = toolDescriptions.getOrElse(toolName, "perform this action")
-    val question = s"Tool '$toolName' wants to $action$resourceText. Allow?"
+    val question = s"Tool '$displayName' wants to $action$resourceText. Allow?"
     
     val toolDef = AssistantTools.tools.find(_.name == toolName)
     val context = toolDef.map(_.description).getOrElse("")

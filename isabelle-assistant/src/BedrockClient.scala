@@ -409,9 +409,11 @@ object BedrockClient {
             
             Output.writeln(s"[Assistant] Tool use ($iteration/$iterStr): ${tu.name}")
             AssistantDockable.setStatus(s"[tool] ${tu.name} ($iteration/$iterStr)...")
-            // Add tool message to chat UI
-            GUI_Thread.later {
-              ChatAction.addToolMessage(tu.name, tu.input)
+            // Add tool message to chat UI (skip for task list tools since they inject their own widgets)
+            if (!tu.name.startsWith("task_list_")) {
+              GUI_Thread.later {
+                ChatAction.addToolMessage(tu.name, tu.input)
+              }
             }
             val result = AssistantTools.executeToolWithPermission(tu.name, tu.input, view)
             (tu.id, result)

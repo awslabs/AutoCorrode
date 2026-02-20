@@ -179,6 +179,31 @@ object UIColors {
     def optionHoverBackground: String = ThemeUtils.themedHex("#454545", "#eeeeee")
   }
   
+  // Task list widget colors (blue accent for task/work semantics)
+  object TaskList {
+    // Card container - white background like other message bubbles
+    def background: String = "white"
+    def border: String = ThemeUtils.themedHex("#1565c0", "#1976d2")  // Blue left border
+    
+    // Header text ("Task List")
+    def headerText: String = ThemeUtils.themedHex("#64b5f6", "#1565c0")
+    
+    // Progress subtitle ("3/6 done")
+    def progressText: String = ThemeUtils.themedHex("#90a4ae", "#78909c")
+    
+    // Status icons
+    def doneIcon: String = ThemeUtils.themedHex("#81c784", "#4caf50")      // ✓ green
+    def pendingIcon: String = ThemeUtils.themedHex("#90a4ae", "#78909c")   // ○ grey
+    def nextIcon: String = ThemeUtils.themedHex("#64b5f6", "#1976d2")      // ● blue
+    def irrelevantIcon: String = ThemeUtils.themedHex("#616161", "#9e9e9e") // ✗ muted
+    
+    // Text colors
+    def irrelevantText: String = ThemeUtils.themedHex("#616161", "#9e9e9e") // strikethrough text
+    def labelColor: String = ThemeUtils.themedHex("#b0bec5", "#607d8b")     // "Description:" labels
+    def taskText: String = ThemeUtils.themedHex("#e0e0e0", "#333333")       // Task title/description
+  }
+  
+  
   // Syntax highlighting colors for Isabelle code blocks (Rustdoc-inspired, subtle)
   object Syntax {
     // Keywords (lemma, theorem, proof, etc.) - muted purple/mauve like Rustdoc

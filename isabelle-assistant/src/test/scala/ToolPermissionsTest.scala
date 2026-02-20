@@ -70,7 +70,7 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
   }
 
   test("checkPermission should return Allowed for Allow-level tools") {
-    val args = Map.empty[String, Any]
+    val args: ResponseParser.ToolArgs = Map.empty
     ToolPermissions.clearSession()
     val decision = ToolPermissions.checkPermission("read_theory", args)
     decision shouldBe ToolPermissions.Allowed
@@ -80,7 +80,7 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     ToolPermissions.clearSession()
     // Session state is internal, but we can test indirectly via checkPermission behavior
     // After clear, checkPermission should follow configured defaults
-    val decision = ToolPermissions.checkPermission("read_theory", Map.empty)
+    val decision = ToolPermissions.checkPermission("read_theory", Map.empty[String, ResponseParser.ToolValue])
     decision shouldBe ToolPermissions.Allowed
   }
 
@@ -93,7 +93,7 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
   test("all tools should have descriptions for permission prompts") {
     val permissions = ToolPermissions.getAllToolPermissions
     permissions should not be empty
-    permissions.length shouldBe 29 // All 29 tools
+    permissions.length shouldBe 35 // All 35 tools
   }
 
   test("session-level decisions should be isolated") {
@@ -129,9 +129,9 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     ToolPermissions.getConfiguredLevel("edit_theory") shouldBe ToolPermissions.AskAlways
   }
 
-  test("getAllToolPermissions should return all 29 tools") {
+  test("getAllToolPermissions should return all 35 tools") {
     val all = ToolPermissions.getAllToolPermissions
-    all.length shouldBe 29
+    all.length shouldBe 35
     all.map(_._1).toSet shouldBe AssistantTools.tools.map(_.name).toSet
   }
 
@@ -142,6 +142,41 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
       val configStr = level.toConfigString
       val parsed = ToolPermissions.PermissionLevel.fromString(configStr)
       parsed shouldBe Some(level)
+    }
+  }
+
+  test("task list tools should default to Allow") {
+    val taskTools = List("task_list_add", "task_list_done", "task_list_irrelevant",
+      "task_list_next", "task_list_show", "task_list_get")
+    for (toolName <- taskTools) {
+      val level = ToolPermissions.getConfiguredLevel(toolName)
+      level shouldBe ToolPermissions.Allow
+    }
+  }
+
+  test("task list tools should be included in getAllToolPermissions") {
+    val all = ToolPermissions.getAllToolPermissions
+    val taskTools = Set("task_list_add", "task_list_done", "task_list_irrelevant",
+      "task_list_next", "task_list_show", "task_list_get")
+    val toolNames = all.map(_._1).toSet
+    taskTools.foreach(tool => toolNames should contain(tool))
+  }
+
+  test("task list tools should be visible by default") {
+    val visible = ToolPermissions.getVisibleTools
+    val taskTools = Set("task_list_add", "task_list_done", "task_list_irrelevant",
+      "task_list_next", "task_list_show", "task_list_get")
+    val visibleNames = visible.map(_.name).toSet
+    taskTools.foreach(tool => visibleNames should contain(tool))
+  }
+
+  test("checkPermission should allow task list tools without prompting") {
+    ToolPermissions.clearSession()
+    val taskTools = List("task_list_add", "task_list_done", "task_list_irrelevant",
+      "task_list_next", "task_list_show", "task_list_get")
+    for (toolName <- taskTools) {
+      val decision = ToolPermissions.checkPermission(toolName, Map.empty[String, ResponseParser.ToolValue])
+      decision shouldBe ToolPermissions.Allowed
     }
   }
 }

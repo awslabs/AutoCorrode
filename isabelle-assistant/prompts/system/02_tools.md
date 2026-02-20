@@ -48,6 +48,14 @@ When using Anthropic Claude models, you have access to tools that let you read t
 ## External Knowledge
 - **web_search**: Search web for Isabelle documentation, AFP entries, or formalization patterns
 
+## Task Management
+- **task_list_add**: Add a new task to the session task list with a title, description, and acceptance criteria
+- **task_list_done**: Mark a task as completed when all acceptance criteria are met
+- **task_list_irrelevant**: Mark a task as irrelevant or no longer needed
+- **task_list_next**: Get the next pending task to work on
+- **task_list_show**: Show all tasks with their current statuses and progress
+- **task_list_get**: Get detailed information about a specific task
+
 ## User Interaction
 - **ask_user**: Ask the user a multiple-choice question when uncertain about their intent or when you need their perspective on a decision. The user will see the question with clickable options in the chat panel (minimum 2 options). Use this **sparingly** — only when the answer genuinely affects your approach. The tool blocks execution until the user responds.
 

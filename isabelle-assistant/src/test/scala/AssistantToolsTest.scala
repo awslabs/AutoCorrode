@@ -119,8 +119,8 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
     params.head.required shouldBe false
   }
 
-  test("all tools should have exactly 29 entries") {
-    AssistantTools.tools.length shouldBe 29
+  test("all tools should have exactly 35 entries") {
+    AssistantTools.tools.length shouldBe 35
   }
 
   test("tool names should follow naming convention") {
@@ -177,7 +177,7 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
     tool.params.find(!_.required).get.name shouldBe "max_results"
   }
 
-  test("integer params should be for pagination, limits, or line numbers") {
+  test("integer params should be for pagination, limits, line numbers, or task IDs") {
     val integerParams = for {
       tool <- AssistantTools.tools
       param <- tool.params if param.typ == "integer"
@@ -185,7 +185,7 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
 
     integerParams should not be empty
     for ((toolName, paramName) <- integerParams) {
-      val validIntParams = Set("start_line", "end_line", "max_results", "line")
+      val validIntParams = Set("start_line", "end_line", "max_results", "line", "task_id")
       validIntParams should contain(paramName)
     }
   }
@@ -432,5 +432,91 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
     val tool = AssistantTools.tools.find(_.name == "ask_user").get
     val desc = tool.description.toLowerCase
     desc should include("sparing")
+  }
+
+  test("task_list_add should exist with three required params") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_add")
+    tool should not be empty
+    val required = tool.get.params.filter(_.required).map(_.name).toSet
+    required should contain("title")
+    required should contain("description")
+    required should contain("acceptance_criteria")
+    required.size shouldBe 3
+  }
+
+  test("task_list_done should exist and require task_id param") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_done")
+    tool should not be empty
+    val required = tool.get.params.filter(_.required).map(_.name)
+    required should contain("task_id")
+    required.length shouldBe 1
+    tool.get.params.head.typ shouldBe "integer"
+  }
+
+  test("task_list_irrelevant should exist and require task_id param") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_irrelevant")
+    tool should not be empty
+    val required = tool.get.params.filter(_.required).map(_.name)
+    required should contain("task_id")
+    required.length shouldBe 1
+    tool.get.params.head.typ shouldBe "integer"
+  }
+
+  test("task_list_next should exist with no required params") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_next")
+    tool should not be empty
+    tool.get.params shouldBe empty
+  }
+
+  test("task_list_show should exist with no required params") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_show")
+    tool should not be empty
+    tool.get.params shouldBe empty
+  }
+
+  test("task_list_get should exist and require task_id param") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_get")
+    tool should not be empty
+    val required = tool.get.params.filter(_.required).map(_.name)
+    required should contain("task_id")
+    required.length shouldBe 1
+    tool.get.params.head.typ shouldBe "integer"
+  }
+
+  test("task list tools should not require I/Q") {
+    val taskTools = List("task_list_add", "task_list_done", "task_list_irrelevant",
+      "task_list_next", "task_list_show", "task_list_get")
+    for (toolName <- taskTools) {
+      val tool = AssistantTools.tools.find(_.name == toolName).get
+      tool.description.toLowerCase should not include "i/q"
+    }
+  }
+
+  test("task list tools should have descriptive documentation") {
+    val taskTools = List("task_list_add", "task_list_done", "task_list_irrelevant",
+      "task_list_next", "task_list_show", "task_list_get")
+    for (toolName <- taskTools) {
+      val tool = AssistantTools.tools.find(_.name == toolName).get
+      tool.description should not be empty
+      tool.description.length should be > 20
+    }
+  }
+
+  test("task_list_add required params should be strings") {
+    val tool = AssistantTools.tools.find(_.name == "task_list_add").get
+    val required = tool.params.filter(_.required)
+    required.length shouldBe 3
+    required.foreach(_.typ shouldBe "string")
+  }
+
+  test("task list status tools should have integer task_id param") {
+    val statusTools = List("task_list_done", "task_list_irrelevant", "task_list_get")
+    for (toolName <- statusTools) {
+      val tool = AssistantTools.tools.find(_.name == toolName).get
+      val taskIdParam = tool.params.find(_.name == "task_id")
+      taskIdParam should not be empty
+      taskIdParam.get.typ shouldBe "integer"
+      taskIdParam.get.required shouldBe true
+    }
   }
 }
