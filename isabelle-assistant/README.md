@@ -1,6 +1,6 @@
 # Isabelle Assistant
 
-LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), built on [AWS Bedrock](https://aws.amazon.com/bedrock/). Provides interactive chat with LaTeX rendering, proof suggestions, code generation, refactoring, and more — all integrated into the Isabelle/jEdit IDE via a dockable chat panel and context-sensitive right-click menu.
+LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), built on [AWS Bedrock](https://aws.amazon.com/bedrock/). Provides interactive chat with LaTeX and Mermaid rendering, proof suggestions, code generation, refactoring, and more — all integrated into the Isabelle/jEdit IDE via a dockable chat panel and context-sensitive right-click menu.
 
 Isabelle Assistant is part of the [AutoCorrode](https://github.com/awslabs/AutoCorrode) project.
 
@@ -19,7 +19,7 @@ For contributor-level component and threading details, see [CONTRIBUTING.md](CON
 
 ### Freeform Chat
 
-Ask natural language questions about Isabelle/HOL directly in the IDE. The chat panel supports Markdown formatting, syntax-highlighted Isabelle code blocks with one-click insertion, and rendered LaTeX mathematics.
+Ask natural language questions about Isabelle/HOL directly in the IDE. The chat panel supports Markdown formatting, syntax-highlighted Isabelle code blocks with one-click insertion, rendered LaTeX mathematics, and Mermaid diagrams (offline via local `mmdc`).
 
 ![Freeform chat with the Assistant](gifs/assistant-freeform-chat.gif)
 
@@ -30,6 +30,21 @@ With Anthropic Claude models, the LLM has autonomous access to tools for reading
 Mathematical notation in chat responses is rendered as LaTeX via [JLaTeXMath](https://github.com/opencollab/jlatexmath), both inline (`$...$`) and display (`$$...$$`).
 
 ![LaTeX rendering in chat](gifs/assistant-chat-latex-rendering.gif)
+
+### Mermaid Rendering
+
+Mermaid diagrams in fenced blocks are rendered to images offline using local Mermaid CLI (`mmdc`):
+
+```mermaid
+graph TD
+  A[Assumptions] --> B[Derived Fact]
+  B --> C[Goal]
+```
+
+If `mmdc` is unavailable, the Assistant shows a graceful fallback message and preserves the original Mermaid source block.
+
+For sandboxed or restricted environments where subprocess execution must be disabled, set:
+`-Dassistant.mermaid.disable_subprocess=true`
 
 ### Explain
 

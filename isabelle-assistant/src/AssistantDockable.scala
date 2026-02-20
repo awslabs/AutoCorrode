@@ -186,7 +186,7 @@ class AssistantDockable(view: View, position: String)
 
   private def createHtmlPane(): JEditorPane = {
     val pane = new JEditorPane()
-    pane.setEditorKit(new LatexAwareEditorKit())
+    pane.setEditorKit(new SyntheticImageAwareEditorKit())
     pane.setEditable(false)
     pane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
     pane.addHyperlinkListener(new HyperlinkListener {
@@ -1056,15 +1056,16 @@ class AssistantDockable(view: View, position: String)
   override def focusOnDefaultComponent(): Unit = chatInput.requestFocus()
 }
 
-/** HTMLEditorKit that resolves latex:// image URLs from MarkdownRenderer's
+/** HTMLEditorKit that resolves synthetic image URLs (latex://, mermaid://)
+  * from MarkdownRenderer's
   * cache.
   */
-class LatexAwareEditorKit extends javax.swing.text.html.HTMLEditorKit {
+class SyntheticImageAwareEditorKit extends javax.swing.text.html.HTMLEditorKit {
   override def getViewFactory: javax.swing.text.ViewFactory =
-    new LatexViewFactory(super.getViewFactory)
+    new SyntheticImageViewFactory(super.getViewFactory)
 }
 
-class LatexViewFactory(delegate: javax.swing.text.ViewFactory)
+class SyntheticImageViewFactory(delegate: javax.swing.text.ViewFactory)
     extends javax.swing.text.ViewFactory {
   def create(elem: javax.swing.text.Element): javax.swing.text.View = {
     val kind = elem.getName
@@ -1072,14 +1073,14 @@ class LatexViewFactory(delegate: javax.swing.text.ViewFactory)
       val src = elem.getAttributes.getAttribute(
         javax.swing.text.html.HTML.Attribute.SRC
       )
-      if (src != null && src.toString.startsWith("latex://")) {
-        new LatexImageView(elem)
+      if (src != null && MarkdownRenderer.isSyntheticImageUrl(src.toString)) {
+        new SyntheticImageView(elem)
       } else delegate.create(elem)
     } else delegate.create(elem)
   }
 }
 
-class LatexImageView(elem: javax.swing.text.Element)
+class SyntheticImageView(elem: javax.swing.text.Element)
     extends javax.swing.text.View(elem) {
   private val src = elem.getAttributes
     .getAttribute(javax.swing.text.html.HTML.Attribute.SRC)

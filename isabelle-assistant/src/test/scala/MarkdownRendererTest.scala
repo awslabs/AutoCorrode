@@ -62,4 +62,27 @@ class MarkdownRendererTest extends AnyFunSuite with Matchers {
     html should include("by")
     html should include("simp")
   }
+
+  test("mermaid code block should render image or graceful fallback") {
+    val prop = "assistant.mermaid.disable_subprocess"
+    val prev = Option(System.getProperty(prop))
+    System.setProperty(prop, "true")
+    val md = "```mermaid\ngraph TD\n  A --> B\n```"
+    try {
+      val html = MarkdownRenderer.toBodyHtml(md)
+      (html.contains("src='mermaid://") ||
+        html.contains("Mermaid rendering unavailable")) shouldBe true
+    } finally {
+      prev match {
+        case Some(v) => System.setProperty(prop, v)
+        case None    => System.clearProperty(prop)
+      }
+    }
+  }
+
+  test("synthetic image URL detection") {
+    MarkdownRenderer.isSyntheticImageUrl("latex://12") shouldBe true
+    MarkdownRenderer.isSyntheticImageUrl("mermaid://34") shouldBe true
+    MarkdownRenderer.isSyntheticImageUrl("https://example.com/x.png") shouldBe false
+  }
 }

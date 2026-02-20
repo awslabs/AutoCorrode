@@ -5,11 +5,16 @@ package isabelle.assistant
 
 import java.awt.{Color, Insets}
 import java.awt.image.BufferedImage
+import java.nio.charset.StandardCharsets
+import java.nio.file.Files
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import javax.imageio.ImageIO
 
 /** Markdown-to-HTML renderer for the chat panel. Handles headings, bold,
   * italic, inline code, code fences (with clickable isabelle blocks),
-  * bullet/numbered lists, markdown tables, and LaTeX math (via JLaTeXMath →
-  * BufferedImage → base64 img tag).
+  * bullet/numbered lists, markdown tables, Mermaid diagrams (via local mmdc),
+  * and LaTeX math (via JLaTeXMath → BufferedImage).
   */
 object MarkdownRenderer {
 
@@ -67,6 +72,7 @@ object MarkdownRenderer {
       registerAction: Option[String => String]
   ): Int = {
     val tag = lines(start).trim.stripPrefix("```").trim
+    val tagName = tag.takeWhile(!_.isWhitespace).toLowerCase(Locale.ROOT)
     val code = new StringBuilder
     var i = start + 1
     while (i < lines.length && !lines(i).trim.startsWith("```")) {
@@ -81,15 +87,17 @@ object MarkdownRenderer {
     if (tag.startsWith("action:")) {
       val id = tag.stripPrefix("action:")
       appendClickableBlock(sb, escaped, id)
-    } else if (tag == "isabelle" && registerAction.isDefined) {
+    } else if (tagName == "isabelle" && registerAction.isDefined) {
       val id = registerAction.get(codeStr)
       appendClickableBlock(sb, escaped, id)
+    } else if (tagName == "mermaid") {
+      appendMermaidBlock(sb, codeStr)
     } else {
       val codeBg = UIColors.CodeBlock.background
       val codeBorder = UIColors.CodeBlock.border
       // Apply syntax highlighting if it's an isabelle block
       val highlighted =
-        if (tag == "isabelle") highlightIsabelle(escaped) else escaped
+        if (tagName == "isabelle") highlightIsabelle(escaped) else escaped
       sb.append(
         s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;"
       )
@@ -101,6 +109,36 @@ object MarkdownRenderer {
       sb.append("</pre>")
     }
     i + 1 // skip closing ```
+  }
+
+  private case class RenderedImage(url: String, width: Int, height: Int)
+
+  private def appendMermaidBlock(sb: StringBuilder, code: String): Unit = {
+    val diagram = code.trim
+    if (diagram.isEmpty) {
+      sb.append(
+        "<div style='margin:4px 0;color:#666;font-style:italic;'>Empty Mermaid diagram block.</div>"
+      )
+      return
+    }
+
+    renderMermaid(diagram) match {
+      case Right(img) =>
+        sb.append(
+          s"<div style='margin:8px 0;text-align:center;'><img src='${img.url}' width='${img.width}' height='${img.height}' style='max-width:100%;height:auto;' /></div>"
+        )
+      case Left(reason) =>
+        val codeBg = UIColors.CodeBlock.background
+        val codeBorder = UIColors.CodeBlock.border
+        sb.append(
+          s"<div style='margin:4px 0 2px;color:#8a3b00;font-size:10.5pt;'><b>Mermaid rendering unavailable:</b> ${escapeHtml(reason)}</div>"
+        )
+        sb.append(
+          s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;white-space:pre;overflow-x:auto;line-height:1.5;'>"
+        )
+        sb.append(escapeHtml(code))
+        sb.append("</pre>")
+    }
   }
 
   private def appendClickableBlock(
@@ -342,7 +380,7 @@ object MarkdownRenderer {
   // Match $...$ but not $$ (display math) and not escaped \$
   private val inlineLatexPattern = """(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)""".r
 
-  /** LRU cache of rendered LaTeX images, keyed by synthetic URL for
+  /** LRU cache of rendered synthetic images, keyed by synthetic URL for
     * JEditorPane.
     */
   private val maxImageCacheSize = 200
@@ -365,8 +403,130 @@ object MarkdownRenderer {
     Option(imageCache.get(url))
   }
 
+  def isSyntheticImageUrl(url: String): Boolean =
+    url.startsWith("latex://") || url.startsWith("mermaid://")
+
+  private def cacheSyntheticImage(
+      scheme: String,
+      image: java.awt.Image
+  ): String = synchronized {
+    val id = s"$scheme://${imageCounter.getAndIncrement()}"
+    imageCache.put(id, image)
+    id
+  }
+
+  @volatile private var mermaidCliAvailability: Option[Boolean] = None
+  private val mermaidDisableSubprocessProp =
+    "assistant.mermaid.disable_subprocess"
+  private val maxMermaidChars = 20000
+  private val maxMermaidPixels = 8_000_000
+
+  private def isMermaidSubprocessDisabled: Boolean =
+    java.lang.Boolean.getBoolean(mermaidDisableSubprocessProp)
+
+  private def isMermaidCliAvailable: Boolean = mermaidCliAvailability match {
+    case Some(v) => v
+    case None =>
+      synchronized {
+        mermaidCliAvailability match {
+          case Some(v) => v
+          case None    =>
+            val available = try {
+              val process = new ProcessBuilder("mmdc", "--version")
+                .redirectErrorStream(true)
+                .start()
+              val finished = process.waitFor(2, TimeUnit.SECONDS)
+              if (!finished) {
+                process.destroyForcibly()
+                false
+              } else {
+                process.exitValue() == 0
+              }
+            } catch {
+              case _: Exception => false
+            }
+            mermaidCliAvailability = Some(available)
+            available
+        }
+      }
+  }
+
+  private def renderMermaid(diagram: String): Either[String, RenderedImage] = {
+    if (isMermaidSubprocessDisabled)
+      return Left(
+        s"subprocess execution disabled via -D$mermaidDisableSubprocessProp=true"
+      )
+
+    if (diagram.length > maxMermaidChars)
+      return Left(
+        s"diagram is too large (${diagram.length} chars, limit: $maxMermaidChars)"
+      )
+
+    if (!isMermaidCliAvailable)
+      return Left(
+        "local Mermaid CLI (`mmdc`) not found in PATH. Install mermaid-cli for offline diagram rendering."
+      )
+
+    val tempDir = Files.createTempDirectory("assistant-mermaid-")
+    val input = tempDir.resolve("diagram.mmd")
+    val output = tempDir.resolve("diagram.png")
+    try {
+      Files.write(input, diagram.getBytes(StandardCharsets.UTF_8))
+      val process = new ProcessBuilder(
+        "mmdc",
+        "--input",
+        input.toString,
+        "--output",
+        output.toString,
+        "--backgroundColor",
+        "transparent"
+      ).redirectErrorStream(true).start()
+
+      val finished = process.waitFor(20, TimeUnit.SECONDS)
+      if (!finished) {
+        process.destroyForcibly()
+        Left("render timed out after 20s")
+      } else {
+        val processOutput = {
+          val in = process.getInputStream
+          try new String(in.readAllBytes(), StandardCharsets.UTF_8).trim
+          finally in.close()
+        }
+        if (process.exitValue() != 0) {
+          val msg =
+            if (processOutput.isEmpty)
+              s"mmdc exited with code ${process.exitValue()}"
+            else processOutput.take(400)
+          Left(msg)
+        } else if (!Files.exists(output)) {
+          Left("mmdc completed but produced no output image")
+        } else {
+          val image = ImageIO.read(output.toFile)
+          if (image == null) Left("could not decode Mermaid output image")
+          else if (image.getWidth.toLong * image.getHeight.toLong > maxMermaidPixels)
+            Left(
+              s"rendered Mermaid image is too large (${image.getWidth}x${image.getHeight})"
+            )
+          else {
+            val id = cacheSyntheticImage("mermaid", image)
+            Right(RenderedImage(id, image.getWidth, image.getHeight))
+          }
+        }
+      }
+    } catch {
+      case ex: Exception => Left(ex.getMessage)
+    } finally {
+      try Files.deleteIfExists(input)
+      catch { case _: Throwable => }
+      try Files.deleteIfExists(output)
+      catch { case _: Throwable => }
+      try Files.deleteIfExists(tempDir)
+      catch { case _: Throwable => }
+    }
+  }
+
   /** Render a LaTeX formula to an img tag with a synthetic URL. The image is
-    * stored in imageCache and loaded by LatexImageView.
+    * stored in imageCache and loaded by SyntheticImageView.
     */
   private def renderLatex(formula: String, size: Float): String = {
     try {
@@ -387,8 +547,7 @@ object MarkdownRenderer {
         g2.fillRect(0, 0, w, h)
         icon.paintIcon(null, g2, 0, 0)
         g2.dispose()
-        val id = s"latex://${imageCounter.getAndIncrement()}"
-        synchronized { imageCache.put(id, img) }
+        val id = cacheSyntheticImage("latex", img)
         s"<img src='$id' width='$w' height='$h' style='vertical-align:middle;' />"
       }
     } catch {

@@ -40,4 +40,5 @@ Produce proofs that are robust under maintenance, easy to read, and consistent w
 ## Chat Rendering Conventions
 - The chat UI supports Markdown; use standard headings, lists, emphasis, and tables where useful.
 - The chat UI renders LaTeX math with `$...$` (inline) and `$$...$$` (display).
+- The chat UI supports Mermaid diagrams in fenced ` ```mermaid ` blocks (offline rendering when available).
 - Prefer ```isabelle code fences for snippets intended for insertion.
