@@ -1,13 +1,115 @@
-name: CI
+# SPDX-License-Identifier: MIT
 
+name: CI
+permissions:
+  contents: read
 on:
+  workflow_dispatch:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
+    types: [ opened, synchronize ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  lint-markdown-link:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+    - uses: gaurav-nelson/github-action-markdown-link-check@3c3b66f1f7d0900e37b71eca45b63ea9eedfce31 # v1.0.17
+
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+      - name: Checkout AutoCorrode
+        uses: actions/checkout@v3
+
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
+
+      # Build with HTML documentation, to make sure we can deploy to pages on merge
+      - name: Build AutoCorrode
+        run: |
+          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info -d $AFP_COMPONENT_BASE/Word_Lib AutoCorrode
+
+  iq-build:
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+      - name: Checkout AutoCorrode
+        uses: actions/checkout@v3
+
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
+
+      - name: Setup dependencies for I/Q build
+        run: |
+          apt install -y make
+          echo "ISABELLE_HOME=/home/isabelle/Isabelle" >> $GITHUB_ENV
+          echo "JAVA_HOME=/home/isabelle/Isabelle/contrib/jdk-21.0.9/x86_64-linux/" >> $GITHUB_ENV
+          echo "PATH=/home/isabelle/Isabelle/contrib/jdk-21.0.9/x86_64-linux/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Build I/Q plugin
+        run: |
+          make -C iq
+
+      - name: Install I/Q plugin
+        run: |
+          make -C iq install
+
+      - name: Build I/P plugin
+        run: |
+          cd ip/ip_plugin
+          make build ISABELLE_HOME=$ISABELLE_HOME
+
+      - name: Install I/P plugin
+        run: |
+          cd ip/ip_plugin
+          make install ISABELLE_HOME=$ISABELLE_HOME
+
+  ip-build:
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+      - name: Checkout AutoCorrode
+        uses: actions/checkout@v3
+
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
+
+      - name: Setup dependencies for I/P build
+        run: |
+          apt install -y make
+          echo "ISABELLE_HOME=/home/isabelle/Isabelle" >> $GITHUB_ENV
+          echo "JAVA_HOME=/home/isabelle/Isabelle/contrib/jdk-21.0.9/x86_64-linux/" >> $GITHUB_ENV
+          echo "PATH=/home/isabelle/Isabelle/contrib/jdk-21.0.9/x86_64-linux/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Build I/P plugin
+        run: |
+          cd ip/ip_plugin
+          make build ISABELLE_HOME=$ISABELLE_HOME
+
+      - name: Install I/P plugin
+        run: |
+          cd ip/ip_plugin
+          make install ISABELLE_HOME=$ISABELLE_HOME
+
+
+  isabelle-assistant:
     runs-on: ubuntu-latest
     container:
       image: makarius/isabelle:Isabelle2025-2
