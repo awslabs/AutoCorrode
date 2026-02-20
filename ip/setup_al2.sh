@@ -5,7 +5,7 @@
 set -euo pipefail
 
 REMOTE="${1:?Usage: $0 user@host [install_dir] [64|32] [skip_build]}"
-INSTALL_DIR="${2:-Isabelle2025-2}"
+INSTALL_DIR="${2:-$HOME/Isabelle2025-2}"
 BITS="${3:-64}"
 SKIP_BUILD="${4:-}"
 
@@ -30,9 +30,9 @@ echo "=== Setting up Isabelle on $REMOTE (Amazon Linux 2, $REMOTE_ARCH, ${BITS}-
 ssh "$REMOTE" bash -s "$URL" "$TARBALL" "$INSTALL_DIR" "$BITS" "$SKIP_BUILD" <<'REMOTE_SCRIPT'
 set -euo pipefail
 URL="$1"; TARBALL="$2"; INSTALL_DIR="$3"; BITS="$4"; SKIP_BUILD="${5:-}"
-cd ~
+[[ "$INSTALL_DIR" = /* ]] || { echo "INSTALL_DIR must be an absolute path" >&2; exit 1; }
 
-ISABELLE_HOME="$HOME/$INSTALL_DIR"
+ISABELLE_HOME="$INSTALL_DIR"
 NPROC=$(nproc)
 
 # Dependencies for building Poly/ML and running Isabelle

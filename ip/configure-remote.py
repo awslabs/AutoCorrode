@@ -348,7 +348,7 @@ def cmd_setup(args):
         setup_script = pick_setup_script(arch, os_id)
         step(f"Installing Isabelle on remote ({os.path.basename(setup_script)})")
         print("", file=sys.stderr)
-        install_dir = os.path.basename(remote_home)
+        install_dir = remote_home
         setup_args = [setup_script, host, install_dir,
                       "64" if args.use_64 else "32"]
         if args.copy_from_local:

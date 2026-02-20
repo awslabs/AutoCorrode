@@ -26,6 +26,11 @@ runs:
       run: |
         echo "$($ISABELLE_HOME/bin/isabelle getenv ISABELLE_HOME_USER)" >> $GITHUB_ENV
 
+    - name: Set Isabelle binary
+      shell: bash
+      run: |
+        echo "ISABELLE=$ISABELLE_HOME/bin/isabelle" >> $GITHUB_ENV
+
     - name: Cache heap images
       uses: actions/cache@v3
       with:
