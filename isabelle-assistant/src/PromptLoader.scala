@@ -6,14 +6,29 @@ package isabelle.assistant
 import isabelle._
 import com.samskivert.mustache.Mustache
 import scala.jdk.CollectionConverters._
+import scala.io.Source
 
 /**
  * Loads Mustache prompt templates from the prompts/ directory.
  * Caches auto-discovered system prompts from prompts/system/ for reuse.
+ * Falls back to classpath-packaged prompts (and finally a built-in baseline)
+ * so prompt delivery remains reliable even if ISABELLE_ASSISTANT_HOME is unset.
  */
 object PromptLoader {
   @volatile private var cachedSystemPrompt: Option[String] = None
   private val cacheLock = new Object()
+  private val defaultSystemPromptFiles = List(
+    "00_core_operating_rules.md",
+    "01_isabelle_style.md",
+    "02_tools.md",
+    "03_task_planning.md"
+  )
+  private val builtInSystemPrompt =
+    """You are an Isabelle/HOL proof assistant.
+      |
+      |Use tools to inspect real proof state before proposing edits.
+      |Do not claim success until there are no errors in the processed theory.
+      |Return executable Isabelle code when suggesting proof text.""".stripMargin
 
   /** Resolve ISABELLE_ASSISTANT_HOME, returning None with a warning if unset. */
   private def assistantHome: Option[String] = {
@@ -34,15 +49,29 @@ object PromptLoader {
     } else Some(home)
   }
 
+  private[assistant] def readClasspathResource(resourcePath: String): Option[String] = {
+    val classLoader = Option(getClass.getClassLoader)
+      .orElse(Option(Thread.currentThread().getContextClassLoader))
+    classLoader.flatMap(cl => Option(cl.getResourceAsStream(resourcePath))).map { in =>
+      val src = Source.fromInputStream(in, "UTF-8")
+      try src.mkString
+      finally src.close()
+    }
+  }
+
+  private def loadFromHome(home: Option[String], name: String): Option[String] =
+    home.flatMap { root =>
+      val path = Path.explode(root) + Path.explode("prompts") + Path.explode(name)
+      if (path.is_file) Some(File.read(path)) else None
+    }
+
   def load(name: String, substitutions: Map[String, String]): String = {
-    val home = assistantHome.getOrElse(
-      error("ISABELLE_ASSISTANT_HOME not set — install the plugin via 'make install' or add init_component to settings"))
-
-    val path = Path.explode(home) + Path.explode("prompts") + Path.explode(name)
-    if (!path.is_file)
-      error("Prompt file not found: " + path)
-
-    renderTemplate(File.read(path), substitutions)
+    val template = loadFromHome(assistantHome, name)
+      .orElse(readClasspathResource(s"prompts/$name"))
+      .getOrElse(error(
+        s"Prompt file not found: prompts/$name (checked ISABELLE_ASSISTANT_HOME and classpath)"
+      ))
+    renderTemplate(template, substitutions)
   }
 
   private[assistant] def renderTemplate(templateText: String, substitutions: Map[String, String]): String = {
@@ -53,14 +82,53 @@ object PromptLoader {
   /** Load and cache all system prompts from prompts/system/ directory */
   def getSystemPrompt: String = cacheLock.synchronized {
     cachedSystemPrompt.getOrElse {
-      val prompt = loadSystemPromptFromHome(
+      val prompt = loadSystemPromptFromSources(
         assistantHome,
         _.is_dir,
         dir => File.read_dir(dir),
-        path => File.read(path)
+        path => File.read(path),
+        readClasspathResource,
+        msg => Output.warning(msg)
       )
       cachedSystemPrompt = Some(prompt)
       prompt
+    }
+  }
+
+  private[assistant] def parseSystemPromptIndex(content: String): List[String] =
+    content.linesIterator
+      .map(_.trim)
+      .filter(line => line.nonEmpty && !line.startsWith("#"))
+      .toList
+
+  private[assistant] def loadSystemPromptFromSources(
+    home: Option[String],
+    isDir: Path => Boolean,
+    readDir: Path => List[String],
+    readFile: Path => String,
+    readResource: String => Option[String],
+    warn: String => Unit
+  ): String = {
+    val fromHome = loadSystemPromptFromHome(home, isDir, readDir, readFile)
+    if (fromHome.nonEmpty) fromHome
+    else {
+      val classpathIndex = readResource("prompts/system/_index.txt")
+        .map(parseSystemPromptIndex)
+        .filter(_.nonEmpty)
+        .getOrElse(defaultSystemPromptFiles)
+
+      val classpathPrompts = classpathIndex
+        .flatMap(name => readResource(s"prompts/system/$name"))
+        .map(_.trim)
+        .filter(_.nonEmpty)
+
+      if (classpathPrompts.nonEmpty) {
+        warn("[Assistant] Using classpath fallback for system prompts")
+        classpathPrompts.mkString("\n\n")
+      } else {
+        warn("[Assistant] No system prompt files found; using built-in fallback prompt")
+        builtInSystemPrompt
+      }
     }
   }
 

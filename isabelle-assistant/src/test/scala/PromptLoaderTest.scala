@@ -54,6 +54,61 @@ class PromptLoaderTest extends AnyFunSuite with Matchers {
     PromptLoader.loadSystemPromptFromHome(Some("/h"), _ => false, _ => Nil, _ => "x") shouldBe ""
   }
 
+  test("parseSystemPromptIndex should ignore blank lines and comments") {
+    val parsed = PromptLoader.parseSystemPromptIndex(
+      """
+        |# comment
+        |00_core_operating_rules.md
+        |
+        |01_isabelle_style.md
+        |  # another comment
+        |02_tools.md
+        |""".stripMargin
+    )
+    parsed shouldBe List(
+      "00_core_operating_rules.md",
+      "01_isabelle_style.md",
+      "02_tools.md"
+    )
+  }
+
+  test("loadSystemPromptFromSources should use classpath fallback when home prompts unavailable") {
+    var warnings = List.empty[String]
+    val resources = Map(
+      "prompts/system/_index.txt" ->
+        "00_core_operating_rules.md\n01_isabelle_style.md\n",
+      "prompts/system/00_core_operating_rules.md" -> "CORE",
+      "prompts/system/01_isabelle_style.md" -> "STYLE"
+    )
+
+    val rendered = PromptLoader.loadSystemPromptFromSources(
+      home = None,
+      isDir = _ => false,
+      readDir = _ => Nil,
+      readFile = _ => "",
+      readResource = resources.get,
+      warn = msg => warnings = warnings :+ msg
+    )
+
+    rendered shouldBe "CORE\n\nSTYLE"
+    warnings.exists(_.contains("classpath fallback")) shouldBe true
+  }
+
+  test("loadSystemPromptFromSources should fall back to built-in prompt when no sources exist") {
+    var warning: Option[String] = None
+    val rendered = PromptLoader.loadSystemPromptFromSources(
+      home = None,
+      isDir = _ => false,
+      readDir = _ => Nil,
+      readFile = _ => "",
+      readResource = _ => None,
+      warn = msg => warning = Some(msg)
+    )
+
+    rendered should include("Isabelle/HOL proof assistant")
+    warning.get should include("built-in fallback")
+  }
+
   test("renderTemplate should substitute placeholders deterministically") {
     val rendered = PromptLoader.renderTemplate("Hello {{name}} from {{place}}", Map(
       "name" -> "Isabelle",

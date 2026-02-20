@@ -39,6 +39,7 @@ IQ_CLASSPATH = $(firstword $(wildcard $(IQ_JAR) $(IQ_BUILD_JAR)))
 
 SCALA_SOURCES := $(wildcard src/*.scala)
 RESOURCE_FILES := $(wildcard resources/*)
+PROMPT_FILES := $(shell find prompts -type f 2>/dev/null)
 
 TEST_SOURCES := $(wildcard src/test/scala/*.scala)
 SCALATEST_JARS = $(wildcard lib/test/*.jar)
@@ -91,9 +92,10 @@ $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 		$(SCALA_SOURCES)
 	touch $@
 
-$(CLASSES_DIR)/.resources: $(RESOURCE_FILES) | $(CLASSES_DIR)
+$(CLASSES_DIR)/.resources: $(RESOURCE_FILES) $(PROMPT_FILES) | $(CLASSES_DIR)
 	echo "Copying resources..."
 	cp -r resources/* $(CLASSES_DIR)/ 2>/dev/null || true
+	cp -r prompts $(CLASSES_DIR)/ 2>/dev/null || true
 	touch $@
 
 $(CLASSES_DIR):
