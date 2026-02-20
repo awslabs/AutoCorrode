@@ -3,7 +3,7 @@
 Isabelle Remote ML Prover Proxy
 ===============================
 
-Runs the Isabelle ML prover (Poly/ML) and Bash.Server on a remote machine
+Runs the Isabelle ML prover (Poly/ML) and associated servers on a remote machine
 while keeping jEdit + Scala/PIDE local. No Isabelle source changes required.
 
 Normal Isabelle Architecture
@@ -62,9 +62,15 @@ This script interposes between Scala and a remote Poly/ML:
     │                  │ │    session    │          ┌──────────────────┐ │
     │                  │ │  • ML→Scala   │          │ Remote           │ │
     │                  │ │    errors     │          │ Bash.Server      │◄┘
-    │                  │ └───────────────┘          │ (localhost:P4)   │
-    │                  │                            └──────────────────┘
-    └──────────────────┘
+    │                  │ │  • ML stats   │          │ (localhost:P4)   │
+    │                  │ │  • loading_   │          └──────────────────┘
+    │                  │ │    theory     │
+    │                  │ └──────┬────────┘          ┌──────────────────┐
+    │                  │        │ SSH               │ Stats monitor    │
+    │                  │        └──────────────────►│ (poly process)   │
+    │                  │         proxy_ml_stats ◄───│ ML_Statistics.   │
+    │                  │                            │   monitor PID    │
+    └──────────────────┘                            └──────────────────┘
 
 Startup sequence:
   1. The proxy + configuration is passed to Isabelle as a `process_policy`;
@@ -100,6 +106,15 @@ PIDE proxy interceptions (ML→Scala):
     verify local file existence for \\<^file> annotations).
   • "status" with "failed" on text commands: dropped (cosmetic failure from
     \\<^file> checks; the subsequent "finished" status completes the command).
+  • "protocol" with "function=ML_statistics": suppressed. Instead, the proxy
+    starts a separate remote poly process that runs ML_Statistics.monitor to
+    poll the remote POLYSTATSDIR, and injects the results back to Scala as
+    proxy_ml_stats messages. This is necessary because Scala normally reads
+    stats files from POLYSTATSDIR on the local filesystem, which doesn't
+    exist when the prover runs remotely.
+  • "protocol" with "function=loading_theory": reverse-rewrites remote paths
+    back to local paths, so that Scala's Sources lookup (which is keyed by
+    local paths) can find the correct session source entries.
 
 Post-build:
   • If ML_Heap.save_child is in the command (heap build), the built heap is
@@ -225,13 +240,6 @@ def yxml_text_leaves(data):
     return [t.decode(errors="replace") for t in texts if t.strip()]
 
 
-def parse_yxml_options(data):
-    """Parse ISABELLE_PROCESS_OPTIONS YXML into (name, type, value) triples."""
-    leaves = yxml_text_leaves(data)
-    # Options come in groups of 3: name, type, value
-    return list(zip(leaves[0::3], leaves[1::3], leaves[2::3]))
-
-
 # ---------------------------------------------------------------------------
 # PIDE protocol helpers
 # ---------------------------------------------------------------------------
@@ -352,12 +360,11 @@ def rewrite_build_session_paths(chunks, path_rewrites,
         return chunks, False
     modified = False
     new_chunks = [chunks[0]]
-    for chunk in chunks[1:]:
-        # Rewrite paths
-        for old, new in path_rewrites:
-            if old in chunk:
-                chunk = chunk.replace(old, new)
-                modified = True
+    for i, chunk in enumerate(chunks[1:], 1):
+        new_chunk = forward_rewrite(chunk, path_rewrites, label=f"build_session[{i}]")
+        if new_chunk != chunk:
+            modified = True
+            chunk = new_chunk
         # Rewrite bash_process fields
         chunk, m = rewrite_bash_process_in_chunk(chunk, remote_bash_addr, remote_bash_pw)
         modified = modified or m
@@ -416,6 +423,10 @@ def pide_proxy(server_sock, scala_port, scala_password,
             ▼
         scala_port (Scala's System_Channel)
     """
+    # Reverse rewrites: remote→local (for ML→Scala path translation).
+    # Built from the same rewrite table used Scala→ML, just swapped.
+    path_rewrites = path_rewrites or []
+
     # Accept ML's connection
     logger.debug(f"PIDE proxy listening on {server_sock.getsockname()}")
 
@@ -552,6 +563,17 @@ def pide_proxy(server_sock, scala_port, scala_password,
                             scala_sock, scala_write_lock)
                     continue
 
+                # Reverse-rewrite loading_theory paths (remote→local) so that
+                # Scala's Sources lookup finds the correct local-keyed entries.
+                if (kind == b"protocol" and path_rewrites and
+                        any(b"function=loading_theory" in c for c in chunks)):
+                    chunks = [backward_rewrite(c, path_rewrites, label="loading_theory")
+                              for c in chunks]
+                    with scala_write_lock:
+                        write_pide_message(scala_sock, chunks)
+                    count_bytes(sum(len(c) for c in chunks))
+                    continue
+
                 # Forward unmodified
                 n = len(header_line) + 1 + sum(len(c) for c in chunks)
                 with scala_write_lock:
@@ -609,45 +631,53 @@ def pide_proxy(server_sock, scala_port, scala_password,
 # Path rewriting
 # ---------------------------------------------------------------------------
 
-def rewrite_argv(poly_argv, local_isabelle_home, target_isabelle_home,
-                 local_polyml_home, target_polyml_home,
-                 local_platform, target_platform,
-                 local_home, remote_home):
-    """Rewrite paths in the poly command line.
+def forward_rewrite(data, rewrites, label=""):
+    """Apply rewrites (old→new) to str or bytes, logging changes."""
+    result = data
+    for old, new in rewrites:
+        result = result.replace(old, new)
+    if result != data and logger.isEnabledFor(logging.DEBUG):
+        if isinstance(data, bytes):
+            logger.debug(f"  forward_rewrite [{label}]: (modified, {len(data)} -> {len(result)} bytes)")
+        else:
+            logger.debug(f"  forward_rewrite [{label}]: {data[:200]} -> {result[:200]}")
+    return result
 
-    Replaces ISABELLE_HOME, POLYML_HOME, ML_PLATFORM, and user HOME
-    (for heap paths in ~/.isabelle/).
-    """
-    new_argv = []
-    for i, arg in enumerate(poly_argv):
-        new_arg = arg
-        if local_isabelle_home:
-            new_arg = new_arg.replace(local_isabelle_home, target_isabelle_home)
-        if local_polyml_home and local_polyml_home != target_polyml_home:
-            new_arg = new_arg.replace(local_polyml_home, target_polyml_home)
-        if local_platform and target_platform and local_platform != target_platform:
-            new_arg = new_arg.replace(local_platform, target_platform)
-        if local_home and remote_home and local_home != remote_home:
-            new_arg = new_arg.replace(local_home, remote_home)
-        if new_arg != arg:
-            logger.debug(f"  REWRITE arg[{i}]")
-        new_argv.append(new_arg)
-    return new_argv
+
+def backward_rewrite(data, rewrites, label=""):
+    """Apply rewrites in reverse (new→old) to str or bytes, logging changes."""
+    result = data
+    for old, new in rewrites:
+        result = result.replace(new, old)
+    if result != data and logger.isEnabledFor(logging.DEBUG):
+        if isinstance(data, bytes):
+            logger.debug(f"  backward_rewrite [{label}]: (modified, {len(data)} -> {len(result)} bytes)")
+        else:
+            logger.debug(f"  backward_rewrite [{label}]: {data[:200]} -> {result[:200]}")
+    return result
+
+
+def rewrite_argv(poly_argv, rewrites):
+    """Rewrite paths in the poly command line using a list of (old, new) pairs."""
+    return [forward_rewrite(arg, rewrites, label=f"arg[{i}]")
+            for i, arg in enumerate(poly_argv)]
 
 # ---------------------------------------------------------------------------
 # Options file helpers
 # ---------------------------------------------------------------------------
 
-def extract_channel_port(opts_file):
-    """Extract the system_channel_address port from the ISABELLE_PROCESS_OPTIONS file.
-
-    The file is YXML-encoded and contains exactly one 127.0.0.1:PORT entry
-    at this point (the PIDE channel). bash_process_address is set later via
-    the PIDE protocol, not in this file.
-    """
-    data = open(opts_file, "rb").read()
-    match = re.search(rb"127\.0\.0\.1:(\d+)", data)
+def extract_bash_port(opts_data):
+    """Extract the bash_process_address port from options data."""
+    match = re.search(
+        rb"bash_process_address[\x05\x06:]+string[\x05\x06:]+127\.0\.0\.1:(\d+)", opts_data)
     return int(match.group(1)) if match else None
+
+
+def extract_channel_port(opts_file):
+    """Extract the system_channel_address port from the ISABELLE_PROCESS_OPTIONS file."""
+    data = open(opts_file, "rb").read()
+    match = re.search(rb"system_channel_address[\x05\x06:]+string[\x05\x06:]+(127\.0\.0\.1:(\d+))", data)
+    return int(match.group(2)) if match else None
 
 
 def make_proxy_server():
@@ -748,6 +778,9 @@ def main():
         logger.error("No poly command provided")
         sys.exit(1)
 
+    logger.debug(f"Full command line ({len(sys.argv)} args): {sys.argv}")
+    logger.debug(f"Parsed poly_argv ({len(poly_argv)} args): {poly_argv}")
+
     # Override poly runtime options
     for opt, val in [("--minheap", args.minheap),
                      ("--maxheap", args.maxheap),
@@ -769,8 +802,6 @@ def main():
 
     target_isabelle_home = args.target_isabelle_home
     host = args.host
-    local_isabelle_home = os.environ.get("ISABELLE_HOME", "")
-    local_polyml_home = os.environ.get("POLYML_HOME", "")
 
     # Derive local ML_PLATFORM from the poly binary path in the command line.
     # The path looks like: .../contrib/polyml-X.Y.Z/PLATFORM/poly
@@ -833,42 +864,72 @@ def main():
 
     remote_components_str = target_env_vars.get("ISABELLE_COMPONENTS", "")
 
-    logger.debug(f"Local  ISABELLE_HOME: {local_isabelle_home}")
-    logger.debug(f"Target ISABELLE_HOME: {target_isabelle_home}")
-    logger.debug(f"Local  HOME: {local_home}")
-    logger.debug(f"Remote HOME: {remote_home}")
-    logger.debug(f"POLYML_HOME: {target_polyml_home}")
     logger.debug(f"Forwarding {len(target_env_vars)} env vars")
 
-    # Step 2: Rewrite poly command line
-    # The command line contains local paths for the poly binary and session heaps.
-    # We replace ISABELLE_HOME, POLYML_HOME, ML_PLATFORM, and user HOME.
-    new_argv = rewrite_argv(poly_argv, local_isabelle_home, target_isabelle_home,
-                            local_polyml_home, target_polyml_home,
-                            local_platform, target_platform,
-                            local_home, remote_home)
-    logger.debug(f"Command: {new_argv[0]}")
+    # Step 2: Build path rewrite table.
+    # Order matters: more specific (longer) prefixes first to avoid partial matches.
+    local_isabelle_home = os.environ.get("ISABELLE_HOME", "")
+    local_polyml_home = os.environ.get("POLYML_HOME", "")
+    local_home_user = os.environ.get("ISABELLE_HOME_USER", "")
+    local_heaps = os.environ.get("ISABELLE_HEAPS", "")
 
-    # Step 2b: Build component path rewrites.
+    remote_home_user = target_env_vars.get("ISABELLE_HOME_USER", "")
+    remote_heaps = target_env_vars.get("ISABELLE_HEAPS", "")
+
+    logger.debug(f"Local  ISABELLE_HOME:      {local_isabelle_home}")
+    logger.debug(f"Remote ISABELLE_HOME:      {target_isabelle_home}")
+    logger.debug(f"Local  POLYML_HOME:        {local_polyml_home}")
+    logger.debug(f"Remote POLYML_HOME:        {target_polyml_home}")
+    logger.debug(f"Local  ML_PLATFORM:        {local_platform}")
+    logger.debug(f"Remote ML_PLATFORM:        {target_platform}")
+    logger.debug(f"Local  ISABELLE_HOME_USER: {local_home_user}")
+    logger.debug(f"Remote ISABELLE_HOME_USER: {remote_home_user}")
+    logger.debug(f"Local  ISABELLE_HEAPS:     {local_heaps}")
+    logger.debug(f"Remote ISABELLE_HEAPS:     {remote_heaps}")
+    logger.debug(f"Local  HOME:               {local_home}")
+    logger.debug(f"Remote HOME:               {remote_home}")
+
+    argv_rewrites = []
+    if local_isabelle_home and target_isabelle_home and local_isabelle_home != target_isabelle_home:
+        argv_rewrites.append((local_isabelle_home, target_isabelle_home))
+    if local_polyml_home and local_polyml_home != target_polyml_home:
+        argv_rewrites.append((local_polyml_home, target_polyml_home))
+    if local_platform and target_platform and local_platform != target_platform:
+        argv_rewrites.append((local_platform, target_platform))
+    if local_home_user and remote_home_user and local_home_user != remote_home_user:
+        argv_rewrites.append((local_home_user, remote_home_user))
+    if local_heaps and remote_heaps and local_heaps != remote_heaps:
+        argv_rewrites.append((local_heaps, remote_heaps))
+    if local_home and remote_home and local_home != remote_home:
+        argv_rewrites.append((local_home, remote_home))
+
+    # Component rewrites (outside ISABELLE_HOME).
     local_components = os.environ.get("ISABELLE_COMPONENTS", "").split(":")
     remote_components = remote_components_str.split(":") if remote_components_str else []
     remote_comp_by_name = {os.path.basename(c): c for c in remote_components if c}
-    component_rewrites = []  # [(local_path, remote_path)]
     for lc in local_components:
-        logger.debug(f"Processing local component: {lc}")
         if not lc:
             continue
         if local_isabelle_home and lc.startswith(local_isabelle_home):
-            logger.debug(f"-> Skip (in local_isabelle_home: {local_isabelle_home})")
             continue
         name = os.path.basename(lc)
         rc = remote_comp_by_name.get(name)
         if rc:
-            component_rewrites.append((lc, rc))
-            logger.debug(f"Component rewrite: {lc} -> {rc}")
+            real_lc = os.path.realpath(lc)
+            argv_rewrites.append((real_lc, rc))
+            if real_lc != lc:
+                argv_rewrites.append((lc, rc))
+            logger.debug(f"Component rewrite: {real_lc} -> {rc}")
         else:
             logger.warning(f"Local component {name} ({lc}) has no match on remote")
 
+    argv_rewrites.sort(key=lambda x: -len(x[0]))
+    logger.debug(f"argv_rewrites ({len(argv_rewrites)} entries):")
+    for old, new in argv_rewrites:
+        logger.debug(f"  {old} -> {new}")
+
+    new_argv = rewrite_argv(poly_argv, argv_rewrites)
+    logger.debug(f"Command: {new_argv[0]}")
 
     # Step 3: Extract PIDE channel info from options file
     local_opts = os.environ.get("ISABELLE_PROCESS_OPTIONS", "")
@@ -876,38 +937,56 @@ def main():
     opts_data = open(local_opts, "rb").read() if local_opts else b""
 
     scala_port = extract_channel_port(local_opts) if local_opts else None
-    if not scala_port:
-        logger.error("Cannot extract PIDE port from options file")
+    has_pide = scala_port is not None
+    has_bash_in_opts = extract_bash_port(opts_data) is not None
+
+    if not has_pide and not has_bash_in_opts:
+        logger.error("Options file has neither PIDE channel nor bash_process — nothing to proxy")
         sys.exit(1)
-    logger.debug(f"Scala PIDE port: {scala_port}")
+
+    if has_pide:
+        logger.debug(f"Scala PIDE port: {scala_port}")
+    else:
+        logger.debug("No PIDE channel — console mode")
 
     pw_match = re.search(
         rb"system_channel_password[\x05\x06:]+string[\x05\x06:]+([0-9a-f-]{36})", opts_data)
     scala_password = pw_match.group(1).decode() if pw_match else ""
 
-    # Step 4: Pick a port for the PIDE proxy
-    proxy_server = make_proxy_server()
-    proxy_port = proxy_server.getsockname()[1]
-    logger.debug(f"PIDE proxy port: {proxy_port}")
+    # Step 4: Pick a port for the PIDE proxy (only needed in PIDE mode)
+    proxy_server = None
+    proxy_port = None
+    if has_pide:
+        proxy_server = make_proxy_server()
+        proxy_port = proxy_server.getsockname()[1]
+        logger.debug(f"PIDE proxy port: {proxy_port}")
 
-    # Step 5: Start remote Bash.Server (in background — result needed only for PIDE proxy)
+    # Step 5: Start remote Bash.Server (in background)
     bash_server_future = {}
     def _start_bash_server():
         bash_server_future["result"] = start_remote_bash_server(host, target_isabelle_home)
     bash_server_thread = threading.Thread(target=_start_bash_server, daemon=True)
     bash_server_thread.start()
 
+    # If bash_process is in the options file (console mode), we need the remote
+    # Bash.Server address now to rewrite the options file before copying it.
+    if has_bash_in_opts:
+        logger.debug("Waiting for remote Bash.Server (needed for options file rewrite)...")
+        bash_server_thread.join()
+
     # Step 6: Rewrite options file and copy to remote
-    #   - system_channel_address: Scala's port → proxy port
-    #   (bash_process_address is rewritten later via PIDE interception)
-    opts_modified = opts_data.replace(
-        f"127.0.0.1:{scala_port}".encode(),
-        f"127.0.0.1:{proxy_port}".encode())
-    logger.debug(f"ISABELLE_PROCESS_OPTIONS ({len(opts_modified)} bytes, "
-                 f"channel rewritten {scala_port} -> {proxy_port})")
-    # Dump options in human-readable form
-    for name, typ, val in parse_yxml_options(opts_modified):
-        logger.debug(f"  opt: {name} : {typ} = {val}")
+    opts_modified = opts_data
+    if has_pide:
+        opts_modified = opts_modified.replace(
+            f"127.0.0.1:{scala_port}".encode(),
+            f"127.0.0.1:{proxy_port}".encode())
+        logger.debug(f"Rewrote system_channel_address: {scala_port} -> {proxy_port}")
+    if has_bash_in_opts:
+        remote_bash_addr, remote_bash_pw, _ = bash_server_future["result"]
+        opts_modified, _ = rewrite_bash_process_in_chunk(
+            opts_modified, remote_bash_addr, remote_bash_pw)
+        logger.debug(f"Rewrote bash_process in options file -> {remote_bash_addr}")
+
     tmp_opts = tempfile.NamedTemporaryFile(delete=False, prefix="isabelle-proxy-opts-")
     tmp_opts.write(opts_modified)
     tmp_opts.close()
@@ -918,14 +997,9 @@ def main():
         init_data = open(local_init, "rb").read()
         logger.debug(f"ISABELLE_INIT_SESSION ({len(init_data)} bytes)")
         init_modified = init_data
-        for lc, rc in component_rewrites:
-            init_modified = init_modified.replace(lc.encode(), rc.encode())
-        if local_isabelle_home:
-            init_modified = init_modified.replace(
-                local_isabelle_home.encode(), target_isabelle_home.encode())
-        if local_home and remote_home and local_home != remote_home:
-            init_modified = init_modified.replace(
-                local_home.encode(), remote_home.encode())
+        init_rewrites = [(old.encode(), new.encode()) for old, new in argv_rewrites]
+        init_rewrites.sort(key=lambda x: -len(x[0]))
+        init_modified = forward_rewrite(init_modified, init_rewrites, label="init_session")
         tmp_init = tempfile.NamedTemporaryFile(delete=False, prefix="isabelle-proxy-init-")
         tmp_init.write(init_modified)
         tmp_init.close()
@@ -989,21 +1063,14 @@ def main():
         logger.debug(f"Remote cwd (synced): {remote_src_dir}")
 
     # Build path rewrite table for PIDE protocol interception (build_session).
-    # Order matters: more specific (longer) prefixes first to avoid partial matches.
-    path_rewrites = []
+    # Same as argv_rewrites, plus source dir rewrite for user sessions.
+    path_rewrites = [(old.encode(), new.encode()) for old, new in argv_rewrites]
     if remote_src_dir:
-        # Rewrite local project path to the remote temp dir.
-        # Must come before other rewrites to avoid partial match.
         path_rewrites.append((local_cwd.encode(), remote_src_dir.encode()))
-    for lc, rc in component_rewrites:
-        # Skip components already covered by the rsync cwd rewrite
-        if remote_src_dir and lc.startswith(local_cwd):
-            continue
-        path_rewrites.append((lc.encode(), rc.encode()))
-    if local_isabelle_home and target_isabelle_home and local_isabelle_home != target_isabelle_home:
-        path_rewrites.append((local_isabelle_home.encode(), target_isabelle_home.encode()))
-    if local_home and remote_home and local_home != remote_home:
-        path_rewrites.append((local_home.encode(), remote_home.encode()))
+    path_rewrites.sort(key=lambda x: -len(x[0]))
+    logger.debug(f"path_rewrites ({len(path_rewrites)} entries):")
+    for old, new in path_rewrites:
+        logger.debug(f"  {old} -> {new}")
 
     # Stats rewrite: (remote_path, local_path) for POLYSTATSDIR
     local_polystatsdir = os.environ.get("POLYSTATSDIR", "")
@@ -1011,30 +1078,35 @@ def main():
     if stats_rewrite:
         logger.debug(f"Stats rewrite: {remote_tmp} -> {local_polystatsdir}")
 
-    # Step 9: Wait for Bash.Server, then start PIDE proxy
+    # Step 9: Wait for Bash.Server (if not already done), then start PIDE proxy
     bash_server_thread.join()
     remote_bash_addr, remote_bash_pw, bash_server_proc = bash_server_future["result"]
-    pide_thread = threading.Thread(
-        target=pide_proxy,
-        args=(proxy_server, scala_port, scala_password,
-              remote_bash_addr, remote_bash_pw, local_isabelle_home,
-              path_rewrites, host, stats_rewrite,
-              target_isabelle_home, target_env_vars.get("ML_HOME", "")),
-        daemon=True)
-    pide_thread.start()
 
-    # Step 10: Launch remote poly via SSH with reverse tunnel
+    if has_pide:
+        pide_thread = threading.Thread(
+            target=pide_proxy,
+            args=(proxy_server, scala_port, scala_password,
+                  remote_bash_addr, remote_bash_pw, local_isabelle_home,
+                  path_rewrites, host, stats_rewrite,
+                  target_isabelle_home, target_env_vars.get("ML_HOME", "")),
+            daemon=True)
+        pide_thread.start()
+
+    # Step 10: Launch remote poly via SSH
+    ssh_tunnel_flags = []
+    if has_pide:
+        ssh_tunnel_flags = ["-R", f"{proxy_port}:127.0.0.1:{proxy_port}"]
     ssh_cmd = [
         "ssh",
         "-C",
         "-o", "ServerAliveInterval=15",
         "-o", "ServerAliveCountMax=86400",
-        "-R", f"{proxy_port}:127.0.0.1:{proxy_port}",
-    ] + ssh_control_flags() + [
+    ] + ssh_tunnel_flags + ssh_control_flags() + [
         host,
         remote_cmd
     ]
-    logger.debug(f"SSH tunnel: remote:{proxy_port} -> local:{proxy_port} (PIDE proxy)")
+    if has_pide:
+        logger.debug(f"SSH tunnel: remote:{proxy_port} -> local:{proxy_port} (PIDE proxy)")
     logger.debug(f"Remote command (first 500 chars): {remote_cmd[:500]}")
     logger.debug(f"Remote command (last 500 chars): ...{remote_cmd[-500:]}")
     if args.log:
@@ -1056,35 +1128,25 @@ def main():
     # If this was a heap build (ML_Heap.save_child in command), copy the
     # built heap back from the remote to the local expected path.
     if rc == 0:
-        copy_heap_back(host, new_argv, target_platform, local_platform,
-                       remote_home, local_home, target_isabelle_home, local_isabelle_home)
+        copy_heap_back(host, new_argv, argv_rewrites)
 
     # Cleanup
-    cleanup_remote(host, bash_server_proc, remote_opts, remote_init,
-                   remote_tmp, remote_src_dir)
+    cleanup_remote(host, bash_server_proc, remote_tmp, remote_src_dir)
     ssh_control_cleanup()
 
     sys.exit(rc)
 
 
-def copy_heap_back(host, new_argv, target_platform, local_platform,
-                   remote_home, local_home, target_isabelle_home, local_isabelle_home):
+def copy_heap_back(host, new_argv, argv_rewrites):
     """After a successful heap build, rsync the heap from remote to local.
 
-    Reverses the platform/HOME/ISABELLE_HOME path rewrites to determine
-    the local destination path.
+    Reverses argv_rewrites to determine the local destination path.
     """
     for arg in new_argv:
         m = re.search(r'ML_Heap\.save_child "([^"]+)"', arg)
         if m:
             remote_heap = m.group(1)
-            local_heap = remote_heap
-            if target_platform and local_platform and target_platform != local_platform:
-                local_heap = local_heap.replace(target_platform, local_platform)
-            if remote_home and local_home and remote_home != local_home:
-                local_heap = local_heap.replace(remote_home, local_home)
-            if target_isabelle_home and local_isabelle_home:
-                local_heap = local_heap.replace(target_isabelle_home, local_isabelle_home)
+            local_heap = backward_rewrite(remote_heap, argv_rewrites, label="heap_back")
             local_heap_dir = os.path.dirname(local_heap)
             os.makedirs(local_heap_dir, exist_ok=True)
             logger.info(f"Copying built heap from remote: {remote_heap} -> {local_heap}")
@@ -1101,21 +1163,16 @@ def copy_heap_back(host, new_argv, target_platform, local_platform,
                 logger.warning(f"Failed to copy heap: {e}")
 
 
-def cleanup_remote(host, bash_server_proc, remote_opts, remote_init,
-                   remote_tmp, remote_src_dir):
+def cleanup_remote(host, bash_server_proc, remote_tmp, remote_src_dir):
     """Terminate remote Bash.Server and remove temp files."""
     if bash_server_proc and bash_server_proc.poll() is None:
         bash_server_proc.terminate()
         logger.debug("Stopped remote Bash.Server")
 
-    parts = []
-    if remote_opts: parts.append(f"rm -f {shlex.quote(remote_opts)}")
-    if remote_init: parts.append(f"rm -f {shlex.quote(remote_init)}")
-    if remote_tmp: parts.append(f"rm -rf {shlex.quote(remote_tmp)}")
-    if remote_src_dir: parts.append(f"rm -rf {shlex.quote(remote_src_dir)}")
-    if parts:
+    dirs = [d for d in [remote_tmp, remote_src_dir] if d]
+    if dirs:
         try:
-            ssh_run(host, "; ".join(parts), timeout=5)
+            ssh_run(host, "rm", "-rf", *dirs, timeout=5)
         except Exception:
             pass
 

@@ -43,7 +43,7 @@ isabelle jedit -l HOL $ISABELLE_REMOTE
 
 ## Setup Scripts
 
-- `setup_aarch64_ubuntu.sh` — Installs Isabelle on a remote aarch64 Ubuntu host.
+- `setup_ubuntu.sh` — Installs Isabelle on a remote Ubuntu/Debian host (aarch64 or x86_64).
 - `setup_al2.sh` — Installs Isabelle on a remote Amazon Linux 2
    host, building Poly/ML from source (to avoid glibc versioning issue).
 

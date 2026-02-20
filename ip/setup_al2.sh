@@ -42,11 +42,13 @@ if [ -d "$INSTALL_DIR" ]; then
   echo "Already installed: ~/$INSTALL_DIR"
 else
   echo "Downloading $URL ..."
-  curl -fSL -o "$TARBALL" "$URL"
+  curl -fSL -o "/tmp/$TARBALL" "$URL"
   echo "Unpacking ..."
-  tar xzf "$TARBALL"
-  rm "$TARBALL"
-  echo "Installed: ~/$INSTALL_DIR"
+  tar xzf "/tmp/$TARBALL" -C /tmp
+  rm "/tmp/$TARBALL"
+  mkdir -p "$(dirname "$INSTALL_DIR")"
+  mv "/tmp/Isabelle2025-2" "$INSTALL_DIR"
+  echo "Installed: $INSTALL_DIR"
 fi
 
 # AFP Word_Lib

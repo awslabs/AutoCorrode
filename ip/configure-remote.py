@@ -27,9 +27,9 @@ Subcommands:
 Common options (setup, run):
 
   HOST                     SSH host in user@host format (positional, required).
-  --isabelle-home PATH     ISABELLE_HOME on the remote machine.
+  --remote-isabelle PATH   Remote Isabelle installation root.
                            Default: /home/<user>/{ISABELLE_VERSION} (user from HOST).
-  --local-isabelle-home P  Local Isabelle installation root. Default: if
+  --local-isabelle PATH    Local Isabelle installation root. Default: if
                            ISABELLE_HOME is set and points to the binary
                            directory of an existing Isabelle installation,
                            uses ISABELLE_HOME/../ as the root.
@@ -62,12 +62,12 @@ Run-only options:
 
 List options:
 
-  --local-isabelle-home P  As above.
+  --local-isabelle PATH    As above.
 
 Remove options:
 
   PLAT                     ML platform name to remove (positional, required).
-  --local-isabelle-home P  As above.
+  --local-isabelle PATH    As above.
   -y, --yes                Skip the confirmation prompt.
 
 Examples:
@@ -254,26 +254,29 @@ def detect_remote(host):
 def pick_setup_script(arch, os_id):
     """Pick the right setup script for the detected system."""
     if os_id in ("ubuntu", "debian"):
-        if arch != "aarch64":
-            die(f"Ubuntu setup script only supports aarch64 (got {arch})")
-        return os.path.join(SCRIPT_DIR, "setup_aarch64_ubuntu.sh")
+        return os.path.join(SCRIPT_DIR, "setup_ubuntu.sh")
     elif os_id in ("amzn",):
         return os.path.join(SCRIPT_DIR, "setup_al2.sh")
     else:
-        die(f"Unsupported OS: {os_id} (supported: Ubuntu, Amazon Linux 2)")
+        die(f"Unsupported OS: {os_id} (supported: Ubuntu/Debian, Amazon Linux 2)")
 
 
 def resolve_local_home(explicit):
     """Resolve local Isabelle installation root."""
     if explicit:
-        return explicit
-    env = os.environ.get("ISABELLE_HOME")
-    if env:
-        isa = os.path.join(env, "isabelle")
-        if os.path.isfile(isa):
-            return os.path.dirname(env)
-        die(f"ISABELLE_HOME={env} but {isa} not found")
-    die("Set ISABELLE_HOME or use --local-isabelle-home")
+        path = explicit
+    else:
+        env = os.environ.get("ISABELLE_HOME")
+        if env:
+            path = env
+        else:
+            die("Set ISABELLE_HOME or use --local-isabelle to point to the root of your Isabelle installation")
+    # Normalize: strip trailing /bin if given
+    if os.path.basename(path.rstrip("/")) == "bin":
+        path = os.path.dirname(path.rstrip("/"))
+    if not os.path.isfile(os.path.join(path, "bin", "isabelle")):
+        die(f"Not a valid Isabelle installation: {path}")
+    return path
 
 
 def query_base_platform(host, remote_home, use_64):
@@ -290,9 +293,15 @@ def local_platform_dir(local_home, platform):
     return os.path.join(local_home, POLYML_CONTRIB, platform)
 
 
-def local_heap_dir(platform):
-    return os.path.join(os.path.expanduser("~"), ".isabelle", ISABELLE_VERSION,
-                        "heaps", f"{HEAP_PREFIX}_{platform}")
+def local_heap_dir(local_home, platform):
+    """Local heap directory, queried from the local Isabelle installation."""
+    isabelle = os.path.join(local_home, "bin", "isabelle")
+    heaps = subprocess.run(
+        [isabelle, "getenv", "-b", "ISABELLE_HEAPS"],
+        capture_output=True, text=True).stdout.strip()
+    if not heaps:
+        die("Failed to query ISABELLE_HEAPS from local Isabelle")
+    return os.path.join(heaps, f"{HEAP_PREFIX}_{platform}")
 
 
 def remote_user_heap_dir(host, base_platform):
@@ -311,8 +320,8 @@ def remote_user_heap_dir(host, base_platform):
 def cmd_setup(args):
     host = args.host
     user = host.split("@")[0] if "@" in host else os.environ.get("USER") or die("USER not set")
-    remote_home = args.isabelle_home or f"/home/{user}/{ISABELLE_VERSION}"
-    local_home = resolve_local_home(args.local_isabelle_home)
+    remote_home = args.remote_isabelle or f"/home/{user}/{ISABELLE_VERSION}"
+    local_home = resolve_local_home(args.local_isabelle)
 
     info(f"setup {host}")
 
@@ -363,7 +372,7 @@ def cmd_setup(args):
 
     local_plat_dir = local_platform_dir(local_home, platform)
     local_poly = os.path.join(local_plat_dir, "poly")
-    local_hdir = local_heap_dir(platform)
+    local_hdir = local_heap_dir(local_home, platform)
     platform_exists_locally = os.path.isfile(local_poly)
 
     # Determine sync direction
@@ -481,8 +490,8 @@ def _setup_copy_from_local(host, remote_home, local_home,
 def cmd_run(args):
     host = args.host
     user = host.split("@")[0] if "@" in host else os.environ.get("USER") or die("USER not set")
-    remote_home = args.isabelle_home or f"/home/{user}/{ISABELLE_VERSION}"
-    local_home = resolve_local_home(args.local_isabelle_home)
+    remote_home = args.remote_isabelle or f"/home/{user}/{ISABELLE_VERSION}"
+    local_home = resolve_local_home(args.local_isabelle)
     proxy = os.path.join(SCRIPT_DIR, "ml_proxy.py")
 
     info(f"run {host}")
@@ -540,7 +549,7 @@ def cmd_run(args):
                   f"  local:  {lh} ({local_poly[:7]})\n"
                   f"  remote: {rh} ({remote_poly[:7]})")
 
-    lhdir = local_heap_dir(platform)
+    lhdir = local_heap_dir(local_home, platform)
     remote_hdir = remote_user_heap_dir(host, base_platform)
     for heap in ("Pure", "HOL"):
         step(f"Checking {heap} heap", indent=1)
@@ -631,7 +640,7 @@ def cmd_run(args):
 # ---------------------------------------------------------------------------
 
 def cmd_list(args):
-    local_home = resolve_local_home(args.local_isabelle_home)
+    local_home = resolve_local_home(args.local_isabelle)
     polyml_dir = os.path.join(local_home, POLYML_CONTRIB)
     heap_base = os.path.join(os.path.expanduser("~"), ".isabelle", ISABELLE_VERSION, "heaps")
 
@@ -669,10 +678,10 @@ def cmd_list(args):
 # ---------------------------------------------------------------------------
 
 def cmd_remove(args):
-    local_home = resolve_local_home(args.local_isabelle_home)
+    local_home = resolve_local_home(args.local_isabelle)
     platform = args.platform
     plat_dir = local_platform_dir(local_home, platform)
-    hdir = local_heap_dir(platform)
+    hdir = local_heap_dir(local_home, platform)
 
     to_remove = []
     if os.path.exists(plat_dir):
@@ -717,9 +726,9 @@ def main():
     # Common arguments
     def add_common(p):
         p.add_argument("host", help="SSH host (user@host)")
-        p.add_argument("--isabelle-home",
+        p.add_argument("--remote-isabelle",
                         help="ISABELLE_HOME on remote (default: /home/<user>/{ISABELLE_VERSION})")
-        p.add_argument("--local-isabelle-home",
+        p.add_argument("--local-isabelle",
                         help="Local ISABELLE_HOME (default: auto-detect)")
         bits = p.add_mutually_exclusive_group()
         bits.add_argument("--64", dest="use_64", action="store_true", default=True,
@@ -768,7 +777,7 @@ def main():
     # list
     p_list = sub.add_parser("list",
         help="List local ML platforms")
-    p_list.add_argument("--local-isabelle-home",
+    p_list.add_argument("--local-isabelle",
                         help="Local ISABELLE_HOME (default: auto-detect)")
     p_list.set_defaults(func=cmd_list)
 
@@ -776,7 +785,7 @@ def main():
     p_remove = sub.add_parser("remove",
         help="Remove a local ML platform and its heaps")
     p_remove.add_argument("platform", help="ML platform name to remove")
-    p_remove.add_argument("--local-isabelle-home",
+    p_remove.add_argument("--local-isabelle",
                           help="Local ISABELLE_HOME (default: auto-detect)")
     p_remove.add_argument("-y", "--yes", action="store_true",
                           help="Skip confirmation prompt")
