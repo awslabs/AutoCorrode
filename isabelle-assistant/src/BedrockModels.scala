@@ -10,16 +10,35 @@ import software.amazon.awssdk.regions.Region
 import scala.jdk.CollectionConverters._
 import java.nio.file.{Files, Path, Paths}
 
-/** Lists and refreshes available Bedrock models, with local file caching and CRIS prefix support. */
+/** Lists and refreshes available Bedrock Anthropic models, with local file caching and CRIS prefix support. */
 object BedrockModels {
   private val cacheFile: Path =
     Paths.get(System.getProperty("user.home"), ".isabelle", "assistant_models.txt")
 
-  private val crisProviders = Set("anthropic", "meta", "mistral")
+  private val crisProviders = Set("anthropic")
+  private val modelIdPattern = "^[a-zA-Z0-9._:/-]+$"
+  private val anthropicModelPattern = "^(?:(?:us|eu|ap|global)\\.)?anthropic\\..+$"
+
+  def isAnthropicModelId(modelId: String): Boolean = {
+    val trimmed = modelId.trim
+    trimmed.nonEmpty &&
+    trimmed.matches(modelIdPattern) &&
+    trimmed.toLowerCase.matches(anthropicModelPattern)
+  }
+
+  private[assistant] def filterAnthropicModels(modelIds: Iterable[String]): Array[String] = {
+    modelIds.iterator.map(_.trim).filter(isAnthropicModelId).toSet.toArray.sorted
+  }
 
   def getModels: Array[String] = {
     if (Files.exists(cacheFile)) {
-      Files.readAllLines(cacheFile).asScala.toArray
+      val cached = Files.readAllLines(cacheFile).asScala.toList
+      val filtered = filterAnthropicModels(cached)
+      if (filtered.length != cached.length)
+        Output.warning(
+          s"[Assistant] Filtered out ${cached.length - filtered.length} non-Anthropic cached model(s)"
+        )
+      filtered
     } else {
       Array.empty
     }
@@ -57,10 +76,9 @@ object BedrockModels {
         .toList
       Output.writeln(s"[Assistant] Found ${profileModels.size} inference profiles")
 
-      // Combine, deduplicate, and sort text-capable model identifiers.
-      val allModels = (foundationModels ++ profileModels)
-        .distinct.sorted.toArray
-      Output.writeln(s"[Assistant] Total text models/profiles: ${allModels.length}")
+      // Keep Anthropic-only model identifiers, then deduplicate and sort.
+      val allModels = filterAnthropicModels(foundationModels ++ profileModels)
+      Output.writeln(s"[Assistant] Total Anthropic models/profiles: ${allModels.length}")
 
       // Write cache
       Files.createDirectories(cacheFile.getParent)

@@ -42,6 +42,16 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
     snapshot.baseModelId shouldBe ""
   }
 
+  test("parseSnapshot should reject non-Anthropic model IDs") {
+    val snapshot = parse(Map("assistant.model.id" -> "meta.llama3-70b-instruct-v1:0"))
+    snapshot.baseModelId shouldBe ""
+  }
+
+  test("parseSnapshot should accept valid Anthropic model IDs") {
+    val snapshot = parse(Map("assistant.model.id" -> "anthropic.claude-3-7-sonnet-20250219-v1:0"))
+    snapshot.baseModelId shouldBe "anthropic.claude-3-7-sonnet-20250219-v1:0"
+  }
+
   test("parseSnapshot should clamp numeric values to configured bounds") {
     val snapshot = parse(Map(
       "assistant.temperature" -> "-1.0",

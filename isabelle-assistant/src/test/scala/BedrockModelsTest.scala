@@ -25,12 +25,37 @@ class BedrockModelsTest extends AnyFunSuite with Matchers {
     BedrockModels.applyCrisPrefix("amazon.titan-text-express-v1", "us-east-1") shouldBe "amazon.titan-text-express-v1"
   }
 
-  test("applyCrisPrefix handles meta provider") {
-    BedrockModels.applyCrisPrefix("meta.llama3-8b-instruct-v1:0", "us-west-2") shouldBe "us.meta.llama3-8b-instruct-v1:0"
+  test("applyCrisPrefix skips non-Anthropic providers") {
+    BedrockModels.applyCrisPrefix("meta.llama3-8b-instruct-v1:0", "us-west-2") shouldBe "meta.llama3-8b-instruct-v1:0"
   }
 
-  test("applyCrisPrefix handles mistral provider") {
-    BedrockModels.applyCrisPrefix("mistral.mistral-large-2402-v1:0", "us-east-1") shouldBe "us.mistral.mistral-large-2402-v1:0"
+  test("isAnthropicModelId accepts Anthropic model IDs with or without CRIS prefix") {
+    BedrockModels.isAnthropicModelId("anthropic.claude-3-7-sonnet-20250219-v1:0") shouldBe true
+    BedrockModels.isAnthropicModelId("us.anthropic.claude-3-7-sonnet-20250219-v1:0") shouldBe true
+    BedrockModels.isAnthropicModelId("global.anthropic.claude-haiku-4-5") shouldBe true
+  }
+
+  test("isAnthropicModelId rejects non-Anthropic or malformed IDs") {
+    BedrockModels.isAnthropicModelId("meta.llama3-8b-instruct-v1:0") shouldBe false
+    BedrockModels.isAnthropicModelId("amazon.titan-text-express-v1") shouldBe false
+    BedrockModels.isAnthropicModelId("anthropic claude bad") shouldBe false
+    BedrockModels.isAnthropicModelId("") shouldBe false
+  }
+
+  test("filterAnthropicModels keeps only unique sorted Anthropic model IDs") {
+    val filtered = BedrockModels.filterAnthropicModels(
+      List(
+        "meta.llama3-8b",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+        "anthropic.claude-3-haiku-20240307-v1:0",
+        "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "bad model id"
+      )
+    )
+    filtered shouldBe Array(
+      "anthropic.claude-3-haiku-20240307-v1:0",
+      "us.anthropic.claude-3-7-sonnet-20250219-v1:0"
+    )
   }
 
   test("getModels returns empty when no cache") {

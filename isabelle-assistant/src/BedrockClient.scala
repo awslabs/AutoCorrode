@@ -16,7 +16,7 @@ import java.io.StringWriter
  * AWS Bedrock client for LLM interactions.
  *
  * Provides robust, retry-enabled communication with AWS Bedrock models
- * including Claude, Llama, Mistral, Titan, and other supported models.
+ * using Anthropic Claude via Bedrock.
  * Handles connection pooling, error recovery, and response parsing.
  *
  * JSON payload construction is delegated to [[PayloadBuilder]] and response
@@ -36,6 +36,17 @@ object BedrockClient {
   private val rateLimitLock = new Object()
   @volatile private var lastApiCallMs = 0L
   private val minIntervalMs = 200L // minimum 200ms between API calls
+
+  private[assistant] def requireAnthropicModel(modelId: String): Unit = {
+    if (modelId.isEmpty)
+      throw new IllegalStateException("No model configured. Use :set model <model-id> or configure in Plugin Options.")
+    if (!modelId.matches("^[a-zA-Z0-9._:/-]+$"))
+      throw new IllegalArgumentException(s"Invalid model ID format: $modelId")
+    if (!BedrockModels.isAnthropicModelId(modelId))
+      throw new IllegalArgumentException(
+        s"Unsupported model '$modelId'. Only Anthropic models are supported because tool-use requires the Anthropic API."
+      )
+  }
 
   /** Circuit breaker: after consecutive failures, fail fast without calling the API.
    *  Resets after a cooldown period or on a successful call. */
@@ -264,12 +275,7 @@ object BedrockClient {
    */
   private def invokeChatInternal(systemPrompt: String, messages: List[(String, String)]): String = {
     val modelId = AssistantOptions.getModelId
-    if (modelId.isEmpty) throw new IllegalStateException("No model configured. Use :set model <model-id> or configure in Plugin Options.")
-    
-    // Validate model ID format
-    if (!modelId.matches("^[a-zA-Z0-9._:/-]+$")) {
-      throw new IllegalArgumentException(s"Invalid model ID format: $modelId")
-    }
+    requireAnthropicModel(modelId)
     
     val temperature = AssistantOptions.getTemperature
     val maxTokens = AssistantOptions.getMaxTokens
@@ -327,19 +333,7 @@ object BedrockClient {
       case (acc, msg) => acc :+ msg
     }
 
-    // For Anthropic models, use the tool-use agentic loop
-    if (PayloadBuilder.isProvider(modelId, "anthropic"))
-      invokeChatWithTools(modelId, fullSystemPrompt, merged, temperature, maxTokens)
-    else {
-      val payload = PayloadBuilder.buildChatPayload(modelId, fullSystemPrompt, merged, temperature, maxTokens)
-      val request = InvokeModelRequest.builder()
-        .modelId(modelId)
-        .body(SdkBytes.fromUtf8String(payload))
-        .build()
-      enforceRateLimit()
-      val response = getClient.invokeModel(request)
-      ResponseParser.parseResponse(modelId, response.body().asUtf8String())
-    }
+    invokeChatWithTools(modelId, fullSystemPrompt, merged, temperature, maxTokens)
   }
 
   /**
@@ -546,12 +540,7 @@ object BedrockClient {
    */
   private def invokeInternal(prompt: String): String = {
     val modelId = AssistantOptions.getModelId
-    if (modelId.isEmpty) throw new IllegalStateException("No model configured. Use :set model <model-id> or configure in Plugin Options.")
-    
-    // Validate model ID format
-    if (!modelId.matches("^[a-zA-Z0-9._:/-]+$")) {
-      throw new IllegalArgumentException(s"Invalid model ID format: $modelId")
-    }
+    requireAnthropicModel(modelId)
     
     val temperature = AssistantOptions.getTemperature
     val maxTokens = AssistantOptions.getMaxTokens

@@ -115,7 +115,7 @@ object ChatAction {
       (_, _) => showHelp()
     ),
     "models" -> CommandEntry(
-      "Refresh the list of available AI models from AWS Bedrock",
+      "Refresh the list of available Anthropic models from AWS Bedrock",
       (_, _) => runModels()
     ),
     "nitpick" -> CommandEntry(
@@ -397,7 +397,7 @@ object ChatAction {
         GUI_Thread.later {
           val modelList = models.map(m => s"* `$m`").mkString("\n")
           addResponse(
-            s"**Available Models** (${models.length} total)\n\n$modelList"
+            s"**Available Anthropic Models** (${models.length} total)\n\n$modelList"
           )
           AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         }

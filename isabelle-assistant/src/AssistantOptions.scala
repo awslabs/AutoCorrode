@@ -192,7 +192,8 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
     val models = BedrockModels.getModels
     modelCombo.removeAllItems()
     if (models.nonEmpty) models.foreach(modelCombo.addItem)
-    modelCombo.setSelectedItem(current)
+    if (models.contains(current)) modelCombo.setSelectedItem(current)
+    else if (models.nonEmpty) modelCombo.setSelectedIndex(0)
   }
 
   private def refreshModelsAsync(): Unit = {
@@ -301,6 +302,11 @@ object AssistantOptions {
     "sa-east-1"
   )
 
+  private val modelIdPattern = "^[a-zA-Z0-9._:/-]*$"
+  private def isValidBaseModelId(modelId: String): Boolean =
+    modelId.matches(modelIdPattern) &&
+      (modelId.isEmpty || BedrockModels.isAnthropicModelId(modelId))
+
   /** All parsed settings in a single immutable snapshot, cached atomically.
     * Boolean settings are included here (not read from jEdit directly) to
     * ensure a consistent view across all settings.
@@ -392,7 +398,7 @@ object AssistantOptions {
       region =
         if (region.matches("^[a-z]{2}(?:-[a-z]+)+-\\d+$")) region
         else "us-east-1",
-      baseModelId = if (modelId.matches("^[a-zA-Z0-9._:/-]*$")) modelId else "",
+      baseModelId = if (isValidBaseModelId(modelId)) modelId else "",
       temperature = doubleProp(
         "assistant.temperature",
         AssistantConstants.DEFAULT_TEMPERATURE,
@@ -650,8 +656,8 @@ object AssistantOptions {
     StringSetting(
       "model",
       "assistant.model.id",
-      _.matches("^[a-zA-Z0-9._:/-]*$"),
-      "Invalid model ID format",
+      isValidBaseModelId,
+      "Invalid model ID. Only Anthropic model IDs are supported (for example: anthropic.claude-3-7-sonnet-20250219-v1:0).",
       _.baseModelId
     ),
     BoolSetting("cris", "assistant.use.cris", _.useCris),

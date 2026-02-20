@@ -47,4 +47,16 @@ class BedrockClientTest extends AnyFunSuite with Matchers {
   test("ErrorHandler.sanitize handles null") {
     ErrorHandler.sanitize(null) shouldBe ""
   }
+
+  test("requireAnthropicModel accepts valid Anthropic model IDs") {
+    noException should be thrownBy BedrockClient.requireAnthropicModel("anthropic.claude-3-7-sonnet-20250219-v1:0")
+    noException should be thrownBy BedrockClient.requireAnthropicModel("us.anthropic.claude-3-7-sonnet-20250219-v1:0")
+  }
+
+  test("requireAnthropicModel rejects non-Anthropic model IDs") {
+    val ex = intercept[IllegalArgumentException] {
+      BedrockClient.requireAnthropicModel("meta.llama3-70b-instruct-v1:0")
+    }
+    ex.getMessage should include("Only Anthropic models are supported")
+  }
 }
