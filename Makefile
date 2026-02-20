@@ -36,6 +36,9 @@ endif
 ISABELLE_FLAGS?=-b -j 1 -o "threads=$(AVAILABLE_CORES)" -v
 ISABELLE_JEDIT_FLAGS?=
 
+ISABELLE_FLAGS += $(ISABELLE_REMOTE)
+ISABELLE_JEDIT_FLAGS += $(ISABELLE_REMOTE)
+
 jedit: register-afp-components
 	$(ISABELLE_HOME)/isabelle jedit $(ISABELLE_JEDIT_FLAGS) -l HOL -d . ./AutoCorrode.thy  &
 
