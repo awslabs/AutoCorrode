@@ -8,6 +8,7 @@ import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.nio.file.Files
 import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, OutputStreamWriter}
 import java.net.{InetAddress, ServerSocket, Socket}
+import java.util.Locale
 import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
 import scala.util.{Try, Success, Failure}
 import scala.concurrent.{Future, ExecutionContext}
@@ -535,6 +536,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
     } catch {
       case ex: Exception =>
         Output.writeln(s"Failed to start MCP server: ${ex.getMessage}")
+        throw ex
     }
   }
 
@@ -959,7 +961,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
             ),
             "xml_result_file" -> Map(
               "type" -> "string",
-              "description" -> "Optional file path to dump full markup (e.g. references) for the results"
+              "description" -> "Optional file path to dump full markup (e.g. references) for the results. Must be within allowed mutation roots."
             ),
             "wait_until_processed" -> Map(
               "type" -> "boolean",
@@ -1070,7 +1072,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       ),
       Map(
         "name" -> "read_file",
-        "description" -> "Read content from an Isabelle theory file. Supports reading full file or specific line ranges using structured parameters. Supports 'Line' and 'Pattern' modes.",
+        "description" -> "Read content from an Isabelle theory file. Supports reading full file or specific line ranges using structured parameters. Supports 'Line' and 'Search' modes.",
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
@@ -1097,7 +1099,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
             ),
             "context_lines" -> Map(
               "type" -> "integer",
-              "description" -> "Number of context lines to include around matching lines. Used in 'Pattern' mode."
+              "description" -> "Number of context lines to include around matching lines. Used in 'Search' mode."
             )
           ),
           "required" -> List("path", "mode")
@@ -1111,10 +1113,8 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
           "properties" -> Map(
             "command" -> Map(
               "type" -> "string",
-              // We actually also support 'line', but this is not advertised for now
-              // to match the existing fs_write interface more closely
-              "description" -> "The command to run. Allowed options are: 'str_replace', 'insert'",
-              "enum" -> List("str_replace", "insert")
+              "description" -> "The command to run. Allowed options are: 'str_replace', 'insert', 'line'",
+              "enum" -> List("str_replace", "insert", "line")
             ),
             "path" -> Map(
               "type" -> "string",
@@ -1142,7 +1142,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
             ),
             "xml_result_file" -> Map(
               "type" -> "string",
-              "description" -> "For all commands. Optional file path to dump full XML results for new commands (must be full real path)"
+              "description" -> "For all commands. Optional file path to dump full XML results for new commands. Must be an absolute path within allowed mutation roots."
             ),
             "wait_until_processed" -> Map(
               "type" -> "boolean",
@@ -1418,6 +1418,14 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       case Some(value: String) if value.trim.nonEmpty => Some(value.trim)
       case _ => None
     }
+    val authorizedXmlResultFile = xmlResultFile match {
+      case Some(path) =>
+        authorizeMutationPath("get_command_info(xml_result_file)", path) match {
+          case Right(canonicalPath) => Some(canonicalPath)
+          case Left(errorMsg) => return Right(errorMsg)
+        }
+      case None => None
+    }
 
     val startLineOpt = IQArgumentUtils.optionalIntParam(params, "start_line") match {
       case Right(v) => v
@@ -1601,7 +1609,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
     }
 
     // Optionally dump XML results to file for all commands
-    xmlResultFile match {
+    authorizedXmlResultFile match {
       case Some(filePath) =>
         try {
           val allXmlResults = commandInfos.flatMap(_.results_xml)
@@ -1635,7 +1643,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       "commands_canceled" -> canceledCount,
       "commands_unprocessed" -> unfinishedCount
     )
-    xmlResultFile match {
+    authorizedXmlResultFile match {
       case Some(file: String) => summaryBuilder("xml_result_file") = file
       case _ =>
     }
@@ -2339,11 +2347,12 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
             case Left(err) => return Left(err)
           }
           params.get("pattern") match {
-            case Some(pattern: String) =>
+            case Some(pattern: String) if pattern.trim.nonEmpty =>
               GUI_Thread.now {
                 searchTheoryFile(filePath, pattern, contextLines)
               }
-            case _ => return Left("`pattern` argument mandatory for mode 'Pattern'")
+            case Some(_) => return Left("`pattern` must be non-empty for mode 'Search'")
+            case _ => return Left("`pattern` argument mandatory for mode 'Search'")
           }
         case _ => return Left("Unknown mode")
       }
@@ -2407,7 +2416,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       case "line" =>
         val new_str: String = params.get("new_str") match {
           case Some(s: String) => s
-          case _ => return Left("new_str parameter is required for command 'str_replace'")
+          case _ => return Left("new_str parameter is required for command 'line'")
         }
 
         val startLine: Int = IQArgumentUtils.requiredIntParam(params, "start_line") match {
@@ -2482,7 +2491,6 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
 
     Output.writeln(s"I/Q Server: Auto-calling get_command for modified range in $filePath")
 
-    val xml_result_file = Files.createTempFile("tmp_result", ".xml").toAbsolutePath.toString
     val newEndOffset: Int = endOffset + text.length
 
     // Create parameters for get_command call - use current command mode for now
@@ -2491,7 +2499,6 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       "mode" -> "offset",
       "start_offset" -> startOffset,
       "end_offset" -> newEndOffset,
-      "xml_result_file" -> xml_result_file,
       "wait_until_processed" -> waitUntilProcessed,
       "timeout" -> timeoutMs.getOrElse(5000L),
       "timeout_per_command" -> timeoutPerCommandMs.getOrElse(5000)
@@ -2751,12 +2758,11 @@ end"""
     val totalLines = lines.length
     val safeContextLines = math.max(0, contextLines)
 
-    // Create a regex pattern (case insensitive)
-    val regex = s"(?i)$pattern".r
+    val normalizedPattern = pattern.toLowerCase(Locale.ROOT)
 
     // Find matching lines
     val matchingLineIndices = lines.zipWithIndex.collect {
-      case (line, idx) if regex.findFirstIn(line).isDefined => idx
+      case (line, idx) if line.toLowerCase(Locale.ROOT).contains(normalizedPattern) => idx
     }
 
     // Create an array of match objects with context

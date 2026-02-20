@@ -68,6 +68,24 @@ class IQBridgeFramingTest(unittest.TestCase):
         self.assertEqual(response1, {"jsonrpc": "2.0", "id": "1", "result": 1})
         self.assertEqual(response2, {"jsonrpc": "2.0", "id": "2", "result": 2})
 
+    def test_out_of_order_responses_match_request_id(self):
+        bridge = self.make_bridge(
+            [
+                b'{"jsonrpc":"2.0","id":"2","result":2}\n',
+                b'{"jsonrpc":"2.0","id":"1","result":1}\n',
+            ]
+        )
+
+        response1 = bridge.forward_to_isabelle(
+            {"jsonrpc": "2.0", "id": "1", "method": "tools/call", "params": {}}
+        )
+        response2 = bridge.forward_to_isabelle(
+            {"jsonrpc": "2.0", "id": "2", "method": "tools/call", "params": {}}
+        )
+
+        self.assertEqual(response1, {"jsonrpc": "2.0", "id": "1", "result": 1})
+        self.assertEqual(response2, {"jsonrpc": "2.0", "id": "2", "result": 2})
+
 
 if __name__ == "__main__":
     unittest.main()

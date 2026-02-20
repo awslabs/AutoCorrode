@@ -104,9 +104,10 @@ class MCPBridgeWithReconnect:
                 self.log(f"Forwarded notification {method} (no response expected)")
                 return None
 
-            # For requests, read one framed JSON line (newline-delimited JSON),
-            # while preserving any additional complete messages for later.
-            parsed_response = self._read_one_response(method)
+            # For requests, read the matching framed JSON line (newline-delimited JSON),
+            # while preserving additional complete messages for later.
+            request_id = request.get("id")
+            parsed_response = self._read_response_for_id(method, request_id)
             if parsed_response is None:
                 return None
             self.log(f"Successfully forwarded {method}")
@@ -139,11 +140,19 @@ class MCPBridgeWithReconnect:
                 return False
         return True
 
-    def _read_one_response(self, method: str) -> Optional[Dict[str, Any]]:
-        """Read exactly one parsed response message from the Isabelle socket."""
+    def _pop_matching_response(self, request_id: Any) -> Optional[Dict[str, Any]]:
+        """Pop the first queued response with a matching JSON-RPC id."""
+        for idx, response in enumerate(self._response_queue):
+            if response.get("id") == request_id:
+                return self._response_queue.pop(idx)
+        return None
+
+    def _read_response_for_id(self, method: str, request_id: Any) -> Optional[Dict[str, Any]]:
+        """Read a parsed response with matching JSON-RPC id from the Isabelle socket."""
         while True:
-            if self._response_queue:
-                return self._response_queue.pop(0)
+            queued = self._pop_matching_response(request_id)
+            if queued is not None:
+                return queued
 
             chunk = self.isabelle_socket.recv(4096)
             if not chunk:
@@ -192,9 +201,6 @@ class MCPBridgeWithReconnect:
                     response = self.forward_to_isabelle(request)
 
                     if response:
-                        # Ensure response has correct ID
-                        response["id"] = request_id
-
                         # Send response back to client
                         response_str = json.dumps(response)
                         print(response_str, flush=True)

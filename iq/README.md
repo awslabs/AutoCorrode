@@ -65,6 +65,7 @@ I/Q now defaults to a hardened local-only posture:
 - Remote bind is blocked unless explicitly enabled (`IQ_MCP_ALLOW_REMOTE_BIND=true`).
 - Optional request authentication token (`IQ_MCP_AUTH_TOKEN`).
 - Mutating tools (`open_file` with `create_if_missing=true`, `create_file`, `write_file`, `save_file`) are restricted to allowed mutation roots.
+- `get_command_info` with `xml_result_file` is also treated as a mutating operation and must target an allowed mutation root.
 
 Use these environment variables to configure behavior:
 

@@ -20,6 +20,7 @@ class IQPlugin extends EBPlugin {
       Output.writeln("Isabelle/Q Server started successfully on port 8765")
     } catch {
       case ex: Exception =>
+        iqServer = None
         Output.writeln(s"Failed to start Isabelle/Q Server: ${ex.getMessage}")
         ex.printStackTrace()
     }
