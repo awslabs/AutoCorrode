@@ -76,19 +76,6 @@ object AssistantConstants {
   val LLM_CACHE_SIZE = 100
   val LLM_CACHE_EXPIRY_HOURS = 1
 
-  // Auto-prover defaults
-  val DEFAULT_PROVE_MAX_STEPS = 20
-  val DEFAULT_PROVE_RETRIES_PER_STEP = 3
-  val DEFAULT_PROVE_STEP_TIMEOUT = 30000L
-  val DEFAULT_PROVE_BRANCHES = 3
-  /** Overall wall-clock timeout for :prove auto-prover (ms). */
-  val DEFAULT_PROVE_TIMEOUT = 300000L
-  /** Timeout for individual LLM calls in auto-prover (ms). */
-  val PROVE_LLM_CALL_TIMEOUT = 90000L
-  /** Sub-deadline for proving speculated auxiliary lemmas (ms). */
-  val PROVE_LEMMA_SUB_DEADLINE = 60000L
-  /** Maximum steps when proving speculated lemmas (limit to prevent runaway). */
-  val PROVE_LEMMA_MAX_STEPS = 10
   /** Heuristic delay for PIDE to process buffer edits (ms). */
   val PIDE_PROCESSING_DELAY = 3000L
   

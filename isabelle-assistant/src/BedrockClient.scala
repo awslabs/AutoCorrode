@@ -320,8 +320,7 @@ object BedrockClient {
       Output.writeln(s"[Assistant] invokeChat - Truncated ${messages.length - truncated.length} old messages")
 
     // Anthropic requires strict user/assistant alternation. Merge consecutive
-    // same-role messages (e.g. when :prove adds a user message and invokeInContext
-    // appends another user message with the prompt).
+    // same-role messages before sending the request.
     val merged = truncated.foldLeft(List.empty[(String, String)]) {
       case (acc, (role, content)) if acc.nonEmpty && acc.last._1 == role =>
         acc.init :+ (role, acc.last._2 + "\n\n" + content)

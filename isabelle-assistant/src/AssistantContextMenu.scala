@@ -74,9 +74,6 @@ class AssistantContextMenu extends DynamicContextMenuService {
 
           if (ctx.iqAvailable) {
             proofMenu.addSeparator()
-            addItem(proofMenu, "Auto-Prove")(_ =>
-              ChatAction.chat(view, ":prove")
-            )
             addItem(proofMenu, "Run Sledgehammer")(_ =>
               SledgehammerAction.run(view)
             )

@@ -11,8 +11,8 @@ import org.gjt.sp.jedit.buffer.JEditBuffer
   * PIDE.editor.output (same as the Output_Dockable) to retrieve the current
   * goal state at a given buffer offset.
   *
-  * Provides both flat-text extraction (for LLM prompts) and structured analysis
-  * (for programmatic use by the auto-prover).
+  * Provides both flat-text extraction (for LLM prompts) and structured
+  * analysis (for programmatic use by assistant features).
   */
 object GoalExtractor {
 

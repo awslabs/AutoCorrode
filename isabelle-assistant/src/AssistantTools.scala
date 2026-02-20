@@ -1206,7 +1206,7 @@ object AssistantTools {
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
         case Some(command) =>
-          val timeout = AssistantOptions.getProveStepTimeout
+          val timeout = AssistantOptions.getVerificationTimeout
           val latch = new CountDownLatch(1)
           @volatile var result = ""
           GUI_Thread.later {

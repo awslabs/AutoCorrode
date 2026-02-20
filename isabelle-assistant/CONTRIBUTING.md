@@ -14,7 +14,6 @@ Isabelle Assistant is a jEdit plugin written in Scala 3 that integrates AWS Bedr
 | `BedrockClient` | AWS Bedrock API with retry, caching, tool-use loop |
 | `IQIntegration` | Async proof verification via I/Q plugin |
 | `SuggestAction` | Proof suggestion pipeline (LLM + sledgehammer) |
-| `ProofLoop` | Autonomous sketch-and-fill prover (`:prove`) |
 | `ContextFetcher` | PIDE entity extraction for LLM context |
 | `GoalExtractor` | Goal state extraction from PIDE output |
 | `PromptLoader` | Mustache template loading from `prompts/` |

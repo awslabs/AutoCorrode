@@ -52,10 +52,9 @@ class ChatActionTest extends AnyFunSuite with Matchers {
     names should contain("help")
     names should contain("suggest")
     names should contain("explain")
-    names should contain("prove")
     names should contain("set")
     names should contain("models")
-    names.length should be >= 25  // We have 30+ commands
+    names.length should be >= 24
   }
 
   test("getHistory and getHistorySnapshot should return same result") {

@@ -29,10 +29,6 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
   private var traceTimeoutField: JTextField = _
   private var traceDepthField: JTextField = _
   private var maxToolIterationsField: JTextField = _
-  private var proveMaxStepsField: JTextField = _
-  private var proveRetriesField: JTextField = _
-  private var proveStepTimeoutField: JTextField = _
-  private var proveBranchesField: JTextField = _
 
   override def _init(): Unit = {
     addSeparator("AWS Configuration")
@@ -149,32 +145,6 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
       new JTextField(AssistantOptions.getTraceDepth.toString, 10)
     traceDepthField.setToolTipText("Maximum depth for simplifier trace")
     addComponent("Trace Depth:", traceDepthField)
-
-    addSeparator("Auto-Prover (:prove)")
-
-    proveMaxStepsField =
-      new JTextField(AssistantOptions.getProveMaxSteps.toString, 10)
-    proveMaxStepsField.setToolTipText("Maximum proof steps before giving up")
-    addComponent("Max Steps:", proveMaxStepsField)
-
-    proveRetriesField =
-      new JTextField(AssistantOptions.getProveRetriesPerStep.toString, 10)
-    proveRetriesField.setToolTipText("Maximum retries per failed proof step")
-    addComponent("Retries per Step:", proveRetriesField)
-
-    proveStepTimeoutField =
-      new JTextField(AssistantOptions.getProveStepTimeout.toString, 10)
-    proveStepTimeoutField.setToolTipText(
-      "Timeout for each proof step verification in milliseconds"
-    )
-    addComponent("Step Timeout (ms):", proveStepTimeoutField)
-
-    proveBranchesField =
-      new JTextField(AssistantOptions.getProveBranches.toString, 10)
-    proveBranchesField.setToolTipText(
-      "Number of parallel proof strategies to explore per step (tree-of-thought)"
-    )
-    addComponent("Branches:", proveBranchesField)
 
     addSeparator("Tool Permissions")
 
@@ -295,16 +265,6 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
     )
     jEdit.setProperty("assistant.trace.timeout", traceTimeoutField.getText)
     jEdit.setProperty("assistant.trace.depth", traceDepthField.getText)
-    jEdit.setProperty("assistant.prove.max.steps", proveMaxStepsField.getText)
-    jEdit.setProperty(
-      "assistant.prove.retries.per.step",
-      proveRetriesField.getText
-    )
-    jEdit.setProperty(
-      "assistant.prove.step.timeout",
-      proveStepTimeoutField.getText
-    )
-    jEdit.setProperty("assistant.prove.branches", proveBranchesField.getText)
 
     // Save tool permissions
     if (permissionCombosField != null) {
@@ -361,11 +321,6 @@ object AssistantOptions {
       findTheoremsTimeout: Long,
       traceTimeout: Int,
       traceDepth: Int,
-      proveMaxSteps: Int,
-      proveRetriesPerStep: Int,
-      proveStepTimeout: Long,
-      proveBranches: Int,
-      proveTimeout: Long,
       useCris: Boolean,
       verifySuggestions: Boolean,
       useSledgehammer: Boolean
@@ -517,36 +472,6 @@ object AssistantOptions {
         1,
         50
       ),
-      proveMaxSteps = intProp(
-        "assistant.prove.max.steps",
-        AssistantConstants.DEFAULT_PROVE_MAX_STEPS,
-        1,
-        100
-      ),
-      proveRetriesPerStep = intProp(
-        "assistant.prove.retries.per.step",
-        AssistantConstants.DEFAULT_PROVE_RETRIES_PER_STEP,
-        0,
-        10
-      ),
-      proveStepTimeout = longProp(
-        "assistant.prove.step.timeout",
-        AssistantConstants.DEFAULT_PROVE_STEP_TIMEOUT,
-        5000L,
-        300000L
-      ),
-      proveBranches = intProp(
-        "assistant.prove.branches",
-        AssistantConstants.DEFAULT_PROVE_BRANCHES,
-        1,
-        10
-      ),
-      proveTimeout = longProp(
-        "assistant.prove.timeout",
-        AssistantConstants.DEFAULT_PROVE_TIMEOUT,
-        30000L,
-        1800000L
-      ),
       useCris = boolProp("assistant.use.cris", true),
       verifySuggestions = boolProp("assistant.verify.suggestions", true),
       useSledgehammer = boolProp("assistant.use.sledgehammer", false)
@@ -572,11 +497,6 @@ object AssistantOptions {
   def getFindTheoremsTimeout: Long = snapshot.findTheoremsTimeout
   def getTraceTimeout: Int = snapshot.traceTimeout
   def getTraceDepth: Int = snapshot.traceDepth
-  def getProveMaxSteps: Int = snapshot.proveMaxSteps
-  def getProveRetriesPerStep: Int = snapshot.proveRetriesPerStep
-  def getProveStepTimeout: Long = snapshot.proveStepTimeout
-  def getProveBranches: Int = snapshot.proveBranches
-  def getProveTimeout: Long = snapshot.proveTimeout
   def getUseCris: Boolean = snapshot.useCris
   def getVerifySuggestions: Boolean = snapshot.verifySuggestions
   def getUseSledgehammer: Boolean = snapshot.useSledgehammer
@@ -829,42 +749,7 @@ object AssistantOptions {
       300,
       _.traceTimeout
     ),
-    IntSetting("trace_depth", "assistant.trace.depth", 1, 50, _.traceDepth),
-    IntSetting(
-      "prove_max_steps",
-      "assistant.prove.max.steps",
-      1,
-      100,
-      _.proveMaxSteps
-    ),
-    IntSetting(
-      "prove_retries",
-      "assistant.prove.retries.per.step",
-      0,
-      10,
-      _.proveRetriesPerStep
-    ),
-    LongSetting(
-      "prove_step_timeout",
-      "assistant.prove.step.timeout",
-      5000L,
-      300000L,
-      _.proveStepTimeout
-    ),
-    IntSetting(
-      "prove_branches",
-      "assistant.prove.branches",
-      1,
-      10,
-      _.proveBranches
-    ),
-    LongSetting(
-      "prove_timeout",
-      "assistant.prove.timeout",
-      30000L,
-      1800000L,
-      _.proveTimeout
-    )
+    IntSetting("trace_depth", "assistant.trace.depth", 1, 50, _.traceDepth)
   )
 
   /** Map from normalized key to definition, supporting aliases. */

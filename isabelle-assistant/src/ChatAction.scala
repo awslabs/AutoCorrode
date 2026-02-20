@@ -129,11 +129,6 @@ object ChatAction {
       (v, _) => PrintContextAction.run(v),
       needsIQ = true
     ),
-    "prove" -> CommandEntry(
-      "Automatically prove the goal at cursor using LLM-guided proof search",
-      (v, _) => runProve(v),
-      needsIQ = true
-    ),
     "quickcheck" -> CommandEntry(
       "Run QuickCheck to test conjectures with random examples",
       (v, _) =>
@@ -550,29 +545,6 @@ object ChatAction {
         val prompt = PromptLoader.load("explain_error.md", subs)
         BedrockClient.invokeInContext(prompt)
       }
-    }
-  }
-
-  private def runProve(view: View): Unit = {
-    val buffer = view.getBuffer
-    val offset = view.getTextArea.getCaretPosition
-    val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
-    val goalState = GoalExtractor.getGoalState(buffer, offset)
-    val commandText = CommandExtractor.getCommandAtOffset(buffer, offset)
-
-    (commandOpt, goalState, commandText) match {
-      case (None, _, _) =>
-        addResponse("No Isabelle command at cursor position.")
-      case (_, None, _) =>
-        addResponse(
-          "No goal state at cursor position. Place cursor inside a proof."
-        )
-      case (_, _, None) => addResponse("No command text at cursor position.")
-      case (Some(command), Some(goal), Some(cmdText)) =>
-        AssistantDockable.setStatus("Proving...")
-        Isabelle_Thread.fork(name = "assistant-prove") {
-          ProofLoop.run(view, command, cmdText, goal)
-        }
     }
   }
 

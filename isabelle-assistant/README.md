@@ -1,6 +1,6 @@
 # Isabelle Assistant
 
-LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), built on [AWS Bedrock](https://aws.amazon.com/bedrock/). Provides autonomous proof search, interactive chat with LaTeX rendering, proof suggestions, code generation, refactoring, and more — all integrated into the Isabelle/jEdit IDE via a dockable chat panel and context-sensitive right-click menu.
+LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), built on [AWS Bedrock](https://aws.amazon.com/bedrock/). Provides interactive chat with LaTeX rendering, proof suggestions, code generation, refactoring, and more — all integrated into the Isabelle/jEdit IDE via a dockable chat panel and context-sensitive right-click menu.
 
 Isabelle Assistant is part of the [AutoCorrode](https://github.com/awslabs/AutoCorrode) project.
 
@@ -10,7 +10,7 @@ Isabelle Assistant combines four main layers:
 
 1. jEdit UI integration (`AssistantPlugin`, `AssistantDockable`, context menus, chat actions)
 2. LLM orchestration (`BedrockClient`, prompts, tool-use loop, retry/caching)
-3. Isabelle context/proof pipelines (`ContextFetcher`, `GoalExtractor`, `SuggestAction`, `ProofLoop`)
+3. Isabelle context/proof pipelines (`ContextFetcher`, `GoalExtractor`, `SuggestAction`)
 4. Optional I/Q integration for proof-state operations and verification (`IQIntegration`)
 
 For contributor-level component and threading details, see [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -30,18 +30,6 @@ With Anthropic Claude models, the LLM has autonomous access to tools for reading
 Mathematical notation in chat responses is rendered as LaTeX via [JLaTeXMath](https://github.com/opencollab/jlatexmath), both inline (`$...$`) and display (`$$...$$`).
 
 ![LaTeX rendering in chat](gifs/assistant-chat-latex-rendering.gif)
-
-### Auto-Prove
-
-The `:prove` command launches an autonomous proof search that combines LLM reasoning with Isabelle verification:
-
-1. **Phase 0** — tries common one-liner methods (`by simp`, `by auto`, `by blast`, induction candidates, etc.)
-2. **Phase 1** — generates multiple proof skeletons in parallel (tree-of-thought), each a structurally valid proof with `sorry` placeholders
-3. **Phase 2** — iteratively fills each `sorry` by querying I/Q for the actual subgoal, trying simple methods first, then calling the LLM with full context
-
-Every intermediate state is a valid proof — no unverified claims are made. The prover respects configurable limits on steps, retries, branches, and timeouts.
-
-![Autonomous proof search](gifs/assistant-autoprove.gif)
 
 ### Explain
 
@@ -75,7 +63,7 @@ Generate QuickCheck-style test cases and examples for definitions.
 
 ### Configuration
 
-All settings are accessible via **Plugins → Plugin Options → Isabelle Assistant** or the `:set` chat command. Configure AWS region, model selection, temperature, verification timeouts, proof search parameters, and more.
+All settings are accessible via **Plugins → Plugin Options → Isabelle Assistant** or the `:set` chat command. Configure AWS region, model selection, temperature, verification timeouts, and more.
 
 ![Settings panel](gifs/assistant-settings.gif)
 
@@ -128,7 +116,6 @@ Right-click in any `.thy` file to access the **Isabelle Assistant** submenu. Ava
 | | Explain Counterexample | Explain nitpick/quickcheck counterexamples | |
 | **Proof** | Suggest Proof Step | LLM proof suggestions with optional sledgehammer | for verification |
 | | Suggest Strategy | High-level proof strategy recommendations | |
-| | Auto-Prove (`:prove`) | Autonomous sketch-and-fill proof search | ✓ |
 | | Sledgehammer | Run external ATP provers | ✓ |
 | | Nitpick | Search for counterexamples | ✓ |
 | | Quickcheck | Test conjectures with random examples | ✓ |
@@ -207,7 +194,6 @@ Type `:help` in the chat to see all commands. Commands are prefixed with `:`.
 | `:suggest-name` | Suggest descriptive names for definitions/lemmas/theorems |
 | `:suggest-strategy` | Recommend proof strategy |
 | `:suggest-tactic` | Generate Eisbach method |
-| `:prove` | Autonomous proof search |
 | `:tidy` | Clean up formatting |
 | `:refactor` | Convert to Isar |
 | `:extract` | Extract lemma from selection |
@@ -265,10 +251,6 @@ Access via **Plugins → Plugin Options → Isabelle Assistant** or `:set` in ch
 | `find_theorems_timeout` | 10000 | Find theorems timeout (ms) |
 | `trace_timeout` | 10 | Simplifier trace timeout (s) |
 | `trace_depth` | 3 | Simplifier trace depth |
-| `prove_max_steps` | 20 | Auto-prover max steps |
-| `prove_retries` | 2 | Retries per failed step |
-| `prove_step_timeout` | 30000 | Per-step verification timeout (ms) |
-| `prove_branches` | 3 | Parallel proof strategies (tree-of-thought) |
 
 ### AWS Credentials
 

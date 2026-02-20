@@ -46,12 +46,12 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
     val snapshot = parse(Map(
       "assistant.temperature" -> "-1.0",
       "assistant.max.tokens" -> "99999999",
-      "assistant.prove.branches" -> "0",
+      "assistant.trace.depth" -> "0",
       "assistant.verify.timeout" -> "1"
     ))
     snapshot.temperature shouldBe AssistantConstants.MIN_TEMPERATURE
     snapshot.maxTokens shouldBe AssistantConstants.MAX_MAX_TOKENS
-    snapshot.proveBranches shouldBe 1
+    snapshot.traceDepth shouldBe 1
     snapshot.verifyTimeout shouldBe 5000L
   }
 
@@ -59,11 +59,11 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
     val snapshot = parse(Map(
       "assistant.temperature" -> "not-a-number",
       "assistant.max.tokens" -> "nan",
-      "assistant.prove.timeout" -> "oops"
+      "assistant.trace.timeout" -> "oops"
     ))
     snapshot.temperature shouldBe AssistantConstants.DEFAULT_TEMPERATURE
     snapshot.maxTokens shouldBe AssistantConstants.DEFAULT_MAX_TOKENS
-    snapshot.proveTimeout shouldBe AssistantConstants.DEFAULT_PROVE_TIMEOUT
+    snapshot.traceTimeout shouldBe AssistantConstants.DEFAULT_TRACE_TIMEOUT
   }
 
   test("parseSnapshot should honor boolean flags and defaults") {
