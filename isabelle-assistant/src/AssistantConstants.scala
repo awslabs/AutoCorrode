@@ -98,6 +98,7 @@ object AssistantConstants {
   val MAX_INSERT_ACTIONS = 200
   val CHAT_INPUT_ROWS = 4
   val CHAT_INPUT_COLUMNS = 40
+  val CHAT_INPUT_PLACEHOLDER = "Ask a question, or type : for commands..."
 
   // I/Q operation names
   val IQ_OPERATION_ISAR_EXPLORE = "isar_explore"

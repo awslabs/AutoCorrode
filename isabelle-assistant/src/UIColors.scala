@@ -154,6 +154,17 @@ object UIColors {
     def accentBorder: String = ThemeUtils.themedHex("#ff5722", "#ff8a65")
   }
   
+  // Chat input box styling (modern, clean look)
+  object ChatInput {
+    def background: String = ThemeUtils.themedHex("#2a2a2a", "#ffffff")
+    def border: String = ThemeUtils.themedHex("#4a4a4a", "#d0d0d0")
+    def focusBorder: String = ThemeUtils.themedHex("#8060b0", "#7b1fa2")
+    def placeholder: String = ThemeUtils.themedHex("#666666", "#9e9e9e")
+    def sendButton: String = ThemeUtils.themedHex("#888888", "#9e9e9e")
+    def sendButtonHover: String = ThemeUtils.themedHex("#b090d0", "#7b1fa2")
+    def sendButtonHoverBackground: String = ThemeUtils.themedHex("#3a3a4a", "#f0e8f8")
+  }
+  
   // Ask user widget colors (matches assistant message aesthetic with amber accent)
   object AskUser {
     // Card container - white background like other message bubbles

@@ -304,66 +304,108 @@ class AssistantDockable(view: View, position: String)
     input.setLineWrap(true)
     input.setWrapStyleWord(true)
     input.setFont(javax.swing.UIManager.getFont("TextField.font"))
-    input.setBorder(BorderFactory.createEmptyBorder(4, 6, 4, 6))
+    input.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 40)) // Right padding for send button
+    input.setBackground(Color.decode(UIColors.ChatInput.background))
 
-    // Small square send button overlaid in the bottom-right corner of the text area
-    val send = new JButton("Send ↵")
+    // Placeholder label overlay (shows "Ask a question..." when empty)
+    val placeholder = new JLabel(AssistantConstants.CHAT_INPUT_PLACEHOLDER)
+    placeholder.setFont(input.getFont)
+    placeholder.setForeground(Color.decode(UIColors.ChatInput.placeholder))
+    placeholder.setVisible(input.getText.isEmpty)
+
+    // Update placeholder visibility based on text content
+    input.getDocument.addDocumentListener(
+      new javax.swing.event.DocumentListener {
+        def insertUpdate(e: javax.swing.event.DocumentEvent): Unit =
+          placeholder.setVisible(input.getText.isEmpty)
+        def removeUpdate(e: javax.swing.event.DocumentEvent): Unit =
+          placeholder.setVisible(input.getText.isEmpty)
+        def changedUpdate(e: javax.swing.event.DocumentEvent): Unit = {}
+      }
+    )
+    input.addFocusListener(new java.awt.event.FocusAdapter {
+      override def focusGained(e: java.awt.event.FocusEvent): Unit =
+        placeholder.setVisible(false)
+      override def focusLost(e: java.awt.event.FocusEvent): Unit =
+        placeholder.setVisible(input.getText.isEmpty)
+    })
+
+    // Modern circular send button with Unicode arrow (➤)
+    val send = new JButton("➤")
     send.setToolTipText("Send message (Enter)")
-    send.setFont(send.getFont.deriveFont(java.awt.Font.BOLD, 11f))
-    send.setPreferredSize(new java.awt.Dimension(56, 24))
-    send.setMinimumSize(new java.awt.Dimension(56, 24))
-    send.setMaximumSize(new java.awt.Dimension(56, 24))
+    send.setFont(send.getFont.deriveFont(java.awt.Font.BOLD, 16f))
+    send.setPreferredSize(new java.awt.Dimension(32, 32))
+    send.setMinimumSize(new java.awt.Dimension(32, 32))
+    send.setMaximumSize(new java.awt.Dimension(32, 32))
     send.setMargin(new java.awt.Insets(0, 0, 0, 0))
     send.setFocusable(false)
     send.setContentAreaFilled(false)
-    send.setForeground(javax.swing.UIManager.getColor("Button.foreground"))
-    send.setBorder(
-      BorderFactory.createLineBorder(
-        javax.swing.UIManager.getColor("Button.shadow"),
-        1,
-        true
-      )
-    )
+    send.setForeground(Color.decode(UIColors.ChatInput.sendButton))
+    send.setBorder(BorderFactory.createEmptyBorder())
     send.setCursor(
       java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
     )
-    // Hover effect
+    
+    // Hover effect for send button
     send.addMouseListener(new java.awt.event.MouseAdapter {
       override def mouseEntered(e: java.awt.event.MouseEvent): Unit = {
-        send.setContentAreaFilled(true)
-        send.setBackground(javax.swing.UIManager.getColor("Button.highlight"))
-        send.setForeground(javax.swing.UIManager.getColor("Button.foreground"))
+        send.setOpaque(true)
+        send.setBackground(Color.decode(UIColors.ChatInput.sendButtonHoverBackground))
+        send.setForeground(Color.decode(UIColors.ChatInput.sendButtonHover))
       }
       override def mouseExited(e: java.awt.event.MouseEvent): Unit = {
-        send.setContentAreaFilled(false)
-        send.setForeground(javax.swing.UIManager.getColor("Button.foreground"))
+        send.setOpaque(false)
+        send.setForeground(Color.decode(UIColors.ChatInput.sendButton))
       }
     })
 
-    // Anchor button in bottom-right of a layered container
-    val scrollPane = new JScrollPane(input)
-    scrollPane.setBorder(
-      BorderFactory.createLineBorder(
-        javax.swing.UIManager.getColor("TextField.darkShadow")
-      )
+    // Rounded border with focus ring support
+    val normalBorder = BorderFactory.createLineBorder(
+      Color.decode(UIColors.ChatInput.border),
+      1,
+      true
     )
+    val focusBorder = BorderFactory.createLineBorder(
+      Color.decode(UIColors.ChatInput.focusBorder),
+      2,
+      true
+    )
+
+    val scrollPane = new JScrollPane(input)
+    scrollPane.setBorder(normalBorder)
     scrollPane.setVerticalScrollBarPolicy(
       javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED
     )
 
+    // Focus ring - swap border on focus/blur
+    input.addFocusListener(new java.awt.event.FocusAdapter {
+      override def focusGained(e: java.awt.event.FocusEvent): Unit =
+        scrollPane.setBorder(focusBorder)
+      override def focusLost(e: java.awt.event.FocusEvent): Unit =
+        scrollPane.setBorder(normalBorder)
+    })
+
+    // Layered panel with overlapping children (placeholder, send button over scroll pane)
     val layered = new JPanel(null) {
+      override def isOptimizedDrawingEnabled: Boolean = false // Fix for overlapping repaints
       override def getPreferredSize: java.awt.Dimension =
         scrollPane.getPreferredSize
       override def doLayout(): Unit = {
         val w = getWidth
         val h = getHeight
         scrollPane.setBounds(0, 0, w, h)
+        
+        // Position placeholder label at top-left with padding matching input
+        placeholder.setBounds(12, 8, w - 50, 20)
+        
+        // Position send button in bottom-right corner
         val bw = send.getPreferredSize.width
         val bh = send.getPreferredSize.height
-        send.setBounds(w - bw - 6, h - bh - 6, bw, bh)
+        send.setBounds(w - bw - 8, h - bh - 8, bw, bh)
       }
     }
-    layered.add(send) // on top
+    layered.add(placeholder) // overlay on top
+    layered.add(send) // overlay on top
     layered.add(scrollPane) // behind
 
     val panel = new JPanel(new BorderLayout())
@@ -472,6 +514,9 @@ class AssistantDockable(view: View, position: String)
 
     val inputMap = chatInput.getInputMap(javax.swing.JComponent.WHEN_FOCUSED)
     val actionMap = chatInput.getActionMap()
+
+    // Explicitly map Shift+Enter to insert-break for cross-platform consistency
+    inputMap.put(javax.swing.KeyStroke.getKeyStroke("shift ENTER"), "insert-break")
 
     inputMap.put(javax.swing.KeyStroke.getKeyStroke("ctrl ENTER"), "send")
     actionMap.put(
