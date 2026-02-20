@@ -421,23 +421,27 @@ object BedrockClient {
           val view = _currentView.getOrElse(throw new RuntimeException("No view available for tool execution"))
           val iterStr = maxIter.map(_.toString).getOrElse("∞")
           val resultBlocks = toolUses.map { tu =>
-            // Enhanced stuck-loop detection: track tool name + key params (not full args)
-            val signature = s"${tu.name}:${tu.input.get("theory").map(ResponseParser.toolValueToString).getOrElse("")}:${tu.input.get("operation").map(ResponseParser.toolValueToString).getOrElse("")}"
+            // Enhanced stuck-loop detection: track tool name + ALL input params
+            // This ensures different arguments produce different signatures
+            val paramStr = tu.input.toSeq.sortBy(_._1).map { case (k, v) => 
+              s"$k=${ResponseParser.toolValueToString(v).take(50)}" 
+            }.mkString(",")
+            val signature = s"${tu.name}($paramStr)"
             recentCalls.enqueue(signature)
             if (recentCalls.length > LOOP_DETECTION_WINDOW) recentCalls.dequeue()
             
             // Check for exact repetition (3+ identical calls in window)
             if (recentCalls.length >= 3 && recentCalls.takeRight(3).distinct.size == 1) {
-              Output.warning(s"[Assistant] Detected stuck loop: same tool signature '${recentCalls.last}' called 3+ times")
-              throw new RuntimeException(s"Stuck in loop: tool '${tu.name}' called repeatedly with no progress. Try a different approach.")
+              Output.warning(s"[Assistant] Detected stuck loop: same tool call '${recentCalls.last}' repeated 3+ times")
+              throw new RuntimeException(s"Stuck in loop: tool '${tu.name}' called repeatedly with identical arguments and no progress. Try a different approach.")
             }
             
-            // Check for alternating pattern (A-B-A-B or A-B-C-A-B-C)
+            // Check for alternating pattern (A-B-A-B)
             if (recentCalls.length >= 4) {
               val last4 = recentCalls.takeRight(4).toList
               if (last4(0) == last4(2) && last4(1) == last4(3)) {
                 Output.warning(s"[Assistant] Detected alternating loop: ${last4(0)} <-> ${last4(1)}")
-                throw new RuntimeException(s"Stuck in alternating loop between tools. Try a different approach.")
+                throw new RuntimeException(s"Stuck in alternating loop between two tool calls with no progress. Try a different approach.")
               }
             }
             
