@@ -8,6 +8,7 @@ import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import scala.jdk.CollectionConverters._
+import java.io.File
 
 /** Analyzes cursor context to determine which context menu items to show. */
 object MenuContext {
@@ -37,15 +38,22 @@ object MenuContext {
   def findTheoryBuffer(theoryName: String): Option[JEditBuffer] = {
     val normalized = if (theoryName.endsWith(".thy")) theoryName else s"$theoryName.thy"
     val buffers = org.gjt.sp.jedit.jEdit.getBufferManager().getBuffers().asScala
-    buffers.find { b =>
-      if (b.getPath == null) false
-      else {
-        val path = b.getPath
-        // Match if path ends with /theoryName or exactly equals theoryName
-        path.endsWith("/" + normalized) || path.endsWith("\\" + normalized) || 
-        java.io.File(path).getName == normalized
-      }
+      .filter(b => b.getPath != null && b.getPath.endsWith(".thy"))
+
+    val byExactPath = buffers.filter(_.getPath == normalized)
+    if (byExactPath.size == 1) return byExactPath.headOption
+
+    val byPathSuffix = buffers.filter { b =>
+      val path = b.getPath
+      path.endsWith(File.separator + normalized) ||
+      path.endsWith("/" + normalized) ||
+      path.endsWith("\\" + normalized)
     }
+    if (byPathSuffix.size == 1) return byPathSuffix.headOption
+
+    val byFilename = buffers.filter(b => new File(b.getPath).getName == normalized)
+    if (byFilename.size == 1) byFilename.headOption
+    else None
   }
 
   case class Context(

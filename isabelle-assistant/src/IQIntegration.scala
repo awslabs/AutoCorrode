@@ -484,12 +484,18 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
         val snapshot = Document_Model.snapshot(model)
         val node = snapshot.get_node(model.node_name)
         if (node.commands.isEmpty) None
-        else
+        else {
+          val clamped = math.max(0, math.min(offset, buffer.getLength))
+          val safeOffset =
+            if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
+            else clamped
+          val safeEnd = math.min(safeOffset + 1, buffer.getLength)
           node
-            .command_iterator(Text.Range(offset, offset + 1))
+            .command_iterator(Text.Range(safeOffset, safeEnd))
             .toList
             .headOption
             .map(_._1)
+        }
       }
     } catch { case _: Exception => None }
   }

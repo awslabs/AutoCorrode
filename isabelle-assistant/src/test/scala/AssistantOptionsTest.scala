@@ -84,9 +84,9 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
     overridden.useSledgehammer shouldBe true
   }
 
-  test("parseSnapshot should default maxToolIterations to None (unlimited)") {
+  test("parseSnapshot should default maxToolIterations to configured default") {
     val defaults = parse()
-    defaults.maxToolIterations shouldBe None
+    defaults.maxToolIterations shouldBe Some(AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS)
   }
 
   test("parseSnapshot should parse valid maxToolIterations values") {

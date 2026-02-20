@@ -77,6 +77,9 @@ object ToolPermissions {
     sessionDeniedTools = Set.empty
   }
 
+  private[assistant] def setSessionAllowedForTest(toolName: String): Unit =
+    setSessionAllowed(toolName)
+
   private def isSessionAllowed(toolName: String): Boolean =
     sessionAllowedTools.contains(toolName)
 
@@ -246,23 +249,20 @@ object ToolPermissions {
    * @return PermissionDecision
    */
   def checkPermission(toolName: String, args: ResponseParser.ToolArgs): PermissionDecision = {
-    // 1. Check session-scoped denials/allowances
+    // 1. Check session-scoped denials
     if (isSessionDenied(toolName)) return Denied
-    if (isSessionAllowed(toolName)) return Allowed
-    
+
     // 2. Get configured level
     val level = getConfiguredLevel(toolName)
-    
+
     // 3. Apply policy
     level match {
       case Deny => Denied
       case Allow => Allowed
       case AskAtFirstUse =>
-        // If already allowed in session, allow; otherwise prompt
         if (isSessionAllowed(toolName)) Allowed
         else NeedPrompt(toolName, extractResource(toolName, args))
       case AskAlways =>
-        // Always prompt (don't check session)
         NeedPrompt(toolName, extractResource(toolName, args))
     }
   }
@@ -284,12 +284,16 @@ object ToolPermissions {
     
     val toolDef = AssistantTools.tools.find(_.name == toolName)
     val context = toolDef.map(_.description).getOrElse("")
-    
-    val options = List(
-      "Allow (for this session)",
-      "Allow Once",
-      "Deny (for this session)"
-    )
+    val level = getConfiguredLevel(toolName)
+    val options =
+      if (level == AskAlways)
+        List("Allow Once", "Deny (for this session)")
+      else
+        List(
+          "Allow (for this session)",
+          "Allow Once",
+          "Deny (for this session)"
+        )
     
     // Reuse the exact same prompt mechanism as execAskUser
     AssistantTools.promptUserWithChoices(question, options, context, view) match {

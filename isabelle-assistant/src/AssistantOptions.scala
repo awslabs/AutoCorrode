@@ -412,8 +412,14 @@ object AssistantOptions {
     ): Double =
       try { math.max(min, math.min(max, prop(key, default.toString).toDouble)) }
       catch { case _: NumberFormatException => default }
-    def optIntProp(key: String, min: Int, max: Int): Option[Int] = {
-      val value = prop(key, "").trim.toLowerCase
+    def optIntProp(
+        key: String,
+        min: Int,
+        max: Int,
+        default: Option[Int]
+    ): Option[Int] = {
+      val defaultText = default.map(_.toString).getOrElse("")
+      val value = prop(key, defaultText).trim.toLowerCase
       if (
         value.isEmpty || value == "0" || value == "none" || value == "unlimited"
       ) None
@@ -444,7 +450,13 @@ object AssistantOptions {
         AssistantConstants.MIN_MAX_TOKENS,
         AssistantConstants.MAX_MAX_TOKENS
       ),
-      maxToolIterations = optIntProp("assistant.max.tool.iterations", 1, 50),
+      maxToolIterations =
+        optIntProp(
+          "assistant.max.tool.iterations",
+          1,
+          50,
+          Some(AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS)
+        ),
       maxRetries = intProp(
         "assistant.verify.max.retries",
         AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES,

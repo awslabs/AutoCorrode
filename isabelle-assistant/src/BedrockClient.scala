@@ -124,10 +124,10 @@ object BedrockClient {
     }
   }
 
-  @volatile private var _currentView: Option[org.gjt.sp.jedit.View] = None
+  private val currentViewTL = new ThreadLocal[org.gjt.sp.jedit.View]()
 
   /** Set the current view for tool execution context. Called before agentic invocations. */
-  def setCurrentView(view: org.gjt.sp.jedit.View): Unit = { _currentView = Some(view) }
+  def setCurrentView(view: org.gjt.sp.jedit.View): Unit = { currentViewTL.set(view) }
 
   /**
    * Invoke chat with retry logic and proper error handling.
@@ -138,8 +138,12 @@ object BedrockClient {
    */
   def invokeChat(systemPrompt: String, messages: List[(String, String)]): String = {
     ErrorHandler.logOperation("invokeChat") {
-      retryWithBackoff(maxRetries) {
-        invokeChatInternal(systemPrompt, messages)
+      try {
+        retryWithBackoff(maxRetries) {
+          invokeChatInternal(systemPrompt, messages)
+        }
+      } finally {
+        currentViewTL.remove()
       }
     }
   }
@@ -159,8 +163,12 @@ object BedrockClient {
       // Take atomic snapshot of history before constructing messages to avoid races
       val history = ChatAction.getHistorySnapshot.filterNot(_.transient).map(m => (m.role.wireValue, m.content))
       val messages = history :+ ("user", prompt)
-      retryWithBackoff(maxRetries) {
-        invokeChatInternal("", messages)
+      try {
+        retryWithBackoff(maxRetries) {
+          invokeChatInternal("", messages)
+        }
+      } finally {
+        currentViewTL.remove()
       }
     }
   }
@@ -418,7 +426,9 @@ object BedrockClient {
           msgBuf += (("assistant", rawContentJson(blocks)))
 
           // Execute each tool and build tool_result message
-          val view = _currentView.getOrElse(throw new RuntimeException("No view available for tool execution"))
+          val view = Option(currentViewTL.get())
+            .orElse(Option(org.gjt.sp.jedit.jEdit.getActiveView))
+            .getOrElse(throw new RuntimeException("No view available for tool execution"))
           val iterStr = maxIter.map(_.toString).getOrElse("∞")
           val resultBlocks = toolUses.map { tu =>
             // Enhanced stuck-loop detection: track tool name + ALL input params

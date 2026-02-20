@@ -55,7 +55,11 @@ object GoalExtractor {
   def getGoalState(buffer: JEditBuffer, offset: Int): Option[String] = {
     Document_Model.get_model(buffer).flatMap { model =>
       val snapshot = Document_Model.snapshot(model)
-      val output = PIDE.editor.output(snapshot, offset)
+      val clamped = math.max(0, math.min(offset, buffer.getLength))
+      val safeOffset =
+        if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
+        else clamped
+      val output = PIDE.editor.output(snapshot, safeOffset)
 
       if (output.messages.nonEmpty) {
         val text =
@@ -80,10 +84,14 @@ object GoalExtractor {
   def analyzeGoal(buffer: JEditBuffer, offset: Int): Option[GoalAnalysis] = {
     Document_Model.get_model(buffer).flatMap { model =>
       val snapshot = Document_Model.snapshot(model)
-      val output = PIDE.editor.output(snapshot, offset)
+      val clamped = math.max(0, math.min(offset, buffer.getLength))
+      val safeOffset =
+        if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
+        else clamped
+      val output = PIDE.editor.output(snapshot, safeOffset)
       analyzeGoalFromMessages(
         output.messages,
-        extractFreeVarsFromCommand(snapshot, offset)
+        extractFreeVarsFromCommand(snapshot, safeOffset, buffer.getLength)
       )
     }
   }
@@ -144,13 +152,19 @@ object GoalExtractor {
     */
   private def extractFreeVarsFromCommand(
       snapshot: Document.Snapshot,
-      offset: Int
+      offset: Int,
+      bufferLength: Int
   ): List[String] = {
     val freeVars = scala.collection.mutable.LinkedHashSet[String]()
     try {
       val node = snapshot.get_node(snapshot.node_name)
+      val clamped = math.max(0, math.min(offset, bufferLength))
+      val safeOffset =
+        if (bufferLength > 0 && clamped == bufferLength) clamped - 1
+        else clamped
+      val safeEnd = math.min(safeOffset + 1, bufferLength)
       node
-        .command_iterator(Text.Range(offset, offset + 1))
+        .command_iterator(Text.Range(safeOffset, safeEnd))
         .toList
         .headOption
         .foreach { case (cmd, cmdOffset) =>
@@ -188,7 +202,8 @@ object GoalExtractor {
       val node = snapshot.get_node(model.node_name)
       if (node.commands.isEmpty) false
       else {
-        val commands = node.command_iterator(Text.Range(0, offset + 1)).toList
+        val safeEnd = math.min(math.max(0, offset) + 1, buffer.getLength)
+        val commands = node.command_iterator(Text.Range(0, safeEnd)).toList
         isInProofContextFromKeywords(commands.map(_._1.span.name))
       }
     }

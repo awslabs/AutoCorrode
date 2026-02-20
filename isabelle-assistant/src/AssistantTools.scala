@@ -8,6 +8,7 @@ import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import scala.jdk.CollectionConverters._
 import java.util.concurrent.{CountDownLatch, TimeUnit}
+import java.util.Locale
 import software.amazon.awssdk.thirdparty.jackson.core.JsonGenerator
 
 /** Tool definitions and execution for LLM tool use (Anthropic function
@@ -559,6 +560,28 @@ object AssistantTools {
     else Right(name)
   }
 
+  private[assistant] def normalizeReadRange(
+      totalLines: Int,
+      requestedStart: Int,
+      requestedEnd: Int
+  ): (Int, Int) = {
+    if (totalLines <= 0) (1, 0)
+    else {
+      val start = math.max(1, math.min(totalLines, requestedStart))
+      val rawEnd = if (requestedEnd <= 0) totalLines else requestedEnd
+      val end = math.max(start, math.min(totalLines, rawEnd))
+      (start, end)
+    }
+  }
+
+  private[assistant] def clampOffset(offset: Int, bufferLength: Int): Int =
+    math.max(0, math.min(offset, bufferLength))
+
+  private def bufferLines(
+      buffer: org.gjt.sp.jedit.buffer.JEditBuffer
+  ): Vector[String] =
+    (0 until buffer.getLineCount).map(buffer.getLineText).toVector
+
   /** Execute a tool by name. Returns the result as a string. Called from the
     * agentic loop on a background thread. All arguments are sanitized before
     * use to prevent injection or resource exhaustion.
@@ -627,27 +650,22 @@ object AssistantTools {
         findBuffer(normalized) match {
           case None         => s"Theory '$theory' not found in open buffers."
           case Some(buffer) =>
-            val content = buffer.getText(0, buffer.getLength)
-            val allLines = content.split("\n")
-            val startLine = intArg(args, "start_line", 1)
-            val endLine = intArg(args, "end_line", allLines.length)
-            
-            // Validate line numbers
-            if (startLine <= 0) 
-              return "Error: start_line must be a positive integer"
-            if (endLine < startLine)
-              return s"Error: end_line ($endLine) must be >= start_line ($startLine)"
-            if (startLine > allLines.length)
-              return s"Error: start_line $startLine out of range (theory has ${allLines.length} lines)"
-            
-            val start = startLine - 1
-            val end = math.min(allLines.length, endLine)
-            val lines = allLines.slice(start, end)
-            val header =
-              s"Theory $theory (lines ${start + 1}-$end of ${allLines.length}):\n"
-            header + lines.zipWithIndex
-              .map { case (l, i) => s"${start + i + 1}: $l" }
-              .mkString("\n")
+            val lines = bufferLines(buffer)
+            val lineCount = lines.length
+            val (start, end) =
+              normalizeReadRange(
+                lineCount,
+                intArg(args, "start_line", 1),
+                intArg(args, "end_line", lineCount)
+              )
+            val header = s"Theory $theory (lines $start-$end of $lineCount):\n"
+            if (lineCount == 0) {
+              s"Theory $theory is empty."
+            } else {
+              header + (start to end)
+                .map(i => s"$i: ${lines(i - 1)}")
+                .mkString("\n")
+            }
         }
     }
   }
@@ -680,9 +698,11 @@ object AssistantTools {
                 AssistantConstants.MAX_SEARCH_RESULTS,
                 math.max(1, intArg(args, "max_results", 20))
               )
-              val lines = buffer.getText(0, buffer.getLength).split("\n")
-              val matches = lines.zipWithIndex
-                .filter(_._1.toLowerCase.contains(pattern.toLowerCase))
+              val patternLower = pattern.toLowerCase(Locale.ROOT)
+              val matches = bufferLines(buffer).zipWithIndex
+                .filter { case (line, _) =>
+                  line.toLowerCase(Locale.ROOT).contains(patternLower)
+                }
                 .take(max)
               if (matches.isEmpty) s"No matches for '$pattern' in $theory."
               else
@@ -1318,6 +1338,7 @@ object AssistantTools {
     if (pattern.isEmpty) "Error: pattern required"
     else {
       val maxTotal = math.min(200, math.max(1, intArg(args, "max_results", 50)))
+      val patternLower = pattern.toLowerCase(Locale.ROOT)
       val buffers =
         org.gjt.sp.jedit.jEdit.getBufferManager().getBuffers().asScala
       val theories = buffers
@@ -1327,9 +1348,10 @@ object AssistantTools {
       val allMatches = scala.collection.mutable.ListBuffer[String]()
       for (buffer <- theories if allMatches.length < maxTotal) {
         val theoryName = java.io.File(buffer.getPath).getName
-        val lines = buffer.getText(0, buffer.getLength).split("\n")
-        val matches = lines.zipWithIndex
-          .filter(_._1.toLowerCase.contains(pattern.toLowerCase))
+        val matches = bufferLines(buffer).zipWithIndex
+          .filter { case (line, _) =>
+            line.toLowerCase(Locale.ROOT).contains(patternLower)
+          }
           .take(maxTotal - allMatches.length)
         matches.foreach { case (line, idx) =>
           allMatches += s"$theoryName:${idx + 1}: ${line.trim}"
@@ -1522,10 +1544,15 @@ object AssistantTools {
               GUI_Thread.later {
                 try {
                   val lineCount = buffer.getLineCount
-                  if (startLine > lineCount) {
+                  val canAppendAtEnd = operation == "insert" && startLine == lineCount + 1
+                  if (startLine > lineCount && !canAppendAtEnd) {
                     result =
                       s"Error: start_line $startLine out of range (theory has $lineCount lines)"
-                  } else if (endLine > lineCount) {
+                  } else if (
+                    (operation == "replace" || operation == "delete") && endLine < startLine
+                  ) {
+                    result = s"Error: end_line must be >= start_line (got $endLine < $startLine)"
+                  } else if ((operation == "replace" || operation == "delete") && endLine > lineCount) {
                     result =
                       s"Error: end_line $endLine out of range (theory has $lineCount lines)"
                   } else {
@@ -1533,31 +1560,47 @@ object AssistantTools {
                     try {
                       operation match {
                         case "insert" =>
-                          val offset = buffer.getLineStartOffset(startLine - 1)
-                          // Add newline only if text doesn't already end with one
-                          val finalText = if (text.endsWith("\n")) text else text + "\n"
-                          buffer.insert(offset, finalText)
-                          val numLines = text.count(_ == '\n') + (if (text.endsWith("\n")) 0 else 1)
-                          result = s"Inserted $numLines line(s) before line $startLine"
+                          val offset =
+                            if (canAppendAtEnd) buffer.getLength
+                            else buffer.getLineStartOffset(startLine - 1)
+                          val needsLeadingNewline =
+                            canAppendAtEnd &&
+                            buffer.getLength > 0 &&
+                            buffer.getText(buffer.getLength - 1, 1) != "\n"
+                          val normalizedText =
+                            if (text.endsWith("\n")) text else text + "\n"
+                          buffer.insert(
+                            offset,
+                            (if (needsLeadingNewline) "\n" else "") + normalizedText
+                          )
+                          result =
+                            if (canAppendAtEnd)
+                              s"Inserted ${text.linesIterator.size} lines after line $lineCount"
+                            else s"Inserted ${text.linesIterator.size} lines before line $startLine"
                         case "replace" =>
                           val startOffset =
                             buffer.getLineStartOffset(startLine - 1)
-                          // Use getLineStartOffset for end to exclude the trailing newline of endLine
-                          val endOffset = 
-                            if (endLine < lineCount) buffer.getLineStartOffset(endLine)
-                            else buffer.getLength
+                          val endOffset =
+                            if (endLine == lineCount) buffer.getLength
+                            else buffer.getLineStartOffset(endLine)
+                          val removedEndsWithNewline =
+                            endOffset > startOffset &&
+                            buffer.getText(endOffset - 1, 1) == "\n"
+                          val replacementText =
+                            if (removedEndsWithNewline && !text.endsWith("\n")) text + "\n"
+                            else text
                           buffer.remove(startOffset, endOffset - startOffset)
-                          // Add newline only if text doesn't already end with one
-                          val finalText = if (text.endsWith("\n")) text else text + "\n"
-                          buffer.insert(startOffset, finalText)
+                          buffer.insert(startOffset, replacementText)
                           result = s"Replaced lines $startLine-$endLine"
                         case "delete" =>
+                          val deletingToEnd = endLine == lineCount
                           val startOffset =
-                            buffer.getLineStartOffset(startLine - 1)
-                          // Use getLineStartOffset for end to preserve newline structure
-                          val endOffset = 
-                            if (endLine < lineCount) buffer.getLineStartOffset(endLine)
-                            else buffer.getLength
+                            if (deletingToEnd && startLine > 1)
+                              math.max(0, buffer.getLineEndOffset(startLine - 2) - 1)
+                            else buffer.getLineStartOffset(startLine - 1)
+                          val endOffset =
+                            if (deletingToEnd) buffer.getLength
+                            else buffer.getLineStartOffset(endLine)
                           buffer.remove(startOffset, endOffset - startOffset)
                           result = s"Deleted lines $startLine-$endLine"
                       }
@@ -2238,11 +2281,16 @@ object AssistantTools {
     try {
       Document_Model.get_model(buffer).flatMap { model =>
         val snapshot = Document_Model.snapshot(model)
-        // Expand search to entire command span like extractErrorAtOffset does
         val command = IQIntegration.getCommandAtOffset(buffer, offset)
         val range = command match {
           case Some(cmd) => cmd.range
-          case None => Text.Range(offset, offset + 1)  // Fallback to single char
+          case None =>
+            val clamped = clampOffset(offset, buffer.getLength)
+            val safeOffset =
+              if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
+              else clamped
+            val safeEnd = math.min(safeOffset + 1, buffer.getLength)
+            Text.Range(safeOffset, safeEnd)
         }
         val warnings = snapshot.cumulate(
           range,

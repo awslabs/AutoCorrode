@@ -76,6 +76,16 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     decision shouldBe ToolPermissions.Allowed
   }
 
+  test("AskAlways tools should still prompt even if session-allowed state exists") {
+    ToolPermissions.clearSession()
+    ToolPermissions.setSessionAllowedForTest("edit_theory")
+    val decision = ToolPermissions.checkPermission(
+      "edit_theory",
+      Map.empty[String, ResponseParser.ToolValue]
+    )
+    decision shouldBe ToolPermissions.NeedPrompt("edit_theory", None)
+  }
+
   test("clearSession should reset session state") {
     ToolPermissions.clearSession()
     // Session state is internal, but we can test indirectly via checkPermission behavior
