@@ -4,15 +4,11 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.buffer.JEditBuffer
 
-/** Extracts goal state and proof context status from PIDE editor output. Uses
-  * PIDE.editor.output (same as the Output_Dockable) to retrieve the current
-  * goal state at a given buffer offset.
-  *
-  * Provides both flat-text extraction (for LLM prompts) and structured
-  * analysis (for programmatic use by assistant features).
+/** Extracts goal state and proof context status via typed I/Q MCP adapters.
+  * Provides flat goal text extraction and structured analysis for prompts and
+  * action heuristics.
   */
 object GoalExtractor {
 
@@ -49,52 +45,58 @@ object GoalExtractor {
     "\\<close>"
   )
 
-  /** Get the goal state text at the given buffer offset. Returns None if no
-    * goal is available (e.g., outside a proof context).
-    */
-  def getGoalState(buffer: JEditBuffer, offset: Int): Option[String] = {
-    Document_Model.get_model(buffer).flatMap { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val clamped = math.max(0, math.min(offset, buffer.getLength))
-      val safeOffset =
-        if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
-        else clamped
-      val output = PIDE.editor.output(snapshot, safeOffset)
+  private val GoalLookupTimeoutMs =
+    AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
 
-      if (output.messages.nonEmpty) {
-        val text =
-          output.messages.map(elem => XML.content(elem).trim).filter(_.nonEmpty)
-        val joined = text.mkString("\n\n")
-        if (joined.nonEmpty) Some(joined) else None
-      } else None
+  private def selectionArgs(buffer: JEditBuffer, offset: Int): Map[String, Any] = {
+    val clamped = math.max(0, math.min(offset, buffer.getLength))
+    MenuContext.bufferPath(buffer) match {
+      case Some(path) =>
+        Map(
+          "command_selection" -> "file_offset",
+          "path" -> path,
+          "offset" -> clamped
+        )
+      case None =>
+        Map("command_selection" -> "current")
     }
   }
+
+  /** Get the goal state text at the given buffer offset. Returns None if no
+   * goal is available (e.g., outside a proof context).
+   */
+  def getGoalState(buffer: JEditBuffer, offset: Int): Option[String] =
+    IQMcpClient
+      .callGetGoalState(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
+      .toOption
+      .map(_.goal)
+      .filter(goal => goal.hasGoal && goal.goalText.trim.nonEmpty)
+      .map(_.goalText)
 
   /** Get structured goal analysis at the given buffer offset. Extracts free
-    * variables and constants from PIDE XML markup rather than relying on regex
-    * over rendered text.
-    *
-    * @param buffer
-    *   The jEdit buffer
+   * variables and constants from typed I/Q goal analysis.
+   *
+   * @param buffer
+   *   The jEdit buffer
     * @param offset
     *   Character offset in the buffer
-    * @return
-    *   Structured goal analysis, or None if no goal at offset
-    */
-  def analyzeGoal(buffer: JEditBuffer, offset: Int): Option[GoalAnalysis] = {
-    Document_Model.get_model(buffer).flatMap { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val clamped = math.max(0, math.min(offset, buffer.getLength))
-      val safeOffset =
-        if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
-        else clamped
-      val output = PIDE.editor.output(snapshot, safeOffset)
-      analyzeGoalFromMessages(
-        output.messages,
-        extractFreeVarsFromCommand(snapshot, safeOffset, buffer.getLength)
+   * @return
+   *   Structured goal analysis, or None if no goal at offset
+   */
+  def analyzeGoal(buffer: JEditBuffer, offset: Int): Option[GoalAnalysis] =
+    IQMcpClient
+      .callGetGoalState(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
+      .toOption
+      .map(_.goal)
+      .filter(goal => goal.hasGoal && goal.goalText.trim.nonEmpty)
+      .map(goal =>
+        GoalAnalysis(
+          text = goal.goalText,
+          freeVars = goal.freeVars,
+          constants = goal.constants.filterNot(isMetaConstant),
+          numSubgoals = math.max(goal.numSubgoals, 1)
+        )
       )
-    }
-  }
 
   private[assistant] def analyzeGoalFromMessages(
       messages: List[XML.Tree],
@@ -149,44 +151,6 @@ object GoalExtractor {
     }
   }
 
-  /** Extract free variables from the command at offset using PIDE entity
-    * markup.
-    */
-  private def extractFreeVarsFromCommand(
-      snapshot: Document.Snapshot,
-      offset: Int,
-      bufferLength: Int
-  ): List[String] = {
-    val freeVars = scala.collection.mutable.LinkedHashSet[String]()
-    try {
-      val node = snapshot.get_node(snapshot.node_name)
-      val clamped = math.max(0, math.min(offset, bufferLength))
-      val safeOffset =
-        if (bufferLength > 0 && clamped == bufferLength) clamped - 1
-        else clamped
-      val safeEnd = math.min(safeOffset + 1, bufferLength)
-      node
-        .command_iterator(Text.Range(safeOffset, safeEnd))
-        .toList
-        .headOption
-        .foreach { case (cmd, cmdOffset) =>
-          val range = Text.Range(cmdOffset, cmdOffset + cmd.length)
-          val results = snapshot.cumulate(
-            range,
-            List.empty[String],
-            Markup.Elements(Markup.FREE, "fixed"),
-            _ => { case (acc, Text.Info(_, XML.Elem(Markup(_, props), _))) =>
-              Markup.Name.unapply(props).map(name => acc :+ name)
-            }
-          )
-          results.flatMap(_._2).distinct.foreach(freeVars.add)
-        }
-    } catch {
-      case ex: Exception => ErrorHandler.logSilentError("GoalExtractor", ex)
-    }
-    freeVars.toList
-  }
-
   /** Filter out meta-level constants that aren't useful for proof strategy. */
   private def isMetaConstant(name: String): Boolean =
     name.startsWith("Pure.") || name == "Trueprop" || name == "HOL.eq" ||
@@ -195,21 +159,14 @@ object GoalExtractor {
       name == "HOL.True" || name == "HOL.False"
 
   /** Check whether the given offset is inside a proof context by walking
-    * commands backwards from the offset, tracking proof opener/closer depth.
-    * Returns true if an unmatched proof opener is found before any closer.
-    */
-  def isInProofContext(buffer: JEditBuffer, offset: Int): Boolean = {
-    Document_Model.get_model(buffer).exists { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val node = snapshot.get_node(model.node_name)
-      if (node.commands.isEmpty) false
-      else {
-        val safeEnd = math.min(math.max(0, offset) + 1, buffer.getLength)
-        val commands = node.command_iterator(Text.Range(0, safeEnd)).toList
-        isInProofContextFromKeywords(commands.map(_._1.span.name))
-      }
-    }
-  }
+   * commands backwards from the offset, tracking proof opener/closer depth.
+   * Returns true if an unmatched proof opener is found before any closer.
+   */
+  def isInProofContext(buffer: JEditBuffer, offset: Int): Boolean =
+    IQMcpClient
+      .callGetContextInfo(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
+      .toOption
+      .exists(_.inProofContext)
 
   private[assistant] def isInProofContextFromKeywords(
       keywords: Seq[String]

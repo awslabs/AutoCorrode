@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import javax.swing.JOptionPane
 
@@ -136,22 +135,13 @@ object FindTheoremsAction {
   private def getFreeVariableNames(view: View): Set[String] = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    Document_Model.get_model(buffer).map { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val range = snapshot.node.command_iterator(Text.Range(offset, offset + 1))
-        .toList.headOption.map { case (cmd, cmdOffset) =>
-          Text.Range(cmdOffset, cmdOffset + cmd.length)
-        }.getOrElse(Text.Range(offset, math.min(offset + 1, buffer.getLength)))
-      // Accumulate constants and free vars via cumulate return value (no side effects)
-      val (constants, freeVars) = snapshot.cumulate(range, (Set.empty[String], Set.empty[String]),
-        Markup.Elements(Markup.CONST, Markup.FREE), _ => {
-          case ((cs, fs), Text.Info(r, XML.Elem(Markup(Markup.CONST, _), _))) =>
-            Some((cs + buffer.getText(r.start, r.length), fs))
-          case ((cs, fs), Text.Info(r, XML.Elem(Markup(Markup.FREE, _), _))) =>
-            Some((cs, fs + buffer.getText(r.start, r.length)))
-          case _ => None
-        }).foldLeft((Set.empty[String], Set.empty[String])) { case ((ac, af), Text.Info(_, (c, f))) => (ac ++ c, af ++ f) }
-      freeVars -- constants
-    }.getOrElse(Set.empty[String])
+    GoalExtractor
+      .analyzeGoal(buffer, offset)
+      .map { analysis =>
+        val free = analysis.freeVars.map(_.trim).filter(_.nonEmpty).toSet
+        val constants = analysis.constants.map(_.trim).filter(_.nonEmpty).toSet
+        free -- constants
+      }
+      .getOrElse(Set.empty[String])
   }
 }

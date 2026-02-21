@@ -5,6 +5,7 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.View
+import scala.annotation.unused
 
 /** Displays proof context (local facts) at cursor via I/Q print_context query. */
 object PrintContextAction {
@@ -18,61 +19,50 @@ object PrintContextAction {
       return None
     }
 
-    val buffer = view.getBuffer
-    val offset = view.getTextArea.getCaretPosition
-    val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
-    
-    commandOpt.flatMap { command =>
-      var result: Option[String] = None
-      val latch = new java.util.concurrent.CountDownLatch(1)
-      
-      GUI_Thread.later {
-        runPrintContextAsync(view, command, 5000, { response =>
-          response match {
-            case Right(output) if output.trim.nonEmpty && !output.contains("No local facts") =>
-              result = Some(output.trim)
-            case _ =>
-              result = None
-          }
-          latch.countDown()
-        })
-      }
-      
-      latch.await(6000, java.util.concurrent.TimeUnit.MILLISECONDS)
-      result
-    }
+    var result: Option[String] = None
+    val latch = new java.util.concurrent.CountDownLatch(1)
+
+    IQIntegration.getProofContextAsync(view, 5000, {
+      case Right(ctx) if ctx.success && ctx.hasContext && ctx.context.trim.nonEmpty =>
+        result = Some(ctx.context.trim)
+        latch.countDown()
+      case _ =>
+        result = None
+        latch.countDown()
+    })
+
+    val _ = latch.await(6000, java.util.concurrent.TimeUnit.MILLISECONDS)
+    result
   }
 
   def run(view: View): Unit = {
-    val buffer = view.getBuffer
-    val offset = view.getTextArea.getCaretPosition
-    val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
-
-    commandOpt match {
-      case None =>
-        GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
-      case Some(command) =>
-        AssistantDockable.setStatus("Getting context...")
-
-        GUI_Thread.later {
-          runPrintContextAsync(view, command, 5000, { result =>
-            GUI_Thread.later {
-              displayResult(result)
-              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-            }
-          })
-        }
-    }
+    AssistantDockable.setStatus("Getting context...")
+    runPrintContextAsync(view, command = null, 5000, { result =>
+      GUI_Thread.later {
+        displayResult(result)
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+      }
+    })
   }
 
-  /** Run print_context query via I/Q. MUST be called from the GUI thread. */
+  /** Run print_context query via I/Q MCP typed adapter. */
   def runPrintContextAsync(
     view: View,
-    command: Command,
+    @unused command: Command,
     timeoutMs: Long,
     callback: Either[String, String] => Unit
   ): Unit = {
-    IQIntegration.runQueryAsync(view, command, List("print_context"), timeoutMs, callback)
+    IQIntegration.getProofContextAsync(view, timeoutMs, {
+      case Right(ctx) if ctx.success =>
+        callback(Right(ctx.context))
+      case Right(ctx) if ctx.timedOut =>
+        callback(Left("query timed out"))
+      case Right(ctx) =>
+        val msg = Option(ctx.error).flatten.getOrElse(ctx.message).trim
+        callback(Left(if (msg.nonEmpty) msg else "proof context query failed"))
+      case Left(err) =>
+        callback(Left(err))
+    })
   }
 
   private def displayResult(result: Either[String, String]): Unit = {

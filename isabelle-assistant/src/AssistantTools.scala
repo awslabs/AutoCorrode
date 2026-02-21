@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import scala.jdk.CollectionConverters._
 import java.util.concurrent.{CountDownLatch, TimeUnit}
@@ -746,26 +745,6 @@ object AssistantTools {
     }
   }
 
-  private def currentCommandAtCursor(view: View): Either[String, Command] = {
-    val timeoutMs =
-      AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC * 1000L
-    try {
-      GUIThreadUtil
-        .awaitOnGUIThread[Option[Command]](timeoutMs) {
-          IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        }
-        .toRight("Error: operation timed out (GUI thread busy)")
-        .flatMap(_.toRight("No Isabelle command at cursor position."))
-    } catch {
-      case ex: Exception =>
-        ErrorHandler.logSilentError("AssistantTools", ex)
-        Left("Error: failed to access command at cursor")
-    }
-  }
-
   private def firstNonEmpty(parts: List[String]): Option[String] =
     parts.map(_.trim).find(_.nonEmpty)
 
@@ -1107,56 +1086,74 @@ object AssistantTools {
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
+    val timeoutMs =
+      AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
+
+    def selectionArgsForCurrentView(): Map[String, Any] = {
+      val buffer = view.getBuffer
+      val offset = view.getTextArea.getCaretPosition
+      val clamped = math.max(0, math.min(offset, buffer.getLength))
+      Option(buffer.getPath).map(_.trim).filter(_.nonEmpty) match {
+        case Some(path) =>
+          Map(
+            "command_selection" -> "file_offset",
+            "path" -> path,
+            "offset" -> clamped
+          )
+        case None =>
+          Map("command_selection" -> "current")
+      }
+    }
+
+    def formatDiagnostics(
+        diagnostics: IQMcpClient.DiagnosticsResult,
+        emptyMessage: String
+    ): String = {
+      if (diagnostics.diagnostics.isEmpty) emptyMessage
+      else
+        diagnostics.diagnostics
+          .map { d =>
+            if (d.line > 0) s"Line ${d.line}: ${d.message}" else d.message
+          }
+          .distinct
+          .mkString("\n")
+    }
+
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
 
     effectiveScope.toLowerCase match {
       case "cursor" =>
-        val latch = new CountDownLatch(1)
-        @volatile var result = "No errors at cursor position."
-        GUI_Thread.later {
-          try {
-            val buffer = view.getBuffer
-            val offset = view.getTextArea.getCaretPosition
-            ExplainErrorAction
-              .extractErrorAtOffset(buffer, offset)
-              .foreach(e => result = e)
-          } catch {
-            case ex: Exception =>
-              ErrorHandler.logSilentError("AssistantTools", ex)
-          }
-          latch.countDown()
-        }
-        if (
-          !latch.await(
-            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-            TimeUnit.SECONDS
+        IQMcpClient
+          .callGetDiagnostics(
+            severity = IQMcpClient.DiagnosticSeverity.Error,
+            scope = IQMcpClient.DiagnosticScope.Selection,
+            timeoutMs = timeoutMs,
+            selectionArgs = selectionArgsForCurrentView()
           )
-        ) "Error: operation timed out (GUI thread busy)"
-        else result
+          .fold(
+            err => s"Error: $err",
+            diagnostics =>
+              formatDiagnostics(diagnostics, "No errors at cursor position.")
+          )
 
       case "all" =>
-        val latch = new CountDownLatch(1)
-        @volatile var result = "No errors in current buffer."
-        GUI_Thread.later {
-          try {
-            val buffer = view.getBuffer
-            extractMessagesInBuffer(buffer, isError = true).foreach(e =>
-              result = e
-            )
-          } catch {
-            case ex: Exception =>
-              ErrorHandler.logSilentError("AssistantTools", ex)
-          }
-          latch.countDown()
+        Option(view.getBuffer.getPath).map(_.trim).filter(_.nonEmpty) match {
+          case None => "Error: current buffer has no path"
+          case Some(path) =>
+            IQMcpClient
+              .callGetDiagnostics(
+                severity = IQMcpClient.DiagnosticSeverity.Error,
+                scope = IQMcpClient.DiagnosticScope.File,
+                timeoutMs = timeoutMs,
+                path = Some(path)
+              )
+              .fold(
+                err => s"Error: $err",
+                diagnostics =>
+                  formatDiagnostics(diagnostics, "No errors in current buffer.")
+              )
         }
-        if (
-          !latch.await(
-            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-            TimeUnit.SECONDS
-          )
-        ) "Error: operation timed out (GUI thread busy)"
-        else result
 
       case _ =>
         // Use original case for theory name (case-sensitive)
@@ -1166,28 +1163,25 @@ object AssistantTools {
         findBuffer(normalized) match {
           case None => s"Theory '$effectiveScope' not found in open buffers."
           case Some(buffer) =>
-            val latch = new CountDownLatch(1)
-            @volatile var result = s"No errors in theory '$effectiveScope'."
-            GUI_Thread.later {
-              try {
-                extractMessagesInBuffer(buffer, isError = true).foreach(e =>
-                  result = e
-                )
-              } catch {
-                case ex: Exception =>
-                  Output.warning(
-                    s"[Assistant] execGetErrors failed: ${ex.getMessage}"
+            MenuContext.bufferPath(buffer) match {
+              case None => s"Error: theory '$effectiveScope' has no backing path"
+              case Some(path) =>
+                IQMcpClient
+                  .callGetDiagnostics(
+                    severity = IQMcpClient.DiagnosticSeverity.Error,
+                    scope = IQMcpClient.DiagnosticScope.File,
+                    timeoutMs = timeoutMs,
+                    path = Some(path)
                   )
-              }
-              latch.countDown()
+                  .fold(
+                    err => s"Error: $err",
+                    diagnostics =>
+                      formatDiagnostics(
+                        diagnostics,
+                        s"No errors in theory '$effectiveScope'."
+                      )
+                  )
             }
-            if (
-              !latch.await(
-                AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-                TimeUnit.SECONDS
-              )
-            ) "Error: operation timed out (GUI thread busy)"
-            else result
         }
     }
   }
@@ -1202,21 +1196,46 @@ object AssistantTools {
     else {
       val nameList = names.split("\\s+").toList.filter(_.nonEmpty)
       if (nameList.isEmpty) "Error: no valid names provided"
-      else
-        currentCommandAtCursor(view) match {
-          case Left(err) => err
-          case Right(command) =>
-            ContextFetcher
-              .fetchDefinitionsForNames(
-                view,
-                command,
-                nameList,
-                AssistantConstants.CONTEXT_FETCH_TIMEOUT
-              )
-              .getOrElse(
-                s"No definitions found for: ${nameList.mkString(", ")}"
-              )
-        }
+      else {
+        val latch = new CountDownLatch(1)
+        @volatile var result =
+          s"No definitions found for: ${nameList.mkString(", ")}"
+
+        IQIntegration.getDefinitionsAsync(
+          view,
+          nameList,
+          AssistantConstants.CONTEXT_FETCH_TIMEOUT,
+          {
+            case Right(defs)
+                if defs.success &&
+                  defs.hasDefinitions &&
+                  defs.definitions.trim.nonEmpty =>
+              result = defs.definitions.trim
+              latch.countDown()
+            case Right(defs) if defs.timedOut =>
+              result = "Definition lookup timed out."
+              latch.countDown()
+            case Right(defs) =>
+              val msg = defs.error.getOrElse(defs.message).trim
+              if (msg.nonEmpty) {
+                result = s"Error: $msg"
+              }
+              latch.countDown()
+            case Left(err) =>
+              result = s"Error: $err"
+              latch.countDown()
+          }
+        )
+
+        if (
+          !latch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC +
+              AssistantConstants.CONTEXT_FETCH_TIMEOUT / 1000 + 2,
+            TimeUnit.SECONDS
+          )
+        ) "Error: definition lookup timed out"
+        else result
+      }
     }
   }
 
@@ -1426,54 +1445,77 @@ object AssistantTools {
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
+    val timeoutMs =
+      AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
+
+    def selectionArgsForCurrentView(): Map[String, Any] = {
+      val buffer = view.getBuffer
+      val offset = view.getTextArea.getCaretPosition
+      val clamped = math.max(0, math.min(offset, buffer.getLength))
+      Option(buffer.getPath).map(_.trim).filter(_.nonEmpty) match {
+        case Some(path) =>
+          Map(
+            "command_selection" -> "file_offset",
+            "path" -> path,
+            "offset" -> clamped
+          )
+        case None =>
+          Map("command_selection" -> "current")
+      }
+    }
+
+    def formatDiagnostics(
+        diagnostics: IQMcpClient.DiagnosticsResult,
+        emptyMessage: String
+    ): String = {
+      if (diagnostics.diagnostics.isEmpty) emptyMessage
+      else
+        diagnostics.diagnostics
+          .map { d =>
+            if (d.line > 0) s"Line ${d.line}: ${d.message}" else d.message
+          }
+          .distinct
+          .mkString("\n")
+    }
+
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
 
     effectiveScope.toLowerCase match {
       case "cursor" =>
-        val latch = new CountDownLatch(1)
-        @volatile var result = "No warnings at cursor position."
-        GUI_Thread.later {
-          try {
-            val buffer = view.getBuffer
-            val offset = view.getTextArea.getCaretPosition
-            extractWarningsAtOffset(buffer, offset).foreach(w => result = w)
-          } catch {
-            case ex: Exception =>
-              ErrorHandler.logSilentError("AssistantTools", ex)
-          }
-          latch.countDown()
-        }
-        if (
-          !latch.await(
-            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-            TimeUnit.SECONDS
+        IQMcpClient
+          .callGetDiagnostics(
+            severity = IQMcpClient.DiagnosticSeverity.Warning,
+            scope = IQMcpClient.DiagnosticScope.Selection,
+            timeoutMs = timeoutMs,
+            selectionArgs = selectionArgsForCurrentView()
           )
-        ) "Error: operation timed out (GUI thread busy)"
-        else result
+          .fold(
+            err => s"Error: $err",
+            diagnostics =>
+              formatDiagnostics(diagnostics, "No warnings at cursor position.")
+          )
 
       case "all" =>
-        val latch = new CountDownLatch(1)
-        @volatile var result = "No warnings in current buffer."
-        GUI_Thread.later {
-          try {
-            val buffer = view.getBuffer
-            extractMessagesInBuffer(buffer, isError = false).foreach(w =>
-              result = w
-            )
-          } catch {
-            case ex: Exception =>
-              ErrorHandler.logSilentError("AssistantTools", ex)
-          }
-          latch.countDown()
+        Option(view.getBuffer.getPath).map(_.trim).filter(_.nonEmpty) match {
+          case None => "Error: current buffer has no path"
+          case Some(path) =>
+            IQMcpClient
+              .callGetDiagnostics(
+                severity = IQMcpClient.DiagnosticSeverity.Warning,
+                scope = IQMcpClient.DiagnosticScope.File,
+                timeoutMs = timeoutMs,
+                path = Some(path)
+              )
+              .fold(
+                err => s"Error: $err",
+                diagnostics =>
+                  formatDiagnostics(
+                    diagnostics,
+                    "No warnings in current buffer."
+                  )
+              )
         }
-        if (
-          !latch.await(
-            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-            TimeUnit.SECONDS
-          )
-        ) "Error: operation timed out (GUI thread busy)"
-        else result
 
       case _ =>
         // Use original case for theory name (case-sensitive)
@@ -1483,28 +1525,25 @@ object AssistantTools {
         findBuffer(normalized) match {
           case None => s"Theory '$effectiveScope' not found in open buffers."
           case Some(buffer) =>
-            val latch = new CountDownLatch(1)
-            @volatile var result = s"No warnings in theory '$effectiveScope'."
-            GUI_Thread.later {
-              try {
-                extractMessagesInBuffer(buffer, isError = false).foreach(w =>
-                  result = w
-                )
-              } catch {
-                case ex: Exception =>
-                  Output.warning(
-                    s"[Assistant] execGetWarnings failed: ${ex.getMessage}"
+            MenuContext.bufferPath(buffer) match {
+              case None => s"Error: theory '$effectiveScope' has no backing path"
+              case Some(path) =>
+                IQMcpClient
+                  .callGetDiagnostics(
+                    severity = IQMcpClient.DiagnosticSeverity.Warning,
+                    scope = IQMcpClient.DiagnosticScope.File,
+                    timeoutMs = timeoutMs,
+                    path = Some(path)
                   )
-              }
-              latch.countDown()
+                  .fold(
+                    err => s"Error: $err",
+                    diagnostics =>
+                      formatDiagnostics(
+                        diagnostics,
+                        s"No warnings in theory '$effectiveScope'."
+                      )
+                  )
             }
-            if (
-              !latch.await(
-                AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-                TimeUnit.SECONDS
-              )
-            ) "Error: operation timed out (GUI thread busy)"
-            else result
         }
     }
   }
@@ -1757,47 +1796,35 @@ object AssistantTools {
         findBuffer(normalized) match {
           case None         => s"Theory '$theory' not found in open buffers."
           case Some(buffer) =>
-            val latch = new CountDownLatch(1)
-            @volatile var result = ""
-            GUI_Thread.later {
-              try {
-                Document_Model.get_model(buffer).foreach { model =>
-                  val snapshot = Document_Model.snapshot(model)
-                  val node = snapshot.get_node(model.node_name)
-                  val entities = scala.collection.mutable.ListBuffer[String]()
-                  val defKeywords = IsabelleKeywords.entityKeywords
-
-                  for ((cmd, cmdOffset) <- node.command_iterator()) {
-                    val keyword = cmd.span.name
-                    if (defKeywords.contains(keyword)) {
-                      val lineNum = buffer.getLineOfOffset(cmdOffset) + 1
-                      val source = cmd.source.take(100).trim
-                      // Expanded regex to match all entityKeywords
-                      val name =
-                        """(?:lemma|theorem|corollary|proposition|schematic_goal|definition|abbreviation|lift_definition|fun|function|primrec|datatype|codatatype|type_synonym|record|typedef|inductive|coinductive|nominal_inductive|locale|class|instantiation|interpretation)\s+([A-Za-z0-9_']+)""".r
-                          .findFirstMatchIn(source)
-                          .map(_.group(1))
-                          .getOrElse("(unnamed)")
-                      entities += s"Line $lineNum: $keyword $name"
+            val maxResultsRaw = intArg(args, "max_results", 200)
+            val maxResults = math.max(1, math.min(1000, maxResultsRaw))
+            MenuContext.bufferPath(buffer) match {
+              case None => s"Error: theory '$theory' has no backing path"
+              case Some(path) =>
+                IQMcpClient
+                  .callGetEntities(
+                    path = path,
+                    maxResults = Some(maxResults),
+                    timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+                  )
+                  .fold(
+                    err => s"Error: $err",
+                    entitiesResult => {
+                      if (entitiesResult.entities.isEmpty)
+                        "No entities found in theory."
+                      else {
+                        val lines = entitiesResult.entities.map { entity =>
+                          s"Line ${entity.line}: ${entity.keyword} ${entity.name}"
+                        }
+                        val suffix =
+                          if (entitiesResult.truncated)
+                            s"\n\nResults truncated to ${entitiesResult.returnedEntities} of ${entitiesResult.totalEntities} entities."
+                          else ""
+                        lines.mkString("\n") + suffix
+                      }
                     }
-                  }
-                  result =
-                    if (entities.nonEmpty) entities.mkString("\n")
-                    else "No entities found in theory."
-                }
-              } catch {
-                case ex: Exception => result = s"Error: ${ex.getMessage}"
-              }
-              latch.countDown()
+                  )
             }
-            if (
-              !latch.await(
-                AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-                TimeUnit.SECONDS
-              )
-            ) "Error: operation timed out (GUI thread busy)"
-            else if (result.isEmpty) "Error: operation completed without a result"
-            else result
         }
     }
   }
@@ -2307,95 +2334,6 @@ object AssistantTools {
        |$contextHtml
        |$optionButtons
        |</div>""".stripMargin
-  }
-
-  /** Extract messages (errors or warnings) from an entire buffer with line
-    * numbers. Uses Isabelle's canonical Rendering.text_messages() API to
-    * retrieve messages from Command.State.results.
-    */
-  private def extractMessagesInBuffer(
-      buffer: org.gjt.sp.jedit.buffer.JEditBuffer,
-      isError: Boolean
-  ): Option[String] = {
-    try {
-      Document_Model.get_model(buffer).flatMap { model =>
-        val snapshot = Document_Model.snapshot(model)
-        val range = Text.Range(0, buffer.getLength)
-
-        val filter: XML.Elem => Boolean =
-          if (isError) Protocol.is_error
-          else elem => Protocol.is_warning(elem) || Protocol.is_legacy(elem)
-
-        val messages = Rendering.text_messages(snapshot, range, filter)
-
-        if (messages.nonEmpty) {
-          val withLines = messages.map { case Text.Info(msgRange, elem) =>
-            val offset = msgRange.start
-            val line = buffer.getLineOfOffset(offset) + 1
-            val text = XML.content(elem)
-            s"Line $line: $text"
-          }.distinct
-          Some(withLines.mkString("\n"))
-        } else None
-      }
-    } catch {
-      case ex: Exception =>
-        Output.warning(
-          s"[Assistant] extractMessagesInBuffer failed: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
-        )
-        None
-    }
-  }
-
-  private def extractWarningsAtOffset(
-      buffer: org.gjt.sp.jedit.buffer.JEditBuffer,
-      offset: Int
-  ): Option[String] = {
-    try {
-      Document_Model.get_model(buffer).flatMap { model =>
-        val snapshot = Document_Model.snapshot(model)
-        val command = IQIntegration.getCommandAtOffset(buffer, offset)
-        val range = command match {
-          case Some(cmd) => cmd.range
-          case None =>
-            val clamped = clampOffset(offset, buffer.getLength)
-            val safeOffset =
-              if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
-              else clamped
-            val safeEnd = math.min(safeOffset + 1, buffer.getLength)
-            Text.Range(safeOffset, safeEnd)
-        }
-        val warnings = snapshot.cumulate(
-          range,
-          List.empty[String],
-          Markup
-            .Elements(Markup.WARNING_MESSAGE, Markup.WARNING, Markup.LEGACY),
-          _ => {
-            case (
-                  acc,
-                  Text
-                    .Info(_, XML.Elem(Markup(Markup.WARNING_MESSAGE, _), body))
-                ) =>
-              Some(acc :+ XML.content(body))
-            case (
-                  acc,
-                  Text.Info(_, XML.Elem(Markup(Markup.WARNING, _), body))
-                ) =>
-              Some(acc :+ XML.content(body))
-            case (
-                  acc,
-                  Text.Info(_, XML.Elem(Markup(Markup.LEGACY, _), body))
-                ) =>
-              Some(acc :+ XML.content(body))
-            case _ => None
-          }
-        )
-        val allWarnings = warnings.flatMap(_._2).distinct
-        if (allWarnings.nonEmpty) Some(allWarnings.mkString("\n")) else None
-      }
-    } catch {
-      case _: Exception => None
-    }
   }
 
   private def findBuffer(

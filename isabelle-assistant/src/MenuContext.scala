@@ -56,6 +56,20 @@ object MenuContext {
     else None
   }
 
+  /** Best-effort absolute path lookup for a jEdit buffer. */
+  def bufferPath(buffer: JEditBuffer): Option[String] =
+    buffer match {
+      case b: org.gjt.sp.jedit.Buffer =>
+        Option(b.getPath).map(_.trim).filter(_.nonEmpty)
+      case _ =>
+        org.gjt.sp.jedit.jEdit
+          .getBufferManager()
+          .getBuffers()
+          .asScala
+          .find(_ eq buffer)
+          .flatMap(b => Option(b.getPath).map(_.trim).filter(_.nonEmpty))
+    }
+
   case class Context(
     inProof: Boolean,
     hasGoal: Boolean,

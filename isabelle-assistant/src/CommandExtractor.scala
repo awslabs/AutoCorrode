@@ -4,48 +4,47 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.buffer.JEditBuffer
 
 /**
- * Extracts the Isabelle command source text at a given buffer offset using PIDE markup.
- * Looks up the PIDE document model for the buffer, finds the command spanning the offset,
- * and returns its source text. Returns None if no model or command is available.
+ * Extracts the Isabelle command source text at a given buffer offset via I/Q MCP.
  */
 object CommandExtractor {
-  /** Get the source text of the Isabelle command at the given buffer offset.
-   *  Requires the buffer to have an active PIDE document model. */
-  def getCommandAtOffset(buffer: JEditBuffer, offset: Int): Option[String] = {
-    Document_Model.get_model(buffer).flatMap { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val node = snapshot.get_node(model.node_name)
+  private val CommandLookupTimeoutMs =
+    AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
 
-      if (node.commands.nonEmpty) {
-        // Clamp range to avoid exceeding buffer length when cursor is at end
-        val safeEnd = math.min(offset + 1, buffer.getLength)
-        val targetRange = Text.Range(offset, safeEnd)
-        node.command_iterator(targetRange).toList.headOption.map {
-          case (command, _) => command.source
-        }
-      } else None
+  private def selectionArgs(buffer: JEditBuffer, offset: Int): Map[String, Any] = {
+    val clamped = math.max(0, math.min(offset, buffer.getLength))
+    MenuContext.bufferPath(buffer) match {
+      case Some(path) =>
+        Map(
+          "command_selection" -> "file_offset",
+          "path" -> path,
+          "offset" -> clamped
+        )
+      case None =>
+        Map("command_selection" -> "current")
     }
   }
 
-  /** Get the PIDE span name (parsed command keyword) at the given buffer offset.
-   *  Uses PIDE's command parser — no string splitting or regex. */
-  def getCommandKeyword(buffer: JEditBuffer, offset: Int): Option[String] = {
-    Document_Model.get_model(buffer).flatMap { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val node = snapshot.get_node(model.node_name)
+  private def resolveCommand(
+      buffer: JEditBuffer,
+      offset: Int
+  ): Option[IQMcpClient.ResolvedCommandTarget] =
+    IQMcpClient
+      .callResolveCommandTarget(selectionArgs(buffer, offset), CommandLookupTimeoutMs)
+      .toOption
 
-      if (node.commands.nonEmpty) {
-        // Clamp range to avoid exceeding buffer length when cursor is at end
-        val safeEnd = math.min(offset + 1, buffer.getLength)
-        val targetRange = Text.Range(offset, safeEnd)
-        node.command_iterator(targetRange).toList.headOption.map {
-          case (command, _) => command.span.name
-        }
-      } else None
-    }
+  /** Get the source text of the Isabelle command at the given buffer offset.
+   */
+  def getCommandAtOffset(buffer: JEditBuffer, offset: Int): Option[String] = {
+    resolveCommand(buffer, offset).map(_.command.source).filter(_.trim.nonEmpty)
+  }
+
+  /** Get the PIDE span name (parsed command keyword) at the given buffer offset.
+   *  Uses I/Q command resolution rather than local document traversal.
+   */
+  def getCommandKeyword(buffer: JEditBuffer, offset: Int): Option[String] = {
+    resolveCommand(buffer, offset).map(_.command.keyword).filter(_.nonEmpty)
   }
 }

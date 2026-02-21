@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 
@@ -41,34 +40,32 @@ object ExplainErrorAction {
   }
 
   def extractErrorAtOffset(buffer: JEditBuffer, offset: Int): Option[String] = {
-    try {
-      Document_Model.get_model(buffer).flatMap { model =>
-        val snapshot = Document_Model.snapshot(model)
-        // Expand search to entire command span, not just 1 character at cursor
-        val command = IQIntegration.getCommandAtOffset(buffer, offset)
-        val range = command match {
-          case Some(cmd) => cmd.range
-          case None => 
-            // Fallback to single char, clamped to buffer length
-            val safeEnd = math.min(offset + 1, buffer.getLength)
-            Text.Range(offset, safeEnd)
-        }
-
-        val errors = snapshot.cumulate(range, List.empty[String],
-          Markup.Elements(Markup.ERROR_MESSAGE, Markup.ERROR), _ => {
-            case (acc, Text.Info(_, XML.Elem(Markup(Markup.ERROR_MESSAGE, _), body))) =>
-              Some(acc :+ XML.content(body))
-            case (acc, Text.Info(_, XML.Elem(Markup(Markup.ERROR, _), body))) =>
-              Some(acc :+ XML.content(body))
-            case _ => None
-          })
-
-        val allErrors = errors.flatMap(_._2).distinct
-        if (allErrors.nonEmpty) Some(allErrors.mkString("\n")) else None
+    val clamped = math.max(0, math.min(offset, buffer.getLength))
+    val selectionArgs =
+      MenuContext.bufferPath(buffer) match {
+        case Some(path) =>
+          Map(
+            "command_selection" -> "file_offset",
+            "path" -> path,
+            "offset" -> clamped
+          )
+        case None =>
+          Map("command_selection" -> "current")
       }
-    } catch {
-      case _: Exception => None
-    }
+
+    IQMcpClient
+      .callGetDiagnostics(
+        severity = IQMcpClient.DiagnosticSeverity.Error,
+        scope = IQMcpClient.DiagnosticScope.Selection,
+        timeoutMs =
+          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+        selectionArgs = selectionArgs
+      )
+      .toOption
+      .flatMap { result =>
+        val messages = result.diagnostics.map(_.message.trim).filter(_.nonEmpty).distinct
+        if (messages.nonEmpty) Some(messages.mkString("\n")) else None
+      }
   }
 
   def hasErrorAtOffset(buffer: JEditBuffer, offset: Int): Boolean =
