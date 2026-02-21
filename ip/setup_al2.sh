@@ -48,6 +48,10 @@ else
   rm "/tmp/$TARBALL"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   mv "/tmp/Isabelle2025-2" "$INSTALL_DIR"
+  # Disable SystemOnTPTP
+  PREFS_DIR="$("$INSTALL_DIR"/bin/isabelle getenv -b ISABELLE_HOME_USER)/etc"
+  mkdir -p "$PREFS_DIR"
+  echo 'SystemOnTPTP = ""' >> "$PREFS_DIR/preferences"
   echo "Installed: $INSTALL_DIR"
 fi
 

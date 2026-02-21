@@ -141,9 +141,11 @@ of `configure-remote.py` for more information.
 """
 
 import argparse
+import atexit
 import os
 import re
 import shlex
+import signal
 import socket
 import subprocess
 import sys
@@ -175,6 +177,77 @@ def setup_logging(verbose, log_file=None):
         file_handler = logging.FileHandler(log_file)
         file_handler.setFormatter(fmt)
         logger.addHandler(file_handler)
+
+# ---------------------------------------------------------------------------
+# Process registry: track all spawned subprocesses for cleanup
+# ---------------------------------------------------------------------------
+
+_spawned_processes = []  # list of subprocess.Popen objects
+_remote_pids = []       # list of (host, pid_str) for remote processes
+_spawned_lock = threading.Lock()
+_cleanup_done = False
+
+def register_process(proc):
+    """Register a subprocess for cleanup on exit."""
+    with _spawned_lock:
+        _spawned_processes.append(proc)
+
+def register_remote_pid(host, pid):
+    """Register a remote PID for cleanup on exit."""
+    with _spawned_lock:
+        _remote_pids.append((host, str(pid)))
+    logger.debug(f"Registered remote PID {pid} on {host}")
+
+def setsid_wrap(cmd):
+    """Wrap a shell command with setsid --wait so the inner process
+    becomes a session leader (PID == PGID), enabling process-group kill."""
+    return f"setsid --wait bash -c {shlex.quote(cmd)}"
+
+def cleanup_all():
+    """Kill all remote processes and terminate all local subprocesses.
+
+    Remote processes are killed first (via SSH) because terminating the local
+    SSH client does NOT reliably kill the remote side.  Safe to call multiple
+    times.
+    """
+    global _cleanup_done
+    with _spawned_lock:
+        if _cleanup_done:
+            return
+        _cleanup_done = True
+        remote = list(_remote_pids)
+        procs = list(_spawned_processes)
+    # Kill remote processes first — group them by host for efficiency.
+    # Each remote command runs under setsid, so its PID == PGID.
+    # kill -9 -{pid} kills the entire process group, including all
+    # descendants (grandchildren etc.) regardless of depth.
+    hosts = {}
+    for host, pid in remote:
+        hosts.setdefault(host, []).append(pid)
+    for host, pids in hosts.items():
+        try:
+            kill_cmd = "kill -9 -- " + " ".join(f"-{p}" for p in pids) + " 2>/dev/null"
+            subprocess.run(
+                ["ssh"] + ssh_control_flags() + [host, kill_cmd],
+                capture_output=True, timeout=5)
+        except Exception:
+            pass
+    # Then terminate local SSH processes, with SIGKILL escalation
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.terminate()
+        except OSError:
+            pass
+    # Give local processes a moment to exit, then SIGKILL any survivors
+    time.sleep(0.5)
+    for proc in procs:
+        try:
+            if proc.poll() is None:
+                proc.kill()
+        except OSError:
+            pass
+    ssh_control_cleanup()
 
 # ---------------------------------------------------------------------------
 # Remote command helpers
@@ -379,16 +452,24 @@ def _start_remote_stats_monitor(host, pid, stats_dir, target_isabelle_home,
     """Start a remote poly process to monitor ML stats, inject as proxy_ml_stats."""
     def monitor_thread():
         try:
-            cmd = (
+            inner_cmd = (
+                f"echo $$; exec env "
                 f"POLYSTATSDIR={shlex.quote(stats_dir)} "
                 f"{shlex.quote(target_ml_home + '/poly')} -q "
                 f"--use {shlex.quote(target_isabelle_home + '/src/Pure/ML/ml_statistics.ML')} "
                 f"--eval 'ML_Statistics.monitor {pid} 0.5'"
             )
+            cmd = setsid_wrap(inner_cmd)
+            logger.debug(f"Stats monitor wrapped cmd: {cmd[:300]}")
             proc = subprocess.Popen(
                 ["ssh"] + ssh_control_flags() + [host, cmd],
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL)
+            register_process(proc)
+            # First line is the session leader PID (= PGID)
+            first_line = proc.stdout.readline().decode().strip()
+            if first_line.isdigit():
+                register_remote_pid(host, first_line)
             while True:
                 line = proc.stdout.readline()
                 if not line:
@@ -705,23 +786,31 @@ def start_remote_bash_server(host, target_isabelle_home):
             "printf '#!/bin/sh\\necho 80\\n' > /tmp/isabelle-proxy-bin/tput && "
             "chmod +x /tmp/isabelle-proxy-bin/tput")
     logger.debug("Starting remote Bash.Server...")
-    bash_server_cmd = (
-        f"PATH=/tmp/isabelle-proxy-bin:$PATH "
+    bash_server_inner = (
+        f"echo $$; exec env PATH=/tmp/isabelle-proxy-bin:$PATH "
         f"{shlex.quote(target_isabelle_home + '/bin/isabelle')} scala -e "
         f"'{{ val server = isabelle.Bash.Server.start(debugging = true); "
         f"println(\"BASH_SERVER_ADDRESS=\" + server.address); "
         f"println(\"BASH_SERVER_PASSWORD=\" + server.password); "
         f"Thread.sleep(Long.MaxValue) }}'"
     )
+    bash_server_cmd = setsid_wrap(bash_server_inner)
+    logger.debug(f"Bash.Server wrapped cmd: {bash_server_cmd[:300]}")
     proc = subprocess.Popen(
         ["ssh"] + ssh_control_flags() + [host, bash_server_cmd],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    register_process(proc)
 
     addr = None
     pw = None
+    remote_pid = None
     deadline = time.time() + 60
     while time.time() < deadline:
         line = proc.stdout.readline().decode().strip()
+        if remote_pid is None and line.isdigit():
+            remote_pid = line
+            register_remote_pid(host, remote_pid)
+            continue
         if line.startswith("BASH_SERVER_ADDRESS="):
             addr = line.split("=", 1)[1]
             logger.debug(f"Remote Bash.Server address: {addr}")
@@ -1115,13 +1204,68 @@ def main():
             f.write(remote_cmd)
         logger.debug(f"Full remote command dumped to {cmd_dump}")
 
+    # Wrap the remote command in setsid so it gets its own process group
+    # (PID == PGID), enabling cleanup_all to kill the entire tree with
+    # kill -9 -{pid}.  The PID is written to a file and read back via SSH.
+    #
+    # The command is written to a script file on the remote rather than
+    # passed as a bash -c argument, because the full command with all env
+    # vars can exceed the Unix socket message size limit for SSH mux.
+    remote_pid_file = f"{remote_tmp}/poly.pid"
+    remote_script = f"{remote_tmp}/run.sh"
+    script_content = f'#!/bin/bash\necho $$ > {shlex.quote(remote_pid_file)}\n{remote_cmd}\n'
+    ssh_run(host, "sh", "-c",
+            f"cat > {shlex.quote(remote_script)} && chmod +x {shlex.quote(remote_script)}",
+            capture=True, input=script_content)
+    remote_cmd_wrapped = f"setsid --wait {shlex.quote(remote_script)}"
+    logger.debug(f"Poly wrapped cmd: {remote_cmd_wrapped}")
+    ssh_cmd[-1] = remote_cmd_wrapped
+    if args.log:
+        wrapped_dump = os.path.splitext(args.log)[0] + "_wrapped_cmd.txt"
+        with open(wrapped_dump, "w") as f:
+            f.write(script_content)
+        logger.debug(f"Full remote script dumped to {wrapped_dump}")
+
     proc = subprocess.Popen(ssh_cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+    register_process(proc)
+
+    # Read the remote session leader PID (= PGID) from the pidfile.
+    # This is the PID inside setsid's child; cleanup_all uses it for
+    # process-group kill (kill -9 -{pid}).
+    def _read_remote_pid():
+        for _ in range(20):
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                return
+            try:
+                pid = ssh_run_stdout(host, "cat", remote_pid_file)
+                if pid.strip().isdigit():
+                    register_remote_pid(host, pid.strip())
+                    return
+            except Exception:
+                pass
+    pid_reader = threading.Thread(target=_read_remote_pid, daemon=True)
+    pid_reader.start()
+    # Block until PID is registered or timeout (5s), so that cleanup_all
+    # can reliably kill the remote process even on early exit.
+    pid_reader.join(timeout=12)
+    if pid_reader.is_alive():
+        logger.warning("Remote PID registration timed out — remote process may survive cleanup")
 
     try:
         rc = proc.wait()
+        logger.debug(f"SSH process exited with rc={rc}")
+        if rc == 127:
+            logger.error("rc=127 (command not found) — the setsid-wrapped "
+                         "remote command may have a quoting issue")
     except KeyboardInterrupt:
         proc.terminate()
         rc = proc.wait()
+    finally:
+        # Kill remote PIDs first (needs SSH master alive), then clean up
+        # local processes and temp files.
+        cleanup_all()
+        cleanup_remote(host, remote_tmp, remote_src_dir)
 
     logger.debug(f"Process exited with rc={rc}")
 
@@ -1129,10 +1273,6 @@ def main():
     # built heap back from the remote to the local expected path.
     if rc == 0:
         copy_heap_back(host, new_argv, argv_rewrites)
-
-    # Cleanup
-    cleanup_remote(host, bash_server_proc, remote_tmp, remote_src_dir)
-    ssh_control_cleanup()
 
     sys.exit(rc)
 
@@ -1163,12 +1303,12 @@ def copy_heap_back(host, new_argv, argv_rewrites):
                 logger.warning(f"Failed to copy heap: {e}")
 
 
-def cleanup_remote(host, bash_server_proc, remote_tmp, remote_src_dir):
-    """Terminate remote Bash.Server and remove temp files."""
-    if bash_server_proc and bash_server_proc.poll() is None:
-        bash_server_proc.terminate()
-        logger.debug("Stopped remote Bash.Server")
+def cleanup_remote(host, remote_tmp, remote_src_dir):
+    """Remove temp files on the remote.
 
+    Note: remote process killing is handled by cleanup_all() which runs
+    before this function.  We only do filesystem cleanup here.
+    """
     dirs = [d for d in [remote_tmp, remote_src_dir] if d]
     if dirs:
         try:
@@ -1178,4 +1318,7 @@ def cleanup_remote(host, bash_server_proc, remote_tmp, remote_src_dir):
 
 
 if __name__ == "__main__":
+    atexit.register(cleanup_all)
+    for sig in [signal.SIGTERM, signal.SIGHUP, signal.SIGINT]:
+        signal.signal(sig, lambda s, f: sys.exit(128 + s))
     main()
