@@ -42,6 +42,36 @@ jobs:
     - name: Test repl.py TCP server
       run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL
 
+  basic-no-prompt-toolkit:
+    name: Basic test (HOL, no prompt_toolkit)
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Isabelle
+      uses: ./.github/actions/setup-isabelle-action
+
+    - name: Install dependencies (no prompt_toolkit)
+      run: apt-get update -qq && apt-get install -y -qq python3 > /dev/null
+
+    - name: Set Isabelle environment
+      run: |
+        ISABELLE_BIN=/home/isabelle/Isabelle/bin/isabelle
+        echo "ISABELLE=$ISABELLE_BIN" >> $GITHUB_ENV
+
+    - name: Build HOL heap
+      run: $ISABELLE build -b HOL
+
+    - name: Test repl.py TCP server (implicit server-only via missing prompt_toolkit)
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL
+
+    - name: Test repl.py TCP server (explicit --server-only)
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --server-only
+
   segment_storage:
     name: Build heap with intermediate states
     runs-on: ubuntu-latest

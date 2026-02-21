@@ -38,12 +38,16 @@ import sys
 import threading
 import time
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.completion import Completer, Completion
-from prompt_toolkit.filters import Always
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
+try:
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.completion import Completer, Completion
+    from prompt_toolkit.filters import Always
+    from prompt_toolkit.formatted_text import HTML
+    from prompt_toolkit.history import FileHistory
+    from prompt_toolkit.patch_stdout import patch_stdout
+    _HAVE_PROMPT_TOOLKIT = True
+except ImportError:
+    _HAVE_PROMPT_TOOLKIT = False
 
 EXPLORE_CMDS = {
     'Explore.init':           'id thy  — create REPL "id" at "Theory" or "Theory:idx"',
@@ -108,7 +112,7 @@ _ARG_COMPLETIONS = {
 }
 
 
-class ExploreCompleter(Completer):
+class ExploreCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
     """Context-aware completer for the Explore REPL."""
 
     def __init__(self):
@@ -669,6 +673,8 @@ def main():
                    help="Check and rebuild session heap if needed (default: load as-is)")
     p.add_argument("--no-bash-server", action="store_true",
                    help="Skip Bash.Server startup (disables sledgehammer)")
+    p.add_argument("--server-only", action="store_true",
+                   help="Expose TCP server only; do not start a REPL on stdin")
     args = p.parse_args()
 
     ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore.ML")
@@ -706,26 +712,42 @@ def main():
         sys.exit(1)
     print(f"{GREEN}Explore loaded.{RST}", flush=True)
 
-    histfile = os.path.expanduser("~/.explore_repl_history")
-    completer = ExploreCompleter()
-    session = PromptSession(history=FileHistory(histfile), completer=completer,
-                            complete_while_typing=Always())
-
     server = Server(poly, args.port)
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
 
-    try:
-        with patch_stdout(raw=True):
-            console_loop(server, session)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        print("Shutting down...", flush=True)
-        server.shutdown()
-        poly.close()
-        if bash_server:
-            bash_server.close()
+    if args.server_only:
+        print(f"{DIM}Running in server-only mode (no stdin REPL). "
+              f"Send SIGTERM or SIGINT to stop.{RST}", flush=True)
+        try:
+            accept_thread.join()
+        except KeyboardInterrupt:
+            pass
+    elif not _HAVE_PROMPT_TOOLKIT:
+        print(f"{YELLOW}Note: prompt_toolkit is not installed. "
+              f"Install it for a nicer interactive experience "
+              f"(pip install prompt_toolkit). "
+              f"Running in server-only mode.{RST}", flush=True)
+        try:
+            accept_thread.join()
+        except KeyboardInterrupt:
+            pass
+    else:
+        histfile = os.path.expanduser("~/.explore_repl_history")
+        completer = ExploreCompleter()
+        session = PromptSession(history=FileHistory(histfile), completer=completer,
+                                complete_while_typing=Always())
+        try:
+            with patch_stdout(raw=True):
+                console_loop(server, session)
+        except KeyboardInterrupt:
+            pass
+
+    print("Shutting down...", flush=True)
+    server.shutdown()
+    poly.close()
+    if bash_server:
+        bash_server.close()
 
 
 if __name__ == "__main__":

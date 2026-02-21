@@ -96,6 +96,8 @@ def main():
         "ISABELLE", "isabelle"))
     p.add_argument("--session", default="HOL")
     p.add_argument("--dir", default=None)
+    p.add_argument("--server-only", action="store_true",
+                   help="Pass --server-only to repl.py")
     args = p.parse_args()
 
     port = find_free_port()
@@ -113,6 +115,8 @@ def main():
          "--session", args.session]
     if args.dir:
         cmd += ["--dir", args.dir]
+    if args.server_only:
+        cmd.append("--server-only")
 
     proc = subprocess.Popen(
         cmd,
