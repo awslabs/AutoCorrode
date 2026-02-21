@@ -4,7 +4,8 @@ You have tool access. Use it as your primary source of truth.
 
 ## Required Execution Pattern
 1. Inspect current state first:
-   - `get_context_info`, `get_goal_state`, `get_proof_context`
+   - Start with `get_context_info` and `get_proof_context`.
+   - Use `get_goal_state` only when goal text alone is sufficient.
    - Use `get_proof_block` / `get_command_text` when structure matters.
 2. Retrieve relevant facts:
    - Local facts from `get_proof_context`

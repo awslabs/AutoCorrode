@@ -187,10 +187,10 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
   def getGoalStateAsync(
       view: View,
       timeoutMs: Long,
-      callback: Either[String, IQMcpClient.GoalStateResult] => Unit
+      callback: Either[String, IQMcpClient.ContextInfoResult] => Unit
   ): Unit =
     runMcpAsync("assistant-goal-state-via-mcp", callback) {
-      IQMcpClient.callGetGoalState(selectionParamsForView(view), timeoutMs)
+      IQMcpClient.callGetContextInfo(selectionParamsForView(view), timeoutMs)
     }
 
   def getContextInfoAsync(

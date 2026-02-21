@@ -1020,15 +1020,15 @@ object AssistantTools {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
     else
       IQMcpClient
-        .callGetGoalState(
+        .callGetContextInfo(
           selectionArgs = selectionArgsForCurrentView(view),
           timeoutMs = readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
-          goalState =>
-            if (goalState.goal.hasGoal && goalState.goal.goalText.trim.nonEmpty)
-              goalState.goal.goalText.trim
+          ctx =>
+            if (ctx.goal.hasGoal && ctx.goal.goalText.trim.nonEmpty)
+              ctx.goal.goalText.trim
             else "No goal at cursor position."
         )
   }
@@ -1426,18 +1426,19 @@ object AssistantTools {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
     else
       IQMcpClient
-        .callGetProofBlock(
+        .callGetProofBlocksForSelection(
           selectionArgs = selectionArgsForCurrentView(view),
           timeoutMs = readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
-          block =>
-            if (block.hasProofBlock && block.proofText.trim.nonEmpty)
-              block.proofText.trim
-            else block.message.filter(_.trim.nonEmpty).getOrElse(
-              "No proof block at cursor position."
-            )
+          blocks =>
+            blocks.proofBlocks.headOption
+              .map(_.proofText.trim)
+              .filter(_.nonEmpty)
+              .getOrElse(
+                blocks.message.getOrElse("No proof block at cursor position.")
+              )
         )
   }
 
@@ -1954,11 +1955,12 @@ object AssistantTools {
               s"Error: invalid theory name '$name'"
             else
               IQMcpClient
-                .callCreateFile(
+                .callOpenFile(
                   path = targetPath.toString,
-                  content = theoryContent,
-                  overwriteIfExists = false,
+                  createIfMissing = true,
                   inView = true,
+                  content = Some(theoryContent),
+                  overwriteIfExists = false,
                   timeoutMs = AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC * 1000L
                 )
                 .fold(

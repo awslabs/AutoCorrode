@@ -67,7 +67,7 @@ object AnalyzePatternsAction {
 
   private def fetchProofBlocks(path: String): Either[String, List[String]] =
     IQMcpClient
-      .callGetProofBlocks(
+      .callGetProofBlocksForFile(
         path = path,
         maxResults = Some(MaxProofBlocks),
         minChars = Some(MinProofChars),

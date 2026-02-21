@@ -67,6 +67,18 @@ Sensitive argument keys (token, secret, password, auth, credential, api_key) mus
 
 These controls are mandatory defense-in-depth even when assistant permissions are enabled.
 
+## Canonical Capability Surface (`iq`)
+
+The `iq` MCP surface is canonicalized; overlapping aliases are not retained.
+
+- File creation is expressed via `open_file` with `create_if_missing=true` (optionally with `content` and `overwrite_if_exists`).
+- Goal-state reads are obtained from `get_context_info.goal` (no separate `get_goal_state` capability at `iq` layer).
+- Proof-block introspection is handled by `get_proof_blocks` with explicit `scope`:
+  - `scope="selection"` for focused block extraction,
+  - `scope="file"` for multi-block file extraction.
+
+Assistant-level tool naming may remain user-oriented, but must map to these canonical `iq` operations rather than reintroducing assistant-side semantic duplicates.
+
 ## Failure and Degradation Rules
 
 On permission denial or unavailable backend:

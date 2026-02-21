@@ -67,7 +67,7 @@ object GoalExtractor {
    */
   def getGoalState(buffer: JEditBuffer, offset: Int): Option[String] =
     IQMcpClient
-      .callGetGoalState(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
+      .callGetContextInfo(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
       .toOption
       .map(_.goal)
       .filter(goal => goal.hasGoal && goal.goalText.trim.nonEmpty)
@@ -85,7 +85,7 @@ object GoalExtractor {
    */
   def analyzeGoal(buffer: JEditBuffer, offset: Int): Option[GoalAnalysis] =
     IQMcpClient
-      .callGetGoalState(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
+      .callGetContextInfo(selectionArgs(buffer, offset), GoalLookupTimeoutMs)
       .toOption
       .map(_.goal)
       .filter(goal => goal.hasGoal && goal.goalText.trim.nonEmpty)

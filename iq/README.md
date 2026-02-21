@@ -74,9 +74,10 @@ I/Q now defaults to a hardened local-only posture:
 - Loopback bind by default (`IQ_MCP_BIND_HOST=127.0.0.1`).
 - Remote bind is blocked unless explicitly enabled (`IQ_MCP_ALLOW_REMOTE_BIND=true`).
 - Optional request authentication token (`IQ_MCP_AUTH_TOKEN`).
-- Read-oriented tools (`list_files`, `read_file`, `get_command_info`, `get_document_info`, `open_file`, `resolve_command_target`, `get_goal_state`, `get_context_info`, `get_entities`, `get_proof_context`, `get_definitions`, `get_diagnostics`, `explore`) are restricted to allowed read roots.
-- Mutating tools (`open_file` with `create_if_missing=true`, `create_file`, `write_file`, `save_file`) are restricted to allowed mutation roots.
+- Read-oriented tools (`list_files`, `read_file`, `get_command_info`, `get_document_info`, `open_file`, `resolve_command_target`, `get_context_info`, `get_entities`, `get_type_at_selection`, `get_proof_blocks`, `get_proof_context`, `get_definitions`, `get_diagnostics`, `explore`) are restricted to allowed read roots.
+- Mutating tools (`open_file` with `create_if_missing=true`, `write_file`, `save_file`) are restricted to allowed mutation roots.
 - `get_command_info` with `xml_result_file` is also treated as a mutating operation and must target an allowed mutation root.
+- Canonical tool surface (no compatibility aliases): `open_file` subsumes file creation, `get_context_info` subsumes direct goal-state reads, and `get_proof_blocks` subsumes single-block extraction.
 
 Use these environment variables to configure behavior:
 
@@ -138,14 +139,14 @@ You have XXX theory files open in total, ...
 1. **list_files**: List all files tracked by Isabelle with filtering and sorting options
 2. **get_command_info**: Get detailed command information including status, errors, and proof states
 3. **get_document_info**: Comprehensive theory file status with error/warning details
-4. **open_file**: Open or create files in Isabelle/jEdit with optional content initialization
-5. **create_file**: Create a new file with content and optionally open it in a view
-6. **read_file**: Read file content with line range and pattern search support
-7. **write_file**: Write or modify content in theory files with multiple edit modes (str_replace, insert, line replacement)
-8. **resolve_command_target**: Resolve canonical command selection (`current`, `file_offset`, `file_pattern`) to a concrete command with normalized target metadata
-9. **get_goal_state**: Read-only goal inspection at a command target, including structured free-variable/constant/subgoal analysis
-10. **get_context_info**: Read-only context summary at a command target, including proof-context status and nested goal state
-11. **get_entities**: Read-only theory entity listing (lemma/definition/fun/etc.) with line and offset metadata
+4. **open_file**: Open an existing file, or create one when `create_if_missing=true`; optional `content` and `overwrite_if_exists` are supported for create flows
+5. **read_file**: Read file content with line range and pattern search support
+6. **write_file**: Write or modify content in theory files with multiple edit modes (str_replace, insert, line replacement)
+7. **resolve_command_target**: Resolve canonical command selection (`current`, `file_offset`, `file_pattern`) to a concrete command with normalized target metadata
+8. **get_context_info**: Read-only context summary at a command target, including proof-context status and nested goal state
+9. **get_entities**: Read-only theory entity listing (lemma/definition/fun/etc.) with line and offset metadata
+10. **get_type_at_selection**: Read-only type introspection around a selected command/offset
+11. **get_proof_blocks**: Read-only proof-block extraction with required `scope` (`selection` or `file`); `selection` returns the focused block, `file` returns multiple blocks
 12. **get_proof_context**: Read-only local proof context lookup (`print_context`) at a command selection
 13. **get_definitions**: Read-only definition lookup for names via `get_defs` at a command selection
 14. **get_diagnostics**: Read-only error/warning diagnostics for either command selection or full file scope

@@ -29,9 +29,12 @@ object ProofExtractor {
       offset: Int
   ): Option[String] = {
     IQMcpClient
-      .callGetProofBlock(selectionArgs(buffer, offset), ProofBlockLookupTimeoutMs)
+      .callGetProofBlocksForSelection(
+        selectionArgs(buffer, offset),
+        ProofBlockLookupTimeoutMs
+      )
       .toOption
-      .filter(_.hasProofBlock)
+      .flatMap(_.proofBlocks.headOption)
       .map(_.proofText.trim)
       .filter(_.nonEmpty)
   }

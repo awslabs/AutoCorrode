@@ -53,14 +53,6 @@ object IQMcpClient {
   final case class OpenFileResult(
       path: String,
       created: Boolean,
-      opened: Boolean,
-      inView: Boolean,
-      message: String
-  )
-
-  final case class CreateFileResult(
-      path: String,
-      created: Boolean,
       overwritten: Boolean,
       opened: Boolean,
       inView: Boolean,
@@ -102,12 +94,6 @@ object IQMcpClient {
       analysisError: Option[String]
   )
 
-  final case class GoalStateResult(
-      selection: CommandSelection,
-      command: CommandInfo,
-      goal: GoalInfo
-  )
-
   final case class ContextInfoResult(
       selection: CommandSelection,
       command: CommandInfo,
@@ -147,20 +133,6 @@ object IQMcpClient {
       message: Option[String]
   )
 
-  final case class ProofBlockResult(
-      selection: CommandSelection,
-      command: CommandInfo,
-      hasProofBlock: Boolean,
-      proofText: String,
-      startOffset: Option[Int],
-      endOffset: Option[Int],
-      startLine: Option[Int],
-      endLine: Option[Int],
-      commandCount: Option[Int],
-      isApplyStyle: Boolean,
-      message: Option[String]
-  )
-
   final case class ProofBlockInfo(
       proofText: String,
       startOffset: Int,
@@ -171,13 +143,22 @@ object IQMcpClient {
       isApplyStyle: Boolean
   )
 
+  enum ProofBlocksScope(val wire: String) {
+    case Selection extends ProofBlocksScope("selection")
+    case File extends ProofBlocksScope("file")
+  }
+
   final case class ProofBlocksResult(
-      path: String,
-      nodeName: String,
+      scope: ProofBlocksScope,
+      path: Option[String],
+      nodeName: Option[String],
       totalBlocks: Int,
       returnedBlocks: Int,
       truncated: Boolean,
-      proofBlocks: List[ProofBlockInfo]
+      proofBlocks: List[ProofBlockInfo],
+      selection: Option[CommandSelection],
+      command: Option[CommandInfo],
+      message: Option[String]
   )
 
   final case class ProofContextResult(
@@ -522,15 +503,6 @@ object IQMcpClient {
       command = decodeCommandInfo(mapField(payload, "command"))
     )
 
-  private[assistant] def decodeGoalStateResult(
-      payload: Map[String, Any]
-  ): GoalStateResult =
-    GoalStateResult(
-      selection = decodeSelection(mapField(payload, "selection")),
-      command = decodeCommandInfo(mapField(payload, "command")),
-      goal = decodeGoalInfo(mapField(payload, "goal"))
-    )
-
   private[assistant] def decodeContextInfoResult(
       payload: Map[String, Any]
   ): ContextInfoResult =
@@ -583,22 +555,11 @@ object IQMcpClient {
       message = payload.get("message").map(_.toString).filter(_.nonEmpty)
     )
 
-  private[assistant] def decodeProofBlockResult(
-      payload: Map[String, Any]
-  ): ProofBlockResult =
-    ProofBlockResult(
-      selection = decodeSelection(mapField(payload, "selection")),
-      command = decodeCommandInfo(mapField(payload, "command")),
-      hasProofBlock = boolField(payload, "has_proof_block", default = false),
-      proofText = stringField(payload, "proof_text"),
-      startOffset = payload.get("start_offset").flatMap(asInt),
-      endOffset = payload.get("end_offset").flatMap(asInt),
-      startLine = payload.get("start_line").flatMap(asInt),
-      endLine = payload.get("end_line").flatMap(asInt),
-      commandCount = payload.get("command_count").flatMap(asInt),
-      isApplyStyle = boolField(payload, "is_apply_style", default = false),
-      message = payload.get("message").map(_.toString).filter(_.nonEmpty)
-    )
+  private def decodeProofBlocksScope(raw: String): ProofBlocksScope =
+    raw.trim.toLowerCase match {
+      case "file" => ProofBlocksScope.File
+      case _ => ProofBlocksScope.Selection
+    }
 
   private[assistant] def decodeProofBlocksResult(
       payload: Map[String, Any]
@@ -617,12 +578,18 @@ object IQMcpClient {
       }
     }
     ProofBlocksResult(
-      path = stringField(payload, "path"),
-      nodeName = stringField(payload, "node_name"),
+      scope = decodeProofBlocksScope(stringField(payload, "scope")),
+      path = payload.get("path").map(_.toString.trim).filter(_.nonEmpty),
+      nodeName = payload.get("node_name").map(_.toString.trim).filter(_.nonEmpty),
       totalBlocks = intField(payload, "total_blocks", blocks.length),
       returnedBlocks = intField(payload, "returned_blocks", blocks.length),
       truncated = boolField(payload, "truncated", default = false),
-      proofBlocks = blocks
+      proofBlocks = blocks,
+      selection = asObject(payload.getOrElse("selection", Map.empty))
+        .map(decodeSelection),
+      command = asObject(payload.getOrElse("command", Map.empty))
+        .map(decodeCommandInfo),
+      message = payload.get("message").map(_.toString.trim).filter(_.nonEmpty)
     )
   }
 
@@ -716,19 +683,8 @@ object IQMcpClient {
     OpenFileResult(
       path = stringField(payload, "path"),
       created = boolField(payload, "created", default = false),
-      opened = boolField(payload, "opened", default = false),
-      inView = boolField(payload, "in_view", default = true),
-      message = stringField(payload, "message")
-    )
-
-  private[assistant] def decodeCreateFileResult(
-      payload: Map[String, Any]
-  ): CreateFileResult =
-    CreateFileResult(
-      path = stringField(payload, "path"),
-      created = boolField(payload, "created", default = false),
       overwritten = boolField(payload, "overwritten", default = false),
-      opened = boolField(payload, "opened", default = true),
+      opened = boolField(payload, "opened", default = false),
       inView = boolField(payload, "in_view", default = true),
       message = stringField(payload, "message")
     )
@@ -836,32 +792,20 @@ object IQMcpClient {
       path: String,
       createIfMissing: Boolean,
       inView: Boolean,
+      content: Option[String] = None,
+      overwriteIfExists: Boolean = false,
       timeoutMs: Long
   ): Either[String, OpenFileResult] = {
-    val args = Map(
-      "path" -> path,
-      "create_if_missing" -> createIfMissing,
-      "view" -> inView
-    )
-    callTool("open_file", args, normalizedToolTimeout(timeoutMs))
+    val args = Map.newBuilder[String, Any]
+    args += ("path" -> path)
+    args += ("create_if_missing" -> createIfMissing)
+    args += ("view" -> inView)
+    if (createIfMissing) {
+      content.foreach(v => args += ("content" -> v))
+      if (overwriteIfExists) args += ("overwrite_if_exists" -> true)
+    }
+    callTool("open_file", args.result(), normalizedToolTimeout(timeoutMs))
       .map(decodeOpenFileResult)
-  }
-
-  def callCreateFile(
-      path: String,
-      content: String,
-      overwriteIfExists: Boolean,
-      inView: Boolean,
-      timeoutMs: Long
-  ): Either[String, CreateFileResult] = {
-    val args = Map(
-      "path" -> path,
-      "content" -> content,
-      "overwrite_if_exists" -> overwriteIfExists,
-      "view" -> inView
-    )
-    callTool("create_file", args, normalizedToolTimeout(timeoutMs))
-      .map(decodeCreateFileResult)
   }
 
   def callResolveCommandTarget(
@@ -870,13 +814,6 @@ object IQMcpClient {
   ): Either[String, ResolvedCommandTarget] =
     callTool("resolve_command_target", selectionArgs, timeoutMs)
       .map(decodeResolvedCommandTarget)
-
-  def callGetGoalState(
-      selectionArgs: Map[String, Any],
-      timeoutMs: Long
-  ): Either[String, GoalStateResult] =
-    callTool("get_goal_state", selectionArgs, timeoutMs)
-      .map(decodeGoalStateResult)
 
   def callGetContextInfo(
       selectionArgs: Map[String, Any],
@@ -901,20 +838,21 @@ object IQMcpClient {
     callTool("get_type_at_selection", selectionArgs, timeoutMs)
       .map(decodeTypeAtSelectionResult)
 
-  def callGetProofBlock(
+  def callGetProofBlocksForSelection(
       selectionArgs: Map[String, Any],
       timeoutMs: Long
-  ): Either[String, ProofBlockResult] =
-    callTool("get_proof_block", selectionArgs, timeoutMs)
-      .map(decodeProofBlockResult)
+  ): Either[String, ProofBlocksResult] = {
+    val args = Map("scope" -> ProofBlocksScope.Selection.wire) ++ selectionArgs
+    callTool("get_proof_blocks", args, timeoutMs).map(decodeProofBlocksResult)
+  }
 
-  def callGetProofBlocks(
+  def callGetProofBlocksForFile(
       path: String,
       maxResults: Option[Int],
       minChars: Option[Int],
       timeoutMs: Long
   ): Either[String, ProofBlocksResult] = {
-    val args = Map("path" -> path) ++
+    val args = Map("scope" -> ProofBlocksScope.File.wire, "path" -> path) ++
       maxResults.map("max_results" -> _) ++
       minChars.map("min_chars" -> _)
     callTool("get_proof_blocks", args, timeoutMs)

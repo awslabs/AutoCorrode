@@ -87,8 +87,8 @@ object IQServerAuthTest {
       s"tools/list should expose resolve_command_target: $payload"
     )
     assertThat(
-      payload.contains("\"name\":\"get_goal_state\""),
-      s"tools/list should expose get_goal_state: $payload"
+      !payload.contains("\"name\":\"get_goal_state\""),
+      s"tools/list should not expose deprecated get_goal_state: $payload"
     )
     assertThat(
       payload.contains("\"name\":\"get_context_info\""),
@@ -103,8 +103,8 @@ object IQServerAuthTest {
       s"tools/list should expose get_type_at_selection: $payload"
     )
     assertThat(
-      payload.contains("\"name\":\"get_proof_block\""),
-      s"tools/list should expose get_proof_block: $payload"
+      !payload.contains("\"name\":\"get_proof_block\""),
+      s"tools/list should not expose deprecated get_proof_block: $payload"
     )
     assertThat(
       payload.contains("\"name\":\"get_proof_blocks\""),
@@ -151,11 +151,11 @@ object IQServerAuthTest {
     )
   }
 
-  private def testGetGoalStateRejectsInvalidSelection(): Unit = {
-    val root = Files.createTempDirectory("iq-server-goal-invalid-target-root").toRealPath()
+  private def testGetContextInfoRejectsInvalidSelection(): Unit = {
+    val root = Files.createTempDirectory("iq-server-context-invalid-target-root").toRealPath()
     val server = mkServer(root, None)
     val request =
-      """{"jsonrpc":"2.0","id":"req-goal-invalid","method":"tools/call","params":{"name":"get_goal_state","arguments":{"command_selection":"bogus"}}}"""
+      """{"jsonrpc":"2.0","id":"req-context-invalid","method":"tools/call","params":{"name":"get_context_info","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "invalid selection should return JSON-RPC error")
     val payload = response.get
@@ -205,11 +205,11 @@ object IQServerAuthTest {
     assertThat(payload.contains("Invalid target"), s"expected invalid target message: $payload")
   }
 
-  private def testGetProofBlockRequiresFileOffsetParameters(): Unit = {
-    val root = Files.createTempDirectory("iq-server-proof-block-file-offset-root").toRealPath()
+  private def testGetProofBlocksSelectionRequiresFileOffsetParameters(): Unit = {
+    val root = Files.createTempDirectory("iq-server-proof-blocks-selection-file-offset-root").toRealPath()
     val server = mkServer(root, None)
     val request =
-      """{"jsonrpc":"2.0","id":"req-proof-block-missing","method":"tools/call","params":{"name":"get_proof_block","arguments":{"command_selection":"file_offset"}}}"""
+      """{"jsonrpc":"2.0","id":"req-proof-blocks-selection-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{"scope":"selection","command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "missing file_offset parameters should return JSON-RPC error")
     val payload = response.get
@@ -224,13 +224,13 @@ object IQServerAuthTest {
     val root = Files.createTempDirectory("iq-server-proof-blocks-missing-path-root").toRealPath()
     val server = mkServer(root, None)
     val request =
-      """{"jsonrpc":"2.0","id":"req-proof-blocks-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{}}}"""
+      """{"jsonrpc":"2.0","id":"req-proof-blocks-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{"scope":"file"}}}"""
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "missing path should return JSON-RPC error")
     val payload = response.get
     assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
     assertThat(
-      payload.contains("Missing required parameter: path"),
+      payload.contains("scope='file' requires parameter: path"),
       s"expected missing path validation message: $payload"
     )
   }
@@ -287,11 +287,11 @@ object IQServerAuthTest {
     val outside = root.resolve("..").resolve("escape.thy").normalize().toString
 
     assertThat(
-      server.authorizeMutationPathForTest("create_file", inside).isRight,
+      server.authorizeMutationPathForTest("open_file(create_if_missing=true)", inside).isRight,
       "mutation path inside allowed root should be accepted"
     )
     assertThat(
-      server.authorizeMutationPathForTest("create_file", outside).isLeft,
+      server.authorizeMutationPathForTest("open_file(create_if_missing=true)", outside).isLeft,
       "mutation path outside allowed root should be rejected"
     )
   }
@@ -321,11 +321,11 @@ object IQServerAuthTest {
     testToolsListIncludesResolveCommandTarget()
     testResolveCommandTargetRejectsInvalidSelection()
     testResolveCommandTargetRequiresPathAndOffsetForFileOffset()
-    testGetGoalStateRejectsInvalidSelection()
+    testGetContextInfoRejectsInvalidSelection()
     testGetContextInfoRequiresFileOffsetParameters()
     testGetEntitiesRequiresPath()
     testGetTypeAtSelectionRejectsInvalidSelection()
-    testGetProofBlockRequiresFileOffsetParameters()
+    testGetProofBlocksSelectionRequiresFileOffsetParameters()
     testGetProofBlocksRequiresPath()
     testGetDefinitionsRequiresNames()
     testGetDiagnosticsRejectsInvalidSeverity()

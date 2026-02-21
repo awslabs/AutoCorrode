@@ -539,19 +539,16 @@ class IQServer(
         "get_command_info" -> (params => handleGetCommand(params)),
         "get_document_info" -> (params => handleGetDocumentInfo(params)),
         "open_file" -> (params => handleOpenFile(params)),
-        "create_file" -> (params => handleCreateFile(params)),
         "read_file" -> (params => handleReadTheoryFile(params)),
         "write_file" -> (params => handleWriteTheoryFile(params)),
         "resolve_command_target" -> (params =>
           handleResolveCommandTarget(params)
         ),
-        "get_goal_state" -> (params => handleGetGoalState(params)),
         "get_context_info" -> (params => handleGetContextInfo(params)),
         "get_entities" -> (params => handleGetEntities(params)),
         "get_type_at_selection" -> (params =>
           handleGetTypeAtSelection(params)
         ),
-        "get_proof_block" -> (params => handleGetProofBlock(params)),
         "get_proof_blocks" -> (params => handleGetProofBlocks(params)),
         "get_proof_context" -> (params => handleGetProofContext(params)),
         "get_definitions" -> (params => handleGetDefinitions(params)),
@@ -1082,6 +1079,7 @@ class IQServer(
               "description" -> "Include command results in the response (default: false). When false, results are written to a temporary file and the filename is returned."
             )
           ),
+          "required" -> List("scope"),
           "additionalProperties" -> false
         )
       ),
@@ -1126,7 +1124,7 @@ class IQServer(
       ),
       Map(
         "name" -> "open_file",
-        "description" -> "Open an existing file in Isabelle/jEdit",
+        "description" -> "Open an existing file in Isabelle/jEdit, or create one when create_if_missing=true",
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
@@ -1138,38 +1136,20 @@ class IQServer(
               "type" -> "boolean",
               "description" -> "Create file if it doesn't exist (default: false)"
             ),
+            "content" -> Map(
+              "type" -> "string",
+              "description" -> "Initial content when creating a missing file. Ignored unless create_if_missing=true."
+            ),
+            "overwrite_if_exists" -> Map(
+              "type" -> "boolean",
+              "description" -> "When create_if_missing=true and content is set, overwrite existing file content if the file already exists (default: false)."
+            ),
             "view" -> Map(
               "type" -> "boolean",
               "description" -> "Open file in jEdit view (default: true). If false, file is only tracked in FileBuffer."
             )
           ),
           "required" -> List("path")
-        )
-      ),
-      Map(
-        "name" -> "create_file",
-        "description" -> "Create a new file with specified content in Isabelle/jEdit",
-        "inputSchema" -> Map(
-          "type" -> "object",
-          "properties" -> Map(
-            "path" -> Map(
-              "type" -> "string",
-              "description" -> "Path to the file to create"
-            ),
-            "content" -> Map(
-              "type" -> "string",
-              "description" -> "Content to write to the new file"
-            ),
-            "overwrite_if_exists" -> Map(
-              "type" -> "boolean",
-              "description" -> "Overwrite file if it already exists (default: false)"
-            ),
-            "view" -> Map(
-              "type" -> "boolean",
-              "description" -> "Open file in jEdit view (default: true). If false, file is only tracked in FileBuffer."
-            )
-          ),
-          "required" -> List("path", "content")
         )
       ),
       Map(
@@ -1292,34 +1272,6 @@ class IQServer(
         )
       ),
       Map(
-        "name" -> "get_goal_state",
-        "description" -> "Read-only goal-state introspection at a canonical command selection. Returns rendered goal text plus structured free-variable/constant/subgoal analysis.",
-        "inputSchema" -> Map(
-          "type" -> "object",
-          "properties" -> Map(
-            "command_selection" -> Map(
-              "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
-              "enum" -> List("current", "file_offset", "file_pattern")
-            ),
-            "path" -> Map(
-              "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
-            ),
-            "offset" -> Map(
-              "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
-            ),
-            "pattern" -> Map(
-              "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
-            )
-          ),
-          "required" -> List("command_selection"),
-          "additionalProperties" -> false
-        )
-      ),
-      Map(
         "name" -> "get_context_info",
         "description" -> "Read-only context introspection at a canonical command selection. Returns command metadata, proof-context status, and nested goal-state information.",
         "inputSchema" -> Map(
@@ -1395,53 +1347,42 @@ class IQServer(
         )
       ),
       Map(
-        "name" -> "get_proof_block",
-        "description" -> "Read-only proof-block extraction around a canonical command selection. Returns surrounding lemma/proof block text and metadata.",
+        "name" -> "get_proof_blocks",
+        "description" -> "Read-only proof-block extraction in either selection scope (single focused block) or file scope (multiple blocks).",
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
+            "scope" -> Map(
+              "type" -> "string",
+              "description" -> "Extraction scope: 'selection' or 'file' (default: selection).",
+              "enum" -> List("selection", "file")
+            ),
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> "Selection mode for scope='selection'. Values: 'current', 'file_offset', 'file_pattern'.",
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+              "description" -> "Path to theory file. Required for scope='file'. Used for selection modes 'file_offset' and 'file_pattern'."
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+              "description" -> "Character offset for command_selection='file_offset'."
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
-            )
-          ),
-          "required" -> List("command_selection"),
-          "additionalProperties" -> false
-        )
-      ),
-      Map(
-        "name" -> "get_proof_blocks",
-        "description" -> "Read-only proof-block extraction across a theory file. Returns multiple proof blocks and metadata for pattern analysis workflows.",
-        "inputSchema" -> Map(
-          "type" -> "object",
-          "properties" -> Map(
-            "path" -> Map(
-              "type" -> "string",
-              "description" -> "Path to theory file for proof-block extraction."
+              "description" -> "Unique substring pattern for command_selection='file_pattern'."
             ),
             "max_results" -> Map(
               "type" -> "integer",
-              "description" -> "Optional maximum number of proof blocks to return (default: 30)."
+              "description" -> "Optional maximum number of proof blocks to return for scope='file' (default: 30)."
             ),
             "min_chars" -> Map(
               "type" -> "integer",
-              "description" -> "Optional minimum proof block text length to include (default: 8)."
+              "description" -> "Optional minimum proof block text length for scope='file' (default: 8)."
             )
           ),
-          "required" -> List("path"),
           "additionalProperties" -> false
         )
       ),
@@ -2623,6 +2564,10 @@ class IQServer(
 
   private def handleOpenFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
+    val hasContent = params.contains("content")
+    val content = params.get("content").map(_.toString)
+    val overwriteIfExists =
+      params.getOrElse("overwrite_if_exists", "false").toString.toBoolean
 
     val resolvedPath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
@@ -2644,14 +2589,25 @@ class IQServer(
     } else readablePath
     val view = params.getOrElse("view", "true").toString.toBoolean
 
-    Output.writeln(s"I/Q Server: Opening file: $filePath, create_if_missing: $createIfMissing, view: $view")
+    if (!createIfMissing && (hasContent || overwriteIfExists)) {
+      return Left(
+        "Parameters 'content' and 'overwrite_if_exists' require create_if_missing=true"
+      )
+    }
+    if (overwriteIfExists && !hasContent) {
+      return Left("Parameter 'overwrite_if_exists' requires parameter 'content'")
+    }
+
+    Output.writeln(
+      s"I/Q Server: Opening file: $filePath, create_if_missing: $createIfMissing, view: $view, has_content: $hasContent, overwrite_if_exists: $overwriteIfExists"
+    )
 
     try {
       val result = GUI_Thread.now {
         if (view) {
-          openFileInEditor(filePath, createIfMissing)
+          openFileInEditor(filePath, createIfMissing, content, overwriteIfExists)
         } else {
-          openFileInBuffer(filePath, createIfMissing)
+          openFileInBuffer(filePath, createIfMissing, content, overwriteIfExists)
         }
       }
 
@@ -2661,6 +2617,7 @@ class IQServer(
       val response = Map(
         "path" -> result("path"),
         "created" -> result("created").toBoolean,
+        "overwritten" -> result.getOrElse("overwritten", "false").toBoolean,
         "opened" -> result("opened").toBoolean,
         "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
         "message" -> "File opened successfully"
@@ -2670,47 +2627,6 @@ class IQServer(
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error in handleOpenFile: ${ex.getMessage}")
         Left(s"Error opening file: ${ex.getMessage}")
-    }
-  }
-
-  private def handleCreateFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
-    val requestedPath = params.getOrElse("path", "").toString
-    val content = params.getOrElse("content", "").toString
-    val overwriteIfExists = params.getOrElse("overwrite_if_exists", "false").toString.toBoolean
-    val view = params.getOrElse("view", "true").toString.toBoolean
-
-    Output.writeln(s"I/Q Server: Creating file: $requestedPath, overwrite_if_exists: $overwriteIfExists, view: $view")
-
-    if (requestedPath.isEmpty) {
-      return Left("path parameter is required")
-    }
-    val filePath = authorizeMutationPath("create_file", requestedPath) match {
-      case Right(canonicalPath) => canonicalPath
-      case Left(errorMsg) => return Left(errorMsg)
-    }
-
-    try {
-      val result = GUI_Thread.now {
-        if (view) {
-          createFileWithContentAndOpen(filePath, content, overwriteIfExists)
-        } else {
-          createFileWithContentInBuffer(filePath, content, overwriteIfExists)
-        }
-      }
-
-      val response = Map(
-        "path" -> result("path"),
-        "created" -> result("created").toBoolean,
-        "overwritten" -> result("overwritten").toBoolean,
-        "opened" -> result("opened").toBoolean,
-        "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
-        "message" -> "File created successfully"
-      )
-      Right(response)
-    } catch {
-      case ex: Exception =>
-        Output.writeln(s"I/Q Server: Error in handleCreateFile: ${ex.getMessage}")
-        Left(s"Error creating file: ${ex.getMessage}")
     }
   }
 
@@ -2933,7 +2849,13 @@ class IQServer(
     Right(Map("commands" -> commands, "summary" -> summary))
   }
 
-  private def openFileCommon(filePath: String, createIfMissing: Boolean, inView: Boolean): Map[String, String] = {
+  private def openFileCommon(
+      filePath: String,
+      createIfMissing: Boolean,
+      inView: Boolean,
+      content: Option[String],
+      overwriteIfExists: Boolean
+  ): Map[String, String] = {
     val authorizedPath =
       if (createIfMissing) {
         authorizeMutationPath("open_file_common(create)", filePath) match {
@@ -2944,16 +2866,35 @@ class IQServer(
 
     val file = new java.io.File(authorizedPath)
     var fileCreated = false
+    var fileOverwritten = false
 
     if (!file.exists() && createIfMissing) {
-      // Create empty file without any default content
-      val parentDir = file.getParentFile
-      if (parentDir != null && !parentDir.exists()) {
-        val _ = parentDir.mkdirs()
+      content match {
+        case Some(initialContent) =>
+          createFileWithContent(file, authorizedPath, initialContent)
+        case None =>
+          // Create empty file without any default content
+          val parentDir = file.getParentFile
+          if (parentDir != null && !parentDir.exists()) {
+            val _ = parentDir.mkdirs()
+          }
+          file.createNewFile()
       }
-      file.createNewFile()
       fileCreated = true
-      Output.writeln(s"I/Q Server: Created empty file${if (inView) "" else " for buffer"}: $authorizedPath")
+      Output.writeln(
+        s"I/Q Server: Created file${if (inView) "" else " for buffer"}: $authorizedPath"
+      )
+    } else if (file.exists() && createIfMissing && content.isDefined) {
+      if (!overwriteIfExists) {
+        throw new Exception(
+          s"File already exists and overwrite_if_exists is false: $authorizedPath"
+        )
+      }
+      createFileWithContent(file, authorizedPath, content.get)
+      fileOverwritten = true
+      Output.writeln(
+        s"I/Q Server: Overwrote existing file${if (inView) "" else " for buffer"}: $authorizedPath"
+      )
     } else if (!file.exists()) {
       throw new java.io.FileNotFoundException(s"File does not exist: $authorizedPath")
     }
@@ -2990,17 +2931,28 @@ class IQServer(
     Map(
       "path" -> authorizedPath,
       "created" -> fileCreated.toString,
+      "overwritten" -> fileOverwritten.toString,
       "opened" -> "true",
       "in_view" -> inView.toString
     )
   }
 
-  private def openFileInEditor(filePath: String, createIfMissing: Boolean): Map[String, String] = {
-    openFileCommon(filePath, createIfMissing, inView = true)
+  private def openFileInEditor(
+      filePath: String,
+      createIfMissing: Boolean,
+      content: Option[String],
+      overwriteIfExists: Boolean
+  ): Map[String, String] = {
+    openFileCommon(filePath, createIfMissing, inView = true, content, overwriteIfExists)
   }
 
-  private def openFileInBuffer(filePath: String, createIfMissing: Boolean): Map[String, String] = {
-    openFileCommon(filePath, createIfMissing, inView = false)
+  private def openFileInBuffer(
+      filePath: String,
+      createIfMissing: Boolean,
+      content: Option[String],
+      overwriteIfExists: Boolean
+  ): Map[String, String] = {
+    openFileCommon(filePath, createIfMissing, inView = false, content, overwriteIfExists)
   }
 
   private def createFileWithContent(file: java.io.File, filePath: String, content: String): Unit = {
@@ -3027,69 +2979,6 @@ end"""
     } finally {
       writer.close()
     }
-  }
-
-  private def createFileWithContentCommon(filePath: String, content: String, overwriteIfExists: Boolean, inView: Boolean): Map[String, String] = {
-    val authorizedPath = authorizeMutationPath("create_file_common", filePath) match {
-      case Right(path) => path
-      case Left(error) => throw new Exception(error)
-    }
-    val file = new java.io.File(authorizedPath)
-    var fileCreated = false
-    var fileOverwritten = false
-
-    if (file.exists() && !overwriteIfExists) {
-      throw new Exception(s"File already exists and overwrite_if_exists is false: $authorizedPath")
-    } else if (file.exists() && overwriteIfExists) {
-      fileOverwritten = true
-      Output.writeln(s"I/Q Server: Overwriting existing file${if (inView) "" else " for buffer"}: $authorizedPath")
-    } else {
-      fileCreated = true
-      Output.writeln(s"I/Q Server: Creating new file${if (inView) "" else " for buffer"}: $authorizedPath")
-    }
-
-    // Create the file with content
-    createFileWithContent(file, authorizedPath, content)
-
-    if (inView) {
-      // Open the file in jEdit
-      val views = getOpenViews()
-      if (views.isEmpty) {
-        throw new Exception("No jEdit views available to display the file")
-      }
-
-      val view = views(0)
-      val buffer = jEdit.openFile(view, authorizedPath)
-      if (buffer == null) {
-        throw new Exception(s"Failed to open file in jEdit: $authorizedPath")
-      }
-
-      view.setBuffer(buffer)
-      view.getTextArea.requestFocus()
-      Output.writeln(s"I/Q Server: Opened file in jEdit: $authorizedPath")
-    } else {
-      // Provide the file to document model (buffer only, no view)
-      val node_name = PIDE.resources.node_name(authorizedPath)
-      Document_Model.provide_files(PIDE.session, List((node_name, content)))
-
-      Output.writeln(s"I/Q Server: Provided file to buffer: $authorizedPath")
-    }
-
-    Map(
-      "path" -> authorizedPath,
-      "created" -> fileCreated.toString,
-      "overwritten" -> fileOverwritten.toString,
-      "opened" -> "true",
-      "in_view" -> inView.toString
-    )
-  }
-
-  private def createFileWithContentAndOpen(filePath: String, content: String, overwriteIfExists: Boolean): Map[String, String] = {
-    createFileWithContentCommon(filePath, content, overwriteIfExists, inView = true)
-  }
-
-  private def createFileWithContentInBuffer(filePath: String, content: String, overwriteIfExists: Boolean): Map[String, String] = {
-    createFileWithContentCommon(filePath, content, overwriteIfExists, inView = false)
   }
 
   private def getOpenViews(): List[View] = {
@@ -3737,21 +3626,6 @@ end"""
     }
   }
 
-  private def handleGetGoalState(
-      params: Map[String, Any]
-  ): Either[String, Map[String, Any]] = {
-    decodeAndAuthorizeTargetSelection(params, "get_goal_state").flatMap {
-      selection =>
-        resolveTargetSelection(selection).map { resolved =>
-          Map(
-            "selection" -> targetSelectionToMap(resolved.selection),
-            "command" -> commandInfoMap(resolved.command),
-            "goal" -> goalStateForCommand(resolved.command)
-          )
-        }
-    }
-  }
-
   private def handleGetContextInfo(
       params: Map[String, Any]
   ): Either[String, Map[String, Any]] = {
@@ -3883,128 +3757,137 @@ end"""
     }
   }
 
-  private def handleGetProofBlock(
-      params: Map[String, Any]
-  ): Either[String, Map[String, Any]] = {
-    val normalizedParams = withDefaultCurrentSelection(params)
-    decodeAndAuthorizeTargetSelection(
-      normalizedParams,
-      "get_proof_block"
-    ).flatMap { selection =>
-      resolveTargetSelection(selection).map { resolved =>
-        val command = resolved.command
-        val snapshot = PIDE.session.snapshot()
-        val node = snapshot.get_node(command.node_name)
-        val fileContent = getFileContent(command.node_name.node)
-        val lineDoc = fileContent.map(Line.Document(_))
-
-        if (node == null || node.commands.isEmpty) {
-          Map(
-            "selection" -> targetSelectionToMap(resolved.selection),
-            "command" -> commandInfoMap(command),
-            "has_proof_block" -> false,
-            "message" -> "No commands available for selection"
-          )
-        } else {
-          val commands = node.command_iterator().toList
-          val fallbackStart = node.command_start(command).getOrElse(0)
-          val anchorOffset =
-            selectionAnchorOffset(resolved.selection, fallbackStart)
-          val anchorIndexFromOffset =
-            commands.indexWhere { case (cmd, cmdOffset) =>
-              anchorOffset >= cmdOffset && anchorOffset < cmdOffset + cmd.length
-            }
-          val anchorIndex =
-            if (anchorIndexFromOffset >= 0) anchorIndexFromOffset
-            else commands.indexWhere(_._1.id == command.id)
-
-          val block =
-            if (anchorIndex >= 0)
-              extractProofBlockAtIndex(commands, anchorIndex, lineDoc)
-            else None
-
-          Map(
-            "selection" -> targetSelectionToMap(resolved.selection),
-            "command" -> commandInfoMap(command),
-            "has_proof_block" -> block.isDefined
-          ) ++ block.getOrElse(
-            Map("message" -> "No proof block found at selection")
-          )
-        }
-      }
-    }
-  }
-
   private def handleGetProofBlocks(
       params: Map[String, Any]
   ): Either[String, Map[String, Any]] = {
-    val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
-      case Some(path) =>
-        IQUtils.autoCompleteFilePath(path) match {
-          case Right(fullPath) =>
-            authorizeReadPath("get_proof_blocks(path)", fullPath) match {
-              case Right(authorizedPath) => authorizedPath
+    val scope = params
+      .get("scope")
+      .map(_.toString.trim.toLowerCase(Locale.ROOT))
+      .filter(_.nonEmpty) match {
+      case Some(value) => value
+      case None => return Left("Missing required parameter: scope")
+    }
+
+    scope match {
+      case "selection" =>
+        val normalizedParams = withDefaultCurrentSelection(params)
+        decodeAndAuthorizeTargetSelection(
+          normalizedParams,
+          "get_proof_blocks(selection)"
+        ).flatMap { selection =>
+          resolveTargetSelection(selection).map { resolved =>
+            val command = resolved.command
+            val snapshot = PIDE.session.snapshot()
+            val node = snapshot.get_node(command.node_name)
+            val fileContent = getFileContent(command.node_name.node)
+            val lineDoc = fileContent.map(Line.Document(_))
+
+            val block = if (node == null || node.commands.isEmpty) None
+            else {
+              val commands = node.command_iterator().toList
+              val fallbackStart = node.command_start(command).getOrElse(0)
+              val anchorOffset =
+                selectionAnchorOffset(resolved.selection, fallbackStart)
+              val anchorIndexFromOffset =
+                commands.indexWhere { case (cmd, cmdOffset) =>
+                  anchorOffset >= cmdOffset && anchorOffset < cmdOffset + cmd.length
+                }
+              val anchorIndex =
+                if (anchorIndexFromOffset >= 0) anchorIndexFromOffset
+                else commands.indexWhere(_._1.id == command.id)
+
+              if (anchorIndex >= 0)
+                extractProofBlockAtIndex(commands, anchorIndex, lineDoc)
+              else None
+            }
+
+            val proofBlocks = block.toList
+            Map(
+              "scope" -> "selection",
+              "selection" -> targetSelectionToMap(resolved.selection),
+              "command" -> commandInfoMap(command),
+              "total_blocks" -> proofBlocks.length,
+              "returned_blocks" -> proofBlocks.length,
+              "truncated" -> false,
+              "proof_blocks" -> proofBlocks
+            ) ++ (if (proofBlocks.isEmpty)
+                    Map("message" -> "No proof block found at selection")
+                  else Map.empty)
+          }
+        }
+      case "file" =>
+        val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
+          case Some(path) =>
+            IQUtils.autoCompleteFilePath(path) match {
+              case Right(fullPath) =>
+                authorizeReadPath("get_proof_blocks(path)", fullPath) match {
+                  case Right(authorizedPath) => authorizedPath
+                  case Left(errorMsg) => return Left(errorMsg)
+                }
               case Left(errorMsg) => return Left(errorMsg)
             }
-          case Left(errorMsg) => return Left(errorMsg)
+          case None =>
+            return Left("scope='file' requires parameter: path")
         }
-      case None =>
-        return Left("Missing required parameter: path")
-    }
 
-    val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
-      case Right(Some(v)) if v > 0 => v
-      case Right(Some(_)) => return Left("Parameter 'max_results' must be > 0")
-      case Right(None) => 30
-      case Left(err) => return Left(err)
-    }
+        val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
+          case Right(Some(v)) if v > 0 => v
+          case Right(Some(_)) => return Left("Parameter 'max_results' must be > 0")
+          case Right(None) => 30
+          case Left(err) => return Left(err)
+        }
 
-    val minChars = IQArgumentUtils.optionalIntParam(params, "min_chars") match {
-      case Right(Some(v)) if v >= 0 => v
-      case Right(Some(_)) => return Left("Parameter 'min_chars' must be >= 0")
-      case Right(None) => 8
-      case Left(err) => return Left(err)
-    }
+        val minChars = IQArgumentUtils.optionalIntParam(params, "min_chars") match {
+          case Right(Some(v)) if v >= 0 => v
+          case Right(Some(_)) => return Left("Parameter 'min_chars' must be >= 0")
+          case Right(None) => 8
+          case Left(err) => return Left(err)
+        }
 
-    getFileContentAndModel(filePath) match {
-      case (Some(content), Some(model)) =>
-        val snapshot = Document_Model.snapshot(model)
-        val node = snapshot.get_node(model.node_name)
-        if (node == null || node.commands.isEmpty) {
-          Right(
-            Map(
-              "path" -> filePath,
-              "node_name" -> model.node_name.toString,
-              "total_blocks" -> 0,
-              "returned_blocks" -> 0,
-              "truncated" -> false,
-              "proof_blocks" -> List.empty[Map[String, Any]]
+        getFileContentAndModel(filePath) match {
+          case (Some(content), Some(model)) =>
+            val snapshot = Document_Model.snapshot(model)
+            val node = snapshot.get_node(model.node_name)
+            if (node == null || node.commands.isEmpty) {
+              Right(
+                Map(
+                  "scope" -> "file",
+                  "path" -> filePath,
+                  "node_name" -> model.node_name.toString,
+                  "total_blocks" -> 0,
+                  "returned_blocks" -> 0,
+                  "truncated" -> false,
+                  "proof_blocks" -> List.empty[Map[String, Any]]
+                )
+              )
+            } else {
+              val lineDoc = Some(Line.Document(content))
+              val allBlocks =
+                extractProofBlocksFromCommands(
+                  node.command_iterator().toList,
+                  lineDoc,
+                  minChars
+                )
+              val returned = allBlocks.take(maxResults)
+              Right(
+                Map(
+                  "scope" -> "file",
+                  "path" -> filePath,
+                  "node_name" -> model.node_name.toString,
+                  "total_blocks" -> allBlocks.length,
+                  "returned_blocks" -> returned.length,
+                  "truncated" -> (allBlocks.length > returned.length),
+                  "proof_blocks" -> returned
+                )
+              )
+            }
+          case _ =>
+            Left(
+              s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting proof blocks."
             )
-          )
-        } else {
-          val lineDoc = Some(Line.Document(content))
-          val allBlocks =
-            extractProofBlocksFromCommands(
-              node.command_iterator().toList,
-              lineDoc,
-              minChars
-            )
-          val returned = allBlocks.take(maxResults)
-          Right(
-            Map(
-              "path" -> filePath,
-              "node_name" -> model.node_name.toString,
-              "total_blocks" -> allBlocks.length,
-              "returned_blocks" -> returned.length,
-              "truncated" -> (allBlocks.length > returned.length),
-              "proof_blocks" -> returned
-            )
-          )
         }
       case _ =>
-        Left(
-          s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting proof blocks."
-        )
+        Left("Parameter 'scope' must be either 'selection' or 'file'")
     }
   }
 

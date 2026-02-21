@@ -82,8 +82,8 @@ class IQMcpClientTest extends AnyFunSuite with Matchers {
     decoded.command.endOffset shouldBe Some(18)
   }
 
-  test("decodeGoalStateResult should decode structured goal information") {
-    val decoded = IQMcpClient.decodeGoalStateResult(
+  test("decodeContextInfoResult should decode structured goal information") {
+    val decoded = IQMcpClient.decodeContextInfoResult(
       Map(
         "selection" -> Map("command_selection" -> "current"),
         "command" -> Map(
@@ -92,6 +92,8 @@ class IQMcpClientTest extends AnyFunSuite with Matchers {
           "source" -> "apply simp",
           "keyword" -> "apply"
         ),
+        "in_proof_context" -> true,
+        "has_goal" -> true,
         "goal" -> Map(
           "has_goal" -> true,
           "goal_text" -> "1. x = x",
@@ -103,6 +105,8 @@ class IQMcpClientTest extends AnyFunSuite with Matchers {
     )
 
     decoded.selection shouldBe IQMcpClient.CurrentSelection
+    decoded.inProofContext shouldBe true
+    decoded.hasGoal shouldBe true
     decoded.goal.hasGoal shouldBe true
     decoded.goal.goalText shouldBe "1. x = x"
     decoded.goal.numSubgoals shouldBe 1

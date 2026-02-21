@@ -76,6 +76,7 @@ Responsibilities:
 - Single source of truth for capability ownership.
 - Typed ADTs for operation outcomes and normalized errors.
 - Deterministic fallbacks on timeout, unavailable backend, or denied permissions.
+- Canonical `iq` capability usage from assistant call sites (no reintroduction of deprecated aliases where a canonical tool exists).
 
 ## Review Checklist
 
