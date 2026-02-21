@@ -174,6 +174,31 @@ object IQSecurityTest {
     )
   }
 
+  private def testEmptyEnvironmentRootsFallbackToUiRoots(): Unit = {
+    val uiMutationRoot = Files.createTempDirectory("iq-security-empty-env-ui-mutation").toRealPath()
+    val uiReadRoot = Files.createTempDirectory("iq-security-empty-env-ui-read").toRealPath()
+
+    val config = IQSecurity.fromEnvironment(
+      readEnv = {
+        case "IQ_MCP_ALLOWED_ROOTS" => Some("   ")
+        case "IQ_MCP_ALLOWED_READ_ROOTS" => Some("")
+        case _ => None
+      },
+      cwdProvider = () => "/tmp/ignored-default-root",
+      readUiMutationRoots = () => Some(uiMutationRoot.toString),
+      readUiReadRoots = () => Some(uiReadRoot.toString)
+    )
+
+    assertThat(
+      config.allowedMutationRoots == List(uiMutationRoot),
+      s"empty env mutation roots should fall back to UI roots: ${config.allowedMutationRoots}"
+    )
+    assertThat(
+      config.allowedReadRoots == List(uiReadRoot),
+      s"empty env read roots should fall back to UI roots: ${config.allowedReadRoots}"
+    )
+  }
+
   def main(args: Array[String]): Unit = {
     testDefaultConfig()
     testPathAllowlist()
@@ -185,6 +210,7 @@ object IQSecurityTest {
     testEnvironmentParsingWithExplicitRootsAndBounds()
     testUiConfiguredRootsWhenEnvMissing()
     testEnvironmentRootsTakePrecedenceOverUiRoots()
+    testEmptyEnvironmentRootsFallbackToUiRoots()
     println("IQSecurityTest: all tests passed")
   }
 }

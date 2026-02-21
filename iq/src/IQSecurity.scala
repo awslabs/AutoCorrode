@@ -77,19 +77,22 @@ object IQSecurity {
     readUiMutationRoots: () => Option[String] = () => None,
     readUiReadRoots: () => Option[String] = () => None
   ): IQServerSecurityConfig = {
+    def nonEmpty(value: Option[String]): Option[String] =
+      value.map(_.trim).filter(_.nonEmpty)
+
     val bindHost = readEnv(BindHostEnv).map(_.trim).filter(_.nonEmpty).getOrElse(DefaultBindHost)
     val allowRemoteBind = readEnv(AllowRemoteBindEnv).exists(v => parseBoolean(v, defaultValue = false))
     val authToken = readEnv(AuthTokenEnv).map(_.trim).filter(_.nonEmpty)
 
     val configuredMutationRoots =
-      parsePathList(readEnv(AllowedRootsEnv).orElse(readUiMutationRoots()))
+      parsePathList(nonEmpty(readEnv(AllowedRootsEnv)).orElse(nonEmpty(readUiMutationRoots())))
 
     val defaultRoot = canonicalizePath(Paths.get(cwdProvider()))
     val allowedMutationRoots =
       if (configuredMutationRoots.nonEmpty) configuredMutationRoots.distinct
       else List(defaultRoot)
     val configuredReadRoots =
-      parsePathList(readEnv(AllowedReadRootsEnv).orElse(readUiReadRoots()))
+      parsePathList(nonEmpty(readEnv(AllowedReadRootsEnv)).orElse(nonEmpty(readUiReadRoots())))
     val allowedReadRoots =
       if (configuredReadRoots.nonEmpty) configuredReadRoots.distinct
       else allowedMutationRoots
