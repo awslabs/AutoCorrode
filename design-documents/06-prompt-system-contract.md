@@ -1,6 +1,6 @@
 # Prompt System Contract
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `isabelle-assistant` prompt loading and delivery  
 Last reviewed: 2026-02-21
 

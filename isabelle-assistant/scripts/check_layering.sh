@@ -174,6 +174,8 @@ enforce_runtime_touchpoint_allowlist() {
   local matches_file="$1"
   local unexpected_file
   unexpected_file="$(mktemp)"
+  local stale_file
+  stale_file="$(mktemp)"
 
   if [[ -s "$matches_file" ]]; then
     while IFS=$'\t' read -r touchpoint file line target source; do
@@ -185,6 +187,12 @@ enforce_runtime_touchpoint_allowlist() {
     done < "$matches_file"
   fi
 
+  for approved in "${approved_runtime_touchpoint_scopes[@]}"; do
+    if ! awk -F '\t' -v key="$approved" '$1 "|" $2 == key {found=1} END {exit(found ? 0 : 1)}' "$matches_file"; then
+      printf "%s\n" "$approved" >> "$stale_file"
+    fi
+  done
+
   if [[ -s "$unexpected_file" ]]; then
     echo "ERROR: layering violation: unapproved assistant runtime touchpoints detected."
     echo "Add missing IQ capability ownership or explicitly approve scope in check_layering.sh."
@@ -192,10 +200,21 @@ enforce_runtime_touchpoint_allowlist() {
     printf "touchpoint\tfile\tline\ttarget_iq_capability\tsource\n"
     cat "$unexpected_file"
     rm -f "$unexpected_file"
+    rm -f "$stale_file"
+    exit 1
+  fi
+
+  if [[ -s "$stale_file" ]]; then
+    echo "ERROR: layering allowlist contains stale entries with no corresponding runtime touchpoint."
+    echo "Remove these dead allowlist entries from check_layering.sh:"
+    cat "$stale_file"
+    rm -f "$unexpected_file"
+    rm -f "$stale_file"
     exit 1
   fi
 
   rm -f "$unexpected_file"
+  rm -f "$stale_file"
 }
 
 extract_method() {

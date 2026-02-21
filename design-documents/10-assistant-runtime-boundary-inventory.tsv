@@ -1,62 +1,22 @@
 touchpoint	file	line	target_iq_capability	source
 command_iterator	isabelle-assistant/src/AnalyzePatternsAction.scala	43	iq.command_lookup	        val commands = node.command_iterator().toList
-command_iterator	isabelle-assistant/src/AssistantTools.scala	1770	iq.command_lookup	                  for ((cmd, cmdOffset) <- node.command_iterator()) {
-command_iterator	isabelle-assistant/src/CommandExtractor.scala	27	iq.command_lookup	        node.command_iterator(targetRange).toList.headOption.map {
-command_iterator	isabelle-assistant/src/CommandExtractor.scala	45	iq.command_lookup	        node.command_iterator(targetRange).toList.headOption.map {
-command_iterator	isabelle-assistant/src/ContextFetcher.scala	81	iq.command_lookup	      val commandRange = snapshot.node.command_iterator(offset)
-command_iterator	isabelle-assistant/src/FindTheoremsAction.scala	141	iq.command_lookup	      val range = snapshot.node.command_iterator(Text.Range(offset, offset + 1))
-command_iterator	isabelle-assistant/src/GoalExtractor.scala	169	iq.command_lookup	        .command_iterator(Text.Range(safeOffset, safeEnd))
-command_iterator	isabelle-assistant/src/GoalExtractor.scala	208	iq.command_lookup	        val commands = node.command_iterator(Text.Range(0, safeEnd)).toList
-command_iterator	isabelle-assistant/src/IQIntegration.scala	430	iq.command_lookup	            .command_iterator(Text.Range(safeOffset, safeEnd))
+command_iterator	isabelle-assistant/src/IQIntegration.scala	555	iq.command_lookup	            .command_iterator(Text.Range(safeOffset, safeEnd))
 command_iterator	isabelle-assistant/src/ProofExtractor.scala	29	iq.command_lookup	          val commands = node.command_iterator().toList
 document_model_get_model	isabelle-assistant/src/AnalyzePatternsAction.scala	38	iq.document_model_lookup	    Document_Model.get_model(buffer).map { model =>
 document_model_get_model	isabelle-assistant/src/AssistantSupport.scala	24	iq.document_model_lookup	    Document_Model.get_model(buffer).exists { model =>
-document_model_get_model	isabelle-assistant/src/AssistantTools.scala	1764	iq.document_model_lookup	                Document_Model.get_model(buffer).foreach { model =>
-document_model_get_model	isabelle-assistant/src/AssistantTools.scala	2321	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/AssistantTools.scala	2355	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/CommandExtractor.scala	19	iq.document_model_lookup	    Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/CommandExtractor.scala	37	iq.document_model_lookup	    Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/ContextFetcher.scala	78	iq.document_model_lookup	    Document_Model.get_model(buffer).map { model =>
-document_model_get_model	isabelle-assistant/src/ExplainErrorAction.scala	45	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/FindTheoremsAction.scala	139	iq.document_model_lookup	    Document_Model.get_model(buffer).map { model =>
-document_model_get_model	isabelle-assistant/src/GoalExtractor.scala	202	iq.document_model_lookup	    Document_Model.get_model(buffer).exists { model =>
-document_model_get_model	isabelle-assistant/src/GoalExtractor.scala	56	iq.document_model_lookup	    Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/GoalExtractor.scala	85	iq.document_model_lookup	    Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/IQIntegration.scala	419	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/MenuContext.scala	107	iq.document_model_lookup	      Document_Model.get_model(buffer).exists { model =>
+document_model_get_model	isabelle-assistant/src/IQIntegration.scala	544	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
+document_model_get_model	isabelle-assistant/src/MenuContext.scala	121	iq.document_model_lookup	      Document_Model.get_model(buffer).exists { model =>
 document_model_get_model	isabelle-assistant/src/ProofExtractor.scala	24	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
 document_model_get_model	isabelle-assistant/src/ShowTypeAction.scala	27	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
 document_model_get_model	isabelle-assistant/src/SuggestNameAction.scala	140	iq.document_model_lookup	    val theoryName = Document_Model.get_model(buffer).map(_.node_name.theory)
 document_model_get_model	isabelle-assistant/src/SummarizeTheoryAction.scala	41	iq.document_model_lookup	    val theoryName = Document_Model.get_model(buffer)
 document_model_snapshot	isabelle-assistant/src/AnalyzePatternsAction.scala	39	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
 document_model_snapshot	isabelle-assistant/src/AssistantSupport.scala	25	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/AssistantTools.scala	1765	iq.document_snapshot	                  val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/AssistantTools.scala	2322	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/AssistantTools.scala	2356	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/CommandExtractor.scala	20	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/CommandExtractor.scala	38	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/ContextFetcher.scala	79	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/ExplainErrorAction.scala	46	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/FindTheoremsAction.scala	140	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/GoalExtractor.scala	203	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/GoalExtractor.scala	57	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/GoalExtractor.scala	86	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/IQIntegration.scala	420	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/MenuContext.scala	108	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
+document_model_snapshot	isabelle-assistant/src/IQIntegration.scala	545	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
+document_model_snapshot	isabelle-assistant/src/MenuContext.scala	122	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
 document_model_snapshot	isabelle-assistant/src/ProofExtractor.scala	25	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
 document_model_snapshot	isabelle-assistant/src/ShowTypeAction.scala	28	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
-extended_query_operation	isabelle-assistant/src/ContextFetcher.scala	150	iq.explore_query	    @volatile var operation: Option[Extended_Query_Operation] = None
-extended_query_operation	isabelle-assistant/src/ContextFetcher.scala	155	iq.explore_query	    val op = new Extended_Query_Operation(
-extended_query_operation	isabelle-assistant/src/ContextFetcher.scala	158	iq.explore_query	        if (status == Extended_Query_Operation.Status.finished ||
-extended_query_operation	isabelle-assistant/src/ContextFetcher.scala	159	iq.explore_query	            status == Extended_Query_Operation.Status.failed) {
 extended_query_operation	isabelle-assistant/src/IQAvailable.scala	22	iq.explore_query	      Class.forName("isabelle.Extended_Query_Operation")
-pide_editor	isabelle-assistant/src/GoalExtractor.scala	62	iq.goal_and_query	      val output = PIDE.editor.output(snapshot, safeOffset)
-pide_editor	isabelle-assistant/src/GoalExtractor.scala	91	iq.goal_and_query	      val output = PIDE.editor.output(snapshot, safeOffset)
 snapshot_get_node	isabelle-assistant/src/AnalyzePatternsAction.scala	40	iq.command_lookup	      val node = snapshot.get_node(model.node_name)
-snapshot_get_node	isabelle-assistant/src/AssistantTools.scala	1766	iq.command_lookup	                  val node = snapshot.get_node(model.node_name)
-snapshot_get_node	isabelle-assistant/src/CommandExtractor.scala	21	iq.command_lookup	      val node = snapshot.get_node(model.node_name)
-snapshot_get_node	isabelle-assistant/src/CommandExtractor.scala	39	iq.command_lookup	      val node = snapshot.get_node(model.node_name)
-snapshot_get_node	isabelle-assistant/src/GoalExtractor.scala	162	iq.command_lookup	      val node = snapshot.get_node(snapshot.node_name)
-snapshot_get_node	isabelle-assistant/src/GoalExtractor.scala	204	iq.command_lookup	      val node = snapshot.get_node(model.node_name)
-snapshot_get_node	isabelle-assistant/src/IQIntegration.scala	421	iq.command_lookup	        val node = snapshot.get_node(model.node_name)
+snapshot_get_node	isabelle-assistant/src/IQIntegration.scala	546	iq.command_lookup	        val node = snapshot.get_node(model.node_name)
 snapshot_get_node	isabelle-assistant/src/ProofExtractor.scala	26	iq.command_lookup	        val node = snapshot.get_node(model.node_name)

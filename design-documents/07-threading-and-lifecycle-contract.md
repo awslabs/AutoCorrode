@@ -1,6 +1,6 @@
 # Threading and Lifecycle Contract
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `iq`, `isabelle-assistant` async and UI interactions  
 Last reviewed: 2026-02-21
 

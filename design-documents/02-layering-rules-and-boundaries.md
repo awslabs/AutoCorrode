@@ -1,6 +1,6 @@
 # Layering Rules and Module Boundaries
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `iq`, `isabelle-assistant`  
 Last reviewed: 2026-02-21
 
@@ -91,4 +91,5 @@ Current enforcement:
 
 - `make -C isabelle-assistant check-layering` is a failing gate:
   1. migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration` must remain MCP-only (no local `IQIntegration`/`Extended_Query_Operation` execution paths),
-  2. any assistant-side direct Isabelle runtime touchpoint outside the approved debt allowlist fails.
+  2. any assistant-side direct Isabelle runtime touchpoint outside the approved debt allowlist fails,
+  3. stale allowlist entries with no corresponding touchpoint fail (dead exception cleanup is mandatory).

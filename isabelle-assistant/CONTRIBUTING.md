@@ -22,10 +22,10 @@ Isabelle Assistant owns UI and model orchestration. Isabelle-proof execution sem
 | `AssistantDockable` | Chat UI panel (Swing, singleton) |
 | `ChatAction` | Command dispatch + chat history |
 | `BedrockClient` | AWS Bedrock API with retry, caching, tool-use loop |
-| `IQIntegration` | Async proof-query facade over I/Q MCP (API compatibility layer) |
+| `IQIntegration` | Async adapter/facade over I/Q MCP with GUI-thread callback delivery |
 | `SuggestAction` | Proof suggestion pipeline (LLM + sledgehammer) |
-| `ContextFetcher` | PIDE entity extraction for LLM context |
-| `GoalExtractor` | Goal state extraction from PIDE output |
+| `ContextFetcher` | Goal-aware definition/context lookup via typed I/Q capabilities |
+| `GoalExtractor` | Goal/context extraction via typed I/Q MCP goal APIs |
 | `PromptLoader` | Mustache template loading from `prompts/` |
 
 ### Threading Model

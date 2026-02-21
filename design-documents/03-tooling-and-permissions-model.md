@@ -1,6 +1,6 @@
 # Tooling and Permissions Model
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `isabelle-assistant` tools and `iq` operation surfaces  
 Last reviewed: 2026-02-21
 

@@ -1,6 +1,6 @@
 # Project Overview for I/Q and Isabelle Assistant
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `iq`, `isabelle-assistant`  
 Last reviewed: 2026-02-21
 
@@ -37,9 +37,12 @@ Together they support interactive theorem proving workflows in Isabelle/jEdit.
 
 Current capabilities are implemented across both subsystems:
 
-- `iq` currently provides MCP tools for read/edit/query/explore/save operations.
-- `isabelle-assistant` currently provides chat UI, prompt loading, Bedrock calls, right-click actions, verification workflows, and tool execution with permissions.
-- Some Isabelle/PIDE operations still occur directly in `isabelle-assistant` code (for example in `AssistantTools`, `ContextFetcher`, `GoalExtractor`, and `IQIntegration`) rather than only via `iq`.
+- `iq` provides MCP tools for read/edit/query/explore/save operations and normalized typed responses for assistant integration.
+- `isabelle-assistant` provides chat UI, prompt loading, Bedrock orchestration, right-click actions, verification workflows, and user-facing tool permissions.
+- Core assistant actions now route command/goal/context/diagnostic/definition/entity lookups through `IQMcpClient`-backed paths.
+- Remaining direct assistant runtime touchpoints are explicit migration debt tracked in:
+  `design-documents/10-assistant-runtime-boundary-inventory.tsv`
+  and bounded by a hard allowlist gate in `isabelle-assistant/scripts/check_layering.sh`.
 
 ## Target Capability Split
 
@@ -49,6 +52,12 @@ The target architecture is:
 - `iq`: Isabelle interaction backplane, tool execution against Isabelle state, and enforcement of operation-level safety constraints.
 
 This target split is normative for future refactoring and new feature work.
+
+## Enforcement Status
+
+- `make -C isabelle-assistant check-layering` is a failing architectural gate.
+- New direct assistant-side Isabelle runtime touchpoints are rejected unless explicitly allowlisted.
+- Stale allowlist entries are rejected to prevent dead boundary exceptions from accumulating.
 
 ## Stakeholders
 

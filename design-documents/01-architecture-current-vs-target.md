@@ -1,6 +1,6 @@
 # Architecture: Current State and Target State
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `iq`, `isabelle-assistant`  
 Last reviewed: 2026-02-21
 
@@ -10,14 +10,15 @@ This document records current architecture, defines target architecture, and mak
 
 ## Current Architecture
 
-The current system is functionally layered but not cleanly separated.
+The current system is layered with a hard boundary gate, plus explicit residual migration debt.
 
 ```mermaid
 graph TD
   UI["isabelle-assistant UI layer"] --> ORCH["LLM orchestration and prompts"]
-  ORCH --> TOOLS["Assistant tool dispatch"]
+  ORCH --> TOOLS["Assistant tool dispatch + permission gate"]
   TOOLS --> IQ["iq MCP and query operations"]
-  TOOLS --> PIDE["Direct PIDE and jEdit interactions"]
+  TOOLS --> DEBT["Allowlisted runtime debt only"]
+  DEBT --> PIDE["Direct PIDE and jEdit interactions"]
   IQ --> PIDE
 ```
 
@@ -28,7 +29,7 @@ graph TD
   - Bedrock model invocation and tool-use loop.
   - Prompt loading and response rendering.
   - Tool permission checks.
-  - Several direct Isabelle operations.
+  - Bounded residual direct runtime debt under explicit allowlist governance.
 - `iq` owns:
   - MCP server and socket protocol entrypoint.
   - Isabelle query/explore operations.
@@ -36,12 +37,20 @@ graph TD
 
 ### Known Coupling Points
 
-The following files indicate direct assistant-side Isabelle execution responsibilities:
+Allowlisted direct runtime touchpoints currently exist in:
 
-- `isabelle-assistant/src/AssistantTools.scala`
-- `isabelle-assistant/src/ContextFetcher.scala`
-- `isabelle-assistant/src/GoalExtractor.scala`
+- `isabelle-assistant/src/AnalyzePatternsAction.scala`
+- `isabelle-assistant/src/AssistantSupport.scala`
 - `isabelle-assistant/src/IQIntegration.scala`
+- `isabelle-assistant/src/IQAvailable.scala`
+- `isabelle-assistant/src/MenuContext.scala`
+- `isabelle-assistant/src/ProofExtractor.scala`
+- `isabelle-assistant/src/ShowTypeAction.scala`
+- `isabelle-assistant/src/SuggestNameAction.scala`
+- `isabelle-assistant/src/SummarizeTheoryAction.scala`
+
+Inventory source of truth:
+- `design-documents/10-assistant-runtime-boundary-inventory.tsv`
 
 ## Target Architecture
 
@@ -72,6 +81,7 @@ graph TD
 2. New proof-related tools should be defined at the `iq` layer first, then consumed by assistant.
 3. Assistant should treat tool outputs as typed capability responses, not raw ad hoc strings.
 4. Security and permission decisions must remain visible to the user.
+5. Residual runtime debt is temporary, explicit, and enforced by failing gates.
 
 ## Migration Direction
 
@@ -86,3 +96,4 @@ A new feature is architecturally compliant when:
 1. The Isabelle interaction path is represented as an `iq` capability.
 2. Assistant-side code remains orchestration-only for that interaction.
 3. Failures are recoverable and clearly surfaced at UI level.
+4. No new direct runtime touchpoint is introduced without explicit allowlist approval.

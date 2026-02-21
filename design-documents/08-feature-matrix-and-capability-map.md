@@ -1,6 +1,6 @@
 # Feature Matrix and Capability Map
 
-Status: Draft steering document  
+Status: Active steering document  
 Applies to: `iq`, `isabelle-assistant`  
 Last reviewed: 2026-02-21
 
@@ -24,8 +24,8 @@ This document maps user-facing features to system capabilities and dependencies.
 | Proof suggestions | Context menu and `:suggest` | isabelle-assistant orchestration | Optional for verification | Yes |
 | Proof verification | Verification badges and retries | iq capability + assistant presentation | Yes | Optional |
 | Find theorems and proof exploration | Tools/actions | iq capability + assistant orchestration | Yes | Optional |
-| Theory read/search navigation | Tools/actions | assistant + iq/read path | Optional | Optional |
-| Theory edits/creation via model tools | tool use | assistant gate + iq/runtime path | Optional | Yes |
+| Theory read/search navigation | Tools/actions | assistant buffer APIs + iq-backed reads where available | Optional | Optional |
+| Theory edits/creation via model tools | tool use | assistant permission gate + jEdit buffer/file operations (migration debt) | No | Yes |
 | Permission gating | settings + runtime prompts | isabelle-assistant | No | No |
 
 ## User-Facing Preconditions

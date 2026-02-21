@@ -67,6 +67,7 @@ Current implementation status:
 
 - `isabelle-assistant/scripts/check_layering.sh` enforces MCP-only execution for migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration`.
 - strict mode also enforces a failing runtime-touchpoint allowlist: new direct assistant runtime couplings fail `check-layering`.
+- strict mode rejects stale allowlist entries, preventing dead architectural exceptions from persisting after migrations.
 - `make -C isabelle-assistant test` now runs `check-layering` before tests.
 - contributor and architecture docs include the layering gate and ownership rule.
 
