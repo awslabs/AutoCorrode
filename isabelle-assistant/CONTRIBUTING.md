@@ -9,6 +9,7 @@ Isabelle Assistant is a jEdit plugin written in Scala 3 that integrates AWS Bedr
 Isabelle Assistant owns UI and model orchestration. Isabelle-proof execution semantics must be owned by I/Q capabilities.
 
 - In `AssistantTools`, the migrated proof tools (`find_theorems`, `verify_proof`, `run_sledgehammer`, `run_nitpick`, `run_quickcheck`, `execute_step`, `trace_simplifier`) must remain MCP-only and route through `IQMcpClient`.
+- In `IQIntegration`, migrated proof-query APIs (`verifyProofAsync`, `runSledgehammerAsync`, `runFindTheoremsAsync`, `runQueryAsync`, `executeStepAsync`) must remain MCP-only and route through `IQMcpClient`.
 - Do not add local fallback logic for those tools via `IQIntegration` or `Extended_Query_Operation`.
 - If a capability is missing in I/Q, add it to I/Q rather than re-implementing runtime semantics in Assistant.
 
@@ -20,7 +21,7 @@ Isabelle Assistant owns UI and model orchestration. Isabelle-proof execution sem
 | `AssistantDockable` | Chat UI panel (Swing, singleton) |
 | `ChatAction` | Command dispatch + chat history |
 | `BedrockClient` | AWS Bedrock API with retry, caching, tool-use loop |
-| `IQIntegration` | Async proof verification via I/Q plugin |
+| `IQIntegration` | Async proof-query facade over I/Q MCP (API compatibility layer) |
 | `SuggestAction` | Proof suggestion pipeline (LLM + sledgehammer) |
 | `ContextFetcher` | PIDE entity extraction for LLM context |
 | `GoalExtractor` | Goal state extraction from PIDE output |
@@ -30,13 +31,13 @@ Isabelle Assistant owns UI and model orchestration. Isabelle-proof execution sem
 
 Three thread contexts are used:
 
-- **GUI Thread (Swing EDT)**: All UI updates, jEdit API calls, `Extended_Query_Operation.activate()`. Use `GUI_Thread.later { ... }`.
+- **GUI Thread (Swing EDT)**: All UI updates and jEdit API calls. Use `GUI_Thread.later { ... }`.
 - **Isabelle_Thread**: Background work (LLM calls, latch waits). Use `Isabelle_Thread.fork(name = "...") { ... }`.
-- **I/Q Callbacks**: May arrive on either thread. Always use `completionLock.synchronized` to guard shared state.
+- **I/Q MCP Worker Threads**: IQ requests run off-EDT; `IQIntegration` dispatches callbacks back onto GUI thread before invoking callers.
 
 **Critical rules:**
 - `ContextFetcher.getContext` and `PrintContextAction.getContextString` must NOT be called from the GUI thread (deadlock).
-- `IQIntegration.verifyProofAsync`, `runSledgehammerAsync`, `runFindTheoremsAsync`, `runQueryAsync` MUST be called from the GUI thread.
+- `IQIntegration.verifyProofAsync`, `runSledgehammerAsync`, `runFindTheoremsAsync`, `runQueryAsync`, and `executeStepAsync` are safe to call from any thread; callbacks are delivered on GUI thread.
 - All `AssistantDockable` UI updates go through `GUI_Thread.later`.
 
 ## Adding a New Chat Command

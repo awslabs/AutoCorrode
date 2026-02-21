@@ -7,6 +7,8 @@ import isabelle._
 import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
+import scala.annotation.unused
+import java.util.Locale
 
 /** Integration layer for I/Q (Isabelle/Q) plugin functionality.
   *
@@ -69,8 +71,86 @@ object IQIntegration {
   imports ... "$IQ_HOME/Isar_Explore"
 Replace $IQ_HOME with the path to your I/Q plugin installation."""
 
-  /** Verify a proof asynchronously. Calls the callback with the result. MUST be
-    * called from the GUI thread.
+  private def callbackOnGui[A](callback: A => Unit, result: A): Unit =
+    GUI_Thread.later { callback(result) }
+
+  private def selectionParamsForView(view: View): Map[String, Any] =
+    Option(view) match {
+      case None => Map("command_selection" -> "current")
+      case Some(v) =>
+        try {
+          GUI_Thread.now {
+            val buffer = v.getBuffer
+            val pathOpt = Option(buffer).flatMap(b => Option(b.getPath)).map(_.trim).filter(_.nonEmpty)
+            pathOpt match {
+              case Some(path) =>
+                val rawOffset = Option(v.getTextArea).map(_.getCaretPosition).getOrElse(0)
+                val bufferLength = Option(buffer).map(_.getLength).getOrElse(0)
+                val offset = math.max(0, math.min(rawOffset, bufferLength))
+                Map(
+                  "command_selection" -> "file_offset",
+                  "path" -> path,
+                  "offset" -> offset
+                )
+              case None =>
+                Map("command_selection" -> "current")
+            }
+          }
+        } catch {
+          case _: Exception =>
+            Map("command_selection" -> "current")
+        }
+    }
+
+  private def exploreFailureMessage(
+      explore: IQMcpClient.ExploreResult,
+      fallback: String
+  ): String = {
+    val message = Option(explore.message).getOrElse("").trim
+    if (message.nonEmpty) message
+    else Option(explore.error).flatten.map(_.trim).filter(_.nonEmpty).getOrElse(fallback)
+  }
+
+  private def indicatesMissingIsarExplore(message: String): Boolean = {
+    val lower = Option(message).getOrElse("").toLowerCase(Locale.ROOT)
+    lower.contains("isar_explore") || lower.contains("import iq.isar_explore")
+  }
+
+  private def parseSledgehammerResults(text: String): List[SledgehammerResult] = {
+    val tryThisPattern = """Try this:\s*(.+?)\s*\((\d+(?:\.\d+)?)\s*(ms|s)\)""".r
+    tryThisPattern
+      .findAllMatchIn(Option(text).getOrElse(""))
+      .map { m =>
+        val method = m.group(1).trim
+        val value = m.group(2).toDouble
+        val unit = m.group(3)
+        val timeMs =
+          if (unit == "s") (value * 1000.0).toLong
+          else value.toLong
+        SledgehammerResult(method, timeMs)
+      }
+      .toList
+      .distinct
+  }
+
+  private def parseFindTheoremsResults(text: String): List[String] =
+    Option(text)
+      .getOrElse("")
+      .linesIterator
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .filter(line =>
+        line.contains(":") &&
+          !line.startsWith("found") &&
+          !line.contains("error") &&
+          !line.contains("Outer syntax") &&
+          !line.contains("bad input")
+      )
+      .toList
+      .distinct
+
+  /** Verify a proof asynchronously through I/Q MCP. Callback is dispatched on
+    * the GUI thread.
     *
     * @param view
     *   The current jEdit view
@@ -91,185 +171,90 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       callback: VerificationResult => Unit
   ): Unit = {
     if (!IQAvailable.isAvailable) {
-      callback(IQUnavailable)
+      callbackOnGui(callback, IQUnavailable)
     } else {
       // Check cache first
       VerificationCache.get(command, proofText) match {
         case Some(cachedResult) =>
-          callback(cachedResult)
+          callbackOnGui(callback, cachedResult)
         case None =>
-          val startTime = System.currentTimeMillis()
-          val outputLock = new Object()
-          @volatile var receivedOutput = false
-          @volatile var operation: Option[Extended_Query_Operation] = None
-          val lifecycle = new IQOperationLifecycle[VerificationResult](
-            onComplete = newResult => {
-              VerificationCache.put(command, proofText, newResult)
-              callback(newResult)
-            },
-            deactivate = () => operation.foreach(_.deactivate())
-          )
-
-          val op = new Extended_Query_Operation(
-            PIDE.editor,
-            view,
-            AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
-            status => {
-              if (status == Extended_Query_Operation.Status.failed) {
-                lifecycle.complete(
-                  ProofFailure(
-                    "Verification unavailable (import iq.Isar_Explore to enable)"
-                  )
+          val selectionParams = selectionParamsForView(view)
+          val _ = IQOperationLifecycle.forkJvmThread(
+            name = "assistant-verify-via-mcp",
+            body = () => {
+              val startTime = System.currentTimeMillis()
+              val result = IQMcpClient
+                .callExplore(
+                  query = "proof",
+                  arguments = proofText,
+                  timeoutMs = timeoutMs,
+                  extraParams = selectionParams
                 )
-              } else if (status == Extended_Query_Operation.Status.finished) {
-                // Don't immediately report success — wait to see if we received valid output.
-                // Schedule a 500ms grace period callback instead of blocking a thread.
-                val p = scala.concurrent.Promise[Unit]()
-                val cancelTimeout =
-                  TimeoutGuard.scheduleTimeout(p, 500L, "Grace period elapsed")
-                import scala.concurrent.ExecutionContext.Implicits.global
-                p.future.onComplete { _ =>
-                  cancelTimeout()
-                }
-                p.future.failed.foreach { _ =>
-                  outputLock.synchronized {
-                    if (!lifecycle.isCompleted && !receivedOutput) {
-                      lifecycle.complete(
-                        ProofFailure(
-                          "proof method did not produce a result (may not have terminated)"
-                        )
+                .fold(
+                  mcpErr => ProofFailure(s"I/Q MCP verification failed: $mcpErr"),
+                  explore => {
+                    if (explore.success)
+                      ProofSuccess(
+                        System.currentTimeMillis() - startTime,
+                        Option(explore.results).getOrElse("").trim
                       )
+                    else if (explore.timedOut) ProofTimeout
+                    else {
+                      val message =
+                        exploreFailureMessage(explore, "proof verification failed")
+                      if (indicatesMissingIsarExplore(message))
+                        MissingImport(getIsarExploreImportSuggestion)
+                      else ProofFailure(message)
                     }
                   }
-                }
-              }
-            },
-            (snapshot, cmdResults, output) => {
-              outputLock.synchronized {
-                if (!lifecycle.isCompleted) {
-                  // Check for errors by XML markup, not text content heuristics
-                  val errors = output.filter(e =>
-                    e.name == Markup.ERROR_MESSAGE || e.name == Markup.ERROR
-                  )
-                  if (errors.nonEmpty) {
-                    val errorMsg = errors
-                      .map(e => XML.content(e).trim)
-                      .mkString("\n")
-                      .take(100)
-                    lifecycle.complete(
-                      ProofFailure(
-                        if (errorMsg.nonEmpty) errorMsg
-                        else "proof method failed"
-                      )
-                    )
-                  } else {
-                    val text = output
-                      .map(XML.content(_).trim)
-                      .filter(_.nonEmpty)
-                      .mkString("\n")
-                    if (text.nonEmpty) {
-                      receivedOutput = true
-                      lifecycle.complete(
-                        ProofSuccess(
-                          System.currentTimeMillis() - startTime,
-                          text
-                        )
-                      )
-                    }
-                  }
-                }
-              }
+                )
+              VerificationCache.put(command, proofText, result)
+              callbackOnGui(callback, result)
             }
           )
-          operation = Some(op)
-
-          val _ = lifecycle.forkTimeout(name = "verify-timeout", timeoutMs = timeoutMs)(
-            ProofTimeout
-          )
-
-          try {
-            op.activate()
-            op.apply_query_at_command(command, List(proofText))
-          } catch {
-            case ex: Exception =>
-              lifecycle.complete(
-                ProofFailure(s"verification setup failed: ${ex.getMessage}")
-              )
-          }
       }
     }
   }
 
-  /** Execute a proof step and return the resulting proof state. Parses the
-    * PROOF_COMPLETE/PROOF_STATE header from isar_explore. MUST be called from
-    * the GUI thread.
+  /** Execute a proof step and return the resulting proof state via I/Q MCP.
+    * Parses the PROOF_COMPLETE/PROOF_STATE header from isar_explore. Callback
+    * is dispatched on the GUI thread.
     */
   def executeStepAsync(
       view: View,
-      command: Command,
+      @unused command: Command,
       proofText: String,
       timeoutMs: Long,
       callback: Either[String, ProofStepResult] => Unit
   ): Unit = {
-    if (!IQAvailable.isAvailable) { callback(Left("I/Q unavailable")); return }
-
-    val startTime = System.currentTimeMillis()
-    val outputLock = new Object()
-    @volatile var operation: Option[Extended_Query_Operation] = None
-    val lifecycle = new IQOperationLifecycle[Either[String, ProofStepResult]](
-      onComplete = callback,
-      deactivate = () => operation.foreach(_.deactivate())
-    )
-
-    val op = new Extended_Query_Operation(
-      PIDE.editor,
-      view,
-      AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
-      status => {
-        if (status == Extended_Query_Operation.Status.failed)
-          lifecycle.complete(
-            Left("Verification unavailable (import iq.Isar_Explore to enable)")
-          )
-        // Do NOT complete on finished — wait for output callback
-      },
-      (snapshot, cmdResults, output) => {
-        outputLock.synchronized {
-          if (!lifecycle.isCompleted) {
-            val errors = output.filter(e =>
-              e.name == Markup.ERROR_MESSAGE || e.name == Markup.ERROR
+    if (!IQAvailable.isAvailable) {
+      callbackOnGui(callback, Left("I/Q unavailable"))
+    } else {
+      val selectionParams = selectionParamsForView(view)
+      val _ = IQOperationLifecycle.forkJvmThread(
+        name = "assistant-execute-step-via-mcp",
+        body = () => {
+          val startTime = System.currentTimeMillis()
+          val result = IQMcpClient
+            .callExplore(
+              query = "proof",
+              arguments = proofText,
+              timeoutMs = timeoutMs,
+              extraParams = selectionParams
             )
-            if (errors.nonEmpty) {
-              val errorMsg =
-                errors.map(e => XML.content(e).trim).mkString("\n").take(200)
-              lifecycle.complete(
-                Left(if (errorMsg.nonEmpty) errorMsg else "proof method failed")
-              )
-            } else {
-              val text = output
-                .map(XML.content(_).trim)
-                .filter(_.nonEmpty)
-                .mkString("\n")
-              if (text.nonEmpty) {
-                val elapsed = System.currentTimeMillis() - startTime
-                lifecycle.complete(Right(parseStepResult(text, elapsed)))
+            .fold(
+              mcpErr => Left(s"I/Q MCP step execution failed: $mcpErr"),
+              explore => {
+                if (explore.success) {
+                  val text = Option(explore.results).getOrElse("").trim
+                  Right(parseStepResult(text, System.currentTimeMillis() - startTime))
+                } else if (explore.timedOut) Left("timeout")
+                else Left(exploreFailureMessage(explore, "step execution failed"))
               }
-            }
-          }
+            )
+          callbackOnGui(callback, result)
         }
-      }
-    )
-    operation = Some(op)
-
-    val _ = lifecycle.forkTimeout(name = "step-timeout", timeoutMs = timeoutMs)(
-      Left("timeout")
-    )
-
-    try {
-      op.activate()
-      op.apply_query_at_command(command, List(proofText))
-    } catch {
-      case ex: Exception =>
-        lifecycle.complete(Left(s"verification setup failed: ${ex.getMessage}"))
+      )
     }
   }
 
@@ -314,12 +299,13 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       )
   }
 
-  /** Run find_theorems asynchronously to search for relevant theorems.
+  /** Run find_theorems asynchronously via I/Q MCP to search for relevant
+    * theorems.
     *
     * @param view
     *   The current jEdit view
     * @param command
-    *   The Isabelle command context for the search
+    *   Retained for API compatibility
     * @param pattern
     *   The search pattern (should be quoted)
     * @param limit
@@ -331,87 +317,48 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def runFindTheoremsAsync(
       view: View,
-      command: Command,
+      @unused command: Command,
       pattern: String,
       limit: Int,
       timeoutMs: Long,
       callback: Either[String, List[String]] => Unit
   ): Unit = {
     if (!IQAvailable.isAvailable) {
-      callback(Left("I/Q unavailable"))
+      callbackOnGui(callback, Left("I/Q unavailable"))
     } else {
-
-      val outputLock = new Object()
-      val results = scala.collection.mutable.ListBuffer[String]()
-      @volatile var operation: Option[Extended_Query_Operation] = None
-      val lifecycle = new IQOperationLifecycle[Either[String, List[String]]](
-        onComplete = callback,
-        deactivate = () => operation.foreach(_.deactivate())
-      )
-
-      val op = new Extended_Query_Operation(
-        PIDE.editor,
-        view,
-        AssistantConstants.IQ_OPERATION_FIND_THEOREMS,
-        status => {
-          if (
-            status == Extended_Query_Operation.Status.finished ||
-            status == Extended_Query_Operation.Status.failed
-          ) {
-            lifecycle.complete(Right(results.synchronized { results.toList }))
-          }
-        },
-        (snapshot, cmdResults, output) => {
-          outputLock.synchronized {
-            if (!lifecycle.isCompleted) {
-              // Parse theorem results - format is typically "theorem_name: statement"
-              val text = output.map(XML.content(_)).mkString("\n")
-              results.synchronized {
-                for (
-                  line <- text.linesIterator
-                  if line.contains(":") && !line.startsWith("found") &&
-                    !line.contains("error") && !line
-                      .contains("Outer syntax") && !line.contains("bad input")
-                ) {
-                  results += line.trim
-                }
+      val selectionParams = selectionParamsForView(view)
+      val _ = IQOperationLifecycle.forkJvmThread(
+        name = "assistant-find-theorems-via-mcp",
+        body = () => {
+          val result = IQMcpClient
+            .callExplore(
+              query = "find_theorems",
+              arguments = pattern,
+              timeoutMs = timeoutMs,
+              extraParams = selectionParams + ("max_results" -> limit)
+            )
+            .fold(
+              mcpErr => Left(s"find_theorems via I/Q MCP failed: $mcpErr"),
+              explore => {
+                if (explore.success)
+                  Right(parseFindTheoremsResults(explore.results))
+                else if (explore.timedOut) Left("find_theorems timed out")
+                else
+                  Left(exploreFailureMessage(explore, "find_theorems failed"))
               }
-            }
-          }
+            )
+          callbackOnGui(callback, result)
         }
       )
-      operation = Some(op)
-
-      val _ = lifecycle.forkTimeout(
-        name = "find-theorems-timeout",
-        timeoutMs = timeoutMs
-      ) {
-        Right(results.synchronized { results.toList })
-      }
-
-      try {
-        op.activate()
-        // find_theorems args: limit, allow_dups, query
-        op.apply_query_at_command(
-          command,
-          List(limit.toString, "false", pattern)
-        )
-      } catch {
-        case ex: Exception =>
-          lifecycle.complete(
-            Left(s"find_theorems setup failed: ${ex.getMessage}")
-          )
-      }
     }
   }
 
-  /** Run an arbitrary I/Q query asynchronously with timeout. MUST be called
-    * from the GUI thread.
+  /** Run an arbitrary I/Q proof query asynchronously via I/Q MCP.
     *
     * @param view
     *   The current jEdit view
     * @param command
-    *   The Isabelle command context
+    *   Retained for API compatibility
     * @param queryArgs
     *   Arguments to pass to isar_explore
     * @param timeoutMs
@@ -421,58 +368,39 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def runQueryAsync(
       view: View,
-      command: Command,
+      @unused command: Command,
       queryArgs: List[String],
       timeoutMs: Long,
       callback: Either[String, String] => Unit
   ): Unit = {
     if (!IQAvailable.isAvailable) {
-      callback(Left("I/Q unavailable"))
+      callbackOnGui(callback, Left("I/Q unavailable"))
     } else {
-
-      val outputLock = new Object()
-      val output = new StringBuilder
-      @volatile var operation: Option[Extended_Query_Operation] = None
-      val lifecycle = new IQOperationLifecycle[Either[String, String]](
-        onComplete = callback,
-        deactivate = () => operation.foreach(_.deactivate())
-      )
-
-      val op = new Extended_Query_Operation(
-        PIDE.editor,
-        view,
-        AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
-        status => {
-          if (
-            status == Extended_Query_Operation.Status.finished ||
-            status == Extended_Query_Operation.Status.failed
-          ) {
-            lifecycle.complete(Right(output.synchronized { output.toString }))
-          }
-        },
-        (snapshot, cmdResults, results) => {
-          outputLock.synchronized {
-              if (!lifecycle.isCompleted) {
-                val text = results.map(XML.content(_)).mkString("\n")
-                if (text.nonEmpty) output.synchronized {
-                  val _ = output.append(text).append("\n")
+      val queryText = queryArgs.map(_.trim).filter(_.nonEmpty).mkString(" ").trim
+      if (queryText.isEmpty) callbackOnGui(callback, Left("query arguments required"))
+      else {
+        val selectionParams = selectionParamsForView(view)
+        val _ = IQOperationLifecycle.forkJvmThread(
+          name = "assistant-query-via-mcp",
+          body = () => {
+            val result = IQMcpClient
+              .callExplore(
+                query = "proof",
+                arguments = queryText,
+                timeoutMs = timeoutMs,
+                extraParams = selectionParams
+              )
+              .fold(
+                mcpErr => Left(s"I/Q MCP query failed: $mcpErr"),
+                explore => {
+                  if (explore.success) Right(Option(explore.results).getOrElse(""))
+                  else if (explore.timedOut) Left("query timed out")
+                  else Left(exploreFailureMessage(explore, "query failed"))
                 }
-              }
-            }
+              )
+            callbackOnGui(callback, result)
           }
-      )
-      operation = Some(op)
-
-      val _ = lifecycle.forkTimeout(name = "iq-query-timeout", timeoutMs = timeoutMs) {
-        Right(output.synchronized { output.toString })
-      }
-
-      try {
-        op.activate()
-        op.apply_query_at_command(command, queryArgs)
-      } catch {
-        case ex: Exception =>
-          lifecycle.complete(Left(s"query setup failed: ${ex.getMessage}"))
+        )
       }
     }
   }
@@ -531,80 +459,40 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
   def getStatus(buffer: JEditBuffer): IQStatus =
     if (IQAvailable.isAvailable) IQConnected else IQDisconnected
 
-  /** Run sledgehammer asynchronously. Calls the callback with results. MUST be
-    * called from the GUI thread.
+  /** Run sledgehammer asynchronously via I/Q MCP. Callback is dispatched on
+    * the GUI thread.
     */
   def runSledgehammerAsync(
       view: View,
-      command: Command,
+      @unused command: Command,
       timeoutMs: Long,
       callback: Either[String, List[SledgehammerResult]] => Unit
   ): Unit = {
     if (!IQAvailable.isAvailable) {
-      callback(Left("I/Q unavailable"))
+      callbackOnGui(callback, Left("I/Q unavailable"))
     } else {
-      val outputLock = new Object()
-      val results = scala.collection.mutable.ListBuffer[SledgehammerResult]()
-
-      // Pattern to match sledgehammer output: "Try this: by simp (0.5 ms)"
-      val tryThisPattern =
-        """Try this:\s*(.+?)\s*\((\d+(?:\.\d+)?)\s*(ms|s)\)""".r
-
-      @volatile var operation: Option[Extended_Query_Operation] = None
-      val lifecycle =
-        new IQOperationLifecycle[Either[String, List[SledgehammerResult]]](
-          onComplete = callback,
-          deactivate = () => operation.foreach(_.deactivate())
-        )
-
-      val op = new Extended_Query_Operation(
-        PIDE.editor,
-        view,
-        AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
-        status => {
-          if (
-            status == Extended_Query_Operation.Status.finished ||
-            status == Extended_Query_Operation.Status.failed
-          ) {
-            lifecycle.complete(Right(results.synchronized { results.toList }))
-          }
-        },
-        (snapshot, cmdResults, output) => {
-          outputLock.synchronized {
-            if (!lifecycle.isCompleted) {
-              val text = output.map(XML.content(_)).mkString("\n")
-              results.synchronized {
-                for (m <- tryThisPattern.findAllMatchIn(text)) {
-                  val method = m.group(1).trim
-                  val timeVal = m.group(2).toDouble
-                  val unit = m.group(3)
-                  val timeMs =
-                    if (unit == "s") (timeVal * 1000).toLong else timeVal.toLong
-                  results += SledgehammerResult(method, timeMs)
-                }
+      val selectionParams = selectionParamsForView(view)
+      val _ = IQOperationLifecycle.forkJvmThread(
+        name = "assistant-sledgehammer-via-mcp",
+        body = () => {
+          val result = IQMcpClient
+            .callExplore(
+              query = "sledgehammer",
+              arguments = "",
+              timeoutMs = timeoutMs,
+              extraParams = selectionParams
+            )
+            .fold(
+              mcpErr => Left(s"sledgehammer via I/Q MCP failed: $mcpErr"),
+              explore => {
+                if (explore.success) Right(parseSledgehammerResults(explore.results))
+                else if (explore.timedOut) Left("sledgehammer timed out")
+                else Left(exploreFailureMessage(explore, "sledgehammer failed"))
               }
-            }
-          }
+            )
+          callbackOnGui(callback, result)
         }
       )
-      operation = Some(op)
-
-      val _ = lifecycle.forkTimeout(
-        name = "sledgehammer-timeout",
-        timeoutMs = timeoutMs
-      ) {
-        Right(results.synchronized { results.toList })
-      }
-
-      try {
-        op.activate()
-        op.apply_query_at_command(command, List("sledgehammer"))
-      } catch {
-        case ex: Exception =>
-          lifecycle.complete(
-            Left(s"sledgehammer setup failed: ${ex.getMessage}")
-          )
-      }
     }
   }
 }
