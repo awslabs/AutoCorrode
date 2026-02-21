@@ -14,6 +14,11 @@ plugin.IQPlugin.usePluginHome=false
 plugin.IQPlugin.depend.0=jdk 21
 plugin.IQPlugin.depend.1=jedit 05.06.00.00
 
+# Options panel
+plugin.IQPlugin.option-group=iq-options
+options.iq-options.label=I/Q
+options.iq-options.code=new IQOptions();
+
 # Menu actions
 plugin.IQPlugin.menu.label=I/Q
 plugin.IQPlugin.menu=mcp-dockable sledgehammer-dockable pide-dump-dockable

@@ -10,6 +10,13 @@ object IQSecurityTest {
     }
   }
 
+  private def leftMessage[A](value: Either[String, A], context: String): String =
+    value match {
+      case Left(msg) => msg
+      case Right(other) =>
+        throw new RuntimeException(s"expected Left for $context, got Right($other)")
+    }
+
   private def testDefaultConfig(): Unit = {
     val config = IQSecurity.fromEnvironment(
       readEnv = _ => None,
@@ -75,7 +82,7 @@ object IQSecurityTest {
     val emptyPath = IQSecurity.resolveMutationPath("   ", List(root))
     assertThat(emptyPath.isLeft, "blank path should be rejected")
     assertThat(
-      emptyPath.left.get.contains("path parameter is required"),
+      leftMessage(emptyPath, "blank mutation path").contains("path parameter is required"),
       s"blank-path error should be explicit: $emptyPath"
     )
   }

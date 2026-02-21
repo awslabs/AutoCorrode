@@ -21,17 +21,23 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   /* output area */
 
   private val output: Output_Area = new Output_Area(view)
+  private val uiSettings = IQUISettings.current
 
   // Store accumulated messages to preserve them when results are displayed
   private var accumulatedMessages: List[XML.Elem] = List.empty
   private var lastProcessedOutputSize: Int = 0
+
+  private def logDebug(message: => String): Unit = {
+    if (uiSettings.exploreDebugLogging) Output.writeln(message)
+  }
 
   // Helper method to append text to the output area (for compatibility)
   private def appendOutput(text: String): Unit = {
     // Convert plain text to XML for the output area
     val xml_elem = XML.Elem(Markup("writeln", Nil), List(XML.Text(text)))
     // Add to accumulated messages with size limit to prevent memory leaks
-    accumulatedMessages = (accumulatedMessages :+ xml_elem).takeRight(1000) // Limit to 1000 messages
+    accumulatedMessages =
+      (accumulatedMessages :+ xml_elem).takeRight(uiSettings.maxExploreMessages)
     // Update display with all accumulated messages
     output.pretty_text_area.update(Document.Snapshot.init, Command.Results.empty, accumulatedMessages)
   }
@@ -59,26 +65,22 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   // Process XML output by appending only new results (for gradual sledgehammer output)
   private def processXMLOutput(xml_output: List[XML.Tree]): Unit = {
-    // Debug: log callback invocation
-    Output.writeln(s"I/Q Explore: processXMLOutput called with ${xml_output.size} XML trees")
+    logDebug(s"I/Q Explore: processXMLOutput called with ${xml_output.size} XML trees")
 
     if (xml_output.nonEmpty) {
-      // Debug: log XML types
       val types = xml_output.map(_.getClass.getSimpleName).distinct
-      Output.writeln(s"I/Q Explore: XML tree types: ${types.mkString(", ")}")
+      logDebug(s"I/Q Explore: XML tree types: ${types.mkString(", ")}")
 
-      // Debug: log first few XML trees
       xml_output.take(3).foreach { tree =>
-        Output.writeln(s"I/Q Explore: XML tree: ${tree.toString.take(200)}")
+        logDebug(s"I/Q Explore: XML tree: ${tree.toString.take(200)}")
       }
 
       // Convert XML.Tree to XML.Elem for the Pretty_Text_Area
       val xml_elems = xml_output.collect { case elem: XML.Elem => elem }
 
-      // Debug: log XML elements
-      Output.writeln(s"I/Q Explore: Found ${xml_elems.size} XML elements")
+      logDebug(s"I/Q Explore: Found ${xml_elems.size} XML elements")
       xml_elems.take(3).foreach { elem =>
-        Output.writeln(s"I/Q Explore: XML element markup: ${elem.markup.name}, body size: ${elem.body.size}")
+        logDebug(s"I/Q Explore: XML element markup: ${elem.markup.name}, body size: ${elem.body.size}")
       }
 
       // Only process new elements (for gradual output like sledgehammer)
@@ -86,11 +88,11 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
         val newElements = xml_elems.drop(lastProcessedOutputSize)
         lastProcessedOutputSize = xml_elems.size
 
-        // Debug: log new elements
-        Output.writeln(s"I/Q Explore: Processing ${newElements.size} new elements (total: $lastProcessedOutputSize)")
+        logDebug(s"I/Q Explore: Processing ${newElements.size} new elements (total: $lastProcessedOutputSize)")
 
         // Append only the new results to accumulated messages with size limit
-        accumulatedMessages = (accumulatedMessages ++ newElements).takeRight(1000) // Limit to 1000 messages
+        accumulatedMessages =
+          (accumulatedMessages ++ newElements).takeRight(uiSettings.maxExploreMessages)
         // Update display with all accumulated messages (initial messages + all results so far)
         output.pretty_text_area.update(Document.Snapshot.init, Command.Results.empty, accumulatedMessages)
       }
@@ -115,6 +117,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       override def keyReleased(e: KeyEvent): Unit = {}
     })
   }
+  inputField.getAccessibleContext.setAccessibleName("Query arguments")
 
   // Mode selection
   private val currentCommandRadio = new JRadioButton("Current Command", true)
@@ -181,6 +184,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       }
     })
   }
+  fileField.getAccessibleContext.setAccessibleName("Target file path")
   private val browseButton = new JButton("Browse...")
   browseButton.addActionListener(new ActionListener {
     def actionPerformed(e: ActionEvent): Unit = {
@@ -212,6 +216,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
     setColumns(10)
     setToolTipText("Character offset in the file")
   }
+  offsetField.getAccessibleContext.setAccessibleName("Target file offset")
 
   offsetPanel.add(offsetLabel)
   offsetPanel.add(offsetField)
@@ -280,6 +285,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       }
     })
   }
+  patternFileField.getAccessibleContext.setAccessibleName("Pattern target file path")
 
   private val patternBrowseButton = new JButton("Browse...")
   patternBrowseButton.addActionListener(new ActionListener {
@@ -322,6 +328,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       override def keyReleased(e: KeyEvent): Unit = {}
     })
   }
+  patternField.getAccessibleContext.setAccessibleName("Pattern matcher")
 
   patternPanel.add(patternLabel)
   patternPanel.add(patternField)
@@ -411,29 +418,36 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       }
     })
   }
+  queryField.getAccessibleContext.setAccessibleName("Explore query type")
+
+  private var lastAutoFilledArguments: Option[String] = None
+
+  private def maybeApplyDefaultArguments(queryType: String, force: Boolean): Unit = {
+    val defaultArguments = IQUtils.getDefaultArguments(queryType)
+    if (defaultArguments.isEmpty) return
+    if (!force && !uiSettings.autoFillDefaults) return
+
+    val current = inputField.getText
+    val safeCurrent = if (current == null) "" else current
+    val shouldReplace =
+      force || safeCurrent.trim.isEmpty || lastAutoFilledArguments.contains(safeCurrent)
+
+    if (shouldReplace) {
+      inputField.setText(defaultArguments)
+      lastAutoFilledArguments = Some(defaultArguments)
+    } else {
+      lastAutoFilledArguments = None
+    }
+  }
 
   // Method to update arguments field based on selected query
   private def updateArgumentsForQuery(): Unit = {
     val queryType = queryField.getText.trim
-
     queryType match {
-      case "isar_explore" =>
-        // Always set default for isar_explore
-        inputField.setText(IQUtils.getDefaultArguments("isar_explore"))
-      case "sledgehammer" =>
-        // Always set default for sledgehammer
-        inputField.setText(IQUtils.getDefaultArguments("sledgehammer"))
-      case "find_theorems" =>
-        // Always set default for find_theorems
-        inputField.setText(IQUtils.getDefaultArguments("find_theorems"))
-      case _ =>
-        // For other queries, don't change the arguments field automatically
+      case "isar_explore" | "sledgehammer" | "find_theorems" =>
+        maybeApplyDefaultArguments(queryType, force = false)
+      case _ => ()
     }
-  }
-
-  // Helper method to get default arguments for each query type (now using IQUtils)
-  private def getDefaultForQuery(queryType: String): String = {
-    IQUtils.getDefaultArguments(queryType)
   }
 
   private val queryPanel = new JPanel(new FlowLayout(FlowLayout.LEFT))
@@ -442,12 +456,18 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   private val applyButton = new JButton("<html><b>Explore</b></html>")
   applyButton.setToolTipText("Apply the selected query to the command")
+  applyButton.setMnemonic('E')
+  applyButton.getAccessibleContext.setAccessibleName("Run explore query")
 
   private val cancelButton = new JButton("Cancel")
   cancelButton.setToolTipText("Interrupt unfinished operation")
+  cancelButton.setMnemonic('C')
+  cancelButton.getAccessibleContext.setAccessibleName("Cancel explore query")
 
   private val locateButton = new JButton("Locate")
   locateButton.setToolTipText("Locate context of current query within source text")
+  locateButton.setMnemonic('L')
+  locateButton.getAccessibleContext.setAccessibleName("Locate query context")
 
   // Process indicator
   private val statusLabel = new JLabel("Ready")
@@ -507,6 +527,10 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   // Make sure the text area can receive focus for mouse wheel events
   output.pretty_text_area.setFocusable(true)
+  output.pretty_text_area.getAccessibleContext.setAccessibleName("I/Q explore output")
+  output.pretty_text_area.getAccessibleContext.setAccessibleDescription(
+    "Shows incremental output from explore queries."
+  )
   output.pretty_text_area.requestFocus()
 
   // Layout: buttons at top, output area in center (use pretty_text_area directly - it has built-in scrolling)
@@ -514,7 +538,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   add(output.pretty_text_area, BorderLayout.CENTER)
 
   // Initialize defaults based on selected query and add some common entries to history
-  updateArgumentsForQuery()
+  maybeApplyDefaultArguments(queryField.getText.trim, force = true)
 
   // Add some common query types to history by temporarily setting text and adding to history
   private def initializeHistoryEntries(): Unit = {
@@ -599,7 +623,14 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
     queryField.addCurrentToHistory()
 
     // Use custom query with selected method
-    val printFunction = queryField.getText
+    val printFunction = queryField.getText.trim
+    if (!IQUtils.validateQuery(printFunction)) {
+      appendOutput(
+        s"Error: unsupported query '$printFunction'. Supported queries: isar_explore, sledgehammer, find_theorems."
+      )
+      statusLabel.setText("Error")
+      return
+    }
     val query = IQUtils.formatQueryArguments(printFunction, inputField.getText)
 
     // Log the query being used
@@ -643,11 +674,8 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
           }
         },
         (snapshot, command_results, output) => {
-          // Debug: log callback invocation
-          Output.writeln(s"I/Q Explore: Output callback called with ${output.size} XML trees")
-
-          // Debug: log command results
-          Output.writeln(s"I/Q Explore: Command results is_empty: ${command_results.is_empty}")
+          logDebug(s"I/Q Explore: Output callback called with ${output.size} XML trees")
+          logDebug(s"I/Q Explore: Command results is_empty: ${command_results.is_empty}")
 
           // Process the output
           processXMLOutput(output)

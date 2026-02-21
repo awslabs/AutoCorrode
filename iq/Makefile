@@ -71,6 +71,10 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQUtilsPathResolutionTest
+	echo "Running I/Q UI settings tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
+		IQUISettingsTest
 	echo "Running I/Q bridge framing tests..."
 	python3 -m unittest discover -s test -p 'test_*.py'
 	echo "I/Q tests passed."

@@ -8,6 +8,13 @@ object IQArgumentUtilsTest {
     if (!condition) throw new RuntimeException(message)
   }
 
+  private def leftMessage[A](value: Either[String, A], context: String): String =
+    value match {
+      case Left(msg) => msg
+      case Right(other) =>
+        throw new RuntimeException(s"expected Left for $context, got Right($other)")
+    }
+
   def main(args: Array[String]): Unit = {
     val input: Map[String, JSON.T] = Map(
       "small_int" -> 42.0,
@@ -38,15 +45,24 @@ object IQArgumentUtilsTest {
 
     val decimalErr = IQArgumentUtils.optionalIntParam(argsMap, "decimal")
     requireThat(decimalErr.isLeft, s"decimal integer parse should fail, got $decimalErr")
-    requireThat(decimalErr.left.get.contains("decimal"), s"decimal error should reference parameter, got $decimalErr")
+    requireThat(
+      leftMessage(decimalErr, "decimal parse").contains("decimal"),
+      s"decimal error should reference parameter, got $decimalErr"
+    )
 
     val outOfRangeInt = IQArgumentUtils.optionalIntParam(Map("x" -> 3000000000.0), "x")
     requireThat(outOfRangeInt.isLeft, s"out-of-range int should fail, got $outOfRangeInt")
-    requireThat(outOfRangeInt.left.get.contains("Int range"), s"out-of-range error should mention Int range, got $outOfRangeInt")
+    requireThat(
+      leftMessage(outOfRangeInt, "out-of-range parse").contains("Int range"),
+      s"out-of-range error should mention Int range, got $outOfRangeInt"
+    )
 
     val missingRequired = IQArgumentUtils.requiredIntParam(Map.empty, "start_line")
     requireThat(missingRequired.isLeft, "missing required int should fail")
-    requireThat(missingRequired.left.get.contains("start_line"), "missing required message should reference parameter")
+    requireThat(
+      leftMessage(missingRequired, "missing required int").contains("start_line"),
+      "missing required message should reference parameter"
+    )
 
     println("IQArgumentUtilsTest passed")
   }

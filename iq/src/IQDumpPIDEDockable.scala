@@ -4,9 +4,12 @@
 import isabelle._
 import isabelle.jedit._
 
-import java.awt.{BorderLayout, FlowLayout, Font, GridLayout}
+import java.awt.{BorderLayout, FlowLayout, Font}
 import java.awt.event.{ActionEvent, ActionListener}
 import javax.swing.{JButton, JPanel, JTextArea, JScrollPane, JLabel, JCheckBox, BorderFactory}
+import javax.swing.text.BadLocationException
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.gui.DefaultFocusComponent
@@ -17,6 +20,10 @@ object PIDEMarkupLogger {
 
   def setDockable(dockable: IQDumpPIDEDockable): Unit = {
     dockableInstance = Some(dockable)
+  }
+
+  def clearDockable(dockable: IQDumpPIDEDockable): Unit = synchronized {
+    if (dockableInstance.contains(dockable)) dockableInstance = None
   }
 
   def logMarkup(markupType: String, message: String, properties: Properties.T = Nil, xmlBody: XML.Body = Nil): Unit = {
@@ -42,22 +49,47 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   outputTextArea.setEditable(false)
   outputTextArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 11))
   outputTextArea.setText("I/Q PIDE Markup Dump:\n" + "=" * 70 + "\n")
+  outputTextArea.getAccessibleContext.setAccessibleName("I/Q PIDE markup log output")
+  outputTextArea.getAccessibleContext.setAccessibleDescription(
+    "Shows filtered PIDE markup messages and optional XML details."
+  )
 
   private val scrollPane = new JScrollPane(outputTextArea)
+  private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
+  private val uiSettings = IQUISettings.current
 
   // Helper method to append text to the output area
   private def appendOutput(text: String): Unit = {
-    val timestamp = java.time.LocalTime.now().toString.substring(0, 12)
+    val timestamp = LocalTime.now().format(timeFmt)
     outputTextArea.append(s"[$timestamp] $text\n")
-    // Auto-scroll to bottom
-    outputTextArea.setCaretPosition(outputTextArea.getDocument.getLength)
+    trimToMaxLines()
+    if (uiSettings.autoScrollLogs) {
+      outputTextArea.setCaretPosition(outputTextArea.getDocument.getLength)
+    }
+  }
+
+  private def trimToMaxLines(): Unit = {
+    val lineCount = outputTextArea.getLineCount
+    val maxLines = uiSettings.maxLogLines
+    if (lineCount <= maxLines) return
+    val excessLines = lineCount - maxLines
+    try {
+      val cutoff = outputTextArea.getLineEndOffset(excessLines - 1)
+      outputTextArea.replaceRange("", 0, cutoff)
+    } catch {
+      case _: BadLocationException => ()
+    }
   }
 
   // Create buttons and controls
   private val clearLogButton = new JButton("Clear Log")
+  clearLogButton.setMnemonic('L')
   private val enableLoggingCheckbox = new JCheckBox("Enable Markup Logging", false)
+  enableLoggingCheckbox.setMnemonic('E')
   private val showPropertiesCheckbox = new JCheckBox("Show Properties", true)
+  showPropertiesCheckbox.setMnemonic('P')
   private val showFullXMLCheckbox = new JCheckBox("Show Full XML", true)
+  showFullXMLCheckbox.setMnemonic('X')
 
   // Markup type filter checkboxes
   private val logErrorsCheckbox = new JCheckBox("Errors", true)
@@ -255,6 +287,11 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       case ex: Exception =>
         appendOutput(s"Error during cleanup: ${ex.getMessage}")
     }
+  }
+
+  def exit(): Unit = {
+    cleanup()
+    PIDEMarkupLogger.clearDockable(this)
   }
 
   // Initialize monitoring when dockable is created

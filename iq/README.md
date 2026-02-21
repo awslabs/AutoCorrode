@@ -41,6 +41,16 @@ You need to register the plugin with your agentic AI as an MCP server. For Amazo
 
 I/Q starts automatically when you start Isabelle, and you should see it as `Plugins` → `I/Q`. If not, the plugin was not successfully registered.
 
+### I/Q UI settings
+
+I/Q now exposes a plugin options panel at **Plugins → Plugin Options → I/Q** for dockable-focused settings:
+
+- Maximum retained log lines for the server-log and PIDE-markup panels
+- Maximum retained explore output messages
+- Log auto-scroll toggle
+- Explore argument auto-fill behavior
+- Verbose explore debug logging toggle
+
 ### Connecting to I/Q (Raw)
 
 I/Q listens out for MCP clients on port 8765. The provided [iq_bridge.py](iq_bridge.py) provides a bridge to stdin/stdout. For example, either

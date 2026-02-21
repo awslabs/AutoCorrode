@@ -4,9 +4,12 @@
 import isabelle._
 import isabelle.jedit._
 
-import java.awt.{BorderLayout, FlowLayout, Font, GridLayout}
+import java.awt.{BorderLayout, FlowLayout, Font}
 import java.awt.event.{ActionEvent, ActionListener}
 import javax.swing.{JButton, JPanel, JTextArea, JScrollPane, JLabel, JCheckBox, BorderFactory}
+import javax.swing.text.BadLocationException
+import java.time.LocalTime
+import java.time.format.DateTimeFormatter
 
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.gui.DefaultFocusComponent
@@ -18,6 +21,10 @@ object IQCommunicationLogger {
 
   def setDockable(dockable: IQLogDockable): Unit = {
     dockableInstance = Some(dockable)
+  }
+
+  def clearDockable(dockable: IQLogDockable): Unit = synchronized {
+    if (dockableInstance.contains(dockable)) dockableInstance = None
   }
 
   def logCommunication(message: String): Unit = {
@@ -51,32 +58,60 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   outputTextArea.setEditable(false)
   outputTextArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12))
   outputTextArea.setText("Isabelle/Q Server Output:\n" + "=" * 50 + "\n")
+  outputTextArea.getAccessibleContext.setAccessibleName("I/Q server log output")
+  outputTextArea.getAccessibleContext.setAccessibleDescription(
+    "Shows MCP server log messages and client connection events."
+  )
 
   private val scrollPane = new JScrollPane(outputTextArea)
+  private val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
+  private val uiSettings = IQUISettings.current
 
   // Helper method to append text to the output area
   private def appendOutput(text: String): Unit = {
-    val timestamp = java.time.LocalTime.now().toString.substring(0, 8)
+    val timestamp = LocalTime.now().format(timeFmt)
     outputTextArea.append(s"[$timestamp] $text\n")
-    // Auto-scroll to bottom
-    outputTextArea.setCaretPosition(outputTextArea.getDocument.getLength)
+    trimToMaxLines()
+    if (uiSettings.autoScrollLogs) {
+      outputTextArea.setCaretPosition(outputTextArea.getDocument.getLength)
+    }
+  }
+
+  private def trimToMaxLines(): Unit = {
+    val lineCount = outputTextArea.getLineCount
+    val maxLines = uiSettings.maxLogLines
+    if (lineCount <= maxLines) return
+    val excessLines = lineCount - maxLines
+    try {
+      val cutoff = outputTextArea.getLineEndOffset(excessLines - 1)
+      outputTextArea.replaceRange("", 0, cutoff)
+    } catch {
+      case _: BadLocationException => ()
+    }
   }
 
   // Create buttons
   private val clearLogButton = new JButton("Clear Log")
+  clearLogButton.setMnemonic('L')
+  clearLogButton.getAccessibleContext.setAccessibleName("Clear log")
 
   // MCP communication logging checkbox
   private val logCommunicationCheckbox = new JCheckBox("Log MCP Communication", true)
+  logCommunicationCheckbox.setMnemonic('M')
+  logCommunicationCheckbox.getAccessibleContext.setAccessibleName("Log MCP communication")
   private val truncateMessagesCheckbox = new JCheckBox("Truncate Long Messages", true)
+  truncateMessagesCheckbox.setMnemonic('T')
+  truncateMessagesCheckbox.getAccessibleContext.setAccessibleName("Truncate long messages")
 
   // MCP Client connection status label
   private val mcpClientStatusLabel = new JLabel("MCP Client: Not connected")
   mcpClientStatusLabel.setBorder(BorderFactory.createEmptyBorder(5, 5, 5, 5))
+  mcpClientStatusLabel.getAccessibleContext.setAccessibleName("MCP client status")
 
   // Clear log button action
   clearLogButton.addActionListener(new ActionListener {
     def actionPerformed(e: ActionEvent): Unit = {
-      outputTextArea.setText("Isabelle MCP Server Output:\n" + "=" * 50 + "\n")
+      outputTextArea.setText("Isabelle/Q Server Output:\n" + "=" * 50 + "\n")
       appendOutput("Log cleared")
     }
   })
@@ -130,5 +165,9 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   def focusOnDefaultComponent(): Unit = {
     clearLogButton.requestFocus()
+  }
+
+  def exit(): Unit = {
+    IQCommunicationLogger.clearDockable(this)
   }
 }
