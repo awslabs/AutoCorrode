@@ -289,7 +289,11 @@ object IQArgumentUtils {
  *
  * @param port The port number to listen on (default: 8765)
  */
-class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment()) {
+class IQServer(
+  port: Int = 8765,
+  securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment(),
+  capabilityBackendOverride: Option[IQCapabilityBackend] = None
+) {
   private def safeOutput(message: String): Unit = {
     try Output.writeln(message)
     catch { case _: Throwable => () }
@@ -507,6 +511,24 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
   // Testing hook: validates read-path authorization against the current server security config.
   def authorizeReadPathForTest(operation: String, rawPath: String): Either[String, String] =
     authorizeReadPath(operation, rawPath)
+
+  private lazy val capabilityBackend: IQCapabilityBackend =
+    capabilityBackendOverride.getOrElse(createDefaultCapabilityBackend())
+
+  private def createDefaultCapabilityBackend(): IQCapabilityBackend =
+    IQCapabilityBackend.fromHandlers(
+      Map(
+        "list_files" -> (params => handleListFiles(params)),
+        "get_command_info" -> (params => handleGetCommand(params)),
+        "get_document_info" -> (params => handleGetDocumentInfo(params)),
+        "open_file" -> (params => handleOpenFile(params)),
+        "create_file" -> (params => handleCreateFile(params)),
+        "read_file" -> (params => handleReadTheoryFile(params)),
+        "write_file" -> (params => handleWriteTheoryFile(params)),
+        "explore" -> (params => handleExplore(params)),
+        "save_file" -> (params => handleSaveFile(params))
+      )
+    )
 
   /**
    * Starts the MCP server.
@@ -832,20 +854,14 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       val (toolName, params) = extractToolAndParams(json)
       Output.writeln(s"I/Q Server: Extracted tool='$toolName', params=$params")
 
-      val result: Either[(Int, String), Map[String, Any]] = toolName match {
-        case "list_files" => handleListFiles(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "get_command_info" => handleGetCommand(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "get_document_info" => handleGetDocumentInfo(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "open_file" => handleOpenFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "create_file" => handleCreateFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "read_file" => handleReadTheoryFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "write_file" => handleWriteTheoryFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "explore" => handleExplore(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case "save_file" => handleSaveFile(params).left.map(msg => (ErrorCodes.INVALID_PARAMS, msg))
-        case _ =>
-          Output.writeln(s"I/Q Server: Unknown tool name: '$toolName'")
-          Left((ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $toolName"))
-      }
+      val result: Either[(Int, String), Map[String, Any]] =
+        capabilityBackend.invoke(toolName, params).left.map {
+          case IQCapabilityInvocationError.UnknownTool(name) =>
+            Output.writeln(s"I/Q Server: Unknown tool name: '$name'")
+            (ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name")
+          case err =>
+            (err.code, err.message)
+        }
 
       result.map(wrapToolCallResult)
     } catch {
