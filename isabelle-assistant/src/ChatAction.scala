@@ -19,6 +19,12 @@ import scala.jdk.CollectionConverters._
   * and help text, preventing drift between the two.
   */
 object ChatAction {
+  private final case class ChatContextSeed(
+      selectedText: Option[String],
+      path: Option[String],
+      caretOffset: Int
+  )
+
   enum ChatRole(val wireValue: String) {
     case User extends ChatRole("user")
     case Assistant extends ChatRole("assistant")
@@ -286,62 +292,69 @@ object ChatAction {
     if (userMessage.startsWith(":")) {
       handleCommand(view, userMessage)
     } else {
-      val context = getContext(view)
-      val systemPromptOpt = try {
-        Some(
-          PromptLoader.load(
-            "chat_system.md",
-            if (context.nonEmpty) Map("context" -> context) else Map.empty
-          )
-        )
-      } catch {
-        case ex: Exception =>
-          GUI.error_dialog(
-            view,
-            "Isabelle Assistant",
-            s"Failed to load prompt: ${ex.getMessage}"
-          )
-          None
-      }
+      val contextSeed = captureContextSeed(view)
+      addMessage(Message(User, userMessage, LocalDateTime.now()))
+      AssistantDockable.showConversation(getHistory)
+      AssistantDockable.setStatus(AssistantConstants.STATUS_THINKING)
 
-      systemPromptOpt.foreach { systemPrompt =>
-        addMessage(Message(User, userMessage, LocalDateTime.now()))
-        AssistantDockable.showConversation(getHistory)
-        AssistantDockable.setStatus(AssistantConstants.STATUS_THINKING)
+      val messagesForApi = getHistory
+        .filterNot(_.transient)
+        .map(m => (m.role.wireValue, m.content))
 
-        val messagesForApi = getHistory
-          .filterNot(_.transient)
-          .map(m => (m.role.wireValue, m.content))
-
-        val _ = Isabelle_Thread.fork(name = "assistant-chat") {
+      val _ = Isabelle_Thread.fork(name = "assistant-chat") {
+        val context = getContext(contextSeed)
+        val systemPromptEither =
           try {
-            BedrockClient.setCurrentView(view)
-            val response =
-              BedrockClient.invokeChat(systemPrompt, messagesForApi)
-            GUI_Thread.later {
-              addMessage(Message(Assistant, response, LocalDateTime.now()))
-              AssistantDockable.showConversation(getHistory)
-              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-            }
+            Right(
+              PromptLoader.load(
+                "chat_system.md",
+                if (context.nonEmpty) Map("context" -> context) else Map.empty
+              )
+            )
           } catch {
-            case ex: Exception =>
-              GUI_Thread.later {
-                val errorMsg =
-                  ErrorHandler.makeUserFriendly(ex.getMessage, "chat")
-                AssistantDockable.setStatus(s"Error: $errorMsg")
-
-                val retryAction = () => {
-                  AssistantDockable.setStatus("Retrying...")
-                  retryChatInternal(view, systemPrompt, messagesForApi)
-                }
-                val retryId = AssistantDockable.registerAction(retryAction)
-                ChatAction.addMessage(
-                  Assistant,
-                  s"Error: $errorMsg\n\n{{ACTION:$retryId:Retry}}"
-                )
-                AssistantDockable.showConversation(ChatAction.getHistory)
-              }
+            case ex: Exception => Left(ex)
           }
+
+        systemPromptEither match {
+          case Left(ex) =>
+            GUI_Thread.later {
+              val errorMsg =
+                ErrorHandler.makeUserFriendly(
+                  s"Failed to load prompt: ${ex.getMessage}",
+                  "chat"
+                )
+              AssistantDockable.setStatus(s"Error: $errorMsg")
+              addResponse(s"Error: $errorMsg")
+            }
+          case Right(systemPrompt) =>
+            try {
+              BedrockClient.setCurrentView(view)
+              val response =
+                BedrockClient.invokeChat(systemPrompt, messagesForApi)
+              GUI_Thread.later {
+                addMessage(Message(Assistant, response, LocalDateTime.now()))
+                AssistantDockable.showConversation(getHistory)
+                AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+              }
+            } catch {
+              case ex: Exception =>
+                GUI_Thread.later {
+                  val errorMsg =
+                    ErrorHandler.makeUserFriendly(ex.getMessage, "chat")
+                  AssistantDockable.setStatus(s"Error: $errorMsg")
+
+                  val retryAction = () => {
+                    AssistantDockable.setStatus("Retrying...")
+                    retryChatInternal(view, systemPrompt, messagesForApi)
+                  }
+                  val retryId = AssistantDockable.registerAction(retryAction)
+                  ChatAction.addMessage(
+                    Assistant,
+                    s"Error: $errorMsg\n\n{{ACTION:$retryId:Retry}}"
+                  )
+                  AssistantDockable.showConversation(ChatAction.getHistory)
+                }
+            }
         }
       }
     }
@@ -794,13 +807,45 @@ object ChatAction {
     AssistantDockable.showConversation(getHistory)
   }
 
-  private def getContext(view: View): String = {
-    val textArea = view.getTextArea
-    val selected = Option(textArea.getSelectedText).filter(_.trim.nonEmpty)
-    selected.getOrElse {
-      CommandExtractor
-        .getCommandAtOffset(view.getBuffer, textArea.getCaretPosition)
+  private def captureContextSeed(view: View): ChatContextSeed =
+    try {
+      GUI_Thread.now {
+        val textArea = view.getTextArea
+        val selected =
+          Option(textArea.getSelectedText).map(_.trim).filter(_.nonEmpty)
+        val buffer = view.getBuffer
+        val path = MenuContext.bufferPath(buffer)
+        val caret =
+          Option(textArea).map(_.getCaretPosition).getOrElse(0)
+        ChatContextSeed(
+          selectedText = selected,
+          path = path,
+          caretOffset = math.max(0, caret)
+        )
+      }
+    } catch {
+      case _: Exception =>
+        ChatContextSeed(selectedText = None, path = None, caretOffset = 0)
+    }
+
+  private def getContext(seed: ChatContextSeed): String =
+    seed.selectedText.getOrElse {
+      seed.path
+        .flatMap { path =>
+          IQMcpClient
+            .callResolveCommandTarget(
+              selectionArgs = Map(
+                "command_selection" -> "file_offset",
+                "path" -> path,
+                "offset" -> seed.caretOffset
+              ),
+              timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+            )
+            .toOption
+            .map(_.command.source)
+            .map(_.trim)
+            .filter(_.nonEmpty)
+        }
         .getOrElse("")
     }
-  }
 }

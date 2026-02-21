@@ -459,18 +459,6 @@ class AssistantDockable(view: View, position: String)
   }
 
   private def setupChatInputHandlers(): Unit = {
-    // Enter sends, Shift+Enter inserts newline
-    chatInput.addKeyListener(new java.awt.event.KeyAdapter {
-      override def keyPressed(e: java.awt.event.KeyEvent): Unit = {
-        if (
-          e.getKeyCode == java.awt.event.KeyEvent.VK_ENTER && !e.isShiftDown
-        ) {
-          e.consume()
-          sendChat()
-        }
-      }
-    })
-
     // Command auto-completion popup
     val completionPopup = new javax.swing.JPopupMenu()
     chatInput.getDocument.addDocumentListener(
@@ -525,6 +513,8 @@ class AssistantDockable(view: View, position: String)
     val inputMap = chatInput.getInputMap(javax.swing.JComponent.WHEN_FOCUSED)
     val actionMap = chatInput.getActionMap()
 
+    // Use key bindings (instead of KeyListener) for reliable cross-platform handling.
+    inputMap.put(javax.swing.KeyStroke.getKeyStroke("ENTER"), "send")
     // Explicitly map Shift+Enter to insert-break for cross-platform consistency
     inputMap.put(javax.swing.KeyStroke.getKeyStroke("shift ENTER"), "insert-break")
 
