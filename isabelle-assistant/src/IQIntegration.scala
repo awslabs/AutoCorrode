@@ -539,8 +539,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     if (!IQAvailable.isAvailable) {
       callback(Left("I/Q unavailable"))
     } else {
-
-      val startTime = System.currentTimeMillis()
       val outputLock = new Object()
       val results = scala.collection.mutable.ListBuffer[SledgehammerResult]()
 

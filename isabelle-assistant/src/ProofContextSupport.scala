@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 
 import java.util.concurrent.{CountDownLatch, TimeUnit}
@@ -195,4 +194,3 @@ object ProofContextSupport {
       .take(AssistantConstants.MAX_CONSTANTS_FOR_FIND_THEOREMS)
   }
 }
-

@@ -4,18 +4,18 @@
 import isabelle._
 import isabelle.jedit._
 
-import java.awt.{BorderLayout, FlowLayout, Font, GridLayout, CardLayout, Dimension}
+import java.awt.{BorderLayout, FlowLayout}
 import java.awt.event.{ActionEvent, ActionListener, KeyEvent, KeyListener, ItemEvent, ItemListener}
-import javax.swing.{JButton, JPanel, JTextArea, JScrollPane, JLabel, JCheckBox, BorderFactory,
-                   JTextField, JRadioButton, ButtonGroup, JFileChooser, BoxLayout, Box}
+import javax.swing.{JButton, JPanel, JLabel, BorderFactory,
+                   JRadioButton, ButtonGroup, JFileChooser, BoxLayout}
 import javax.swing.filechooser.FileNameExtensionFilter
 import java.io.File
+import scala.annotation.unused
 
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.gui.{DefaultFocusComponent, HistoryTextField}
-import org.gjt.sp.jedit.textarea.JEditTextArea
 
-class IQExploreDockable(view: View, position: String)
+class IQExploreDockable(view: View, @unused position: String)
 extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   /* output area */

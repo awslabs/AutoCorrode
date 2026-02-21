@@ -9,6 +9,7 @@ import org.gjt.sp.jedit.View
 import scala.jdk.CollectionConverters._
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.Locale
+import scala.annotation.unused
 import scala.util.control.NonFatal
 import software.amazon.awssdk.thirdparty.jackson.core.JsonGenerator
 
@@ -810,7 +811,7 @@ object AssistantTools {
 
   private def execReadTheory(
       args: ResponseParser.ToolArgs,
-      view: View
+      @unused view: View
   ): String = {
     safeTheoryArg(args) match {
       case Left(err)     => err
@@ -850,7 +851,7 @@ object AssistantTools {
 
   private def execSearchInTheory(
       args: ResponseParser.ToolArgs,
-      view: View
+      @unused view: View
   ): String = {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     safeTheoryArg(args) match {
@@ -1398,7 +1399,7 @@ object AssistantTools {
 
   private def execSearchAllTheories(
       args: ResponseParser.ToolArgs,
-      view: View
+      @unused view: View
   ): String = {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     if (pattern.isEmpty) "Error: pattern required"
@@ -1435,7 +1436,7 @@ object AssistantTools {
 
   private def execGetDependencies(
       args: ResponseParser.ToolArgs,
-      view: View
+      @unused view: View
   ): String = {
     safeTheoryArg(args) match {
       case Left(err)     => err
@@ -1583,7 +1584,7 @@ object AssistantTools {
 
   private def execEditTheory(
       args: ResponseParser.ToolArgs,
-      view: View
+      @unused view: View
   ): String = {
     val operation = safeStringArg(args, "operation", 50).toLowerCase
     val text =
@@ -1786,7 +1787,7 @@ object AssistantTools {
 
   private def execGetEntities(
       args: ResponseParser.ToolArgs,
-      view: View
+      @unused view: View
   ): String = {
     safeTheoryArg(args) match {
       case Left(err)     => err
@@ -2054,7 +2055,10 @@ object AssistantTools {
     }
   }
 
-  private def execTaskListAdd(args: ResponseParser.ToolArgs, view: View): String = {
+  private def execTaskListAdd(
+      args: ResponseParser.ToolArgs,
+      @unused view: View
+  ): String = {
     val title = safeStringArg(args, "title", 500)
     val description = safeStringArg(args, "description", 2000)
     val criteria = safeStringArg(args, "acceptance_criteria", 2000)
@@ -2063,7 +2067,7 @@ object AssistantTools {
     
     // Inject rich HTML widget
     GUI_Thread.later {
-      val html = buildTaskAddedHtml(title, description, criteria, result)
+      val html = buildTaskAddedHtml(title, description, criteria)
       ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
         java.time.LocalDateTime.now(), rawHtml = true, transient = true))
       AssistantDockable.showConversation(ChatAction.getHistory)
@@ -2072,7 +2076,10 @@ object AssistantTools {
     result
   }
 
-  private def execTaskListDone(args: ResponseParser.ToolArgs, view: View): String = {
+  private def execTaskListDone(
+      args: ResponseParser.ToolArgs,
+      @unused view: View
+  ): String = {
     val taskId = intArg(args, "task_id", -1)
     val result = TaskList.markDone(taskId)
     
@@ -2087,7 +2094,10 @@ object AssistantTools {
     result
   }
 
-  private def execTaskListIrrelevant(args: ResponseParser.ToolArgs, view: View): String = {
+  private def execTaskListIrrelevant(
+      args: ResponseParser.ToolArgs,
+      @unused view: View
+  ): String = {
     val taskId = intArg(args, "task_id", -1)
     val result = TaskList.markIrrelevant(taskId)
     
@@ -2102,7 +2112,7 @@ object AssistantTools {
     result
   }
 
-  private def execTaskListNext(view: View): String = {
+  private def execTaskListNext(@unused view: View): String = {
     val result = TaskList.getNextTask()
     
     // Inject rich HTML widget showing full checklist with next task highlighted
@@ -2116,7 +2126,7 @@ object AssistantTools {
     result
   }
 
-  private def execTaskListShow(view: View): String = {
+  private def execTaskListShow(@unused view: View): String = {
     val result = TaskList.listTasks()
     
     // Inject rich HTML widget showing full checklist
@@ -2130,7 +2140,10 @@ object AssistantTools {
     result
   }
 
-  private def execTaskListGet(args: ResponseParser.ToolArgs, view: View): String = {
+  private def execTaskListGet(
+      args: ResponseParser.ToolArgs,
+      @unused view: View
+  ): String = {
     val taskId = intArg(args, "task_id", -1)
     val result = TaskList.getTask(taskId)
     
@@ -2147,7 +2160,11 @@ object AssistantTools {
     result
   }
 
-  private def buildTaskAddedHtml(title: String, description: String, criteria: String, result: String): String = {
+  private def buildTaskAddedHtml(
+      title: String,
+      description: String,
+      criteria: String
+  ): String = {
     val border = UIColors.TaskList.border
     val bg = UIColors.TaskList.background
     val headerText = UIColors.TaskList.headerText

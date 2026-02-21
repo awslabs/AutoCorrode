@@ -6,7 +6,7 @@ package isabelle.assistant
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterEach
-import scala.util.{Success, Failure}
+import scala.util.Success
 
 class ErrorHandlerExtendedTest extends AnyFunSuite with Matchers with BeforeAndAfterEach {
   

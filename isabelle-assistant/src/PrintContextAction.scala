@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 
 /** Displays proof context (local facts) at cursor via I/Q print_context query. */

@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 
 /** Traces simplifier (simp/auto) via I/Q and explains the trace output using
@@ -53,14 +52,13 @@ object TraceSimplifierAction {
       List(s"simp_trace $method $timeout $depth"),
       queryTimeoutMs,
       {
-        case Right(output) => processTrace(view, goal, output, method)
-        case Left(error)   => processTrace(view, goal, s"Error: $error", method)
+        case Right(output) => processTrace(goal, output, method)
+        case Left(error)   => processTrace(goal, s"Error: $error", method)
       }
     )
   }
 
   private def processTrace(
-      view: View,
       goal: String,
       traceOutput: String,
       method: String

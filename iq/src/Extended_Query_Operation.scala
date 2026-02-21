@@ -211,8 +211,6 @@ class Extended_Query_Operation(
 
   // Helper method for cleanup
   private def cleanup_state(): Unit = {
-    val state_before = current_state.value
-
     remove_overlay()
     current_state.change(_ => Extended_Query_Operation.State.empty)
     consume_output(Document.Snapshot.init, Command.Results.empty, Nil)

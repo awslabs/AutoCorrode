@@ -9,8 +9,7 @@ import java.util.concurrent.{
   TimeUnit,
   TimeoutException
 }
-import scala.concurrent.{Future, Promise}
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.Promise
 
 object TimeoutGuard {
   // A single daemon thread for scheduling timeouts across the assistant

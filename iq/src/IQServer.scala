@@ -4,18 +4,17 @@
 import isabelle._
 import isabelle.jedit._
 
-import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.nio.file.Files
 import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, OutputStreamWriter}
 import java.net.{InetAddress, ServerSocket, Socket}
 import java.util.Locale
 import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
 import scala.util.{Try, Success, Failure}
+import scala.annotation.unused
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 import org.gjt.sp.jedit.{View, jEdit, Buffer}
-import org.gjt.sp.jedit.io.VFSManager
 
 // Data structures
 /**
@@ -771,7 +770,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
    * @param method The notification method name
    * @param json The parsed JSON notification
    */
-  private def handleNotification(method: String, json: JSON.T): Unit = {
+  private def handleNotification(method: String, @unused json: JSON.T): Unit = {
     method match {
       case "notifications/initialized" =>
         Output.writeln("I/Q Server: Client initialization complete")
@@ -1295,7 +1294,6 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
         val views = getOpenViews()
         val activeView = jEdit.getActiveView()
         val allBuffers = views.flatMap(_.getBuffers()).distinct
-        val bufferPaths = allBuffers.map(_.getPath()).toSet
 
         Output.writeln(s"I/Q Server: Found ${views.length} views, ${allBuffers.length} buffers")
 
@@ -2773,29 +2771,6 @@ end"""
     }
   }
 
-  // Helper methods
-  private def findViewForFile(filePath: String): Option[View] = {
-    val views = getOpenViews()
-    views.find { view =>
-      val buffer = view.getBuffer()
-      val bufferPath = buffer.getPath()
-
-      // Try exact match first
-      if (bufferPath == filePath) {
-        true
-      } else {
-        // Try canonical path comparison
-        try {
-          val file1 = new java.io.File(bufferPath).getCanonicalPath
-          val file2 = new java.io.File(filePath).getCanonicalPath
-          file1 == file2
-        } catch {
-          case _: Exception => false
-        }
-      }
-    }
-  }
-
   /**
     * Format a range of lines with line numbers and optional highlighting
     *
@@ -3142,13 +3117,6 @@ end"""
         case scala.util.Success(command) =>
           // Format query arguments using IQUtils
           val formattedArgs = IQUtils.formatQueryArguments(internalQuery, finalArguments)
-
-          val targetDescription = target match {
-            case "current" => "current command at cursor position"
-            case "file_offset" => s"command at ${filePath.getOrElse("?")}:${offset.getOrElse("?")}"
-            case "file_pattern" => s"command matching '${pattern.getOrElse("?")}' in ${filePath.getOrElse("?")}"
-            case _ => "unknown target"
-          }
 
           // Execute the actual query using Extended_Query_Operation
           val collector = new ExploreResultCollector(query)

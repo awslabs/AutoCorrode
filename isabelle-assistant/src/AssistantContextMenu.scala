@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.gui.DynamicContextMenuService
 import org.gjt.sp.jedit.textarea.JEditTextArea
 import java.awt.event.MouseEvent

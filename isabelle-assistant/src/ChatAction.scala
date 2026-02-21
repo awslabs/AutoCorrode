@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -463,7 +462,6 @@ object ChatAction {
   }
 
   private def runSet(arg: String): Unit = {
-    import org.gjt.sp.jedit.jEdit
     val parts = arg.trim.split("\\s+", 2)
 
     if (arg.trim.isEmpty) {

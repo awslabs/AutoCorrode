@@ -6,7 +6,6 @@ import isabelle.jedit._
 
 import org.gjt.sp.jedit.{View, jEdit}
 import scala.util.{Try, Success, Failure}
-import java.nio.file.Paths
 import java.io.File
 
 /**

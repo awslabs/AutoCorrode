@@ -10,6 +10,7 @@ import javax.swing.{JButton, JPanel, JTextArea, JScrollPane, JLabel, JCheckBox, 
 import javax.swing.text.BadLocationException
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import scala.annotation.unused
 
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.gui.DefaultFocusComponent
@@ -35,7 +36,7 @@ object PIDEMarkupLogger {
   }
 }
 
-class IQDumpPIDEDockable(view: View, position: String)
+class IQDumpPIDEDockable(@unused view: View, @unused position: String)
 extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   // Register this instance for PIDE markup logging

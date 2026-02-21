@@ -53,7 +53,7 @@ object SuggestNameAction {
           try {
             // Gather context on background thread
             val context =
-              gatherContext(view, buffer, offset, commandText, keyword)
+              gatherContext(buffer, offset, commandText)
 
             // Build prompt
             val subs = buildPromptSubstitutions(commandText, keyword, context)
@@ -74,11 +74,7 @@ object SuggestNameAction {
               } else {
                 displaySuggestions(
                   view,
-                  buffer,
-                  offset,
-                  commandText,
                   keyword,
-                  context.currentName,
                   suggestions
                 )
               }
@@ -105,11 +101,9 @@ object SuggestNameAction {
   )
 
   private def gatherContext(
-      view: View,
       buffer: JEditBuffer,
       offset: Int,
-      commandText: String,
-      keyword: String
+      commandText: String
   ): NameContext = {
     // Extract current name if present
     val currentName = ExplainAction.extractName(commandText)
@@ -195,11 +189,7 @@ object SuggestNameAction {
 
   private def displaySuggestions(
       view: View,
-      buffer: JEditBuffer,
-      offset: Int,
-      commandText: String,
       keyword: String,
-      currentName: Option[String],
       suggestions: List[String]
   ): Unit = {
     val sb = new StringBuilder()

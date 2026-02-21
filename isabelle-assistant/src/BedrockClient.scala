@@ -8,7 +8,7 @@ import software.amazon.awssdk.services.bedrockruntime.BedrockRuntimeClient
 import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelRequest
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonGenerator}
+import software.amazon.awssdk.thirdparty.jackson.core.JsonFactory
 import java.io.StringWriter
 import scala.util.control.NonFatal
 

@@ -4,11 +4,10 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.util.concurrent.{CountDownLatch, TimeUnit}
-import scala.collection.mutable.ListBuffer
+import scala.annotation.unused
 
 /** Proof suggestion pipeline combining LLM suggestions with optional
   * Sledgehammer results. Candidates are collected in parallel, optionally
@@ -198,8 +197,8 @@ object SuggestAction {
 
   private def getCurrentTarget(
       view: View,
-      buffer: JEditBuffer,
-      offset: Int
+      @unused buffer: JEditBuffer,
+      @unused offset: Int
   ): TargetParser.Target = {
     val textArea = view.getTextArea
     val selection = Option(textArea.getSelectedText).filter(_.trim.nonEmpty)

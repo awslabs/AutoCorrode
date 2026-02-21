@@ -1,19 +1,16 @@
 /* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT */
 
-import isabelle._
-import isabelle.jedit._
-
 import java.awt.{BorderLayout, FlowLayout, Font}
 import java.awt.event.{ActionEvent, ActionListener}
 import javax.swing.{JButton, JPanel, JTextArea, JScrollPane, JLabel, JCheckBox, BorderFactory}
 import javax.swing.text.BadLocationException
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import scala.annotation.unused
 
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.gui.DefaultFocusComponent
-import org.gjt.sp.jedit.textarea.JEditTextArea
 
 // Companion object for MCP communication logging
 object IQCommunicationLogger {
@@ -47,7 +44,7 @@ object IQCommunicationLogger {
   }
 }
 
-class IQLogDockable(view: View, position: String)
+class IQLogDockable(@unused view: View, @unused position: String)
 extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   // Register this instance for MCP communication logging
