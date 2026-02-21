@@ -12,9 +12,11 @@ plugin.isabelle.assistant.AssistantPlugin.depend.0=jdk 21
 plugin.isabelle.assistant.AssistantPlugin.depend.1=jedit 05.06.00.00
 
 # Options panel
-plugin.isabelle.assistant.AssistantPlugin.option-group=assistant-options
-options.assistant-options.label=Isabelle Assistant
-options.assistant-options.code=new isabelle.assistant.AssistantOptions();
+plugin.isabelle.assistant.AssistantPlugin.option-group=assistant-general-options assistant-tool-permissions-options
+options.assistant-general-options.label=General
+options.assistant-general-options.code=new isabelle.assistant.AssistantOptions();
+options.assistant-tool-permissions-options.label=Tool Permissions
+options.assistant-tool-permissions-options.code=new isabelle.assistant.AssistantToolPermissionsOptions();
 
 # Menu actions
 plugin.isabelle.assistant.AssistantPlugin.menu.label=Isabelle Assistant

@@ -19,7 +19,7 @@ import scala.collection.mutable.ListBuffer
   * region, model selection, temperature, verification settings, and tracing
   * parameters.
   */
-class AssistantOptions extends AbstractOptionPane("assistant-options") {
+class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
   private var regionCombo: JComboBox[String] = _
   private var modelCombo: JComboBox[String] = _
   private var crisCheckbox: JCheckBox = _
@@ -172,50 +172,7 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
     traceDepthField.setToolTipText("Maximum depth for simplifier trace")
     addComponent("Trace Depth:", traceDepthField)
 
-    addSeparator("Tool Permissions")
-
-    // Add each tool permission directly to the main pane
-    permissionCombosField = scala.collection.mutable.Map[String, JComboBox[String]]()
-    
-    for (tool <- AssistantTools.tools.sortBy(_.name)) {
-      val combo = new JComboBox(ToolPermissions.PermissionLevel.displayOptions)
-      val currentLevel = ToolPermissions.getConfiguredLevel(tool.name).toDisplayString
-      combo.setSelectedItem(currentLevel)
-      
-      // Convert snake_case to title with spaces for readability in options UI.
-      val displayName = formatToolDisplayName(tool.name)
-      
-      // Use user-friendly tooltip
-      val description = ToolPermissions.toolDescriptions.getOrElse(tool.name, tool.description)
-      val tooltipBase = if (tool.name == "ask_user") {
-        "This tool allows the assistant to ask you questions. Must always be allowed (locked)."
-      } else {
-        s"Allows the assistant to $description"
-      }
-      val tooltip = s"$tooltipBase\nTool ID: ${tool.name}"
-      
-      combo.setEnabled(tool.name != "ask_user")
-      combo.setToolTipText(tooltip)
-      
-      permissionCombosField(tool.name) = combo
-      addComponent(displayName + ":", combo)
-    }
-    
-    val resetButton = new JButton("Reset to Defaults")
-    resetButton.addActionListener(_ => {
-      ToolPermissions.resetToDefaults()
-      for ((toolName, combo) <- permissionCombosField) {
-        val level = ToolPermissions.getConfiguredLevel(toolName).toDisplayString
-        combo.setSelectedItem(level)
-      }
-    })
-    addComponent("", resetButton)
   }
-
-  private var permissionCombosField: scala.collection.mutable.Map[String, JComboBox[String]] = _
-
-  private def formatToolDisplayName(toolName: String): String =
-    toolName.split("_").map(_.capitalize).mkString(" ")
 
   private def populateModelCombo(models: Array[String], current: String): Unit = {
     modelCombo.removeAllItems()
@@ -514,16 +471,6 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
     findTheoremsTimeoutField.setText(findTheoremsTimeoutValue)
     traceTimeoutField.setText(traceTimeoutValue)
     traceDepthField.setText(traceDepthValue)
-
-    // Save tool permissions
-    if (permissionCombosField != null) {
-      for ((toolName, combo) <- permissionCombosField) {
-        val displayLabel = Option(combo.getSelectedItem).map(_.toString).getOrElse("Ask at First Use")
-        ToolPermissions.PermissionLevel.fromDisplayString(displayLabel).foreach { permLevel =>
-          ToolPermissions.setConfiguredLevel(toolName, permLevel)
-        }
-      }
-    }
 
     AssistantOptions.invalidateCache()
     AssistantDockable.refreshModelLabel()
