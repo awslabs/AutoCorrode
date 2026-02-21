@@ -74,6 +74,22 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
   private def callbackOnGui[A](callback: A => Unit, result: A): Unit =
     GUI_Thread.later { callback(result) }
 
+  private def runMcpAsync[A](
+      threadName: String,
+      callback: Either[String, A] => Unit
+  )(
+      body: => Either[String, A]
+  ): Unit = {
+    if (!IQAvailable.isAvailable) {
+      callbackOnGui(callback, Left("I/Q unavailable"))
+    } else {
+      val _ = IQOperationLifecycle.forkJvmThread(
+        name = threadName,
+        body = () => callbackOnGui(callback, body)
+      )
+    }
+  }
+
   private def selectionParamsForView(view: View): Map[String, Any] =
     Option(view) match {
       case None => Map("command_selection" -> "current")
@@ -148,6 +164,115 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       )
       .toList
       .distinct
+
+  def resolveCommandTargetAsync(
+      view: View,
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.ResolvedCommandTarget] => Unit
+  ): Unit =
+    runMcpAsync("assistant-resolve-target-via-mcp", callback) {
+      IQMcpClient.callResolveCommandTarget(selectionParamsForView(view), timeoutMs)
+    }
+
+  def getGoalStateAsync(
+      view: View,
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.GoalStateResult] => Unit
+  ): Unit =
+    runMcpAsync("assistant-goal-state-via-mcp", callback) {
+      IQMcpClient.callGetGoalState(selectionParamsForView(view), timeoutMs)
+    }
+
+  def getContextInfoAsync(
+      view: View,
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.ContextInfoResult] => Unit
+  ): Unit =
+    runMcpAsync("assistant-context-info-via-mcp", callback) {
+      IQMcpClient.callGetContextInfo(selectionParamsForView(view), timeoutMs)
+    }
+
+  def getProofContextAsync(
+      view: View,
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.ProofContextResult] => Unit
+  ): Unit =
+    runMcpAsync("assistant-proof-context-via-mcp", callback) {
+      IQMcpClient.callGetProofContext(selectionParamsForView(view), timeoutMs)
+    }
+
+  def getDefinitionsAsync(
+      view: View,
+      names: List[String],
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.DefinitionsResult] => Unit
+  ): Unit = {
+    val normalized = names.map(_.trim).filter(_.nonEmpty).distinct
+    if (normalized.isEmpty) {
+      callbackOnGui(callback, Left("no names provided"))
+    } else
+      runMcpAsync("assistant-definitions-via-mcp", callback) {
+        IQMcpClient.callGetDefinitions(
+          names = normalized,
+          selectionArgs = selectionParamsForView(view),
+          timeoutMs = timeoutMs
+        )
+      }
+  }
+
+  def getDiagnosticsAtSelectionAsync(
+      view: View,
+      severity: IQMcpClient.DiagnosticSeverity,
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.DiagnosticsResult] => Unit
+  ): Unit =
+    runMcpAsync("assistant-diagnostics-selection-via-mcp", callback) {
+      IQMcpClient.callGetDiagnostics(
+        severity = severity,
+        scope = IQMcpClient.DiagnosticScope.Selection,
+        timeoutMs = timeoutMs,
+        selectionArgs = selectionParamsForView(view)
+      )
+    }
+
+  def getDiagnosticsForFileAsync(
+      path: String,
+      severity: IQMcpClient.DiagnosticSeverity,
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.DiagnosticsResult] => Unit
+  ): Unit = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty) {
+      callbackOnGui(callback, Left("path required"))
+    } else
+      runMcpAsync("assistant-diagnostics-file-via-mcp", callback) {
+        IQMcpClient.callGetDiagnostics(
+          severity = severity,
+          scope = IQMcpClient.DiagnosticScope.File,
+          timeoutMs = timeoutMs,
+          path = Some(normalizedPath)
+        )
+      }
+  }
+
+  def getEntitiesAsync(
+      path: String,
+      maxResults: Option[Int],
+      timeoutMs: Long,
+      callback: Either[String, IQMcpClient.EntitiesResult] => Unit
+  ): Unit = {
+    val normalizedPath = Option(path).map(_.trim).getOrElse("")
+    if (normalizedPath.isEmpty) {
+      callbackOnGui(callback, Left("path required"))
+    } else
+      runMcpAsync("assistant-entities-via-mcp", callback) {
+        IQMcpClient.callGetEntities(
+          path = normalizedPath,
+          maxResults = maxResults,
+          timeoutMs = timeoutMs
+        )
+      }
+  }
 
   /** Verify a proof asynchronously through I/Q MCP. Callback is dispatched on
     * the GUI thread.

@@ -26,6 +26,124 @@ object IQMcpClient {
       error: Option[String]
   )
 
+  sealed trait CommandSelection
+  case object CurrentSelection extends CommandSelection
+  final case class FileOffsetSelection(
+      path: String,
+      requestedOffset: Option[Int],
+      normalizedOffset: Option[Int]
+  ) extends CommandSelection
+  final case class FilePatternSelection(path: String, pattern: String)
+      extends CommandSelection
+  final case class UnknownSelection(raw: String) extends CommandSelection
+
+  final case class CommandInfo(
+      id: Long,
+      length: Int,
+      source: String,
+      keyword: String,
+      nodePath: Option[String],
+      startOffset: Option[Int],
+      endOffset: Option[Int]
+  )
+
+  final case class ResolvedCommandTarget(
+      selection: CommandSelection,
+      command: CommandInfo
+  )
+
+  final case class GoalInfo(
+      hasGoal: Boolean,
+      goalText: String,
+      numSubgoals: Int,
+      freeVars: List[String],
+      constants: List[String],
+      analysisError: Option[String]
+  )
+
+  final case class GoalStateResult(
+      selection: CommandSelection,
+      command: CommandInfo,
+      goal: GoalInfo
+  )
+
+  final case class ContextInfoResult(
+      selection: CommandSelection,
+      command: CommandInfo,
+      inProofContext: Boolean,
+      hasGoal: Boolean,
+      goal: GoalInfo
+  )
+
+  final case class EntityInfo(
+      line: Int,
+      keyword: String,
+      name: String,
+      startOffset: Int,
+      endOffset: Int,
+      sourcePreview: String
+  )
+
+  final case class EntitiesResult(
+      path: String,
+      nodeName: String,
+      totalEntities: Int,
+      returnedEntities: Int,
+      truncated: Boolean,
+      entities: List[EntityInfo]
+  )
+
+  final case class ProofContextResult(
+      selection: CommandSelection,
+      command: CommandInfo,
+      success: Boolean,
+      timedOut: Boolean,
+      hasContext: Boolean,
+      context: String,
+      message: String,
+      error: Option[String]
+  )
+
+  final case class DefinitionsResult(
+      selection: CommandSelection,
+      command: CommandInfo,
+      names: List[String],
+      success: Boolean,
+      timedOut: Boolean,
+      hasDefinitions: Boolean,
+      definitions: String,
+      message: String,
+      error: Option[String]
+  )
+
+  enum DiagnosticSeverity(val wire: String) {
+    case Error extends DiagnosticSeverity("error")
+    case Warning extends DiagnosticSeverity("warning")
+  }
+
+  enum DiagnosticScope(val wire: String) {
+    case Selection extends DiagnosticScope("selection")
+    case File extends DiagnosticScope("file")
+  }
+
+  final case class DiagnosticEntry(
+      line: Int,
+      startOffset: Int,
+      endOffset: Int,
+      message: String
+  )
+
+  final case class DiagnosticsResult(
+      scope: DiagnosticScope,
+      severity: DiagnosticSeverity,
+      count: Int,
+      diagnostics: List[DiagnosticEntry],
+      path: Option[String],
+      nodeName: Option[String],
+      selection: Option[CommandSelection],
+      command: Option[CommandInfo]
+  )
+
   private val requestCounter = new AtomicLong(0L)
   private val host = "127.0.0.1"
   private val connectTimeoutMs = 250
@@ -49,6 +167,28 @@ object IQMcpClient {
   private def asList(value: Any): Option[List[Any]] = value match {
     case xs: List[?] => Some(xs.asInstanceOf[List[Any]])
     case _ => None
+  }
+
+  private def asInt(value: Any): Option[Int] = value match {
+    case i: Int => Some(i)
+    case l: Long if l.isValidInt => Some(l.toInt)
+    case d: Double if d.isWhole && d.isValidInt => Some(d.toInt)
+    case s: String => scala.util.Try(s.trim.toInt).toOption
+    case _ => None
+  }
+
+  private def asLong(value: Any): Option[Long] = value match {
+    case i: Int => Some(i.toLong)
+    case l: Long => Some(l)
+    case d: Double if d.isWhole => Some(d.toLong)
+    case s: String => scala.util.Try(s.trim.toLong).toOption
+    case _ => None
+  }
+
+  private def asStringList(value: Any): List[String] = value match {
+    case xs: List[?] =>
+      xs.collect { case v if v != null => v.toString.trim }.filter(_.nonEmpty)
+    case _ => List.empty
   }
 
   private def decodeJsonValue(value: Any): Any = value match {
@@ -194,6 +334,26 @@ object IQMcpClient {
   private def stringField(payload: Map[String, Any], key: String): String =
     payload.get(key).map(_.toString).getOrElse("")
 
+  private def intField(
+      payload: Map[String, Any],
+      key: String,
+      default: Int
+  ): Int =
+    payload.get(key).flatMap(asInt).getOrElse(default)
+
+  private def longField(
+      payload: Map[String, Any],
+      key: String,
+      default: Long
+  ): Long =
+    payload.get(key).flatMap(asLong).getOrElse(default)
+
+  private def mapField(payload: Map[String, Any], key: String): Map[String, Any] =
+    payload.get(key).flatMap(asObject).getOrElse(Map.empty)
+
+  private def listField(payload: Map[String, Any], key: String): List[Any] =
+    payload.get(key).flatMap(asList).getOrElse(List.empty)
+
   private[assistant] def decodeExploreResult(payload: Map[String, Any]): ExploreResult = {
     ExploreResult(
       success = boolField(payload, "success", default = false),
@@ -202,6 +362,239 @@ object IQMcpClient {
       timedOut = boolField(payload, "timed_out", default = false),
       error = payload.get("error").map(_.toString).filter(_.nonEmpty)
     )
+  }
+
+  private def decodeSelection(payload: Map[String, Any]): CommandSelection = {
+    val selectionType =
+      payload.get("command_selection").map(_.toString.trim).getOrElse("")
+    selectionType match {
+      case "current" =>
+        CurrentSelection
+      case "file_offset" =>
+        FileOffsetSelection(
+          path = stringField(payload, "path"),
+          requestedOffset = payload.get("requested_offset").flatMap(asInt),
+          normalizedOffset = payload.get("normalized_offset").flatMap(asInt)
+        )
+      case "file_pattern" =>
+        FilePatternSelection(
+          path = stringField(payload, "path"),
+          pattern = stringField(payload, "pattern")
+        )
+      case other =>
+        UnknownSelection(other)
+    }
+  }
+
+  private def decodeCommandInfo(payload: Map[String, Any]): CommandInfo =
+    CommandInfo(
+      id = longField(payload, "id", 0L),
+      length = intField(payload, "length", 0),
+      source = stringField(payload, "source"),
+      keyword = stringField(payload, "keyword"),
+      nodePath = payload
+        .get("node_path")
+        .map(_.toString.trim)
+        .filter(_.nonEmpty),
+      startOffset = payload.get("start_offset").flatMap(asInt),
+      endOffset = payload.get("end_offset").flatMap(asInt)
+    )
+
+  private def decodeGoalInfo(payload: Map[String, Any]): GoalInfo =
+    GoalInfo(
+      hasGoal = boolField(payload, "has_goal", default = false),
+      goalText = stringField(payload, "goal_text"),
+      numSubgoals = intField(payload, "num_subgoals", default = 0),
+      freeVars = payload.get("free_vars").map(asStringList).getOrElse(List.empty),
+      constants = payload.get("constants").map(asStringList).getOrElse(List.empty),
+      analysisError = payload
+        .get("analysis_error")
+        .map(_.toString.trim)
+        .filter(_.nonEmpty)
+    )
+
+  private def decodeDiagnosticSeverity(
+      raw: String
+  ): DiagnosticSeverity =
+    raw.trim.toLowerCase match {
+      case "warning" => DiagnosticSeverity.Warning
+      case _ => DiagnosticSeverity.Error
+    }
+
+  private def decodeDiagnosticScope(raw: String): DiagnosticScope =
+    raw.trim.toLowerCase match {
+      case "file" => DiagnosticScope.File
+      case _ => DiagnosticScope.Selection
+    }
+
+  private[assistant] def decodeResolvedCommandTarget(
+      payload: Map[String, Any]
+  ): ResolvedCommandTarget =
+    ResolvedCommandTarget(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command"))
+    )
+
+  private[assistant] def decodeGoalStateResult(
+      payload: Map[String, Any]
+  ): GoalStateResult =
+    GoalStateResult(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command")),
+      goal = decodeGoalInfo(mapField(payload, "goal"))
+    )
+
+  private[assistant] def decodeContextInfoResult(
+      payload: Map[String, Any]
+  ): ContextInfoResult =
+    ContextInfoResult(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command")),
+      inProofContext = boolField(payload, "in_proof_context", default = false),
+      hasGoal = boolField(payload, "has_goal", default = false),
+      goal = decodeGoalInfo(mapField(payload, "goal"))
+    )
+
+  private[assistant] def decodeEntitiesResult(
+      payload: Map[String, Any]
+  ): EntitiesResult = {
+    val entities = listField(payload, "entities").flatMap { raw =>
+      asObject(raw).map { entity =>
+        EntityInfo(
+          line = intField(entity, "line", 0),
+          keyword = stringField(entity, "keyword"),
+          name = stringField(entity, "name"),
+          startOffset = intField(entity, "start_offset", 0),
+          endOffset = intField(entity, "end_offset", 0),
+          sourcePreview = stringField(entity, "source_preview")
+        )
+      }
+    }
+    EntitiesResult(
+      path = stringField(payload, "path"),
+      nodeName = stringField(payload, "node_name"),
+      totalEntities = intField(payload, "total_entities", entities.length),
+      returnedEntities = intField(payload, "returned_entities", entities.length),
+      truncated = boolField(payload, "truncated", default = false),
+      entities = entities
+    )
+  }
+
+  private[assistant] def decodeProofContextResult(
+      payload: Map[String, Any]
+  ): ProofContextResult =
+    ProofContextResult(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command")),
+      success = boolField(payload, "success", default = false),
+      timedOut = boolField(payload, "timed_out", default = false),
+      hasContext = boolField(payload, "has_context", default = false),
+      context = stringField(payload, "context"),
+      message = stringField(payload, "message"),
+      error = payload.get("error").map(_.toString).filter(_.nonEmpty)
+    )
+
+  private[assistant] def decodeDefinitionsResult(
+      payload: Map[String, Any]
+  ): DefinitionsResult =
+    DefinitionsResult(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command")),
+      names = payload.get("names").map(asStringList).getOrElse(List.empty),
+      success = boolField(payload, "success", default = false),
+      timedOut = boolField(payload, "timed_out", default = false),
+      hasDefinitions = boolField(payload, "has_definitions", default = false),
+      definitions = stringField(payload, "definitions"),
+      message = stringField(payload, "message"),
+      error = payload.get("error").map(_.toString).filter(_.nonEmpty)
+    )
+
+  private[assistant] def decodeDiagnosticsResult(
+      payload: Map[String, Any]
+  ): DiagnosticsResult = {
+    val diagnostics = listField(payload, "diagnostics").flatMap { raw =>
+      asObject(raw).map { diag =>
+        DiagnosticEntry(
+          line = intField(diag, "line", 0),
+          startOffset = intField(diag, "start_offset", 0),
+          endOffset = intField(diag, "end_offset", 0),
+          message = stringField(diag, "message")
+        )
+      }
+    }
+    DiagnosticsResult(
+      scope = decodeDiagnosticScope(stringField(payload, "scope")),
+      severity = decodeDiagnosticSeverity(stringField(payload, "severity")),
+      count = intField(payload, "count", diagnostics.length),
+      diagnostics = diagnostics,
+      path = payload.get("path").map(_.toString),
+      nodeName = payload.get("node_name").map(_.toString),
+      selection = asObject(payload.getOrElse("selection", Map.empty))
+        .map(decodeSelection),
+      command = asObject(payload.getOrElse("command", Map.empty))
+        .map(decodeCommandInfo)
+    )
+  }
+
+  def callResolveCommandTarget(
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, ResolvedCommandTarget] =
+    callTool("resolve_command_target", selectionArgs, timeoutMs)
+      .map(decodeResolvedCommandTarget)
+
+  def callGetGoalState(
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, GoalStateResult] =
+    callTool("get_goal_state", selectionArgs, timeoutMs)
+      .map(decodeGoalStateResult)
+
+  def callGetContextInfo(
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, ContextInfoResult] =
+    callTool("get_context_info", selectionArgs, timeoutMs)
+      .map(decodeContextInfoResult)
+
+  def callGetEntities(
+      path: String,
+      maxResults: Option[Int],
+      timeoutMs: Long
+  ): Either[String, EntitiesResult] = {
+    val args = Map("path" -> path) ++ maxResults.map("max_results" -> _)
+    callTool("get_entities", args, timeoutMs).map(decodeEntitiesResult)
+  }
+
+  def callGetProofContext(
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, ProofContextResult] =
+    callTool("get_proof_context", selectionArgs, timeoutMs)
+      .map(decodeProofContextResult)
+
+  def callGetDefinitions(
+      names: List[String],
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, DefinitionsResult] = {
+    val args = selectionArgs + ("names" -> names.mkString(" "))
+    callTool("get_definitions", args, timeoutMs).map(decodeDefinitionsResult)
+  }
+
+  def callGetDiagnostics(
+      severity: DiagnosticSeverity,
+      scope: DiagnosticScope,
+      timeoutMs: Long,
+      selectionArgs: Map[String, Any] = Map.empty,
+      path: Option[String] = None
+  ): Either[String, DiagnosticsResult] = {
+    val baseArgs = Map("severity" -> severity.wire, "scope" -> scope.wire)
+    val args = scope match {
+      case DiagnosticScope.Selection => baseArgs ++ selectionArgs
+      case DiagnosticScope.File => baseArgs ++ path.map("path" -> _)
+    }
+    callTool("get_diagnostics", args, timeoutMs).map(decodeDiagnosticsResult)
   }
 
   def callExplore(
