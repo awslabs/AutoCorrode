@@ -414,19 +414,20 @@ class PolyMLProcess:
 class Server:
     """TCP server that serializes client commands to the Poly/ML process."""
 
-    def __init__(self, poly, port):
+    def __init__(self, poly, port, host="127.0.0.1"):
         self.poly = poly
         self.port = port
+        self.host = host
         self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", port))
+        self.sock.bind((host, port))
         self.sock.listen(8)
         self.running = True
         self.verbose = False
         self.clients = {}
         self.clients_lock = threading.Lock()
-        print(f"Explore server listening on 127.0.0.1:{port}")
+        print(f"Explore server listening on {host}:{port}")
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
@@ -450,7 +451,6 @@ class Server:
                     "bytes_in": 0,
                     "bytes_out": 0,
                 }
-            self.log(f"{GREEN}[+] {addr[0]}:{addr[1]} connected ({self.num_clients} total){RST}")
             threading.Thread(
                 target=self._handle_client, args=(client,), daemon=True
             ).start()
@@ -458,6 +458,7 @@ class Server:
     def _handle_client(self, client):
         buf = b""
         cmd_lines = []
+        logged_connect = False
         with self.clients_lock:
             peer = self.clients[client]["peer"] if client in self.clients else "?"
         try:
@@ -479,6 +480,9 @@ class Server:
                     cmd_lines = []
                     if not command:
                         continue
+                    if not logged_connect:
+                        self.log(f"{GREEN}[+] {peer} connected ({self.num_clients} total){RST}")
+                        logged_connect = True
                     if self.verbose:
                         self.log(f"{CYAN}[{peer}]{RST} {YELLOW}>>>{RST} {command}")
                     with self.lock:
@@ -504,8 +508,12 @@ class Server:
             with self.clients_lock:
                 info = self.clients.pop(client, None)
             client.close()
-            peer = info["peer"] if info else "unknown"
-            self.log(f"{RED}[-] {peer} disconnected ({self.num_clients} total){RST}")
+            if logged_connect:
+                peer = info["peer"] if info else "unknown"
+                self.log(f"{RED}[-] {peer} disconnected ({self.num_clients} total){RST}")
+            elif info and info.get("bytes_in", 0) > 0:
+                # Received data but no valid command — log for debugging
+                self.log(f"{DIM}[probe] {peer} sent {info['bytes_in']}B, no command{RST}")
 
     def client_info(self):
         with self.clients_lock:
@@ -675,6 +683,8 @@ def main():
                    help="Skip Bash.Server startup (disables sledgehammer)")
     p.add_argument("--server-only", action="store_true",
                    help="Expose TCP server only; do not start a REPL on stdin")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="Host address to bind the TCP server on (default: 127.0.0.1)")
     args = p.parse_args()
 
     ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore.ML")
@@ -712,7 +722,7 @@ def main():
         sys.exit(1)
     print(f"{GREEN}Explore loaded.{RST}", flush=True)
 
-    server = Server(poly, args.port)
+    server = Server(poly, args.port, host=args.host)
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
 
