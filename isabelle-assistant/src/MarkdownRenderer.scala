@@ -3,12 +3,14 @@
 
 package isabelle.assistant
 
+import isabelle._
 import java.awt.{Color, Insets}
 import java.awt.image.BufferedImage
+import java.security.MessageDigest
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.util.Locale
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{ConcurrentHashMap, Executors, ThreadFactory, TimeUnit}
 import javax.imageio.ImageIO
 
 /** Markdown-to-HTML renderer for the chat panel. Handles headings, bold,
@@ -17,6 +19,15 @@ import javax.imageio.ImageIO
   * and LaTeX math (via JLaTeXMath → BufferedImage).
   */
 object MarkdownRenderer {
+
+  @volatile private var syntheticImageReadyCallback: Option[() => Unit] = None
+
+  /** Register a callback invoked when a deferred synthetic image render
+    * (currently Mermaid) completes and the UI should refresh.
+    */
+  def setSyntheticImageReadyCallback(callback: () => Unit): Unit = synchronized {
+    syntheticImageReadyCallback = Option(callback)
+  }
 
   /** Code font family string for HTML. Always uses Source Code Pro as primary.
     */
@@ -113,6 +124,11 @@ object MarkdownRenderer {
 
   private case class RenderedImage(url: String, width: Int, height: Int)
 
+  private sealed trait MermaidRenderState
+  private case class MermaidReady(image: RenderedImage) extends MermaidRenderState
+  private case object MermaidPending extends MermaidRenderState
+  private case class MermaidUnavailable(reason: String) extends MermaidRenderState
+
   private def appendMermaidBlock(sb: StringBuilder, code: String): Unit = {
     val diagram = code.trim
     if (diagram.isEmpty) {
@@ -122,12 +138,23 @@ object MarkdownRenderer {
       return
     }
 
-    renderMermaid(diagram) match {
-      case Right(img) =>
+    resolveMermaid(diagram) match {
+      case MermaidReady(img) =>
         sb.append(
           s"<div style='margin:8px 0;text-align:center;'><img src='${img.url}' width='${img.width}' height='${img.height}' style='max-width:100%;height:auto;' /></div>"
         )
-      case Left(reason) =>
+      case MermaidPending =>
+        val codeBg = UIColors.CodeBlock.background
+        val codeBorder = UIColors.CodeBlock.border
+        sb.append(
+          "<div style='margin:4px 0 2px;color:#666;font-size:10.5pt;'><b>Mermaid:</b> rendering diagram...</div>"
+        )
+        sb.append(
+          s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;white-space:pre;overflow-x:auto;line-height:1.5;'>"
+        )
+        sb.append(escapeHtml(code))
+        sb.append("</pre>")
+      case MermaidUnavailable(reason) =>
         val codeBg = UIColors.CodeBlock.background
         val codeBorder = UIColors.CodeBlock.border
         sb.append(
@@ -415,7 +442,28 @@ object MarkdownRenderer {
     id
   }
 
+  private def cacheSyntheticImageWithId(
+      id: String,
+      image: java.awt.Image
+  ): String = synchronized {
+    imageCache.put(id, image)
+    id
+  }
+
   @volatile private var mermaidCliAvailability: Option[Boolean] = None
+  private val mermaidRenderFailures =
+    new ConcurrentHashMap[String, String]()
+  private val mermaidRenderInProgress =
+    new ConcurrentHashMap[String, java.lang.Boolean]()
+  private val mermaidRenderExecutor = Executors.newSingleThreadExecutor(
+    new ThreadFactory {
+      override def newThread(r: Runnable): Thread = {
+        val t = new Thread(r, "assistant-mermaid-render")
+        t.setDaemon(true)
+        t
+      }
+    }
+  )
   private val mermaidDisableSubprocessProp =
     "assistant.mermaid.disable_subprocess"
   private val maxMermaidChars = 20000
@@ -451,22 +499,83 @@ object MarkdownRenderer {
       }
   }
 
-  private def renderMermaid(diagram: String): Either[String, RenderedImage] = {
+  private def mermaidCacheId(diagram: String): String = {
+    val digest = MessageDigest.getInstance("SHA-256")
+      .digest(diagram.getBytes(StandardCharsets.UTF_8))
+    val hex = digest.take(12).map { b =>
+      f"${b & 0xff}%02x"
+    }.mkString
+    s"mermaid://$hex"
+  }
+
+  private def notifySyntheticImageReady(): Unit =
+    syntheticImageReadyCallback.foreach { cb =>
+      try cb()
+      catch {
+        case ex: Exception =>
+          Output.warning(
+            s"[Assistant] Mermaid refresh callback failed: ${ex.getMessage}"
+          )
+      }
+    }
+
+  private def resolveMermaid(diagram: String): MermaidRenderState = {
     if (isMermaidSubprocessDisabled)
-      return Left(
+      return MermaidUnavailable(
         s"subprocess execution disabled via -D$mermaidDisableSubprocessProp=true"
       )
 
     if (diagram.length > maxMermaidChars)
-      return Left(
+      return MermaidUnavailable(
         s"diagram is too large (${diagram.length} chars, limit: $maxMermaidChars)"
       )
 
     if (!isMermaidCliAvailable)
-      return Left(
+      return MermaidUnavailable(
         "local Mermaid CLI (`mmdc`) not found in PATH. Install mermaid-cli for offline diagram rendering."
       )
 
+    val cacheId = mermaidCacheId(diagram)
+    getCachedImage(cacheId) match {
+      case Some(img) =>
+        MermaidReady(
+          RenderedImage(cacheId, img.getWidth(null), img.getHeight(null))
+        )
+      case None =>
+        Option(mermaidRenderFailures.get(cacheId)) match {
+          case Some(reason) =>
+            MermaidUnavailable(reason)
+          case None =>
+            scheduleMermaidRender(cacheId, diagram)
+            MermaidPending
+        }
+    }
+  }
+
+  private def scheduleMermaidRender(cacheId: String, diagram: String): Unit = {
+    if (
+      mermaidRenderInProgress.putIfAbsent(cacheId, java.lang.Boolean.TRUE) != null
+    ) return
+
+    mermaidRenderExecutor.execute(new Runnable {
+      override def run(): Unit = {
+        try {
+          renderMermaidImage(diagram) match {
+            case Right(image) =>
+              mermaidRenderFailures.remove(cacheId)
+              cacheSyntheticImageWithId(cacheId, image)
+            case Left(reason) =>
+              mermaidRenderFailures.put(cacheId, reason)
+          }
+        } finally {
+          mermaidRenderInProgress.remove(cacheId)
+          notifySyntheticImageReady()
+        }
+      }
+    })
+  }
+
+  private def renderMermaidImage(diagram: String): Either[String, BufferedImage] = {
     val tempDir = Files.createTempDirectory("assistant-mermaid-")
     val input = tempDir.resolve("diagram.mmd")
     val output = tempDir.resolve("diagram.png")
@@ -507,10 +616,7 @@ object MarkdownRenderer {
             Left(
               s"rendered Mermaid image is too large (${image.getWidth}x${image.getHeight})"
             )
-          else {
-            val id = cacheSyntheticImage("mermaid", image)
-            Right(RenderedImage(id, image.getWidth, image.getHeight))
-          }
+          else Right(image)
         }
       }
     } catch {

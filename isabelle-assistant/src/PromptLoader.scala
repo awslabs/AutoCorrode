@@ -144,7 +144,16 @@ object PromptLoader {
         val systemDir = Path.explode(root) + Path.explode("prompts") + Path.explode("system")
         if (!isDir(systemDir)) ""
         else {
-          val files = readDir(systemDir).filter(_.endsWith(".md")).sorted
+          val dirEntries = readDir(systemDir)
+          val indexPath = systemDir + Path.explode("_index.txt")
+          val files =
+            if (dirEntries.contains("_index.txt")) {
+              val ordered = parseSystemPromptIndex(readFile(indexPath))
+                .filter(_.endsWith(".md"))
+              val existing = ordered.filter(dirEntries.contains)
+              if (existing.nonEmpty) existing
+              else dirEntries.filter(_.endsWith(".md")).sorted
+            } else dirEntries.filter(_.endsWith(".md")).sorted
           files.map(name => readFile(systemDir + Path.explode(name))).mkString("\n\n")
         }
     }

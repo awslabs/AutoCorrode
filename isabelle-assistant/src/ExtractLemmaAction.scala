@@ -143,7 +143,7 @@ object ExtractLemmaAction {
     }
   }
 
-  private def parseExtractionResponse(
+  private[assistant] def parseExtractionResponse(
       response: String
   ): Option[ExtractionResult] = {
     ResponseParser.extractJsonObjectString(response).flatMap { json =>

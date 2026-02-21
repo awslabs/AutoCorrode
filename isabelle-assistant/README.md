@@ -1,6 +1,6 @@
 # Isabelle Assistant
 
-LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), built on [AWS Bedrock](https://aws.amazon.com/bedrock/). Provides interactive chat with LaTeX and Mermaid rendering, proof suggestions, code generation, refactoring, and more — all integrated into the Isabelle/jEdit IDE via a dockable chat panel and context-sensitive right-click menu.
+LLM-powered proof assistant for [Isabelle/jEdit](https://isabelle.in.tum.de/), built on [AWS Bedrock](https://aws.amazon.com/bedrock/) with Anthropic Claude tool-use. Provides interactive chat with LaTeX and Mermaid rendering, proof suggestions, code generation, refactoring, and more — all integrated into the Isabelle/jEdit IDE via a dockable chat panel and context-sensitive right-click menu.
 
 Isabelle Assistant is part of the [AutoCorrode](https://github.com/awslabs/AutoCorrode) project.
 
@@ -85,7 +85,7 @@ All settings are accessible via **Plugins → Plugin Options → Isabelle Assist
 ## Prerequisites
 
 - [Isabelle2025-2](https://isabelle.in.tum.de/website-Isabelle2025-2/)
-- AWS account with [Bedrock model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) (Claude recommended)
+- AWS account with [Bedrock model access](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) to Anthropic Claude models (required)
 - AWS credentials configured (`~/.aws/credentials` or environment variables)
 
 ## Setup
@@ -165,7 +165,8 @@ Verification cache semantics: only successful verification outcomes are cached. 
 
 ### Tool Use (Anthropic Models)
 
-With Anthropic Claude models, the LLM can autonomously use tools during chat:
+With Anthropic Claude models, the LLM can autonomously use tools during chat.
+The table below is a representative subset; the complete toolset in the current build includes read/search/navigation, proof/verification, editing/open/create, user-interaction (`ask_user`), and task-list tools.
 
 | Tool | Description |
 |------|-------------|
@@ -276,7 +277,7 @@ Credentials are read from the standard AWS credential chain:
 
 ### Cross-Region Inference (CRIS)
 
-Enabled by default. Automatically prefixes model IDs with `us.` or `eu.` for supported providers (Anthropic, Meta, Mistral).
+Enabled by default. Automatically prefixes Anthropic model IDs with `us.` or `eu.` based on the selected region.
 
 ## Development
 

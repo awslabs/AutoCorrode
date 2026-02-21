@@ -180,7 +180,13 @@ object ToolPermissions {
     "create_theory" -> "create new theory files",
     "open_theory" -> "open existing theory files",
     "web_search" -> "search the web",
-    "ask_user" -> "ask you questions"
+    "ask_user" -> "ask you questions",
+    "task_list_add" -> "add items to the task list",
+    "task_list_done" -> "mark task list items as done",
+    "task_list_irrelevant" -> "mark task list items as irrelevant",
+    "task_list_next" -> "retrieve the next pending task list item",
+    "task_list_show" -> "show the current task list",
+    "task_list_get" -> "retrieve a specific task list item"
   )
 
   // --- Tool Name Formatting ---

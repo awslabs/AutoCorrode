@@ -362,6 +362,7 @@ object BedrockClient {
     while (continue) {
       iteration += 1
       if (AssistantDockable.isCancelled) throw new RuntimeException("Operation cancelled")
+      pruneToolLoopMessagesInPlace(msgBuf, AssistantConstants.MAX_CHAT_CONTEXT_CHARS)
 
       // Check if we've hit the iteration limit
       val hitLimit = maxIter match {
@@ -478,6 +479,51 @@ object BedrockClient {
     } else {
       Output.writeln(s"[Assistant] Tool loop completed in $iteration iterations, response: ${finalText.length} chars")
       finalText
+    }
+  }
+
+  private def pruneToolLoopMessagesInPlace(
+      msgBuf: scala.collection.mutable.ListBuffer[(String, String)],
+      maxChars: Int
+  ): Unit = {
+    val pruned = prunedToolLoopMessages(msgBuf.toList, maxChars)
+    if (pruned.length != msgBuf.length || pruned != msgBuf.toList) {
+      val removed = msgBuf.length - pruned.length
+      if (removed > 0)
+        Output.writeln(
+          s"[Assistant] Tool loop context pruned $removed message(s) to stay within budget"
+        )
+      msgBuf.clear()
+      msgBuf ++= pruned
+    }
+  }
+
+  private[assistant] def prunedToolLoopMessages(
+      messages: List[(String, String)],
+      maxChars: Int
+  ): List[(String, String)] = {
+    if (messages.isEmpty) return Nil
+    val budget = math.max(1, maxChars)
+    val lengths = messages.map(_._2.length)
+    var total = lengths.sum
+    var dropCount = 0
+    while (total > budget && dropCount < messages.length - 1) {
+      total -= lengths(dropCount)
+      dropCount += 1
+    }
+    val kept = messages.drop(dropCount)
+    if (kept.isEmpty) Nil
+    else if (total <= budget) kept
+    else {
+      // Single oversized tail message: keep it but trim content.
+      val (role, content) = kept.last
+      val keepChars = math.max(64, budget - 32)
+      val trimmed =
+        if (content.length <= keepChars) content
+        else "[... truncated due to context budget ...]\n" + content.takeRight(
+          keepChars
+        )
+      List((role, trimmed))
     }
   }
 

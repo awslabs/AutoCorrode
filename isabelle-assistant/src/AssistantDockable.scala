@@ -149,6 +149,10 @@ class AssistantDockable(view: View, position: String)
     )
   @volatile private[this] var disposed = false
 
+  MarkdownRenderer.setSyntheticImageReadyCallback(() => {
+    if (!disposed) AssistantDockable.showConversation(ChatAction.getHistory)
+  })
+
   // Display state — MUST be declared before initializeUI() runs
   private val displayLock = new Object()
   @volatile private var renderedMessageCount = 0
@@ -603,6 +607,7 @@ class AssistantDockable(view: View, position: String)
       disposed = true
       statusSubscription.stop()
       AssistantEventBus.unsubscribe(eventBusListener)
+      MarkdownRenderer.setSyntheticImageReadyCallback(() => ())
     }
   }
 
@@ -1085,9 +1090,12 @@ class SyntheticImageView(elem: javax.swing.text.Element)
   private val src = elem.getAttributes
     .getAttribute(javax.swing.text.html.HTML.Attribute.SRC)
     .toString
-  private val img = MarkdownRenderer.getCachedImage(src).orNull
+
+  private def currentImage: java.awt.Image =
+    MarkdownRenderer.getCachedImage(src).orNull
 
   override def getPreferredSpan(axis: Int): Float = {
+    val img = currentImage
     if (img == null) 0f
     else if (axis == javax.swing.text.View.X_AXIS) img.getWidth(null).toFloat
     else img.getHeight(null).toFloat
@@ -1097,6 +1105,7 @@ class SyntheticImageView(elem: javax.swing.text.Element)
   override def getMaximumSpan(axis: Int): Float = getPreferredSpan(axis)
 
   override def paint(g: java.awt.Graphics, allocation: java.awt.Shape): Unit = {
+    val img = currentImage
     if (img != null) {
       val rect = allocation.getBounds
       g.drawImage(img, rect.x, rect.y, null)

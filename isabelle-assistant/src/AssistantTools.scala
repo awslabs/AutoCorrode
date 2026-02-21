@@ -484,6 +484,19 @@ object AssistantTools {
         g.writeObjectFieldStart(p.name)
         g.writeStringField("type", p.typ)
         g.writeStringField("description", p.description)
+        // Keep enum constraints aligned with writeToolsJson.
+        if (tool.name == "edit_theory" && p.name == "operation") {
+          g.writeArrayFieldStart("enum")
+          g.writeString("insert")
+          g.writeString("replace")
+          g.writeString("delete")
+          g.writeEndArray()
+        } else if ((tool.name == "get_errors" || tool.name == "get_warnings") && p.name == "scope") {
+          g.writeArrayFieldStart("enum")
+          g.writeString("all")
+          g.writeString("cursor")
+          g.writeEndArray()
+        }
         g.writeEndObject()
       }
       g.writeEndObject() // properties
@@ -533,6 +546,9 @@ object AssistantTools {
 
   /** Maximum length for search pattern arguments. */
   private val MAX_PATTERN_ARG_LENGTH = 500
+
+  private val sensitiveArgTokens =
+    Set("token", "secret", "password", "auth", "credential", "api_key")
 
   /** Valid theory reference pattern (for referring to already-open theories). */
   private val THEORY_REFERENCE_PATTERN = """^[A-Za-z0-9_.\-/]+$""".r
@@ -590,6 +606,19 @@ object AssistantTools {
   ): Vector[String] =
     (0 until buffer.getLineCount).map(buffer.getLineText).toVector
 
+  private def isSensitiveArgName(argName: String): Boolean = {
+    val lowered = argName.toLowerCase(Locale.ROOT)
+    sensitiveArgTokens.exists(token => lowered.contains(token))
+  }
+
+  private def summarizeToolArgsForLog(args: ResponseParser.ToolArgs): String =
+    args.map { case (k, v) =>
+      val rendered =
+        if (isSensitiveArgName(k)) "***"
+        else ResponseParser.toolValueToDisplay(v).replace('\n', ' ').take(100)
+      s"$k=$rendered"
+    }.mkString(", ")
+
   /** Execute a tool by name. Returns the result as a string. Called from the
     * agentic loop on a background thread. All arguments are sanitized before
     * use to prevent injection or resource exhaustion.
@@ -600,7 +629,7 @@ object AssistantTools {
       view: View
   ): String = {
     Output.writeln(
-      s"[Assistant] Tool call: $name(${args.map { case (k, v) => s"$k=${ResponseParser.toolValueToDisplay(v).take(100)}" }.mkString(", ")})"
+      s"[Assistant] Tool call: $name(${summarizeToolArgsForLog(args)})"
     )
     AssistantDockable.setStatus(s"[tool] $name...")
     try {
@@ -735,8 +764,13 @@ object AssistantTools {
       }
       latch.countDown()
     }
-    latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
-    result
+    if (
+      !latch.await(
+        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+        TimeUnit.SECONDS
+      )
+    ) "Error: operation timed out (GUI thread busy)"
+    else result
   }
 
   private def execGetProofContext(view: View): String = {
@@ -768,10 +802,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -805,8 +841,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "find_theorems timed out." else result
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            "find_theorems timed out."
+          else if (result.isEmpty)
+            "Error: find_theorems completed without a result."
+          else result
       }
     }
   }
@@ -833,10 +872,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -861,8 +902,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "Verification timed out." else result
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            "Verification timed out."
+          else if (result.isEmpty)
+            "Error: verification completed without a result."
+          else result
       }
     }
   }
@@ -884,10 +928,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -911,8 +957,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "Sledgehammer timed out." else result
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            "Sledgehammer timed out."
+          else if (result.isEmpty)
+            "Error: sledgehammer completed without a result."
+          else result
       }
     }
   }
@@ -934,10 +983,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -957,8 +1008,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "Nitpick timed out." else result
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            "Nitpick timed out."
+          else if (result.isEmpty)
+            "Error: nitpick completed without a result."
+          else result
       }
     }
   }
@@ -980,10 +1034,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -1003,8 +1059,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "Quickcheck timed out." else result
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            "Quickcheck timed out."
+          else if (result.isEmpty)
+            "Error: quickcheck completed without a result."
+          else result
       }
     }
   }
@@ -1022,8 +1081,13 @@ object AssistantTools {
       }
       latch.countDown()
     }
-    latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
-    result
+    if (
+      !latch.await(
+        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+        TimeUnit.SECONDS
+      )
+    ) "Error: operation timed out (GUI thread busy)"
+    else result
   }
 
   private def execGetCommandText(view: View): String = {
@@ -1041,8 +1105,13 @@ object AssistantTools {
       }
       latch.countDown()
     }
-    latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
-    result
+    if (
+      !latch.await(
+        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+        TimeUnit.SECONDS
+      )
+    ) "Error: operation timed out (GUI thread busy)"
+    else result
   }
 
   private def execGetErrors(
@@ -1069,11 +1138,13 @@ object AssistantTools {
           }
           latch.countDown()
         }
-        latch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-        result
+        if (
+          !latch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+            TimeUnit.SECONDS
+          )
+        ) "Error: operation timed out (GUI thread busy)"
+        else result
 
       case "all" =>
         val latch = new CountDownLatch(1)
@@ -1090,11 +1161,13 @@ object AssistantTools {
           }
           latch.countDown()
         }
-        latch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-        result
+        if (
+          !latch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+            TimeUnit.SECONDS
+          )
+        ) "Error: operation timed out (GUI thread busy)"
+        else result
 
       case _ =>
         // Use original case for theory name (case-sensitive)
@@ -1119,11 +1192,13 @@ object AssistantTools {
               }
               latch.countDown()
             }
-            latch.await(
-              AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-              TimeUnit.SECONDS
-            )
-            result
+            if (
+              !latch.await(
+                AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+                TimeUnit.SECONDS
+              )
+            ) "Error: operation timed out (GUI thread busy)"
+            else result
         }
     }
   }
@@ -1153,10 +1228,12 @@ object AssistantTools {
           }
           cmdLatch.countDown()
         }
-        cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
+        if (
+          !cmdLatch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+            TimeUnit.SECONDS
+          )
+        ) return "Error: operation timed out (GUI thread busy)"
 
         commandOpt match {
           case None          => "No Isabelle command at cursor position."
@@ -1198,10 +1275,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -1228,8 +1307,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "Step execution timed out." else result
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            "Step execution timed out."
+          else if (result.isEmpty)
+            "Error: step execution completed without a result."
+          else result
       }
     }
   }
@@ -1257,10 +1339,12 @@ object AssistantTools {
         }
         cmdLatch.countDown()
       }
-      cmdLatch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
+      if (
+        !cmdLatch.await(
+          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) return "Error: operation timed out (GUI thread busy)"
 
       commandOpt match {
         case None          => "No Isabelle command at cursor position."
@@ -1283,8 +1367,11 @@ object AssistantTools {
               }
             )
           }
-          latch.await(queryTimeoutMs + 2000, TimeUnit.MILLISECONDS)
-          if (result.isEmpty) "Simplifier trace timed out." else result
+          if (!latch.await(queryTimeoutMs + 2000, TimeUnit.MILLISECONDS))
+            "Simplifier trace timed out."
+          else if (result.isEmpty)
+            "Error: simplifier trace completed without a result."
+          else result
       }
     }
   }
@@ -1304,8 +1391,13 @@ object AssistantTools {
       }
       latch.countDown()
     }
-    latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
-    result
+    if (
+      !latch.await(
+        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+        TimeUnit.SECONDS
+      )
+    ) "Error: operation timed out (GUI thread busy)"
+    else result
   }
 
   private def execGetContextInfo(view: View): String = {
@@ -1334,8 +1426,14 @@ object AssistantTools {
       } catch { case _: Exception => result = "Error analyzing context" }
       latch.countDown()
     }
-    latch.await(AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC, TimeUnit.SECONDS)
-    result
+    if (
+      !latch.await(
+        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+        TimeUnit.SECONDS
+      )
+    ) "Error: operation timed out (GUI thread busy)"
+    else if (result.isEmpty) "Error: operation completed without a result"
+    else result
   }
 
   private def execSearchAllTheories(
@@ -1424,11 +1522,13 @@ object AssistantTools {
           }
           latch.countDown()
         }
-        latch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-        result
+        if (
+          !latch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+            TimeUnit.SECONDS
+          )
+        ) "Error: operation timed out (GUI thread busy)"
+        else result
 
       case "all" =>
         val latch = new CountDownLatch(1)
@@ -1445,11 +1545,13 @@ object AssistantTools {
           }
           latch.countDown()
         }
-        latch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-        result
+        if (
+          !latch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+            TimeUnit.SECONDS
+          )
+        ) "Error: operation timed out (GUI thread busy)"
+        else result
 
       case _ =>
         // Use original case for theory name (case-sensitive)
@@ -1474,11 +1576,13 @@ object AssistantTools {
               }
               latch.countDown()
             }
-            latch.await(
-              AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-              TimeUnit.SECONDS
-            )
-            result
+            if (
+              !latch.await(
+                AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+                TimeUnit.SECONDS
+              )
+            ) "Error: operation timed out (GUI thread busy)"
+            else result
         }
     }
   }
@@ -1638,6 +1742,8 @@ object AssistantTools {
                 TimeUnit.SECONDS
               )) {
                 "Error: Operation timed out (GUI thread busy)"
+              } else if (result.isEmpty) {
+                "Error: operation completed without a result"
               } else {
                 result
               }
@@ -1671,10 +1777,12 @@ object AssistantTools {
           }
           cmdLatch.countDown()
         }
-        cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
+        if (
+          !cmdLatch.await(
+            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+            TimeUnit.SECONDS
+          )
+        ) return "Error: operation timed out (GUI thread busy)"
 
         commandOpt match {
           case None          => "No Isabelle command at cursor position."
@@ -1704,9 +1812,11 @@ object AssistantTools {
                   }
                 )
               }
-              latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-              results += (if (methodResult.isEmpty) s"[TIMEOUT] $method"
-                          else methodResult)
+              if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                results += s"[TIMEOUT] $method"
+              else if (methodResult.isEmpty)
+                results += s"[ERROR] $method returned no result"
+              else results += methodResult
             }
             s"Tried ${methods.length} methods:\n${results.mkString("\n")}"
         }
@@ -1758,11 +1868,14 @@ object AssistantTools {
               }
               latch.countDown()
             }
-            latch.await(
-              AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-              TimeUnit.SECONDS
-            )
-            result
+            if (
+              !latch.await(
+                AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
+                TimeUnit.SECONDS
+              )
+            ) "Error: operation timed out (GUI thread busy)"
+            else if (result.isEmpty) "Error: operation completed without a result"
+            else result
         }
     }
   }
@@ -1908,11 +2021,14 @@ object AssistantTools {
         } catch { case ex: Exception => result = s"Error: ${ex.getMessage}" }
         latch.countDown()
       }
-      latch.await(
-        AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
-      result
+      if (
+        !latch.await(
+          AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
+          TimeUnit.SECONDS
+        )
+      ) "Error: operation timed out (GUI thread busy)"
+      else if (result.isEmpty) "Error: operation completed without a result"
+      else result
     }
   }
 

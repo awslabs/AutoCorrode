@@ -108,7 +108,7 @@ object TidyAction {
     AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
   }
 
-  private def extractCode(response: String): String = {
+  private[assistant] def extractCode(response: String): String = {
     val fromJson = ResponseParser
       .extractJsonObjectString(response)
       .flatMap { json =>

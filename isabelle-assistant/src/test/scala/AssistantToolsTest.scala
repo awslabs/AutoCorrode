@@ -5,6 +5,8 @@ package isabelle.assistant
 
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+import software.amazon.awssdk.thirdparty.jackson.core.JsonFactory
+import java.io.StringWriter
 
 /**
  * Tests for AssistantTools input sanitization and tool definitions.
@@ -518,5 +520,20 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
       taskIdParam.get.typ shouldBe "integer"
       taskIdParam.get.required shouldBe true
     }
+  }
+
+  test("filtered tool schemas should preserve enum constraints for constrained params") {
+    val sw = new StringWriter()
+    val g = new JsonFactory().createGenerator(sw)
+    g.writeStartObject()
+    AssistantTools.writeFilteredToolsJson(g)
+    g.writeEndObject()
+    g.close()
+    val json = sw.toString
+
+    json should include(""""operation"""")
+    json should include(""""enum":["insert","replace","delete"]""")
+    json should include(""""scope"""")
+    json should include(""""enum":["all","cursor"]""")
   }
 }

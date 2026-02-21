@@ -49,6 +49,27 @@ class PromptLoaderTest extends AnyFunSuite with Matchers {
     rendered shouldBe "A\n\nB"
   }
 
+  test("loadSystemPromptFromHome should honor _index.txt ordering when present") {
+    val root = "/virtual/home"
+    val systemDir =
+      Path.explode(root) + Path.explode("prompts") + Path.explode("system")
+    val files = Map(
+      "_index.txt" -> "02-b.md\n01-a.md\n",
+      "02-b.md" -> "B",
+      "01-a.md" -> "A",
+      "99-extra.md" -> "EXTRA"
+    )
+
+    val rendered = PromptLoader.loadSystemPromptFromHome(
+      Some(root),
+      dir => dir == systemDir,
+      _ => files.keys.toList,
+      path => files(path.implode.split('/').last)
+    )
+
+    rendered shouldBe "B\n\nA"
+  }
+
   test("loadSystemPromptFromHome should return empty when home missing or system dir absent") {
     PromptLoader.loadSystemPromptFromHome(None, _ => true, _ => Nil, _ => "x") shouldBe ""
     PromptLoader.loadSystemPromptFromHome(Some("/h"), _ => false, _ => Nil, _ => "x") shouldBe ""

@@ -59,4 +59,22 @@ class BedrockClientTest extends AnyFunSuite with Matchers {
     }
     ex.getMessage should include("Only Anthropic models are supported")
   }
+
+  test("prunedToolLoopMessages should keep newest messages within budget") {
+    val messages = List(
+      "user" -> ("a" * 80),
+      "assistant" -> ("b" * 80),
+      "user" -> ("c" * 80)
+    )
+    val pruned = BedrockClient.prunedToolLoopMessages(messages, 120)
+    pruned.length should be <= 2
+    pruned.last._2 should include("c")
+  }
+
+  test("prunedToolLoopMessages should trim a single oversized tail message") {
+    val messages = List("assistant" -> ("x" * 500))
+    val pruned = BedrockClient.prunedToolLoopMessages(messages, 100)
+    pruned should have length 1
+    pruned.head._2 should include("truncated due to context budget")
+  }
 }

@@ -379,69 +379,12 @@ object SuggestAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
 
-    val constantsFromMarkup = GoalExtractor
-      .analyzeGoal(buffer, offset)
-      .map(_.constants.take(AssistantConstants.MAX_CONSTANTS_FOR_FIND_THEOREMS))
-      .getOrElse(Nil)
-
-    // Fallback to regex extraction if PIDE markup didn't provide constants
-    val constants = if (constantsFromMarkup.nonEmpty) {
-      Output.writeln(
-        s"[Assistant] Using constants from PIDE markup: ${constantsFromMarkup.mkString(", ")}"
-      )
-      constantsFromMarkup
-    } else {
-      // Fallback: extract from goal text (original heuristic)
-      val skipWords = Set(
-        "goal",
-        "subgoal",
-        "subgoals",
-        "proof",
-        "have",
-        "show",
-        "using",
-        "by",
-        "True",
-        "False",
-        "undefined",
-        "THE",
-        "SOME",
-        "ALL",
-        "EX",
-        "if",
-        "then",
-        "else",
-        "let",
-        "in",
-        "case",
-        "of",
-        "where",
-        "and",
-        "or",
-        "not",
-        "for",
-        "assumes",
-        "shows",
-        "fixes",
-        "obtains"
-      )
-      val identPattern = """[A-Za-z][A-Za-z0-9_'.]*""".r
-      val fromText = goalState.linesIterator
-        .flatMap(line => identPattern.findAllIn(line.trim))
-        .filter(w => w.length > 2 && !skipWords.contains(w))
-        .filter(w =>
-          w.contains("_") || w.head.isLower || w.head.isUpper && w
-            .drop(1)
-            .exists(_.isLower)
-        )
-        .toSet
-        .take(AssistantConstants.MAX_CONSTANTS_FOR_FIND_THEOREMS)
-        .toList
-      Output.writeln(
-        s"[Assistant] Using constants from text heuristic: ${fromText.mkString(", ")}"
-      )
-      fromText
-    }
+    val analysisOpt = GoalExtractor.analyzeGoal(buffer, offset)
+    val constants =
+      ProofContextSupport.extractNamesForFindTheorems(goalState, analysisOpt)
+    Output.writeln(
+      s"[Assistant] Constants for find_theorems context: ${constants.mkString(", ")}"
+    )
 
     // Build separate name: criteria for each constant — find_theorems expects
     // individual search criteria, not a single space-joined pattern.

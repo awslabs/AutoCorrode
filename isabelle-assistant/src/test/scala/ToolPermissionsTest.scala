@@ -141,6 +141,11 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     permissions.length shouldBe 35 // All 35 tools
   }
 
+  test("toolDescriptions should cover every defined tool") {
+    val toolNames = AssistantTools.tools.map(_.name).toSet
+    ToolPermissions.toolDescriptions.keySet shouldBe toolNames
+  }
+
   test("session-level decisions should be isolated") {
     ToolPermissions.clearSession()
     // checkPermission behavior depends on session state which is internal
