@@ -24,6 +24,11 @@ Must not own:
 - Proof execution engines.
 - Hidden side effects to theory files outside explicit tools.
 
+Permitted local behavior:
+
+- read-only UI/context introspection for responsiveness (menu enablement, cursor/selection state, lightweight local affordance checks).
+- this permission does not include proof execution, file mutation semantics, or assistant tool semantics.
+
 ### Layer 2: Orchestration (`isabelle-assistant`)
 
 Responsibilities:
@@ -58,6 +63,7 @@ Responsibilities:
 2. Any module in `isabelle-assistant` that directly performs proof-state execution is forbidden.
 3. `iq` must not depend on assistant UI classes.
 4. Shared data contracts should be explicit and typed.
+5. Read-only UI/context introspection may remain assistant-local for interaction latency; semantic operations must still route through `iq`.
 
 ## Forbidden Patterns
 
@@ -90,5 +96,6 @@ A pull request passes layering checks only when:
 Current enforcement:
 
 - `make -C isabelle-assistant check-layering` is a failing gate:
-  1. migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration` must remain MCP-only (no local `IQIntegration`/`Extended_Query_Operation` execution paths),
-  2. any assistant-side direct Isabelle runtime touchpoint fails (zero exceptions).
+  1. migrated proof and theory tools in `AssistantTools`, theory browsing in `TheoryBrowserAction`, and migrated proof-query APIs in `IQIntegration` must remain MCP-only (no local `IQIntegration`/`Extended_Query_Operation` execution paths),
+  2. forbidden low-level assistant runtime touchpoints fail,
+  3. designated read-only UI/context modules are exempt from the low-level touchpoint scan for responsiveness.

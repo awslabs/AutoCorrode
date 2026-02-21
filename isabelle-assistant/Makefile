@@ -207,7 +207,7 @@ help:
 	echo "  iq-install - Install I/Q plugin only"
 	echo "  iq-clean   - Clean I/Q build directory only"
 	echo "  check-layering  - Enforce hard Assistant/IQ layering gate (failing)"
-	echo "  report-layering - Print runtime boundary inventory (expected: zero touchpoints)"
+	echo "  report-layering - Print runtime boundary inventory (expected: zero forbidden touchpoints)"
 	echo "  debug      - Show configuration"
 	echo ""
 	echo "First run ./fetch-deps.sh to download AWS SDK JARs"

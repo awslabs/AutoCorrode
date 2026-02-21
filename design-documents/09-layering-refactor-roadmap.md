@@ -1,6 +1,6 @@
 # Layering Refactor Roadmap
 
-Status: Completed (all phases complete; zero-exception gate active)  
+Status: Completed (all phases complete; hard gate active)  
 Applies to: architecture convergence for `iq` and `isabelle-assistant`  
 Last reviewed: 2026-02-21
 
@@ -66,12 +66,13 @@ Acceptance criteria:
 Current implementation status:
 
 - `isabelle-assistant/scripts/check_layering.sh` enforces MCP-only execution for migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration`.
-- strict mode enforces zero assistant-side runtime touchpoints (no exceptions).
+- strict mode enforces zero forbidden assistant-side runtime touchpoints.
+- designated read-only UI/context modules are exempt from low-level touchpoint scanning for responsiveness.
 - `make -C isabelle-assistant test` runs `check-layering` before tests.
 - contributor and architecture docs align with hard layering ownership.
 - machine-readable runtime-boundary inventory remains available at:
   `design-documents/10-assistant-runtime-boundary-inventory.tsv`
-  and must report zero touchpoints.
+  and must report zero forbidden touchpoints.
 
 ## Risk Register
 

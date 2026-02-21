@@ -10,7 +10,7 @@ This document records current architecture, defines target architecture, and mak
 
 ## Current Architecture
 
-The current system is layered with a hard boundary gate and zero assistant-side runtime exceptions.
+The current system is layered with a hard boundary gate: semantic proof/file/tool behavior is IQ-owned, while designated read-only UI context probing may remain assistant-local.
 
 ```mermaid
 graph TD
@@ -34,7 +34,7 @@ graph TD
 
 ### Known Coupling Points
 
-Assistant-side direct runtime touchpoints are prohibited. Current expected count: zero.
+Assistant-side forbidden low-level runtime touchpoints are prohibited. Current expected count: zero.
 
 Inventory source of truth:
 - `design-documents/10-assistant-runtime-boundary-inventory.tsv`
@@ -68,7 +68,8 @@ graph TD
 2. New proof-related tools should be defined at the `iq` layer first, then consumed by assistant.
 3. Assistant should treat tool outputs as typed capability responses, not raw ad hoc strings.
 4. Security and permission decisions must remain visible to the user.
-5. Direct runtime touchpoints in assistant are disallowed and enforced by failing gates.
+5. Direct semantic runtime touchpoints in assistant are disallowed and enforced by failing gates.
+6. Read-only UI/context introspection for interaction latency is allowed in designated UI modules.
 
 ## Migration Direction
 
@@ -83,4 +84,4 @@ A new feature is architecturally compliant when:
 1. The Isabelle interaction path is represented as an `iq` capability.
 2. Assistant-side code remains orchestration-only for that interaction.
 3. Failures are recoverable and clearly surfaced at UI level.
-4. No direct runtime touchpoint is introduced in assistant code.
+4. No forbidden runtime touchpoint is introduced in assistant code.

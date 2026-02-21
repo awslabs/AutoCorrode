@@ -6,6 +6,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ASSISTANT_SRC="$REPO_ROOT/isabelle-assistant/src"
 ASSISTANT_TOOLS="$REPO_ROOT/isabelle-assistant/src/AssistantTools.scala"
 IQ_INTEGRATION="$REPO_ROOT/isabelle-assistant/src/IQIntegration.scala"
+THEORY_BROWSER="$REPO_ROOT/isabelle-assistant/src/TheoryBrowserAction.scala"
 MODE="strict"
 INVENTORY_OUT=""
 
@@ -14,8 +15,8 @@ usage() {
 Usage: check_layering.sh [--mode strict|report] [--inventory-out <path>]
 
 Modes:
-  strict  Enforce MCP-only migrated method boundaries and zero assistant runtime touchpoints (default).
-  report  Emit assistant runtime boundary report (must be zero touchpoints).
+  strict  Enforce MCP-only migrated method boundaries and zero forbidden assistant runtime touchpoints (default).
+  report  Emit assistant runtime boundary report (forbidden touchpoints only).
 EOF
 }
 
@@ -55,7 +56,7 @@ if [[ "$MODE" != "strict" && "$MODE" != "report" ]]; then
   exit 2
 fi
 
-for source_file in "$ASSISTANT_TOOLS" "$IQ_INTEGRATION"; do
+for source_file in "$ASSISTANT_TOOLS" "$IQ_INTEGRATION" "$THEORY_BROWSER"; do
   if [[ ! -f "$source_file" ]]; then
     echo "ERROR: missing source file: $source_file"
     exit 1
@@ -79,6 +80,29 @@ runtime_touchpoint_specs=(
   "command_iterator|command_iterator\\(|iq.command_lookup"
 )
 
+# Read-only UI/context modules are permitted to perform local context probing
+# for responsiveness (menu enablement, cursor/selection UX). Execution and
+# semantic tool behavior remain guarded separately below.
+ui_readonly_touchpoint_allowlist=(
+  "isabelle-assistant/src/AssistantContextMenu.scala"
+  "isabelle-assistant/src/MenuContext.scala"
+  "isabelle-assistant/src/TargetParser.scala"
+  "isabelle-assistant/src/ShowTypeAction.scala"
+  "isabelle-assistant/src/ProofExtractor.scala"
+  "isabelle-assistant/src/PrintContextAction.scala"
+)
+
+is_ui_readonly_allowlisted_path() {
+  local path="$1"
+  local allow
+  for allow in "${ui_readonly_touchpoint_allowlist[@]}"; do
+    if [[ "$path" == "$allow" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 scan_runtime_touchpoints() {
   local mode="$1"
   local out_file="$2"
@@ -95,6 +119,9 @@ scan_runtime_touchpoints() {
       while IFS=: read -r file line text; do
         [[ -z "${file:-}" ]] && continue
         file="${file#"$REPO_ROOT/"}"
+        if is_ui_readonly_allowlisted_path "$file"; then
+          continue
+        fi
         printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$text" >> "$out_file"
       done < <(rg -n --no-heading --color never "$regex" "$ASSISTANT_SRC" || true)
     else
@@ -106,6 +133,9 @@ scan_runtime_touchpoints() {
         line="${rest%%:*}"
         text="${rest#*:}"
         file="${file#"$REPO_ROOT/"}"
+        if is_ui_readonly_allowlisted_path "$file"; then
+          continue
+        fi
         printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$text" >> "$out_file"
       done < <(grep -R -n -E "$regex" "$ASSISTANT_SRC" || true)
     fi
@@ -116,9 +146,9 @@ scan_runtime_touchpoints() {
   fi
 
   if [[ "$mode" == "report" ]]; then
-    echo "Layering runtime-boundary report:"
+    echo "Layering runtime-boundary report (forbidden touchpoints):"
     if [[ ! -s "$out_file" ]]; then
-      echo "  No runtime touchpoints detected in $ASSISTANT_SRC."
+      echo "  No forbidden runtime touchpoints detected in $ASSISTANT_SRC."
     else
       awk -F '\t' '{count[$1]++} END {for (k in count) printf "  - %s: %d\n", k, count[k]}' "$out_file" | sort
       echo
@@ -139,8 +169,9 @@ scan_runtime_touchpoints() {
 enforce_zero_runtime_touchpoints() {
   local matches_file="$1"
   if [[ -s "$matches_file" ]]; then
-    echo "ERROR: layering violation: assistant runtime touchpoints detected."
-    echo "Assistant must remain orchestration-only; move runtime semantics into iq capabilities."
+    echo "ERROR: layering violation: forbidden assistant runtime touchpoints detected."
+    echo "Semantic proof/file operations must live in iq capabilities."
+    echo "Read-only UI/context introspection is allowed only in designated UI modules."
     echo
     printf "touchpoint\tfile\tline\ttarget_iq_capability\tsource\n"
     cat "$matches_file"
@@ -188,16 +219,33 @@ check_mcp_only_method() {
 
 run_strict_mcp_guards() {
 assistant_tools_mcp_only_methods=(
+  execReadTheory
+  execListTheories
+  execSearchInTheory
+  execGetGoalState
+  execGetProofContext
   execFindTheorems
   execVerifyProof
   execRunSledgehammer
   execRunNitpick
   execRunQuickcheck
+  execGetType
+  execGetCommandText
   execExecuteStep
   execTraceSimplifier
+  execGetProofBlock
+  execGetContextInfo
+  execSearchAllTheories
+  execGetDependencies
+  execGetErrors
+  execGetWarnings
+  execEditTheory
+  execGetEntities
+  execCreateTheory
+  execOpenTheory
 )
 
-assistant_forbidden='IQIntegration\.(verifyProofAsync|runSledgehammerAsync|runFindTheoremsAsync|runQueryAsync|getCommandAtOffset)|Extended_Query_Operation'
+assistant_forbidden='IQIntegration\.(verifyProofAsync|runSledgehammerAsync|runFindTheoremsAsync|runQueryAsync|getCommandAtOffset)|Extended_Query_Operation|GoalExtractor|PrintContextAction|ShowTypeAction|CommandExtractor|ProofExtractor|MenuContext\.findTheoryBuffer|jEdit\.getBufferManager'
 
 for method in "${assistant_tools_mcp_only_methods[@]}"; do
   check_mcp_only_method \
@@ -205,6 +253,24 @@ for method in "${assistant_tools_mcp_only_methods[@]}"; do
     "AssistantTools.scala" \
     "$method" \
     "$assistant_forbidden" \
+    'IQMcpClient'
+done
+
+theory_browser_mcp_only_methods=(
+  theories
+  read
+  deps
+  search
+)
+
+theory_browser_forbidden='MenuContext|jEdit\.getBufferManager|getText\(|getLength\(\)|split\("\\\\n"\)'
+
+for method in "${theory_browser_mcp_only_methods[@]}"; do
+  check_mcp_only_method \
+    "$THEORY_BROWSER" \
+    "TheoryBrowserAction.scala" \
+    "$method" \
+    "$theory_browser_forbidden" \
     'IQMcpClient'
 done
 

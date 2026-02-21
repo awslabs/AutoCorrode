@@ -42,7 +42,7 @@ Current capabilities are implemented across both subsystems:
 - Core assistant actions now route command/goal/context/diagnostic/definition/entity lookups through `IQMcpClient`-backed paths.
 - Assistant runtime touchpoint inventory is tracked in:
   `design-documents/10-assistant-runtime-boundary-inventory.tsv`
-  and is expected to remain empty under the hard layering gate in `isabelle-assistant/scripts/check_layering.sh`.
+  and is expected to remain empty for forbidden low-level touchpoints under the hard layering gate in `isabelle-assistant/scripts/check_layering.sh`.
 
 ## Target Capability Split
 
@@ -56,7 +56,8 @@ This target split is normative for future refactoring and new feature work.
 ## Enforcement Status
 
 - `make -C isabelle-assistant check-layering` is a failing architectural gate.
-- Any direct assistant-side Isabelle runtime touchpoint is rejected (zero-exception policy).
+- Forbidden assistant-side low-level Isabelle runtime touchpoints are rejected.
+- Read-only UI/context introspection remains allowed in designated assistant UI modules for responsiveness.
 
 ## Stakeholders
 

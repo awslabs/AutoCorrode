@@ -5,7 +5,6 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.View
-import scala.jdk.CollectionConverters._
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.Locale
 import scala.annotation.unused
@@ -720,10 +719,141 @@ object AssistantTools {
   private[assistant] def clampOffset(offset: Int, bufferLength: Int): Int =
     math.max(0, math.min(offset, bufferLength))
 
-  private def bufferLines(
-      buffer: org.gjt.sp.jedit.buffer.JEditBuffer
-  ): Vector[String] =
-    (0 until buffer.getLineCount).map(buffer.getLineText).toVector
+  private val readToolsTimeoutMs: Long =
+    AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
+
+  private val numberedLinePattern = """^\s*(?:→\s*)?(\d+):(.*)$""".r
+
+  private def normalizeTheoryFileName(raw: String): String = {
+    val trimmed = raw.trim
+    if (trimmed.endsWith(".thy")) trimmed else s"$trimmed.thy"
+  }
+
+  private def baseName(path: String): String =
+    java.nio.file.Paths.get(path).getFileName.toString
+
+  private def optionalIntArg(args: ResponseParser.ToolArgs, key: String): Option[Int] =
+    args.get(key).map {
+      case ResponseParser.DecimalValue(d) if !d.isWhole =>
+        throw new IllegalArgumentException(
+          s"Parameter '$key' must be an integer, got decimal value: $d"
+        )
+      case ResponseParser.DecimalValue(d) => d.toInt
+      case ResponseParser.IntValue(i)     => i
+      case ResponseParser.StringValue(s) =>
+        scala.util.Try(s.toInt).getOrElse(
+          throw new IllegalArgumentException(
+            s"Parameter '$key' must be an integer, got: '$s'"
+          )
+        )
+      case ResponseParser.BooleanValue(_) | ResponseParser.JsonValue(_) =>
+        throw new IllegalArgumentException(
+          s"Parameter '$key' must be an integer"
+        )
+      case ResponseParser.NullValue =>
+        throw new IllegalArgumentException(
+          s"Parameter '$key' must be an integer"
+        )
+    }
+
+  private def selectionArgsForCurrentView(view: View): Map[String, Any] =
+    Option(view) match {
+      case None => Map("command_selection" -> "current")
+      case Some(v) =>
+        try {
+          val buffer = v.getBuffer
+          val pathOpt =
+            Option(buffer).flatMap(b => Option(b.getPath)).map(_.trim).filter(_.nonEmpty)
+          pathOpt match {
+            case Some(path) =>
+              val rawOffset = Option(v.getTextArea).map(_.getCaretPosition).getOrElse(0)
+              val bufferLength = Option(buffer).map(_.getLength).getOrElse(0)
+              val offset = clampOffset(rawOffset, bufferLength)
+              Map(
+                "command_selection" -> "file_offset",
+                "path" -> path,
+                "offset" -> offset
+              )
+            case None =>
+              Map("command_selection" -> "current")
+          }
+        } catch {
+          case _: Exception =>
+            Map("command_selection" -> "current")
+        }
+    }
+
+  private def currentBufferPath(view: View): Either[String, String] =
+    Option(view)
+      .flatMap(v => Option(v.getBuffer))
+      .flatMap(b => Option(b.getPath))
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .toRight("Error: current buffer has no path")
+
+  private def resolveTheoryPath(
+      theory: String,
+      openOnly: Boolean = true
+  ): Either[String, String] = {
+    val normalized = normalizeTheoryFileName(theory)
+    IQMcpClient
+      .callListFiles(
+        filterOpen = if (openOnly) Some(true) else None,
+        filterTheory = Some(true),
+        sortBy = Some("path"),
+        timeoutMs = readToolsTimeoutMs
+      )
+      .flatMap { result =>
+        val matches = result.files.filter(f => baseName(f.path) == normalized)
+        matches match {
+          case one :: Nil => Right(one.path)
+          case Nil =>
+            val scopeHint =
+              if (openOnly) "open or tracked theory files" else "tracked theory files"
+            Left(s"Theory '$theory' not found in $scopeHint.")
+          case many =>
+            Left(
+              s"Theory '$theory' is ambiguous; matching paths: ${
+                  many.map(_.path).mkString(", ")
+                }"
+            )
+        }
+      }
+  }
+
+  private def lineCountFromNumberedContent(content: String): Int =
+    content.linesIterator.count {
+      case numberedLinePattern(_, _) => true
+      case _                         => false
+    }
+
+  private def stripNumberPrefix(line: String): String = line match {
+    case numberedLinePattern(_, rest) => rest
+    case _                            => line
+  }
+
+  private def stripNumberPrefixes(content: String): String =
+    content.linesIterator.map(stripNumberPrefix).mkString("\n")
+
+  private def firstHighlightedOrFirstLine(context: String): String = {
+    val nonEmpty = context.linesIterator.map(_.trim).filter(_.nonEmpty).toList
+    val picked = nonEmpty.find(_.startsWith("→")).orElse(nonEmpty.headOption).getOrElse("")
+    stripNumberPrefix(picked).trim
+  }
+
+  private def formatDiagnosticsMessages(
+      diagnostics: IQMcpClient.DiagnosticsResult,
+      emptyMessage: String
+  ): String = {
+    if (diagnostics.diagnostics.isEmpty) emptyMessage
+    else
+      diagnostics.diagnostics
+        .map { d =>
+          if (d.line > 0) s"Line ${d.line}: ${d.message}" else d.message
+        }
+        .distinct
+        .mkString("\n")
+  }
 
   private def isSensitiveArgName(argName: String): Boolean = {
     val lowered = argName.toLowerCase(Locale.ROOT)
@@ -805,37 +935,43 @@ object AssistantTools {
     safeTheoryArg(args) match {
       case Left(err)     => err
       case Right(theory) =>
-        val normalized = if (theory.endsWith(".thy")) theory else s"$theory.thy"
-        findBuffer(normalized) match {
-          case None         => s"Theory '$theory' not found in open buffers."
-          case Some(buffer) =>
-            val lines = bufferLines(buffer)
-            val lineCount = lines.length
-            val (start, end) =
-              normalizeReadRange(
-                lineCount,
-                intArg(args, "start_line", 1),
-                intArg(args, "end_line", lineCount)
+        val start = optionalIntArg(args, "start_line")
+        val end = optionalIntArg(args, "end_line")
+        resolveTheoryPath(theory).fold(
+          err => err,
+          path =>
+            IQMcpClient
+              .callReadFileLine(
+                path = path,
+                startLine = start.orElse(Some(1)),
+                endLine = end,
+                timeoutMs = readToolsTimeoutMs
               )
-            val header = s"Theory $theory (lines $start-$end of $lineCount):\n"
-            if (lineCount == 0) {
-              s"Theory $theory is empty."
-            } else {
-              header + (start to end)
-                .map(i => s"$i: ${lines(i - 1)}")
-                .mkString("\n")
-            }
-        }
+              .fold(
+                mcpErr => s"Error: $mcpErr",
+                content =>
+                  if (content.trim.isEmpty) s"Theory $theory is empty."
+                  else s"Theory $theory:\n$content"
+              )
+        )
     }
   }
 
   private def execListTheories(): String = {
-    val buffers = org.gjt.sp.jedit.jEdit.getBufferManager().getBuffers().asScala
-    val theories = buffers
-      .filter(b => b.getPath != null && b.getPath.endsWith(".thy"))
-      .map(b => java.io.File(b.getPath).getName)
-      .sorted
-    if (theories.nonEmpty) theories.mkString("\n") else "No theory files open."
+    IQMcpClient
+      .callListFiles(
+        filterOpen = Some(true),
+        filterTheory = Some(true),
+        sortBy = Some("path"),
+        timeoutMs = readToolsTimeoutMs
+      )
+      .fold(
+        err => s"Error: $err",
+        listed => {
+          val theories = listed.files.map(f => baseName(f.path)).distinct.sorted
+          if (theories.nonEmpty) theories.mkString("\n") else "No theory files open."
+        }
+      )
   }
 
   private def execSearchInTheory(
@@ -848,58 +984,73 @@ object AssistantTools {
       case Right(theory) =>
         if (pattern.isEmpty) "Error: pattern required"
         else {
-          val normalized =
-            if (theory.endsWith(".thy")) theory else s"$theory.thy"
-          findBuffer(normalized) match {
-            case None         => s"Theory '$theory' not found."
-            case Some(buffer) =>
-              val max = math.min(
-                AssistantConstants.MAX_SEARCH_RESULTS,
-                math.max(1, intArg(args, "max_results", 20))
-              )
-              val patternLower = pattern.toLowerCase(Locale.ROOT)
-              val matches = bufferLines(buffer).zipWithIndex
-                .filter { case (line, _) =>
-                  line.toLowerCase(Locale.ROOT).contains(patternLower)
-                }
-                .take(max)
-              if (matches.isEmpty) s"No matches for '$pattern' in $theory."
-              else
-                matches
-                  .map { case (l, i) => s"${i + 1}: ${l.trim}" }
-                  .mkString("\n")
-          }
+          val max = math.min(
+            AssistantConstants.MAX_SEARCH_RESULTS,
+            math.max(1, intArg(args, "max_results", 20))
+          )
+          resolveTheoryPath(theory).fold(
+            err => err,
+            path =>
+              IQMcpClient
+                .callReadFileSearch(
+                  path = path,
+                  pattern = pattern,
+                  contextLines = 0,
+                  timeoutMs = readToolsTimeoutMs
+                )
+                .fold(
+                  mcpErr => s"Error: $mcpErr",
+                  matches => {
+                    val shown = matches.take(max)
+                    if (shown.isEmpty) s"No matches for '$pattern' in $theory."
+                    else
+                      shown
+                        .map(m =>
+                          s"${m.lineNumber}: ${firstHighlightedOrFirstLine(m.context)}"
+                        )
+                        .mkString("\n")
+                  }
+                )
+          )
         }
     }
   }
 
   private def execGetGoalState(view: View): String = {
-    val latch = new CountDownLatch(1)
-    @volatile var result = "No goal at cursor position."
-    GUI_Thread.later {
-      try {
-        val buffer = view.getBuffer
-        val offset = view.getTextArea.getCaretPosition
-        GoalExtractor.getGoalState(buffer, offset).foreach(g => result = g)
-      } catch {
-        case ex: Exception => ErrorHandler.logSilentError("AssistantTools", ex)
-      }
-      latch.countDown()
-    }
-    if (
-      !latch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
-    ) "Error: operation timed out (GUI thread busy)"
-    else result
+    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else
+      IQMcpClient
+        .callGetGoalState(
+          selectionArgs = selectionArgsForCurrentView(view),
+          timeoutMs = readToolsTimeoutMs
+        )
+        .fold(
+          err => s"Error: $err",
+          goalState =>
+            if (goalState.goal.hasGoal && goalState.goal.goalText.trim.nonEmpty)
+              goalState.goal.goalText.trim
+            else "No goal at cursor position."
+        )
   }
 
   private def execGetProofContext(view: View): String = {
-    // getContextString must be called from a background thread (it dispatches to GUI internally)
-    PrintContextAction
-      .getContextString(view)
-      .getOrElse("No local facts in scope.")
+    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else
+      IQMcpClient
+        .callGetProofContext(
+          selectionArgs = selectionArgsForCurrentView(view),
+          timeoutMs = readToolsTimeoutMs
+        )
+        .fold(
+          err => s"Error: $err",
+          ctx => {
+            if (ctx.success && ctx.hasContext && ctx.context.trim.nonEmpty)
+              ctx.context.trim
+            else if (ctx.timedOut) "Proof context lookup timed out."
+            else if (ctx.message.trim.nonEmpty) ctx.message.trim
+            else "No local facts in scope."
+          }
+        )
   }
 
   private def execFindTheorems(
@@ -1037,87 +1188,46 @@ object AssistantTools {
   }
 
   private def execGetType(view: View): String = {
-    val latch = new CountDownLatch(1)
-    @volatile var result = "No type information at cursor position."
-    GUI_Thread.later {
-      try {
-        val buffer = view.getBuffer
-        val offset = view.getTextArea.getCaretPosition
-        ShowTypeAction.getTypeAtOffset(buffer, offset).foreach(t => result = t)
-      } catch {
-        case ex: Exception => ErrorHandler.logSilentError("AssistantTools", ex)
-      }
-      latch.countDown()
-    }
-    if (
-      !latch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
-    ) "Error: operation timed out (GUI thread busy)"
-    else result
+    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else
+      IQMcpClient
+        .callGetTypeAtSelection(
+          selectionArgs = selectionArgsForCurrentView(view),
+          timeoutMs = readToolsTimeoutMs
+        )
+        .fold(
+          err => s"Error: $err",
+          t =>
+            if (t.hasType && t.typeText.trim.nonEmpty) t.typeText.trim
+            else t.message.filter(_.trim.nonEmpty).getOrElse(
+              "No type information at cursor position."
+            )
+        )
   }
 
   private def execGetCommandText(view: View): String = {
-    val latch = new CountDownLatch(1)
-    @volatile var result = "No command at cursor position."
-    GUI_Thread.later {
-      try {
-        val buffer = view.getBuffer
-        val offset = view.getTextArea.getCaretPosition
-        CommandExtractor
-          .getCommandAtOffset(buffer, offset)
-          .foreach(c => result = c)
-      } catch {
-        case ex: Exception => ErrorHandler.logSilentError("AssistantTools", ex)
-      }
-      latch.countDown()
-    }
-    if (
-      !latch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
-    ) "Error: operation timed out (GUI thread busy)"
-    else result
+    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else
+      IQMcpClient
+        .callResolveCommandTarget(
+          selectionArgs = selectionArgsForCurrentView(view),
+          timeoutMs = readToolsTimeoutMs
+        )
+        .fold(
+          err => s"Error: $err",
+          resolved =>
+            Option(resolved.command.source)
+              .map(_.trim)
+              .filter(_.nonEmpty)
+              .getOrElse("No command at cursor position.")
+        )
   }
 
   private def execGetErrors(
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
-    val timeoutMs =
-      AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
-
-    def selectionArgsForCurrentView(): Map[String, Any] = {
-      val buffer = view.getBuffer
-      val offset = view.getTextArea.getCaretPosition
-      val clamped = math.max(0, math.min(offset, buffer.getLength))
-      Option(buffer.getPath).map(_.trim).filter(_.nonEmpty) match {
-        case Some(path) =>
-          Map(
-            "command_selection" -> "file_offset",
-            "path" -> path,
-            "offset" -> clamped
-          )
-        case None =>
-          Map("command_selection" -> "current")
-      }
-    }
-
-    def formatDiagnostics(
-        diagnostics: IQMcpClient.DiagnosticsResult,
-        emptyMessage: String
-    ): String = {
-      if (diagnostics.diagnostics.isEmpty) emptyMessage
-      else
-        diagnostics.diagnostics
-          .map { d =>
-            if (d.line > 0) s"Line ${d.line}: ${d.message}" else d.message
-          }
-          .distinct
-          .mkString("\n")
-    }
+    val timeoutMs = readToolsTimeoutMs
 
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
@@ -1129,18 +1239,18 @@ object AssistantTools {
             severity = IQMcpClient.DiagnosticSeverity.Error,
             scope = IQMcpClient.DiagnosticScope.Selection,
             timeoutMs = timeoutMs,
-            selectionArgs = selectionArgsForCurrentView()
+            selectionArgs = selectionArgsForCurrentView(view)
           )
           .fold(
             err => s"Error: $err",
             diagnostics =>
-              formatDiagnostics(diagnostics, "No errors at cursor position.")
+              formatDiagnosticsMessages(diagnostics, "No errors at cursor position.")
           )
 
       case "all" =>
-        Option(view.getBuffer.getPath).map(_.trim).filter(_.nonEmpty) match {
-          case None => "Error: current buffer has no path"
-          case Some(path) =>
+        currentBufferPath(view).fold(
+          err => err,
+          path =>
             IQMcpClient
               .callGetDiagnostics(
                 severity = IQMcpClient.DiagnosticSeverity.Error,
@@ -1149,40 +1259,35 @@ object AssistantTools {
                 path = Some(path)
               )
               .fold(
-                err => s"Error: $err",
+                mcpErr => s"Error: $mcpErr",
                 diagnostics =>
-                  formatDiagnostics(diagnostics, "No errors in current buffer.")
+                  formatDiagnosticsMessages(
+                    diagnostics,
+                    "No errors in current buffer."
+                  )
               )
-        }
+        )
 
       case _ =>
-        // Use original case for theory name (case-sensitive)
-        val normalized =
-          if (effectiveScope.endsWith(".thy")) effectiveScope
-          else s"$effectiveScope.thy"
-        findBuffer(normalized) match {
-          case None => s"Theory '$effectiveScope' not found in open buffers."
-          case Some(buffer) =>
-            MenuContext.bufferPath(buffer) match {
-              case None => s"Error: theory '$effectiveScope' has no backing path"
-              case Some(path) =>
-                IQMcpClient
-                  .callGetDiagnostics(
-                    severity = IQMcpClient.DiagnosticSeverity.Error,
-                    scope = IQMcpClient.DiagnosticScope.File,
-                    timeoutMs = timeoutMs,
-                    path = Some(path)
+        resolveTheoryPath(effectiveScope).fold(
+          err => err,
+          path =>
+            IQMcpClient
+              .callGetDiagnostics(
+                severity = IQMcpClient.DiagnosticSeverity.Error,
+                scope = IQMcpClient.DiagnosticScope.File,
+                timeoutMs = timeoutMs,
+                path = Some(path)
+              )
+              .fold(
+                mcpErr => s"Error: $mcpErr",
+                diagnostics =>
+                  formatDiagnosticsMessages(
+                    diagnostics,
+                    s"No errors in theory '$effectiveScope'."
                   )
-                  .fold(
-                    err => s"Error: $err",
-                    diagnostics =>
-                      formatDiagnostics(
-                        diagnostics,
-                        s"No errors in theory '$effectiveScope'."
-                      )
-                  )
-            }
-        }
+              )
+        )
     }
   }
 
@@ -1318,63 +1423,68 @@ object AssistantTools {
   }
 
   private def execGetProofBlock(view: View): String = {
-    val latch = new CountDownLatch(1)
-    @volatile var result = "No proof block at cursor position."
-    GUI_Thread.later {
-      try {
-        val buffer = view.getBuffer
-        val offset = view.getTextArea.getCaretPosition
-        ProofExtractor
-          .getProofBlockAtOffset(buffer, offset)
-          .foreach(p => result = p)
-      } catch {
-        case ex: Exception => ErrorHandler.logSilentError("AssistantTools", ex)
-      }
-      latch.countDown()
-    }
-    if (
-      !latch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
-    ) "Error: operation timed out (GUI thread busy)"
-    else result
+    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else
+      IQMcpClient
+        .callGetProofBlock(
+          selectionArgs = selectionArgsForCurrentView(view),
+          timeoutMs = readToolsTimeoutMs
+        )
+        .fold(
+          err => s"Error: $err",
+          block =>
+            if (block.hasProofBlock && block.proofText.trim.nonEmpty)
+              block.proofText.trim
+            else block.message.filter(_.trim.nonEmpty).getOrElse(
+              "No proof block at cursor position."
+            )
+        )
   }
 
   private def execGetContextInfo(view: View): String = {
-    val latch = new CountDownLatch(1)
-    @volatile var result = ""
-    GUI_Thread.later {
-      try {
-        val buffer = view.getBuffer
-        val offset = view.getTextArea.getCaretPosition
-        val selection =
-          Option(view.getTextArea.getSelectedText).filter(_.trim.nonEmpty)
-        val ctx = MenuContext.analyze(view, buffer, offset, selection)
-        val parts = List(
-          s"in_proof: ${ctx.inProof}",
-          s"has_goal: ${ctx.hasGoal}",
-          s"on_error: ${ctx.onError}",
-          s"on_warning: ${ctx.onWarning}",
-          s"has_selection: ${ctx.hasSelection}",
-          s"has_command: ${ctx.hasCommand}",
-          s"has_type_info: ${ctx.hasTypeInfo}",
-          s"has_apply_proof: ${ctx.hasApplyProof}",
-          s"on_definition: ${ctx.onDefinition}",
-          s"iq_available: ${ctx.iqAvailable}"
+    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else
+      IQMcpClient
+        .callGetContextInfo(
+          selectionArgs = selectionArgsForCurrentView(view),
+          timeoutMs = readToolsTimeoutMs
         )
-        result = parts.mkString("\n")
-      } catch { case _: Exception => result = "Error analyzing context" }
-      latch.countDown()
-    }
-    if (
-      !latch.await(
-        AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )
-    ) "Error: operation timed out (GUI thread busy)"
-    else if (result.isEmpty) "Error: operation completed without a result"
-    else result
+        .fold(
+          err => s"Error: $err",
+          ctx => {
+            val commandKeyword = Option(ctx.command.keyword).getOrElse("").trim
+            val definitionKeywords = Set(
+              "definition",
+              "abbreviation",
+              "fun",
+              "function",
+              "primrec",
+              "datatype",
+              "codatatype",
+              "type_synonym",
+              "record",
+              "typedef"
+            )
+            val hasSelection =
+              Option(view)
+                .flatMap(v => Option(v.getTextArea))
+                .flatMap(ta => Option(ta.getSelectedText))
+                .exists(_.trim.nonEmpty)
+            val parts = List(
+              s"in_proof: ${ctx.inProofContext}",
+              s"has_goal: ${ctx.hasGoal || ctx.goal.hasGoal}",
+              s"on_error: false",
+              s"on_warning: false",
+              s"has_selection: $hasSelection",
+              s"has_command: ${ctx.command.source.trim.nonEmpty}",
+              s"has_type_info: false",
+              s"has_apply_proof: false",
+              s"on_definition: ${definitionKeywords.contains(commandKeyword)}",
+              "iq_available: true"
+            )
+            parts.mkString("\n")
+          }
+        )
   }
 
   private def execSearchAllTheories(
@@ -1385,32 +1495,43 @@ object AssistantTools {
     if (pattern.isEmpty) "Error: pattern required"
     else {
       val maxTotal = math.min(200, math.max(1, intArg(args, "max_results", 50)))
-      val patternLower = pattern.toLowerCase(Locale.ROOT)
-      val buffers =
-        org.gjt.sp.jedit.jEdit.getBufferManager().getBuffers().asScala
-      val theories = buffers
-        .filter(b => b.getPath != null && b.getPath.endsWith(".thy"))
-        .toList
+      IQMcpClient
+        .callListFiles(
+          filterOpen = Some(true),
+          filterTheory = Some(true),
+          sortBy = Some("path"),
+          timeoutMs = readToolsTimeoutMs
+        )
+        .fold(
+          err => s"Error: $err",
+          listed => {
+            val allMatches = scala.collection.mutable.ListBuffer[String]()
+            listed.files.iterator.takeWhile(_ => allMatches.length < maxTotal).foreach { file =>
+              val remaining = maxTotal - allMatches.length
+              val matches = IQMcpClient
+                .callReadFileSearch(
+                  path = file.path,
+                  pattern = pattern,
+                  contextLines = 0,
+                  timeoutMs = readToolsTimeoutMs
+                )
+                .getOrElse(Nil)
+                .take(remaining)
+              matches.foreach { m =>
+                allMatches += s"${baseName(file.path)}:${m.lineNumber}: ${
+                    firstHighlightedOrFirstLine(m.context)
+                  }"
+              }
+            }
 
-      val allMatches = scala.collection.mutable.ListBuffer[String]()
-      for (buffer <- theories if allMatches.length < maxTotal) {
-        val theoryName = java.io.File(buffer.getPath).getName
-        val matches = bufferLines(buffer).zipWithIndex
-          .filter { case (line, _) =>
-            line.toLowerCase(Locale.ROOT).contains(patternLower)
+            if (allMatches.nonEmpty) {
+              val truncated =
+                if (allMatches.length >= maxTotal) s" (showing first $maxTotal)"
+                else ""
+              s"Found ${allMatches.length} matches$truncated:\n${allMatches.mkString("\n")}"
+            } else s"No matches for '$pattern' in any open theory."
           }
-          .take(maxTotal - allMatches.length)
-        matches.foreach { case (line, idx) =>
-          allMatches += s"$theoryName:${idx + 1}: ${line.trim}"
-        }
-      }
-
-      if (allMatches.nonEmpty) {
-        val truncated =
-          if (allMatches.length >= maxTotal) s" (showing first $maxTotal)"
-          else ""
-        s"Found ${allMatches.length} matches$truncated:\n${allMatches.mkString("\n")}"
-      } else s"No matches for '$pattern' in any open theory."
+        )
     }
   }
 
@@ -1421,23 +1542,34 @@ object AssistantTools {
     safeTheoryArg(args) match {
       case Left(err)     => err
       case Right(theory) =>
-        val normalized = if (theory.endsWith(".thy")) theory else s"$theory.thy"
-        findBuffer(normalized) match {
-          case None         => s"Theory '$theory' not found in open buffers."
-          case Some(buffer) =>
-            val content = buffer.getText(0, buffer.getLength)
-            val importPattern = """(?s)imports\s+(.*?)(?:\bbegin\b|\z)""".r
-            importPattern.findFirstMatchIn(content) match {
-              case Some(m) =>
-                val tokenPattern = """"[^"]+"|[^\s"]+""".r
-                val imports =
-                  tokenPattern.findAllIn(m.group(1)).toList.filter(_.nonEmpty)
-                if (imports.nonEmpty)
-                  s"Dependencies of $theory:\n${imports.mkString("\n")}"
-                else s"Theory '$theory' has no explicit imports."
-              case None => s"No imports found in theory '$theory'."
-            }
-        }
+        resolveTheoryPath(theory).fold(
+          err => err,
+          path =>
+            IQMcpClient
+              .callReadFileLine(
+                path = path,
+                startLine = Some(1),
+                endLine = Some(-1),
+                timeoutMs = readToolsTimeoutMs
+              )
+              .fold(
+                mcpErr => s"Error: $mcpErr",
+                numberedContent => {
+                  val content = stripNumberPrefixes(numberedContent)
+                  val importPattern = """(?s)imports\s+(.*?)(?:\bbegin\b|\z)""".r
+                  importPattern.findFirstMatchIn(content) match {
+                    case Some(m) =>
+                      val tokenPattern = """"[^"]+"|[^\s"]+""".r
+                      val imports =
+                        tokenPattern.findAllIn(m.group(1)).toList.filter(_.nonEmpty)
+                      if (imports.nonEmpty)
+                        s"Dependencies of $theory:\n${imports.mkString("\n")}"
+                      else s"Theory '$theory' has no explicit imports."
+                    case None => s"No imports found in theory '$theory'."
+                  }
+                }
+              )
+        )
     }
   }
 
@@ -1445,38 +1577,7 @@ object AssistantTools {
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
-    val timeoutMs =
-      AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
-
-    def selectionArgsForCurrentView(): Map[String, Any] = {
-      val buffer = view.getBuffer
-      val offset = view.getTextArea.getCaretPosition
-      val clamped = math.max(0, math.min(offset, buffer.getLength))
-      Option(buffer.getPath).map(_.trim).filter(_.nonEmpty) match {
-        case Some(path) =>
-          Map(
-            "command_selection" -> "file_offset",
-            "path" -> path,
-            "offset" -> clamped
-          )
-        case None =>
-          Map("command_selection" -> "current")
-      }
-    }
-
-    def formatDiagnostics(
-        diagnostics: IQMcpClient.DiagnosticsResult,
-        emptyMessage: String
-    ): String = {
-      if (diagnostics.diagnostics.isEmpty) emptyMessage
-      else
-        diagnostics.diagnostics
-          .map { d =>
-            if (d.line > 0) s"Line ${d.line}: ${d.message}" else d.message
-          }
-          .distinct
-          .mkString("\n")
-    }
+    val timeoutMs = readToolsTimeoutMs
 
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
@@ -1488,18 +1589,21 @@ object AssistantTools {
             severity = IQMcpClient.DiagnosticSeverity.Warning,
             scope = IQMcpClient.DiagnosticScope.Selection,
             timeoutMs = timeoutMs,
-            selectionArgs = selectionArgsForCurrentView()
+            selectionArgs = selectionArgsForCurrentView(view)
           )
           .fold(
             err => s"Error: $err",
             diagnostics =>
-              formatDiagnostics(diagnostics, "No warnings at cursor position.")
+              formatDiagnosticsMessages(
+                diagnostics,
+                "No warnings at cursor position."
+              )
           )
 
       case "all" =>
-        Option(view.getBuffer.getPath).map(_.trim).filter(_.nonEmpty) match {
-          case None => "Error: current buffer has no path"
-          case Some(path) =>
+        currentBufferPath(view).fold(
+          err => err,
+          path =>
             IQMcpClient
               .callGetDiagnostics(
                 severity = IQMcpClient.DiagnosticSeverity.Warning,
@@ -1508,43 +1612,35 @@ object AssistantTools {
                 path = Some(path)
               )
               .fold(
-                err => s"Error: $err",
+                mcpErr => s"Error: $mcpErr",
                 diagnostics =>
-                  formatDiagnostics(
+                  formatDiagnosticsMessages(
                     diagnostics,
                     "No warnings in current buffer."
                   )
               )
-        }
+        )
 
       case _ =>
-        // Use original case for theory name (case-sensitive)
-        val normalized =
-          if (effectiveScope.endsWith(".thy")) effectiveScope
-          else s"$effectiveScope.thy"
-        findBuffer(normalized) match {
-          case None => s"Theory '$effectiveScope' not found in open buffers."
-          case Some(buffer) =>
-            MenuContext.bufferPath(buffer) match {
-              case None => s"Error: theory '$effectiveScope' has no backing path"
-              case Some(path) =>
-                IQMcpClient
-                  .callGetDiagnostics(
-                    severity = IQMcpClient.DiagnosticSeverity.Warning,
-                    scope = IQMcpClient.DiagnosticScope.File,
-                    timeoutMs = timeoutMs,
-                    path = Some(path)
+        resolveTheoryPath(effectiveScope).fold(
+          err => err,
+          path =>
+            IQMcpClient
+              .callGetDiagnostics(
+                severity = IQMcpClient.DiagnosticSeverity.Warning,
+                scope = IQMcpClient.DiagnosticScope.File,
+                timeoutMs = timeoutMs,
+                path = Some(path)
+              )
+              .fold(
+                mcpErr => s"Error: $mcpErr",
+                diagnostics =>
+                  formatDiagnosticsMessages(
+                    diagnostics,
+                    s"No warnings in theory '$effectiveScope'."
                   )
-                  .fold(
-                    err => s"Error: $err",
-                    diagnostics =>
-                      formatDiagnostics(
-                        diagnostics,
-                        s"No warnings in theory '$effectiveScope'."
-                      )
-                  )
-            }
-        }
+              )
+        )
     }
   }
 
@@ -1610,105 +1706,82 @@ object AssistantTools {
         )
           s"Error: text required for $operation operation"
         else {
-          val normalized =
-            if (theory.endsWith(".thy")) theory else s"$theory.thy"
-          findBuffer(normalized) match {
-            case None         => s"Theory '$theory' not found in open buffers."
-            case Some(buffer) =>
-              val latch = new CountDownLatch(1)
-              @volatile var result = ""
-              GUI_Thread.later {
-                try {
-                  val lineCount = buffer.getLineCount
-                  val canAppendAtEnd = operation == "insert" && startLine == lineCount + 1
-                  if (startLine > lineCount && !canAppendAtEnd) {
-                    result =
+          resolveTheoryPath(theory).fold(
+            err => err,
+            path =>
+              IQMcpClient
+                .callReadFileLine(
+                  path = path,
+                  startLine = Some(1),
+                  endLine = Some(-1),
+                  timeoutMs = readToolsTimeoutMs
+                )
+                .fold(
+                  mcpErr => s"Error: $mcpErr",
+                  numberedContent => {
+                    val lineCount = lineCountFromNumberedContent(numberedContent)
+                    val canAppendAtEnd = operation == "insert" && startLine == lineCount + 1
+                    if (startLine > lineCount && !canAppendAtEnd)
                       s"Error: start_line $startLine out of range (theory has $lineCount lines)"
-                  } else if (
-                    (operation == "replace" || operation == "delete") && endLine < startLine
-                  ) {
-                    result = s"Error: end_line must be >= start_line (got $endLine < $startLine)"
-                  } else if ((operation == "replace" || operation == "delete") && endLine > lineCount) {
-                    result =
+                    else if (
+                      (operation == "replace" || operation == "delete") && endLine > lineCount
+                    )
                       s"Error: end_line $endLine out of range (theory has $lineCount lines)"
-                  } else {
-                    buffer.beginCompoundEdit()
-                    try {
-                      operation match {
+                    else {
+                      val writeResult = operation match {
                         case "insert" =>
-                          val offset =
-                            if (canAppendAtEnd) buffer.getLength
-                            else buffer.getLineStartOffset(startLine - 1)
-                          val needsLeadingNewline =
-                            canAppendAtEnd &&
-                            buffer.getLength > 0 &&
-                            buffer.getText(buffer.getLength - 1, 1) != "\n"
                           val normalizedText =
                             if (text.endsWith("\n")) text else text + "\n"
-                          buffer.insert(
-                            offset,
-                            (if (needsLeadingNewline) "\n" else "") + normalizedText
+                          IQMcpClient.callWriteFileInsert(
+                            path = path,
+                            insertAfterLine = math.max(0, startLine - 1),
+                            newText = normalizedText,
+                            timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
                           )
-                          result =
-                            if (canAppendAtEnd)
-                              s"Inserted ${text.linesIterator.size} lines after line $lineCount"
-                            else s"Inserted ${text.linesIterator.size} lines before line $startLine"
                         case "replace" =>
-                          val startOffset =
-                            buffer.getLineStartOffset(startLine - 1)
-                          val endOffset =
-                            if (endLine == lineCount) buffer.getLength
-                            else buffer.getLineStartOffset(endLine)
-                          val removedEndsWithNewline =
-                            endOffset > startOffset &&
-                            buffer.getText(endOffset - 1, 1) == "\n"
-                          val replacementText =
-                            if (removedEndsWithNewline && !text.endsWith("\n")) text + "\n"
-                            else text
-                          buffer.remove(startOffset, endOffset - startOffset)
-                          buffer.insert(startOffset, replacementText)
-                          result = s"Replaced lines $startLine-$endLine"
+                          IQMcpClient.callWriteFileLine(
+                            path = path,
+                            startLine = startLine,
+                            endLine = endLine,
+                            newText = text,
+                            timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+                          )
                         case "delete" =>
-                          val deletingToEnd = endLine == lineCount
-                          val startOffset =
-                            if (deletingToEnd && startLine > 1)
-                              math.max(0, buffer.getLineEndOffset(startLine - 2) - 1)
-                            else buffer.getLineStartOffset(startLine - 1)
-                          val endOffset =
-                            if (deletingToEnd) buffer.getLength
-                            else buffer.getLineStartOffset(endLine)
-                          buffer.remove(startOffset, endOffset - startOffset)
-                          result = s"Deleted lines $startLine-$endLine"
+                          IQMcpClient.callWriteFileLine(
+                            path = path,
+                            startLine = startLine,
+                            endLine = endLine,
+                            newText = "",
+                            timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+                          )
                       }
-                      // Show context after edit: 3 lines before and after
-                      val newLineCount = buffer.getLineCount
-                      val contextStart = math.max(1, startLine - 3)
-                      val contextEnd = math.min(newLineCount, startLine + 5)
-                      val contextLines = (contextStart to contextEnd).map { i =>
-                        val lineText = buffer.getLineText(i - 1)
-                        s"$i: $lineText"
-                      }.mkString("\n")
-                      result += s"\n\nContext (lines $contextStart-$contextEnd of $newLineCount):\n$contextLines"
-                    } finally {
-                      buffer.endCompoundEdit()
+
+                      writeResult.fold(
+                        err => s"Error: $err",
+                        _ => {
+                          val contextStart = math.max(1, startLine - 3)
+                          val contextEnd = math.max(contextStart, startLine + 5)
+                          val context = IQMcpClient
+                            .callReadFileLine(
+                              path = path,
+                              startLine = Some(contextStart),
+                              endLine = Some(contextEnd),
+                              timeoutMs = readToolsTimeoutMs
+                            )
+                            .getOrElse("")
+                          val action = operation match {
+                            case "insert"  => s"Inserted ${text.linesIterator.size} lines before line $startLine"
+                            case "replace" => s"Replaced lines $startLine-$endLine"
+                            case "delete"  => s"Deleted lines $startLine-$endLine"
+                          }
+                          if (context.trim.isEmpty) action
+                          else s"$action\n\nContext:\n$context"
+                        }
+                      )
                     }
                   }
-                } catch {
-                  case ex: Exception => result = s"Error: ${ex.getMessage}"
-                }
-                latch.countDown()
-              }
-              if (!latch.await(
-                AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
-                TimeUnit.SECONDS
-              )) {
-                "Error: Operation timed out (GUI thread busy)"
-              } else if (result.isEmpty) {
-                "Error: operation completed without a result"
-              } else {
-                result
-              }
-          }
+                )
+          )
         }
     }
   }
@@ -1724,63 +1797,37 @@ object AssistantTools {
       val methods = methodsStr.split(",").map(_.trim).filter(_.nonEmpty).toList
       if (methods.isEmpty) "Error: no valid methods provided"
       else {
-        val cmdLatch = new CountDownLatch(1)
-        @volatile var hasCommand = false
-        GUI_Thread.later {
-          try {
-            hasCommand = CommandExtractor
-              .getCommandAtOffset(
-              view.getBuffer,
-              view.getTextArea.getCaretPosition
-            )
-              .isDefined
-          } catch {
-            case ex: Exception =>
-              ErrorHandler.logSilentError("AssistantTools", ex)
-          }
-          cmdLatch.countDown()
-        }
-        if (
-          !cmdLatch.await(
-            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-            TimeUnit.SECONDS
-          )
-        ) return "Error: operation timed out (GUI thread busy)"
-
-        if (!hasCommand) "No Isabelle command at cursor position."
-        else {
-            val results = scala.collection.mutable.ListBuffer[String]()
-            for (method <- methods) {
-              val timeout = AssistantOptions.getVerificationTimeout
-              val latch = new CountDownLatch(1)
-              @volatile var methodResult = ""
-              GUI_Thread.later {
-                IQIntegration.verifyProofAsync(
-                  view,
-                  method,
-                  timeout,
-                  {
-                    case IQIntegration.ProofSuccess(ms, _) =>
-                      methodResult = s"[ok] $method (${ms}ms)";
-                      latch.countDown()
-                    case IQIntegration.ProofFailure(err) =>
-                      methodResult = s"[FAIL] $method: ${err.take(50)}";
-                      latch.countDown()
-                    case IQIntegration.ProofTimeout =>
-                      methodResult = s"[TIMEOUT] $method"; latch.countDown()
-                    case _ =>
-                      methodResult = s"[UNAVAILABLE] $method"; latch.countDown()
-                  }
-                )
-              }
-              if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-                results += s"[TIMEOUT] $method"
-              else if (methodResult.isEmpty)
-                results += s"[ERROR] $method returned no result"
-              else results += methodResult
+        val results = scala.collection.mutable.ListBuffer[String]()
+        for (method <- methods) {
+          val timeout = AssistantOptions.getVerificationTimeout
+          val latch = new CountDownLatch(1)
+          @volatile var methodResult = ""
+          IQIntegration.verifyProofAsync(
+            view,
+            method,
+            timeout,
+            {
+              case IQIntegration.ProofSuccess(ms, _) =>
+                methodResult = s"[ok] $method (${ms}ms)"
+                latch.countDown()
+              case IQIntegration.ProofFailure(err) =>
+                methodResult = s"[FAIL] $method: ${err.take(50)}"
+                latch.countDown()
+              case IQIntegration.ProofTimeout =>
+                methodResult = s"[TIMEOUT] $method"
+                latch.countDown()
+              case _ =>
+                methodResult = s"[UNAVAILABLE] $method"
+                latch.countDown()
             }
-            s"Tried ${methods.length} methods:\n${results.mkString("\n")}"
-          }
+          )
+          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+            results += s"[TIMEOUT] $method"
+          else if (methodResult.isEmpty)
+            results += s"[ERROR] $method returned no result"
+          else results += methodResult
+        }
+        s"Tried ${methods.length} methods:\n${results.mkString("\n")}"
       }
     }
   }
@@ -1792,40 +1839,35 @@ object AssistantTools {
     safeTheoryArg(args) match {
       case Left(err)     => err
       case Right(theory) =>
-        val normalized = if (theory.endsWith(".thy")) theory else s"$theory.thy"
-        findBuffer(normalized) match {
-          case None         => s"Theory '$theory' not found in open buffers."
-          case Some(buffer) =>
-            val maxResultsRaw = intArg(args, "max_results", 200)
-            val maxResults = math.max(1, math.min(1000, maxResultsRaw))
-            MenuContext.bufferPath(buffer) match {
-              case None => s"Error: theory '$theory' has no backing path"
-              case Some(path) =>
-                IQMcpClient
-                  .callGetEntities(
-                    path = path,
-                    maxResults = Some(maxResults),
-                    timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
-                  )
-                  .fold(
-                    err => s"Error: $err",
-                    entitiesResult => {
-                      if (entitiesResult.entities.isEmpty)
-                        "No entities found in theory."
-                      else {
-                        val lines = entitiesResult.entities.map { entity =>
-                          s"Line ${entity.line}: ${entity.keyword} ${entity.name}"
-                        }
-                        val suffix =
-                          if (entitiesResult.truncated)
-                            s"\n\nResults truncated to ${entitiesResult.returnedEntities} of ${entitiesResult.totalEntities} entities."
-                          else ""
-                        lines.mkString("\n") + suffix
-                      }
+        val maxResultsRaw = intArg(args, "max_results", 200)
+        val maxResults = math.max(1, math.min(1000, maxResultsRaw))
+        resolveTheoryPath(theory).fold(
+          err => err,
+          path =>
+            IQMcpClient
+              .callGetEntities(
+                path = path,
+                maxResults = Some(maxResults),
+                timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+              )
+              .fold(
+                mcpErr => s"Error: $mcpErr",
+                entitiesResult => {
+                  if (entitiesResult.entities.isEmpty)
+                    "No entities found in theory."
+                  else {
+                    val lines = entitiesResult.entities.map { entity =>
+                      s"Line ${entity.line}: ${entity.keyword} ${entity.name}"
                     }
-                  )
-            }
-        }
+                    val suffix =
+                      if (entitiesResult.truncated)
+                        s"\n\nResults truncated to ${entitiesResult.returnedEntities} of ${entitiesResult.totalEntities} entities."
+                      else ""
+                    lines.mkString("\n") + suffix
+                  }
+                }
+              )
+        )
     }
   }
 
@@ -1893,49 +1935,39 @@ object AssistantTools {
     else if (!isValidCreateTheoryName(name))
       s"Error: invalid theory name '$name'"
     else {
-      val latch = new CountDownLatch(1)
-      @volatile var result = ""
-      GUI_Thread.later {
-        try {
-          val currentPath = view.getBuffer.getPath
+      currentBufferPath(view).fold(
+        err => err,
+        currentPath => {
           val currentDir = java.nio.file.Paths.get(currentPath).getParent
-          if (currentDir == null) {
-            result = "Error: could not determine current theory directory"
-          } else {
+          if (currentDir == null) "Error: could not determine current theory directory"
+          else {
             val normalizedDir = currentDir.toAbsolutePath.normalize()
             val targetPath = normalizedDir.resolve(s"$name.thy").normalize()
 
             val effectiveImports = if (imports.isEmpty) "Main" else imports
-            // Proper theory header format with begin on its own line
             val theoryContent =
               s"theory $name\n  imports $effectiveImports\nbegin\n\n${
                   if (content.nonEmpty) content + "\n\n" else ""
                 }end\n"
 
-            if (targetPath.getParent != normalizedDir) {
-              result = s"Error: invalid theory name '$name'"
-            } else if (java.nio.file.Files.exists(targetPath)) {
-              result = s"Error: file $name.thy already exists"
-            } else {
-              java.nio.file.Files.write(
-                targetPath,
-                theoryContent.getBytes("UTF-8")
-              )
-              org.gjt.sp.jedit.jEdit.openFile(view, targetPath.toString)
-              result = s"Created and opened $name.thy"
-            }
+            if (targetPath.getParent != normalizedDir)
+              s"Error: invalid theory name '$name'"
+            else
+              IQMcpClient
+                .callCreateFile(
+                  path = targetPath.toString,
+                  content = theoryContent,
+                  overwriteIfExists = false,
+                  inView = true,
+                  timeoutMs = AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC * 1000L
+                )
+                .fold(
+                  mcpErr => s"Error: $mcpErr",
+                  _ => s"Created and opened $name.thy"
+                )
           }
-        } catch { case ex: Exception => result = s"Error: ${ex.getMessage}" }
-        latch.countDown()
-      }
-      if (!latch.await(
-        AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
-        TimeUnit.SECONDS
-      )) {
-        "Error: Operation timed out (GUI thread busy)"
-      } else {
-        result
-      }
+        }
+      )
     }
   }
 
@@ -1946,38 +1978,34 @@ object AssistantTools {
     val path = safeStringArg(args, "path", 1000)
     if (path.isEmpty) "Error: path required"
     else {
-      val latch = new CountDownLatch(1)
-      @volatile var result = ""
-      GUI_Thread.later {
-        try {
-          val file =
-            if (java.io.File(path).isAbsolute) java.io.File(path)
-            else {
-              val currentPath = view.getBuffer.getPath
-              val currentDir = java.io.File(currentPath).getParent
-              java.io.File(s"$currentDir/$path")
-            }
-
-          if (!file.exists()) {
-            result = s"Error: file not found: ${file.getPath}"
-          } else if (!file.getName.endsWith(".thy")) {
-            result =
-              s"Error: not a theory file (must end with .thy): ${file.getName}"
-          } else {
-            org.gjt.sp.jedit.jEdit.openFile(view, file.getPath)
-            result = s"Opened ${file.getName}"
-          }
-        } catch { case ex: Exception => result = s"Error: ${ex.getMessage}" }
-        latch.countDown()
+      if (!path.endsWith(".thy")) {
+        s"Error: not a theory file (must end with .thy): $path"
+      } else {
+        val resolvedPath = {
+          val file = java.io.File(path)
+          if (file.isAbsolute) file.getPath
+          else
+            currentBufferPath(view).fold(_ => path, current =>
+              java.nio.file.Paths
+                .get(current)
+                .getParent
+                .resolve(path)
+                .normalize()
+                .toString
+            )
+        }
+        IQMcpClient
+          .callOpenFile(
+            path = resolvedPath,
+            createIfMissing = false,
+            inView = true,
+            timeoutMs = AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC * 1000L
+          )
+          .fold(
+            err => s"Error: $err",
+            opened => s"Opened ${baseName(opened.path)}"
+          )
       }
-      if (
-        !latch.await(
-          AssistantConstants.BUFFER_OPERATION_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) "Error: operation timed out (GUI thread busy)"
-      else if (result.isEmpty) "Error: operation completed without a result"
-      else result
     }
   }
 
@@ -2335,11 +2363,6 @@ object AssistantTools {
        |$optionButtons
        |</div>""".stripMargin
   }
-
-  private def findBuffer(
-      normalized: String
-  ): Option[org.gjt.sp.jedit.buffer.JEditBuffer] =
-    MenuContext.findTheoryBuffer(normalized)
 
   private def intArg(
       args: ResponseParser.ToolArgs,

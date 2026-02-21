@@ -26,6 +26,47 @@ object IQMcpClient {
       error: Option[String]
   )
 
+  final case class ListedFile(
+      path: String,
+      isTheory: Boolean,
+      isOpen: Boolean,
+      theoryName: Option[String]
+  )
+
+  final case class ListFilesResult(
+      files: List[ListedFile],
+      totalCount: Int,
+      openCount: Int,
+      theoryCount: Int
+  )
+
+  final case class ReadFileSearchMatch(
+      lineNumber: Int,
+      context: String
+  )
+
+  final case class WriteFileResult(
+      commands: List[Map[String, Any]],
+      summary: Map[String, Any]
+  )
+
+  final case class OpenFileResult(
+      path: String,
+      created: Boolean,
+      opened: Boolean,
+      inView: Boolean,
+      message: String
+  )
+
+  final case class CreateFileResult(
+      path: String,
+      created: Boolean,
+      overwritten: Boolean,
+      opened: Boolean,
+      inView: Boolean,
+      message: String
+  )
+
   sealed trait CommandSelection
   case object CurrentSelection extends CommandSelection
   final case class FileOffsetSelection(
@@ -639,6 +680,188 @@ object IQMcpClient {
       command = asObject(payload.getOrElse("command", Map.empty))
         .map(decodeCommandInfo)
     )
+  }
+
+  private def decodeListedFile(payload: Map[String, Any]): ListedFile =
+    ListedFile(
+      path = stringField(payload, "path"),
+      isTheory = boolField(payload, "is_theory", default = false),
+      isOpen = boolField(payload, "is_open", default = false),
+      theoryName = payload.get("theory_name").map(_.toString.trim).filter(_.nonEmpty)
+    )
+
+  private[assistant] def decodeListFilesResult(
+      payload: Map[String, Any]
+  ): ListFilesResult = {
+    val files = listField(payload, "files").flatMap(raw =>
+      asObject(raw).map(decodeListedFile)
+    )
+    ListFilesResult(
+      files = files,
+      totalCount = intField(payload, "total_count", files.length),
+      openCount = intField(payload, "open_count", files.count(_.isOpen)),
+      theoryCount = intField(payload, "theory_count", files.count(_.isTheory))
+    )
+  }
+
+  private def decodeWriteFileResult(payload: Map[String, Any]): WriteFileResult = {
+    val commands = listField(payload, "commands").flatMap(asObject)
+    val summary = mapField(payload, "summary")
+    WriteFileResult(commands = commands, summary = summary)
+  }
+
+  private[assistant] def decodeOpenFileResult(
+      payload: Map[String, Any]
+  ): OpenFileResult =
+    OpenFileResult(
+      path = stringField(payload, "path"),
+      created = boolField(payload, "created", default = false),
+      opened = boolField(payload, "opened", default = false),
+      inView = boolField(payload, "in_view", default = true),
+      message = stringField(payload, "message")
+    )
+
+  private[assistant] def decodeCreateFileResult(
+      payload: Map[String, Any]
+  ): CreateFileResult =
+    CreateFileResult(
+      path = stringField(payload, "path"),
+      created = boolField(payload, "created", default = false),
+      overwritten = boolField(payload, "overwritten", default = false),
+      opened = boolField(payload, "opened", default = true),
+      inView = boolField(payload, "in_view", default = true),
+      message = stringField(payload, "message")
+    )
+
+  private[assistant] def decodeReadFileSearchMatches(
+      payload: Map[String, Any]
+  ): List[ReadFileSearchMatch] =
+    payload.get("content").flatMap(asList).getOrElse(List.empty).flatMap(raw =>
+      asObject(raw).map { item =>
+        ReadFileSearchMatch(
+          lineNumber = intField(item, "line_number", 0),
+          context = stringField(item, "context")
+        )
+      }
+    )
+
+  private def normalizedToolTimeout(timeoutMs: Long): Long =
+    math.max(1L, timeoutMs)
+
+  def callListFiles(
+      filterOpen: Option[Boolean] = None,
+      filterTheory: Option[Boolean] = None,
+      sortBy: Option[String] = Some("path"),
+      timeoutMs: Long = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+  ): Either[String, ListFilesResult] = {
+    val args = Map.newBuilder[String, Any]
+    filterOpen.foreach(v => args += ("filter_open" -> v))
+    filterTheory.foreach(v => args += ("filter_theory" -> v))
+    sortBy.map(_.trim).filter(_.nonEmpty).foreach(v => args += ("sort_by" -> v))
+    callTool("list_files", args.result(), normalizedToolTimeout(timeoutMs))
+      .map(decodeListFilesResult)
+  }
+
+  def callReadFileLine(
+      path: String,
+      startLine: Option[Int],
+      endLine: Option[Int],
+      timeoutMs: Long
+  ): Either[String, String] = {
+    val args = Map.newBuilder[String, Any]
+    args += ("path" -> path)
+    args += ("mode" -> "Line")
+    startLine.foreach(v => args += ("start_line" -> v))
+    endLine.foreach(v => args += ("end_line" -> v))
+    callTool("read_file", args.result(), normalizedToolTimeout(timeoutMs)).map(
+      payload => payload.get("content").map(_.toString).getOrElse("")
+    )
+  }
+
+  def callReadFileSearch(
+      path: String,
+      pattern: String,
+      contextLines: Int,
+      timeoutMs: Long
+  ): Either[String, List[ReadFileSearchMatch]] = {
+    val args = Map(
+      "path" -> path,
+      "mode" -> "Search",
+      "pattern" -> pattern,
+      "context_lines" -> math.max(0, contextLines)
+    )
+    callTool("read_file", args, normalizedToolTimeout(timeoutMs))
+      .map(decodeReadFileSearchMatches)
+  }
+
+  def callWriteFileLine(
+      path: String,
+      startLine: Int,
+      endLine: Int,
+      newText: String,
+      timeoutMs: Long,
+      waitUntilProcessed: Boolean = true
+  ): Either[String, WriteFileResult] = {
+    val args = Map(
+      "command" -> "line",
+      "path" -> path,
+      "start_line" -> startLine,
+      "end_line" -> endLine,
+      "new_str" -> newText,
+      "wait_until_processed" -> waitUntilProcessed
+    )
+    callTool("write_file", args, normalizedToolTimeout(timeoutMs))
+      .map(decodeWriteFileResult)
+  }
+
+  def callWriteFileInsert(
+      path: String,
+      insertAfterLine: Int,
+      newText: String,
+      timeoutMs: Long,
+      waitUntilProcessed: Boolean = true
+  ): Either[String, WriteFileResult] = {
+    val args = Map(
+      "command" -> "insert",
+      "path" -> path,
+      "insert_line" -> insertAfterLine,
+      "new_str" -> newText,
+      "wait_until_processed" -> waitUntilProcessed
+    )
+    callTool("write_file", args, normalizedToolTimeout(timeoutMs))
+      .map(decodeWriteFileResult)
+  }
+
+  def callOpenFile(
+      path: String,
+      createIfMissing: Boolean,
+      inView: Boolean,
+      timeoutMs: Long
+  ): Either[String, OpenFileResult] = {
+    val args = Map(
+      "path" -> path,
+      "create_if_missing" -> createIfMissing,
+      "view" -> inView
+    )
+    callTool("open_file", args, normalizedToolTimeout(timeoutMs))
+      .map(decodeOpenFileResult)
+  }
+
+  def callCreateFile(
+      path: String,
+      content: String,
+      overwriteIfExists: Boolean,
+      inView: Boolean,
+      timeoutMs: Long
+  ): Either[String, CreateFileResult] = {
+    val args = Map(
+      "path" -> path,
+      "content" -> content,
+      "overwrite_if_exists" -> overwriteIfExists,
+      "view" -> inView
+    )
+    callTool("create_file", args, normalizedToolTimeout(timeoutMs))
+      .map(decodeCreateFileResult)
   }
 
   def callResolveCommandTarget(
