@@ -216,21 +216,21 @@ object TaskList {
    * 
    * @return Current list of tasks
    */
-  def getTasks: List[Task] = tasks
+  def getTasks: List[Task] = lock.synchronized { tasks }
 
   /**
    * Get the total count of tasks.
    * 
    * @return Number of tasks in the list
    */
-  def getTaskCount: Int = tasks.length
+  def getTaskCount: Int = lock.synchronized { tasks.length }
 
   /**
    * Get counts by status.
    * 
    * @return Tuple of (doneCount, todoCount, irrelevantCount)
    */
-  def getStatusCounts: (Int, Int, Int) = {
+  def getStatusCounts: (Int, Int, Int) = lock.synchronized {
     val doneCount = tasks.count(_.status == Done)
     val todoCount = tasks.count(_.status == Todo)
     val irrelevantCount = tasks.count(_.status == Irrelevant)

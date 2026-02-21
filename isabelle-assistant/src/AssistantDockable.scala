@@ -85,10 +85,14 @@ object AssistantDockable {
   def showConversation(history: List[ChatAction.Message]): Unit =
     AssistantEventBus.publish(AssistantEvent.ShowConversation(history))
 
-  def setStatus(status: String): Unit = {
+  def setStatus(status: String): Unit =
+    setStatus(AssistantStatus.fromText(status))
+
+  def setStatus(status: AssistantStatus): Unit = {
+    val statusText = status.text
     val wasBusy = _busy
     _busy =
-      status != AssistantConstants.STATUS_READY && status != AssistantConstants.STATUS_CANCELLED && !status
+      statusText != AssistantConstants.STATUS_READY && statusText != AssistantConstants.STATUS_CANCELLED && !statusText
         .startsWith("Error")
     if (_busy && !wasBusy) _busyStartTime = System.currentTimeMillis()
     AssistantEventBus.publish(AssistantEvent.StatusUpdate(status))
@@ -128,7 +132,7 @@ class AssistantDockable(view: View, position: String)
 
   private val eventBusListener: AssistantEvent => Unit = {
     case AssistantEvent.StatusUpdate(status) =>
-      GUI_Thread.later { updateStatus(status) }
+      GUI_Thread.later { updateStatus(status.text) }
     case AssistantEvent.BadgeUpdate(badge) =>
       GUI_Thread.later { updateBadge(badge) }
     case AssistantEvent.ShowConversation(history) =>

@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 sealed trait AssistantEvent
 
 object AssistantEvent {
-  case class StatusUpdate(status: String) extends AssistantEvent
+  case class StatusUpdate(status: AssistantStatus) extends AssistantEvent
   case class BadgeUpdate(badge: VerificationBadge.BadgeType)
       extends AssistantEvent
   case class ChatResponse(

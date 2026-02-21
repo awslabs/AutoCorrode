@@ -9,7 +9,6 @@ import software.amazon.awssdk.services.bedrockruntime.model.InvokeModelRequest
 import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonGenerator}
-import scala.util.Try
 import java.io.StringWriter
 
 /**
@@ -37,15 +36,40 @@ object BedrockClient {
   @volatile private var lastApiCallMs = 0L
   private val minIntervalMs = 200L // minimum 200ms between API calls
 
-  private[assistant] def requireAnthropicModel(modelId: String): Unit = {
-    if (modelId.isEmpty)
-      throw new IllegalStateException("No model configured. Use :set model <model-id> or configure in Plugin Options.")
-    if (!modelId.matches("^[a-zA-Z0-9._:/-]+$"))
-      throw new IllegalArgumentException(s"Invalid model ID format: $modelId")
-    if (!BedrockModels.isAnthropicModelId(modelId))
-      throw new IllegalArgumentException(
+  enum ModelValidationError {
+    case MissingModel
+    case InvalidFormat(modelId: String)
+    case UnsupportedProvider(modelId: String)
+
+    def message: String = this match {
+      case MissingModel =>
+        "No model configured. Use :set model <model-id> or configure in Plugin Options."
+      case InvalidFormat(modelId) =>
+        s"Invalid model ID format: $modelId"
+      case UnsupportedProvider(modelId) =>
         s"Unsupported model '$modelId'. Only Anthropic models are supported because tool-use requires the Anthropic API."
-      )
+    }
+  }
+
+  private[assistant] def validateAnthropicModel(
+      modelId: String
+  ): Either[ModelValidationError, Unit] = {
+    if (modelId.isEmpty) Left(ModelValidationError.MissingModel)
+    else if (!modelId.matches("^[a-zA-Z0-9._:/-]+$"))
+      Left(ModelValidationError.InvalidFormat(modelId))
+    else if (!BedrockModels.isAnthropicModelId(modelId))
+      Left(ModelValidationError.UnsupportedProvider(modelId))
+    else Right(())
+  }
+
+  private[assistant] def requireAnthropicModel(modelId: String): Unit = {
+    validateAnthropicModel(modelId) match {
+      case Right(_) => ()
+      case Left(ModelValidationError.MissingModel) =>
+        throw new IllegalStateException(ModelValidationError.MissingModel.message)
+      case Left(err) =>
+        throw new IllegalArgumentException(err.message)
+    }
   }
 
   /** Circuit breaker: after consecutive failures, fail fast without calling the API.
@@ -137,6 +161,39 @@ object BedrockClient {
 
   private val currentViewTL = new ThreadLocal[org.gjt.sp.jedit.View]()
 
+  private enum BedrockRole(val wireValue: String) {
+    case User extends BedrockRole("user")
+    case Assistant extends BedrockRole("assistant")
+  }
+
+  private object BedrockRole {
+    def fromWire(value: String): Option[BedrockRole] = value match {
+      case "user"      => Some(User)
+      case "assistant" => Some(Assistant)
+      case _           => None
+    }
+  }
+
+  private case class ChatTurn(role: BedrockRole, content: String)
+
+  private def toTurns(messages: List[(String, String)]): List[ChatTurn] = {
+    val (valid, dropped) = messages.foldLeft((List.empty[ChatTurn], 0)) {
+      case ((acc, dropCount), (role, content)) =>
+        BedrockRole.fromWire(role) match {
+          case Some(r) => (acc :+ ChatTurn(r, content), dropCount)
+          case None    => (acc, dropCount + 1)
+        }
+    }
+    if (dropped > 0)
+      Output.warning(
+        s"[Assistant] Dropped $dropped message(s) with unsupported Bedrock role(s)"
+      )
+    valid
+  }
+
+  private def fromTurns(messages: List[ChatTurn]): List[(String, String)] =
+    messages.map(m => (m.role.wireValue, m.content))
+
   /** Set the current view for tool execution context. Called before agentic invocations. */
   def setCurrentView(view: org.gjt.sp.jedit.View): Unit = { currentViewTL.set(view) }
 
@@ -151,7 +208,7 @@ object BedrockClient {
     ErrorHandler.logOperation("invokeChat") {
       try {
         retryWithBackoff(maxRetries) {
-          invokeChatInternal(systemPrompt, messages)
+          invokeChatInternal(systemPrompt, toTurns(messages))
         }
       } finally {
         currentViewTL.remove()
@@ -172,8 +229,11 @@ object BedrockClient {
       Option(org.gjt.sp.jedit.jEdit.getActiveView).foreach(setCurrentView)
       // System prompt is empty here — invokeChatInternal prepends getSystemPrompt automatically
       // Take atomic snapshot of history before constructing messages to avoid races
-      val history = ChatAction.getHistorySnapshot.filterNot(_.transient).map(m => (m.role.wireValue, m.content))
-      val messages = history :+ ("user", prompt)
+      val history =
+        ChatAction.getHistorySnapshot
+          .filterNot(_.transient)
+          .flatMap(m => BedrockRole.fromWire(m.role.wireValue).map(ChatTurn(_, m.content)))
+      val messages = history :+ ChatTurn(BedrockRole.User, prompt)
       try {
         retryWithBackoff(maxRetries) {
           invokeChatInternal("", messages)
@@ -260,8 +320,11 @@ object BedrockClient {
   def invokeInContextStructured(prompt: String, schema: StructuredResponseSchema): ToolArgs = {
     ErrorHandler.logOperation("invokeInContextStructured") {
       Option(org.gjt.sp.jedit.jEdit.getActiveView).foreach(setCurrentView)
-      val history = ChatAction.getHistorySnapshot.filterNot(_.transient).map(m => (m.role.wireValue, m.content))
-      val messages = history :+ ("user", prompt)
+      val history =
+        ChatAction.getHistorySnapshot
+          .filterNot(_.transient)
+          .flatMap(m => BedrockRole.fromWire(m.role.wireValue).map(ChatTurn(_, m.content)))
+      val messages = history :+ ChatTurn(BedrockRole.User, prompt)
       try {
         retryWithBackoff(maxRetries) {
           invokeStructuredChatInternal(messages, schema)
@@ -317,7 +380,8 @@ object BedrockClient {
 
   /** Chat-history structured invocation with truncation and merging. */
   private def invokeStructuredChatInternal(
-    messages: List[(String, String)], schema: StructuredResponseSchema
+    messages: List[ChatTurn],
+    schema: StructuredResponseSchema
   ): ToolArgs = {
     val modelId = AssistantOptions.getModelId
     requireAnthropicModel(modelId)
@@ -329,13 +393,17 @@ object BedrockClient {
     Output.writeln(s"[Assistant] invokeStructuredChat - Model: $modelId, Schema: ${schema.name}, Messages: ${messages.length}")
 
     val maxChars = AssistantConstants.MAX_CHAT_CONTEXT_CHARS
-    val truncated = truncateMessages(messages, maxChars)
+    val truncated = truncateTurns(messages, maxChars)
     if (truncated.length < messages.length)
       Output.writeln(s"[Assistant] invokeStructuredChat - Truncated ${messages.length - truncated.length} old messages")
-    val merged = mergeConsecutiveRoles(truncated)
+    val merged = mergeConsecutiveTurns(truncated)
 
     val payload = PayloadBuilder.buildAnthropicStructuredPayload(
-      fullSystemPrompt, merged, schema, temperature, maxTokens
+      fullSystemPrompt,
+      fromTurns(merged),
+      schema,
+      temperature,
+      maxTokens
     )
 
     val request = InvokeModelRequest.builder()
@@ -392,10 +460,12 @@ object BedrockClient {
     retry(1, None)
   }
 
-  /** Truncate old messages to fit within context budget, keeping the most recent. */
-  private[assistant] def truncateMessages(
-    messages: List[(String, String)], maxChars: Int, systemCost: Int = 0
-  ): List[(String, String)] = {
+  /** Truncate old typed messages to fit within context budget, keeping the most recent. */
+  private def truncateTurns(
+      messages: List[ChatTurn],
+      maxChars: Int,
+      systemCost: Int = 0
+  ): List[ChatTurn] = {
     val available = math.max(0, maxChars - systemCost)
     if (available <= 0) {
       Output.warning(s"[Assistant] System prompt ($systemCost chars) exceeds context budget ($maxChars chars)")
@@ -404,37 +474,52 @@ object BedrockClient {
       val reversed = messages.reverse
       var accumulated = 0
       var kept = 0
-      for ((_, content) <- reversed if accumulated + content.length <= available) {
-        accumulated += content.length
+      for (msg <- reversed if accumulated + msg.content.length <= available) {
+        accumulated += msg.content.length
         kept += 1
       }
       if (kept > 0) {
         messages.takeRight(kept)
       } else if (messages.nonEmpty) {
         val lastMsg = messages.last
-        if (lastMsg._2.length > available && available > 0)
-          List((lastMsg._1, lastMsg._2.take(available) + "\n[... truncated]"))
+        if (lastMsg.content.length > available && available > 0)
+          List(lastMsg.copy(content = lastMsg.content.take(available) + "\n[... truncated]"))
         else List(lastMsg)
       } else List.empty
     }
   }
 
-  /** Merge consecutive same-role messages (Anthropic requires strict alternation). */
-  private[assistant] def mergeConsecutiveRoles(
-    messages: List[(String, String)]
+  /** Public tuple-based wrapper used by tests. */
+  private[assistant] def truncateMessages(
+      messages: List[(String, String)],
+      maxChars: Int,
+      systemCost: Int = 0
   ): List[(String, String)] =
-    messages.foldLeft(List.empty[(String, String)]) {
-      case (acc, (role, content)) if acc.nonEmpty && acc.last._1 == role =>
-        acc.init :+ (role, acc.last._2 + "\n\n" + content)
+    fromTurns(truncateTurns(toTurns(messages), maxChars, systemCost))
+
+  /** Merge consecutive same-role messages (Anthropic requires strict alternation). */
+  private def mergeConsecutiveTurns(messages: List[ChatTurn]): List[ChatTurn] =
+    messages.foldLeft(List.empty[ChatTurn]) {
+      case (acc, msg) if acc.nonEmpty && acc.last.role == msg.role =>
+        acc.init :+ acc.last.copy(content = acc.last.content + "\n\n" + msg.content)
       case (acc, msg) => acc :+ msg
     }
+
+  /** Public tuple-based wrapper used by tests. */
+  private[assistant] def mergeConsecutiveRoles(
+      messages: List[(String, String)]
+  ): List[(String, String)] =
+    fromTurns(mergeConsecutiveTurns(toTurns(messages)))
 
   /**
    * Internal implementation of chat invocation.
    * Delegates payload construction to [[PayloadBuilder]] and response parsing
    * to [[ResponseParser]].
    */
-  private def invokeChatInternal(systemPrompt: String, messages: List[(String, String)]): String = {
+  private def invokeChatInternal(
+      systemPrompt: String,
+      messages: List[ChatTurn]
+  ): String = {
     val modelId = AssistantOptions.getModelId
     requireAnthropicModel(modelId)
 
@@ -447,11 +532,11 @@ object BedrockClient {
 
     val maxChars = AssistantConstants.MAX_CHAT_CONTEXT_CHARS
     val systemCost = if (PayloadBuilder.isProvider(modelId, "anthropic")) 0 else fullSystemPrompt.length
-    val truncated = truncateMessages(messages, maxChars, systemCost)
+    val truncated = truncateTurns(messages, maxChars, systemCost)
     if (truncated.length < messages.length)
       Output.writeln(s"[Assistant] invokeChat - Truncated ${messages.length - truncated.length} old messages")
 
-    val merged = mergeConsecutiveRoles(truncated)
+    val merged = mergeConsecutiveTurns(truncated)
 
     invokeChatWithTools(modelId, fullSystemPrompt, merged, temperature, maxTokens)
   }
@@ -462,14 +547,16 @@ object BedrockClient {
    * the model responds with text only or the iteration limit is reached.
    */
   private def invokeChatWithTools(
-    modelId: String, systemPrompt: String, initialMessages: List[(String, String)],
+    modelId: String,
+    systemPrompt: String,
+    initialMessages: List[ChatTurn],
     temperature: Double, maxTokens: Int
   ): String = {
     val maxIter = AssistantOptions.getMaxToolIterations
     // Build structured message list: each entry is (role, json_content_string)
     // For simple text messages, content is just the string.
     // For tool results, content is a JSON array of tool_result blocks.
-    val msgBuf = scala.collection.mutable.ListBuffer[(String, String)]()
+    val msgBuf = scala.collection.mutable.ListBuffer[ChatTurn]()
     msgBuf ++= initialMessages
 
     var iteration = 0
@@ -492,10 +579,18 @@ object BedrockClient {
       if (hitLimit) {
         // Send a message to the model informing it we've hit the limit
         Output.warning(s"[Assistant] Hit max tool iteration limit ($iteration iterations)")
-        msgBuf += (("user", "You have reached the maximum tool iteration limit. Please provide a summary of what you've learned and any conclusions you can make without additional tool calls."))
+        msgBuf += ChatTurn(
+          BedrockRole.User,
+          "You have reached the maximum tool iteration limit. Please provide a summary of what you've learned and any conclusions you can make without additional tool calls."
+        )
         
         // Make one final call to get the model's summary
-        val payload = PayloadBuilder.buildAnthropicToolPayload(systemPrompt, msgBuf.toList, temperature, maxTokens)
+        val payload = PayloadBuilder.buildAnthropicToolPayload(
+          systemPrompt,
+          fromTurns(msgBuf.toList),
+          temperature,
+          maxTokens
+        )
         val request = InvokeModelRequest.builder()
           .modelId(modelId)
           .body(SdkBytes.fromUtf8String(payload))
@@ -514,7 +609,12 @@ object BedrockClient {
         }
         continue = false
       } else {
-        val payload = PayloadBuilder.buildAnthropicToolPayload(systemPrompt, msgBuf.toList, temperature, maxTokens)
+        val payload = PayloadBuilder.buildAnthropicToolPayload(
+          systemPrompt,
+          fromTurns(msgBuf.toList),
+          temperature,
+          maxTokens
+        )
         val request = InvokeModelRequest.builder()
           .modelId(modelId)
           .body(SdkBytes.fromUtf8String(payload))
@@ -537,7 +637,7 @@ object BedrockClient {
           continue = false
         } else {
           // Append assistant message with the raw response content
-          msgBuf += (("assistant", rawContentJson(blocks)))
+          msgBuf += ChatTurn(BedrockRole.Assistant, rawContentJson(blocks))
 
           // Execute each tool and build tool_result message
           val view = Option(currentViewTL.get())
@@ -587,7 +687,7 @@ object BedrockClient {
           }
 
           // Append user message with tool results
-          msgBuf += (("user", toolResultsJson(resultBlocks)))
+          msgBuf += ChatTurn(BedrockRole.User, toolResultsJson(resultBlocks))
         }
       }
     }
@@ -603,10 +703,10 @@ object BedrockClient {
   }
 
   private def pruneToolLoopMessagesInPlace(
-      msgBuf: scala.collection.mutable.ListBuffer[(String, String)],
+      msgBuf: scala.collection.mutable.ListBuffer[ChatTurn],
       maxChars: Int
   ): Unit = {
-    val pruned = prunedToolLoopMessages(msgBuf.toList, maxChars)
+    val pruned = prunedToolLoopTurns(msgBuf.toList, maxChars)
     if (pruned.length != msgBuf.length || pruned != msgBuf.toList) {
       val removed = msgBuf.length - pruned.length
       if (removed > 0)
@@ -618,13 +718,13 @@ object BedrockClient {
     }
   }
 
-  private[assistant] def prunedToolLoopMessages(
-      messages: List[(String, String)],
+  private def prunedToolLoopTurns(
+      messages: List[ChatTurn],
       maxChars: Int
-  ): List[(String, String)] = {
+  ): List[ChatTurn] = {
     if (messages.isEmpty) return Nil
     val budget = math.max(1, maxChars)
-    val lengths = messages.map(_._2.length)
+    val lengths = messages.map(_.content.length)
     var total = lengths.sum
     var dropCount = 0
     while (total > budget && dropCount < messages.length - 1) {
@@ -636,16 +736,21 @@ object BedrockClient {
     else if (total <= budget) kept
     else {
       // Single oversized tail message: keep it but trim content.
-      val (role, content) = kept.last
+      val last = kept.last
       val keepChars = math.max(64, budget - 32)
       val trimmed =
-        if (content.length <= keepChars) content
-        else "[... truncated due to context budget ...]\n" + content.takeRight(
-          keepChars
-        )
-      List((role, trimmed))
+        if (last.content.length <= keepChars) last.content
+        else "[... truncated due to context budget ...]\n" + last.content
+          .takeRight(keepChars)
+      List(last.copy(content = trimmed))
     }
   }
+
+  private[assistant] def prunedToolLoopMessages(
+      messages: List[(String, String)],
+      maxChars: Int
+  ): List[(String, String)] =
+    fromTurns(prunedToolLoopTurns(toTurns(messages), maxChars))
 
   /** Serialize content blocks as a JSON array string for the assistant message. */
   private def rawContentJson(blocks: List[ResponseParser.ContentBlock]): String = {
@@ -750,7 +855,10 @@ object BedrockClient {
     val response = getClient.invokeModel(request)
     val responseBody = response.body().asUtf8String()
 
-    val parsed = ResponseParser.parseResponse(modelId, responseBody)
+    val parsed = ResponseParser.parseResponseEither(modelId, responseBody) match {
+      case Right(text) => text
+      case Left(err)   => throw new RuntimeException(err.message)
+    }
     Output.writeln(s"[Assistant] Parsed response length: ${parsed.length} chars")
     parsed
   }

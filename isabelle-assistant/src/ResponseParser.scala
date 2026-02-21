@@ -22,6 +22,18 @@ case class StructuredResponseSchema(
 object ResponseParser {
   private val jsonFactory = new JsonFactory()
 
+  enum ParseError {
+    case EmptyResponse
+    case MissingTextField
+    case InvalidJson(details: String)
+
+    def message: String = this match {
+      case EmptyResponse        => "Empty response from model"
+      case MissingTextField     => "Could not parse model response (no text field found)"
+      case InvalidJson(details) => s"Failed to parse model response: $details"
+    }
+  }
+
   /** Parse response from Bedrock model using Jackson JSON parser. Throws on
     * empty/unparseable responses so callers don't treat errors as valid text.
     *
@@ -35,26 +47,32 @@ object ResponseParser {
     *   on empty/unparseable responses
     */
   def parseResponse(modelId: String, json: String): String = {
-    if (json == null || json.trim.isEmpty)
-      throw new RuntimeException("Empty response from model")
+    parseResponseEither(modelId, json) match {
+      case Right(value) => value
+      case Left(ParseError.InvalidJson(details)) =>
+        throw new RuntimeException(
+          ParseError.InvalidJson(details).message,
+          new RuntimeException(details)
+        )
+      case Left(err) =>
+        throw new RuntimeException(err.message)
+    }
+  }
 
-    val parser = jsonFactory.createParser(json)
-    try {
-      val result = extractTextField(parser, modelId)
-      result.getOrElse(
-        throw new RuntimeException(
-          s"Could not parse model response (no text field found)"
-        )
-      )
-    } catch {
-      case e: RuntimeException => throw e
-      case ex: Exception       =>
-        throw new RuntimeException(
-          s"Failed to parse model response: ${ex.getMessage}",
-          ex
-        )
-    } finally {
-      parser.close()
+  def parseResponseEither(
+      modelId: String,
+      json: String
+  ): Either[ParseError, String] = {
+    if (json == null || json.trim.isEmpty) Left(ParseError.EmptyResponse)
+    else {
+      val parser = jsonFactory.createParser(json)
+      try {
+        extractTextField(parser, modelId).toRight(ParseError.MissingTextField)
+      } catch {
+        case ex: Exception => Left(ParseError.InvalidJson(ex.getMessage))
+      } finally {
+        parser.close()
+      }
     }
   }
 
@@ -116,13 +134,25 @@ object ResponseParser {
   }
 
   def parseToolArgsJsonObject(json: String): ToolArgs = {
+    parseToolArgsJsonObjectEither(json) match {
+      case Right(args) => args
+      case Left(ParseError.InvalidJson(details)) =>
+        ErrorHandler.logSilentError(
+          "parseToolArgsJsonObject",
+          new RuntimeException(details)
+        )
+        Map.empty
+      case Left(_) => Map.empty
+    }
+  }
+
+  def parseToolArgsJsonObjectEither(json: String): Either[ParseError, ToolArgs] = {
     val parser = jsonFactory.createParser(json)
     try {
-      if (parser.nextToken() != JsonToken.START_OBJECT) Map.empty
-      else parseToolArgsObject(parser)
+      if (parser.nextToken() != JsonToken.START_OBJECT) Right(Map.empty)
+      else Right(parseToolArgsObject(parser))
     } catch {
-      case ex: Exception =>
-        ErrorHandler.logSilentError("parseToolArgsJsonObject", ex); Map.empty
+      case ex: Exception => Left(ParseError.InvalidJson(ex.getMessage))
     } finally {
       parser.close()
     }

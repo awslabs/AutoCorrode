@@ -23,7 +23,25 @@ object AssistantTools {
       description: String,
       required: Boolean = false
   )
-  case class ToolDef(name: String, description: String, params: List[ToolParam])
+  case class ToolDef private (
+      id: ToolId,
+      description: String,
+      params: List[ToolParam]
+  ) {
+    val name: String = id.wireName
+  }
+  object ToolDef {
+    def apply(id: ToolId, description: String, params: List[ToolParam]): ToolDef =
+      new ToolDef(id, description, params)
+
+    def apply(name: String, description: String, params: List[ToolParam]): ToolDef =
+      ToolId
+        .fromWire(name)
+        .map(id => new ToolDef(id, description, params))
+        .getOrElse(
+          throw new IllegalArgumentException(s"Unknown tool name in definition: $name")
+        )
+  }
 
   val tools: List[ToolDef] = List(
     ToolDef(
@@ -423,6 +441,18 @@ object AssistantTools {
     )
   )
 
+  private val toolsById: Map[ToolId, ToolDef] = tools.map(t => t.id -> t).toMap
+  require(
+    toolsById.size == tools.size,
+    "Tool definitions must have unique tool IDs."
+  )
+  require(
+    toolsById.keySet == ToolId.values.toSet,
+    "Tool definitions must cover all ToolId values exactly."
+  )
+  private[assistant] def toolDefinition(toolId: ToolId): Option[ToolDef] =
+    toolsById.get(toolId)
+
   /** Write tool definitions into a JsonGenerator as the Anthropic tools array.
     */
   def writeToolsJson(g: JsonGenerator): Unit = {
@@ -439,13 +469,15 @@ object AssistantTools {
         g.writeStringField("type", p.typ)
         g.writeStringField("description", p.description)
         // Add enum constraints for specific parameters
-        if (tool.name == "edit_theory" && p.name == "operation") {
+        if (tool.id == ToolId.EditTheory && p.name == "operation") {
           g.writeArrayFieldStart("enum")
           g.writeString("insert")
           g.writeString("replace")
           g.writeString("delete")
           g.writeEndArray()
-        } else if ((tool.name == "get_errors" || tool.name == "get_warnings") && p.name == "scope") {
+        } else if (
+          (tool.id == ToolId.GetErrors || tool.id == ToolId.GetWarnings) && p.name == "scope"
+        ) {
           g.writeArrayFieldStart("enum")
           g.writeString("all")
           g.writeString("cursor")
@@ -485,13 +517,15 @@ object AssistantTools {
         g.writeStringField("type", p.typ)
         g.writeStringField("description", p.description)
         // Keep enum constraints aligned with writeToolsJson.
-        if (tool.name == "edit_theory" && p.name == "operation") {
+        if (tool.id == ToolId.EditTheory && p.name == "operation") {
           g.writeArrayFieldStart("enum")
           g.writeString("insert")
           g.writeString("replace")
           g.writeString("delete")
           g.writeEndArray()
-        } else if ((tool.name == "get_errors" || tool.name == "get_warnings") && p.name == "scope") {
+        } else if (
+          (tool.id == ToolId.GetErrors || tool.id == ToolId.GetWarnings) && p.name == "scope"
+        ) {
           g.writeArrayFieldStart("enum")
           g.writeString("all")
           g.writeString("cursor")
@@ -517,23 +551,106 @@ object AssistantTools {
    * Wraps executeTool with capability-based authorization.
    * Returns tool result or permission denial message.
    */
-  def executeToolWithPermission(name: String, args: ResponseParser.ToolArgs, view: View): String = {
-    ToolPermissions.checkPermission(name, args) match {
+  sealed trait ToolExecResult {
+    def toUserMessage: String
+  }
+  object ToolExecResult {
+    case class Success(output: String) extends ToolExecResult {
+      def toUserMessage: String = output
+    }
+    case class UnknownTool(name: String) extends ToolExecResult {
+      def toUserMessage: String = s"Unknown tool: $name"
+    }
+    case class PermissionDenied(message: String) extends ToolExecResult {
+      def toUserMessage: String = message
+    }
+    case class ExecutionFailure(toolId: ToolId, message: String)
+        extends ToolExecResult {
+      def toUserMessage: String = s"Tool error: $message"
+    }
+  }
+  import ToolExecResult._
+
+  private val toolHandlers: Map[ToolId, (ResponseParser.ToolArgs, View) => String] =
+    Map(
+      ToolId.ReadTheory -> ((a, v) => execReadTheory(a, v)),
+      ToolId.ListTheories -> ((_, _) => execListTheories()),
+      ToolId.SearchInTheory -> ((a, v) => execSearchInTheory(a, v)),
+      ToolId.GetGoalState -> ((_, v) => execGetGoalState(v)),
+      ToolId.GetProofContext -> ((_, v) => execGetProofContext(v)),
+      ToolId.FindTheorems -> ((a, v) => execFindTheorems(a, v)),
+      ToolId.VerifyProof -> ((a, v) => execVerifyProof(a, v)),
+      ToolId.RunSledgehammer -> ((_, v) => execRunSledgehammer(v)),
+      ToolId.RunNitpick -> ((_, v) => execRunNitpick(v)),
+      ToolId.RunQuickcheck -> ((_, v) => execRunQuickcheck(v)),
+      ToolId.GetType -> ((_, v) => execGetType(v)),
+      ToolId.GetCommandText -> ((_, v) => execGetCommandText(v)),
+      ToolId.GetErrors -> ((a, v) => execGetErrors(a, v)),
+      ToolId.GetDefinitions -> ((a, v) => execGetDefinitions(a, v)),
+      ToolId.ExecuteStep -> ((a, v) => execExecuteStep(a, v)),
+      ToolId.TraceSimplifier -> ((a, v) => execTraceSimplifier(a, v)),
+      ToolId.GetProofBlock -> ((_, v) => execGetProofBlock(v)),
+      ToolId.GetContextInfo -> ((_, v) => execGetContextInfo(v)),
+      ToolId.SearchAllTheories -> ((a, v) => execSearchAllTheories(a, v)),
+      ToolId.GetDependencies -> ((a, v) => execGetDependencies(a, v)),
+      ToolId.GetWarnings -> ((a, v) => execGetWarnings(a, v)),
+      ToolId.SetCursorPosition -> ((a, v) => execSetCursorPosition(a, v)),
+      ToolId.EditTheory -> ((a, v) => execEditTheory(a, v)),
+      ToolId.TryMethods -> ((a, v) => execTryMethods(a, v)),
+      ToolId.GetEntities -> ((a, v) => execGetEntities(a, v)),
+      ToolId.WebSearch -> ((a, _) => execWebSearch(a)),
+      ToolId.CreateTheory -> ((a, v) => execCreateTheory(a, v)),
+      ToolId.OpenTheory -> ((a, v) => execOpenTheory(a, v)),
+      ToolId.AskUser -> ((a, v) => execAskUser(a, v)),
+      ToolId.TaskListAdd -> ((a, v) => execTaskListAdd(a, v)),
+      ToolId.TaskListDone -> ((a, v) => execTaskListDone(a, v)),
+      ToolId.TaskListIrrelevant -> ((a, v) => execTaskListIrrelevant(a, v)),
+      ToolId.TaskListNext -> ((_, v) => execTaskListNext(v)),
+      ToolId.TaskListShow -> ((_, v) => execTaskListShow(v)),
+      ToolId.TaskListGet -> ((a, v) => execTaskListGet(a, v))
+    )
+
+  def executeToolWithPermission(
+      name: String,
+      args: ResponseParser.ToolArgs,
+      view: View
+  ): String =
+    executeToolWithPermissionResult(name, args, view).toUserMessage
+
+  def executeToolWithPermissionResult(
+      name: String,
+      args: ResponseParser.ToolArgs,
+      view: View
+  ): ToolExecResult =
+    ToolId.fromWire(name) match {
+      case Some(toolId) => executeToolWithPermissionResult(toolId, args, view)
+      case None         => UnknownTool(name)
+    }
+
+  private def executeToolWithPermissionResult(
+      toolId: ToolId,
+      args: ResponseParser.ToolArgs,
+      view: View
+  ): ToolExecResult = {
+    ToolPermissions.checkPermission(toolId, args) match {
       case ToolPermissions.Allowed =>
-        executeTool(name, args, view)
+        executeToolResult(toolId, args, view)
       case ToolPermissions.Denied =>
+        val name = toolId.wireName
         safeLog(s"[Permissions] Tool '$name' denied by policy")
-        s"Permission denied: tool '$name' is not allowed."
+        PermissionDenied(s"Permission denied: tool '$name' is not allowed.")
       case ToolPermissions.NeedPrompt(toolName, resource, details) =>
         ToolPermissions.promptUser(toolName, resource, details, view) match {
           case ToolPermissions.Allowed =>
-            executeTool(name, args, view)
+            executeToolResult(toolId, args, view)
           case ToolPermissions.Denied =>
-            safeLog(s"[Permissions] User denied tool '$name'")
-            s"Permission denied: user declined tool '$name'."
+            safeLog(s"[Permissions] User denied tool '$toolName'")
+            PermissionDenied(
+              s"Permission denied: user declined tool '$toolName'."
+            )
           case _ =>
-            safeLog(s"[Permissions] Unexpected decision for tool '$name'")
-            s"Permission denied: tool '$name'."
+            safeLog(s"[Permissions] Unexpected decision for tool '$toolName'")
+            PermissionDenied(s"Permission denied: tool '$toolName'.")
         }
     }
   }
@@ -632,52 +749,38 @@ object AssistantTools {
       name: String,
       args: ResponseParser.ToolArgs,
       view: View
-  ): String = {
-    safeLog(
-      s"[Assistant] Tool call: $name(${summarizeToolArgsForLog(args)})"
-    )
-    AssistantDockable.setStatus(s"[tool] $name...")
+  ): String =
+    executeToolResult(name, args, view).toUserMessage
+
+  def executeToolResult(
+      name: String,
+      args: ResponseParser.ToolArgs,
+      view: View
+  ): ToolExecResult =
+    ToolId.fromWire(name) match {
+      case Some(toolId) => executeToolResult(toolId, args, view)
+      case None         => UnknownTool(name)
+    }
+
+  private def executeToolResult(
+      toolId: ToolId,
+      args: ResponseParser.ToolArgs,
+      view: View
+  ): ToolExecResult = {
+    val toolName = toolId.wireName
+    safeLog(s"[Assistant] Tool call: $toolName(${summarizeToolArgsForLog(args)})")
+    AssistantDockable.setStatus(s"[tool] $toolName...")
     try {
-      name match {
-        case "read_theory"         => execReadTheory(args, view)
-        case "list_theories"       => execListTheories()
-        case "search_in_theory"    => execSearchInTheory(args, view)
-        case "get_goal_state"      => execGetGoalState(view)
-        case "get_proof_context"   => execGetProofContext(view)
-        case "find_theorems"       => execFindTheorems(args, view)
-        case "verify_proof"        => execVerifyProof(args, view)
-        case "run_sledgehammer"    => execRunSledgehammer(view)
-        case "run_nitpick"         => execRunNitpick(view)
-        case "run_quickcheck"      => execRunQuickcheck(view)
-        case "get_type"            => execGetType(view)
-        case "get_command_text"    => execGetCommandText(view)
-        case "get_errors"          => execGetErrors(args, view)
-        case "get_definitions"     => execGetDefinitions(args, view)
-        case "execute_step"        => execExecuteStep(args, view)
-        case "trace_simplifier"    => execTraceSimplifier(args, view)
-        case "get_proof_block"     => execGetProofBlock(view)
-        case "get_context_info"    => execGetContextInfo(view)
-        case "search_all_theories" => execSearchAllTheories(args, view)
-        case "get_dependencies"    => execGetDependencies(args, view)
-        case "get_warnings"        => execGetWarnings(args, view)
-        case "set_cursor_position" => execSetCursorPosition(args, view)
-        case "edit_theory"         => execEditTheory(args, view)
-        case "try_methods"         => execTryMethods(args, view)
-        case "get_entities"        => execGetEntities(args, view)
-        case "web_search"          => execWebSearch(args)
-        case "create_theory"       => execCreateTheory(args, view)
-        case "open_theory"         => execOpenTheory(args, view)
-        case "ask_user"            => execAskUser(args, view)
-        case "task_list_add"       => execTaskListAdd(args, view)
-        case "task_list_done"      => execTaskListDone(args, view)
-        case "task_list_irrelevant" => execTaskListIrrelevant(args, view)
-        case "task_list_next"      => execTaskListNext(view)
-        case "task_list_show"      => execTaskListShow(view)
-        case "task_list_get"       => execTaskListGet(args, view)
-        case _                     => s"Unknown tool: $name"
+      toolHandlers.get(toolId) match {
+        case Some(handler) => Success(handler(args, view))
+        case None =>
+          ExecutionFailure(
+            toolId,
+            s"No execution handler registered for tool '$toolName'"
+          )
       }
     } catch {
-      case ex: Exception => s"Tool error: ${ex.getMessage}"
+      case ex: Exception => ExecutionFailure(toolId, ex.getMessage)
     }
   }
 

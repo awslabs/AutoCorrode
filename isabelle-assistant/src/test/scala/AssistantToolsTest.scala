@@ -19,6 +19,12 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
     names.distinct.length shouldBe names.length
   }
 
+  test("toolDefinition should resolve every ToolId") {
+    for (toolId <- ToolId.values) {
+      AssistantTools.toolDefinition(toolId) should not be empty
+    }
+  }
+
   test("all tools should have non-empty descriptions") {
     for (tool <- AssistantTools.tools) {
       tool.description should not be empty

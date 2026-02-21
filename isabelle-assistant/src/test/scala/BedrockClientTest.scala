@@ -60,6 +60,24 @@ class BedrockClientTest extends AnyFunSuite with Matchers {
     ex.getMessage should include("Only Anthropic models are supported")
   }
 
+  test("validateAnthropicModel reports missing model explicitly") {
+    BedrockClient.validateAnthropicModel("") shouldBe
+      Left(BedrockClient.ModelValidationError.MissingModel)
+  }
+
+  test("validateAnthropicModel rejects invalid model ID format") {
+    val result = BedrockClient.validateAnthropicModel("anthropic.claude 3")
+    result shouldBe Left(
+      BedrockClient.ModelValidationError.InvalidFormat("anthropic.claude 3")
+    )
+  }
+
+  test("validateAnthropicModel rejects non-Anthropic providers") {
+    val modelId = "amazon.titan-text-express-v1"
+    BedrockClient.validateAnthropicModel(modelId) shouldBe
+      Left(BedrockClient.ModelValidationError.UnsupportedProvider(modelId))
+  }
+
   test("prunedToolLoopMessages should keep newest messages within budget") {
     val messages = List(
       "user" -> ("a" * 80),

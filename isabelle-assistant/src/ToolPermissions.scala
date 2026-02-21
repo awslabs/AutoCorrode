@@ -74,8 +74,8 @@ object ToolPermissions {
   // --- Session State ---
 
   private val sessionLock = new Object()
-  @volatile private var sessionAllowedTools: Set[String] = Set.empty
-  @volatile private var sessionDeniedTools: Set[String] = Set.empty
+  @volatile private var sessionAllowedTools: Set[ToolId] = Set.empty
+  @volatile private var sessionDeniedTools: Set[ToolId] = Set.empty
   @volatile private var promptChoicesFn: PromptChoicesFn =
     AssistantTools.promptUserWithChoices
 
@@ -86,7 +86,7 @@ object ToolPermissions {
   }
 
   private[assistant] def setSessionAllowedForTest(toolName: String): Unit =
-    setSessionAllowed(toolName)
+    ToolId.fromWire(toolName).foreach(setSessionAllowed)
 
   private[assistant] def withPromptChoicesForTest[A](
       fn: PromptChoicesFn
@@ -97,110 +97,123 @@ object ToolPermissions {
     finally promptChoicesFn = previous
   }
 
-  private def isSessionAllowed(toolName: String): Boolean =
-    sessionAllowedTools.contains(toolName)
+  private def isSessionAllowed(toolId: ToolId): Boolean =
+    sessionAllowedTools.contains(toolId)
 
-  private def isSessionDenied(toolName: String): Boolean =
-    sessionDeniedTools.contains(toolName)
+  private def isSessionDenied(toolId: ToolId): Boolean =
+    sessionDeniedTools.contains(toolId)
 
-  private def setSessionAllowed(toolName: String): Unit = sessionLock.synchronized {
-    sessionAllowedTools += toolName
-    sessionDeniedTools -= toolName
+  private def setSessionAllowed(toolId: ToolId): Unit = sessionLock.synchronized {
+    sessionAllowedTools += toolId
+    sessionDeniedTools -= toolId
   }
 
-  private def setSessionDenied(toolName: String): Unit = sessionLock.synchronized {
-    sessionDeniedTools += toolName
-    sessionAllowedTools -= toolName
+  private def setSessionDenied(toolId: ToolId): Unit = sessionLock.synchronized {
+    sessionDeniedTools += toolId
+    sessionAllowedTools -= toolId
   }
 
   // --- Default Permission Levels ---
 
   /** Default permission level for each tool. Consulted if no user override exists. */
-  private val defaultPermissions: Map[String, PermissionLevel] = Map(
+  private val defaultPermissions: Map[ToolId, PermissionLevel] = Map(
     // Safe read-only operations → Allow
-    "read_theory" -> Allow,
-    "list_theories" -> Allow,
-    "search_in_theory" -> Allow,
-    "search_all_theories" -> Allow,
-    "get_goal_state" -> Allow,
-    "get_proof_context" -> Allow,
-    "get_command_text" -> Allow,
-    "get_type" -> Allow,
-    "get_errors" -> Allow,
-    "get_warnings" -> Allow,
-    "get_context_info" -> Allow,
-    "get_proof_block" -> Allow,
-    "get_dependencies" -> Allow,
-    "get_entities" -> Allow,
-    "set_cursor_position" -> Allow,
+    ToolId.ReadTheory -> Allow,
+    ToolId.ListTheories -> Allow,
+    ToolId.SearchInTheory -> Allow,
+    ToolId.SearchAllTheories -> Allow,
+    ToolId.GetGoalState -> Allow,
+    ToolId.GetProofContext -> Allow,
+    ToolId.GetCommandText -> Allow,
+    ToolId.GetType -> Allow,
+    ToolId.GetErrors -> Allow,
+    ToolId.GetWarnings -> Allow,
+    ToolId.GetContextInfo -> Allow,
+    ToolId.GetProofBlock -> Allow,
+    ToolId.GetDependencies -> Allow,
+    ToolId.GetEntities -> Allow,
+    ToolId.SetCursorPosition -> Allow,
     
     // I/Q-dependent verification (computational but non-destructive) → AskAtFirstUse
-    "verify_proof" -> AskAtFirstUse,
-    "execute_step" -> AskAtFirstUse,
-    "try_methods" -> AskAtFirstUse,
-    "find_theorems" -> AskAtFirstUse,
-    "get_definitions" -> AskAtFirstUse,
-    "run_sledgehammer" -> AskAtFirstUse,
-    "run_nitpick" -> AskAtFirstUse,
-    "run_quickcheck" -> AskAtFirstUse,
-    "trace_simplifier" -> AskAtFirstUse,
+    ToolId.VerifyProof -> AskAtFirstUse,
+    ToolId.ExecuteStep -> AskAtFirstUse,
+    ToolId.TryMethods -> AskAtFirstUse,
+    ToolId.FindTheorems -> AskAtFirstUse,
+    ToolId.GetDefinitions -> AskAtFirstUse,
+    ToolId.RunSledgehammer -> AskAtFirstUse,
+    ToolId.RunNitpick -> AskAtFirstUse,
+    ToolId.RunQuickcheck -> AskAtFirstUse,
+    ToolId.TraceSimplifier -> AskAtFirstUse,
     
     // Side effects (file creation, modification, network) → AskAlways
-    "edit_theory" -> AskAlways,
-    "create_theory" -> AskAlways,
-    "open_theory" -> AskAlways,
-    "web_search" -> AskAlways,
+    ToolId.EditTheory -> AskAlways,
+    ToolId.CreateTheory -> AskAlways,
+    ToolId.OpenTheory -> AskAlways,
+    ToolId.WebSearch -> AskAlways,
     
     // Meta-tool for user interaction → Always Allow (exempt from permission checks)
-    "ask_user" -> Allow,
+    ToolId.AskUser -> Allow,
     
     // Task list management → Always Allow (pure in-memory state, no side effects)
-    "task_list_add" -> Allow,
-    "task_list_done" -> Allow,
-    "task_list_irrelevant" -> Allow,
-    "task_list_next" -> Allow,
-    "task_list_show" -> Allow,
-    "task_list_get" -> Allow
+    ToolId.TaskListAdd -> Allow,
+    ToolId.TaskListDone -> Allow,
+    ToolId.TaskListIrrelevant -> Allow,
+    ToolId.TaskListNext -> Allow,
+    ToolId.TaskListShow -> Allow,
+    ToolId.TaskListGet -> Allow
+  )
+  require(
+    defaultPermissions.keySet == ToolId.values.toSet,
+    "defaultPermissions must cover all ToolId values."
   )
 
   /** Human-readable description of what each tool does (for permission prompts). */
-  private[assistant] val toolDescriptions: Map[String, String] = Map(
-    "read_theory" -> "read the content of theory files",
-    "list_theories" -> "list all open theory files",
-    "search_in_theory" -> "search for text patterns in theory files",
-    "search_all_theories" -> "search for text patterns across all theory files",
-    "get_goal_state" -> "check the current proof goal state",
-    "get_proof_context" -> "view local facts and assumptions",
-    "get_command_text" -> "read Isabelle command text",
-    "get_type" -> "get type information",
-    "get_errors" -> "read error messages",
-    "get_warnings" -> "read warning messages",
-    "get_context_info" -> "analyze proof context",
-    "get_proof_block" -> "read complete proof blocks",
-    "get_dependencies" -> "read theory dependencies",
-    "get_entities" -> "list definitions and lemmas",
-    "set_cursor_position" -> "move the cursor position",
-    "verify_proof" -> "verify proof methods using Isabelle",
-    "execute_step" -> "execute proof steps",
-    "try_methods" -> "try multiple proof methods",
-    "find_theorems" -> "search for theorems",
-    "get_definitions" -> "look up definitions",
-    "run_sledgehammer" -> "run automated theorem provers",
-    "run_nitpick" -> "search for counterexamples",
-    "run_quickcheck" -> "test with random examples",
-    "trace_simplifier" -> "trace simplifier operations",
-    "edit_theory" -> "modify theory file content",
-    "create_theory" -> "create new theory files",
-    "open_theory" -> "open existing theory files",
-    "web_search" -> "search the web",
-    "ask_user" -> "ask you questions",
-    "task_list_add" -> "add items to the task list",
-    "task_list_done" -> "mark task list items as done",
-    "task_list_irrelevant" -> "mark task list items as irrelevant",
-    "task_list_next" -> "retrieve the next pending task list item",
-    "task_list_show" -> "show the current task list",
-    "task_list_get" -> "retrieve a specific task list item"
+  private val toolDescriptionsById: Map[ToolId, String] = Map(
+    ToolId.ReadTheory -> "read the content of theory files",
+    ToolId.ListTheories -> "list all open theory files",
+    ToolId.SearchInTheory -> "search for text patterns in theory files",
+    ToolId.SearchAllTheories -> "search for text patterns across all theory files",
+    ToolId.GetGoalState -> "check the current proof goal state",
+    ToolId.GetProofContext -> "view local facts and assumptions",
+    ToolId.GetCommandText -> "read Isabelle command text",
+    ToolId.GetType -> "get type information",
+    ToolId.GetErrors -> "read error messages",
+    ToolId.GetWarnings -> "read warning messages",
+    ToolId.GetContextInfo -> "analyze proof context",
+    ToolId.GetProofBlock -> "read complete proof blocks",
+    ToolId.GetDependencies -> "read theory dependencies",
+    ToolId.GetEntities -> "list definitions and lemmas",
+    ToolId.SetCursorPosition -> "move the cursor position",
+    ToolId.VerifyProof -> "verify proof methods using Isabelle",
+    ToolId.ExecuteStep -> "execute proof steps",
+    ToolId.TryMethods -> "try multiple proof methods",
+    ToolId.FindTheorems -> "search for theorems",
+    ToolId.GetDefinitions -> "look up definitions",
+    ToolId.RunSledgehammer -> "run automated theorem provers",
+    ToolId.RunNitpick -> "search for counterexamples",
+    ToolId.RunQuickcheck -> "test with random examples",
+    ToolId.TraceSimplifier -> "trace simplifier operations",
+    ToolId.EditTheory -> "modify theory file content",
+    ToolId.CreateTheory -> "create new theory files",
+    ToolId.OpenTheory -> "open existing theory files",
+    ToolId.WebSearch -> "search the web",
+    ToolId.AskUser -> "ask you questions",
+    ToolId.TaskListAdd -> "add items to the task list",
+    ToolId.TaskListDone -> "mark task list items as done",
+    ToolId.TaskListIrrelevant -> "mark task list items as irrelevant",
+    ToolId.TaskListNext -> "retrieve the next pending task list item",
+    ToolId.TaskListShow -> "show the current task list",
+    ToolId.TaskListGet -> "retrieve a specific task list item"
   )
+  require(
+    toolDescriptionsById.keySet == ToolId.values.toSet,
+    "toolDescriptionsById must cover all ToolId values."
+  )
+
+  private[assistant] val toolDescriptions: Map[String, String] =
+    toolDescriptionsById.map { case (id, description) =>
+      id.wireName -> description
+    }
 
   private def safeLog(message: String): Unit = {
     try Output.writeln(message)
@@ -210,23 +223,25 @@ object ToolPermissions {
   // --- Tool Name Formatting ---
 
   /** Convert snake_case tool name to user-friendly PascalCase display name. */
-  private def toolNameToDisplay(toolName: String): String = {
-    toolName.split("_").map(_.capitalize).mkString
-  }
+  private def toolNameToDisplay(toolId: ToolId): String =
+    ToolId.displayName(toolId).replace(" ", "")
 
   // --- Resource Extraction ---
 
   /** Extract a displayable resource identifier from tool arguments (e.g., theory name, URL). */
-  private def extractResource(toolName: String, args: ResponseParser.ToolArgs): Option[String] = {
-    toolName match {
-      case "read_theory" | "search_in_theory" | "edit_theory" | 
-           "get_entities" | "get_dependencies" =>
+  private def extractResource(
+      toolId: ToolId,
+      args: ResponseParser.ToolArgs
+  ): Option[String] = {
+    toolId match {
+      case ToolId.ReadTheory | ToolId.SearchInTheory | ToolId.EditTheory |
+          ToolId.GetEntities | ToolId.GetDependencies =>
         args.get("theory").map(ResponseParser.toolValueToString)
-      case "create_theory" =>
+      case ToolId.CreateTheory =>
         args.get("name").map(n => s"${ResponseParser.toolValueToString(n)}.thy")
-      case "open_theory" =>
+      case ToolId.OpenTheory =>
         args.get("path").map(ResponseParser.toolValueToString)
-      case "web_search" =>
+      case ToolId.WebSearch =>
         args.get("query").map(q => s"query: ${ResponseParser.toolValueToString(q)}")
       case _ => None
     }
@@ -262,34 +277,42 @@ object ToolPermissions {
 
   /** Get the configured permission level for a tool from jEdit properties. */
   def getConfiguredLevel(toolName: String): PermissionLevel = {
+    ToolId.fromWire(toolName).map(getConfiguredLevel).getOrElse(AskAtFirstUse)
+  }
+
+  def getConfiguredLevel(toolId: ToolId): PermissionLevel = {
     // ask_user is always Allow and cannot be changed (would create recursion)
-    if (toolName == "ask_user") return Allow
-    
-    val key = s"assistant.permissions.tool.$toolName"
+    if (toolId == ToolId.AskUser) return Allow
+
+    val key = s"assistant.permissions.tool.${toolId.wireName}"
     val value = jEdit.getProperty(key, "")
-    PermissionLevel.fromString(value).getOrElse(
-      defaultPermissions.getOrElse(toolName, AskAtFirstUse)
-    )
+    PermissionLevel
+      .fromString(value)
+      .getOrElse(defaultPermissions.getOrElse(toolId, AskAtFirstUse))
   }
 
   /** Set the permission level for a tool in jEdit properties. */
   def setConfiguredLevel(toolName: String, level: PermissionLevel): Unit = {
-    if (toolName == "ask_user") return // ask_user is locked to Allow
-    val key = s"assistant.permissions.tool.$toolName"
+    ToolId.fromWire(toolName).foreach(toolId => setConfiguredLevel(toolId, level))
+  }
+
+  def setConfiguredLevel(toolId: ToolId, level: PermissionLevel): Unit = {
+    if (toolId == ToolId.AskUser) return // ask_user is locked to Allow
+    val key = s"assistant.permissions.tool.${toolId.wireName}"
     jEdit.setProperty(key, level.toConfigString)
   }
 
   /** Reset all tool permissions to defaults. */
   def resetToDefaults(): Unit = {
-    for ((toolName, level) <- defaultPermissions if toolName != "ask_user") {
-      setConfiguredLevel(toolName, level)
+    for ((toolId, level) <- defaultPermissions if toolId != ToolId.AskUser) {
+      setConfiguredLevel(toolId, level)
     }
   }
 
   /** Get all tool names with their configured or default permission levels. */
   def getAllToolPermissions: List[(String, PermissionLevel)] = {
     AssistantTools.tools.map { tool =>
-      (tool.name, getConfiguredLevel(tool.name))
+      (tool.name, getConfiguredLevel(tool.id))
     }
   }
 
@@ -303,21 +326,36 @@ object ToolPermissions {
    * @return PermissionDecision
    */
   def checkPermission(toolName: String, args: ResponseParser.ToolArgs): PermissionDecision = {
+    ToolId
+      .fromWire(toolName)
+      .map(checkPermission(_, args))
+      .getOrElse(Denied)
+  }
+
+  def checkPermission(
+      toolId: ToolId,
+      args: ResponseParser.ToolArgs
+  ): PermissionDecision = {
     // 1. Check session-scoped denials
-    if (isSessionDenied(toolName)) return Denied
+    if (isSessionDenied(toolId)) return Denied
 
     // 2. Get configured level
-    val level = getConfiguredLevel(toolName)
+    val level = getConfiguredLevel(toolId)
 
     // 3. Apply policy
     level match {
       case Deny => Denied
       case Allow => Allowed
       case AskAtFirstUse =>
-        if (isSessionAllowed(toolName)) Allowed
-        else NeedPrompt(toolName, extractResource(toolName, args), summarizeArgs(args))
+        if (isSessionAllowed(toolId)) Allowed
+        else
+          NeedPrompt(
+            toolId.wireName,
+            extractResource(toolId, args),
+            summarizeArgs(args)
+          )
       case AskAlways =>
-        NeedPrompt(toolName, extractResource(toolName, args), summarizeArgs(args))
+        NeedPrompt(toolId.wireName, extractResource(toolId, args), summarizeArgs(args))
     }
   }
 
@@ -336,14 +374,26 @@ object ToolPermissions {
       resource: Option[String],
       details: Option[String],
       view: View
+  ): PermissionDecision =
+    ToolId
+      .fromWire(toolName)
+      .map(promptUser(_, resource, details, view))
+      .getOrElse(Denied)
+
+  def promptUser(
+      toolId: ToolId,
+      resource: Option[String],
+      details: Option[String],
+      view: View
   ): PermissionDecision = {
-    val displayName = toolNameToDisplay(toolName)
+    val toolName = toolId.wireName
+    val displayName = toolNameToDisplay(toolId)
     val resourceText = resource.map(r => s" on '$r'").getOrElse("")
-    val action = toolDescriptions.getOrElse(toolName, "perform this action")
+    val action = toolDescriptionsById.getOrElse(toolId, "perform this action")
     val question = s"Tool '$displayName' wants to $action$resourceText. Allow now?"
     
-    val toolDef = AssistantTools.tools.find(_.name == toolName)
-    val level = getConfiguredLevel(toolName)
+    val toolDef = AssistantTools.toolDefinition(toolId)
+    val level = getConfiguredLevel(toolId)
     val contextLines =
       List(
         toolDef.map(_.description).filter(_.nonEmpty),
@@ -366,14 +416,14 @@ object ToolPermissions {
       case Some(choice) =>
         choice match {
           case "Allow (for this session)" =>
-            setSessionAllowed(toolName)
+            setSessionAllowed(toolId)
             safeLog(s"[Permissions] User allowed '$toolName' for session")
             Allowed
           case "Allow Once" =>
             safeLog(s"[Permissions] User allowed '$toolName' once")
             Allowed
           case "Deny (for this session)" =>
-            setSessionDenied(toolName)
+            setSessionDenied(toolId)
             safeLog(s"[Permissions] User denied '$toolName' for session")
             Denied
           case _ =>
@@ -394,6 +444,6 @@ object ToolPermissions {
    * Excludes tools with Deny permission level.
    */
   def getVisibleTools: List[AssistantTools.ToolDef] = {
-    AssistantTools.tools.filter(tool => getConfiguredLevel(tool.name) != Deny)
+    AssistantTools.tools.filter(tool => getConfiguredLevel(tool.id) != Deny)
   }
 }

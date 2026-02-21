@@ -58,6 +58,15 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
     }
   }
 
+  test("parseResponseEither should return typed parse errors") {
+    ResponseParser.parseResponseEither("anthropic.claude-v2", "") shouldBe
+      Left(ResponseParser.ParseError.EmptyResponse)
+    ResponseParser.parseResponseEither(
+      "anthropic.claude-v2",
+      """{"id":"msg_123","model":"claude"}"""
+    ) shouldBe Left(ResponseParser.ParseError.MissingTextField)
+  }
+
   test("parseResponse should handle CRIS-prefixed model IDs") {
     val json = """{"content":[{"type":"text","text":"CRIS response"}],"stop_reason":"end_turn"}"""
     ResponseParser.parseResponse("us.anthropic.claude-3-sonnet", json) shouldBe "CRIS response"
@@ -217,6 +226,12 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
         input("ratio") shouldBe ResponseParser.DecimalValue(3.14)  // Double preserved
       case _ => fail("Expected ToolUseBlock")
     }
+  }
+
+  test("parseToolArgsJsonObjectEither should reject invalid JSON") {
+    val bad = """{"x":"""
+    val parsed = ResponseParser.parseToolArgsJsonObjectEither(bad)
+    parsed.isLeft shouldBe true
   }
 
   // --- extractForcedToolArgs ---
