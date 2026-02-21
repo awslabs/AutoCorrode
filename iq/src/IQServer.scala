@@ -548,6 +548,9 @@ class IQServer(
         "get_goal_state" -> (params => handleGetGoalState(params)),
         "get_context_info" -> (params => handleGetContextInfo(params)),
         "get_entities" -> (params => handleGetEntities(params)),
+        "get_proof_context" -> (params => handleGetProofContext(params)),
+        "get_definitions" -> (params => handleGetDefinitions(params)),
+        "get_diagnostics" -> (params => handleGetDiagnostics(params)),
         "explore" -> (params => handleExplore(params)),
         "save_file" -> (params => handleSaveFile(params))
       )
@@ -1355,6 +1358,104 @@ class IQServer(
             )
           ),
           "required" -> List("path"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_proof_context",
+        "description" -> "Read-only local proof-context introspection (print_context) at a canonical command selection.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_definitions",
+        "description" -> "Read-only definition/context lookup via Isar Explore get_defs for one or more names at a canonical command selection.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "names" -> Map(
+              "type" -> "string",
+              "description" -> "Whitespace-separated list of names to look up, e.g. 'map foldl list_all2'."
+            ),
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("names", "command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_diagnostics",
+        "description" -> "Read-only diagnostics retrieval for errors or warnings in either a canonical command selection or an entire file.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "severity" -> Map(
+              "type" -> "string",
+              "description" -> "Diagnostic severity filter.",
+              "enum" -> List("error", "warning")
+            ),
+            "scope" -> Map(
+              "type" -> "string",
+              "description" -> "Diagnostic scope. 'selection' uses command_selection targeting. 'file' scans full file content.",
+              "enum" -> List("selection", "file")
+            ),
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "When scope='selection': method of selecting command context.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "When scope='file': target file path. When scope='selection' and command_selection != current: file path for selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "When scope='selection' and command_selection='file_offset': character offset."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "When scope='selection' and command_selection='file_pattern': unique substring pattern."
+            )
+          ),
+          "required" -> List("severity"),
           "additionalProperties" -> false
         )
       ),
@@ -3467,6 +3568,237 @@ end"""
         Left(
           s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting entities."
         )
+    }
+  }
+
+  private def withDefaultCurrentSelection(
+      params: Map[String, Any]
+  ): Map[String, Any] = {
+    params.get("command_selection") match {
+      case Some(value) if value.toString.trim.nonEmpty => params
+      case _ => params + ("command_selection" -> "current")
+    }
+  }
+
+  private def boolField(payload: Map[String, Any], key: String): Boolean =
+    payload.get(key) match {
+      case Some(value: Boolean) => value
+      case Some(value: String) => value.trim.toLowerCase(Locale.ROOT) == "true"
+      case Some(value: Int) => value != 0
+      case Some(value: Long) => value != 0L
+      case Some(value: Double) => value != 0.0
+      case _ => false
+    }
+
+  private def stringField(payload: Map[String, Any], key: String): String =
+    payload.get(key).map(_.toString).getOrElse("")
+
+  private def runProofQueryAtSelection(
+      resolvedTarget: IQUtils.TargetResolution,
+      arguments: String
+  ): Map[String, Any] =
+    executeExploration(
+      resolvedTarget = resolvedTarget,
+      query = "proof",
+      arguments = arguments,
+      maxResults = None
+    )
+
+  private def handleGetProofContext(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val normalizedParams = withDefaultCurrentSelection(params)
+    decodeAndAuthorizeTargetSelection(
+      normalizedParams,
+      "get_proof_context"
+    ).flatMap { selection =>
+      resolveTargetSelection(selection).map { resolved =>
+        val queryResult = runProofQueryAtSelection(resolved, "print_context")
+        val success = boolField(queryResult, "success")
+        val timedOut = boolField(queryResult, "timed_out")
+        val context = stringField(queryResult, "results").trim
+        val message = stringField(queryResult, "message")
+        val hasContext = success && context.nonEmpty && context != "No results"
+        Map(
+          "selection" -> targetSelectionToMap(resolved.selection),
+          "command" -> commandInfoMap(resolved.command),
+          "success" -> success,
+          "timed_out" -> timedOut,
+          "has_context" -> hasContext,
+          "context" -> context,
+          "message" -> message
+        ) ++ queryResult.get("error").map(err => Map("error" -> err.toString)).getOrElse(Map.empty)
+      }
+    }
+  }
+
+  private def handleGetDefinitions(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val namesRaw = params.get("names").map(_.toString.trim).getOrElse("")
+    if (namesRaw.isEmpty) {
+      return Left("Missing required parameter: names")
+    }
+    val names = namesRaw.split("\\s+").toList.map(_.trim).filter(_.nonEmpty).distinct
+    if (names.isEmpty) {
+      return Left("No valid names provided")
+    }
+
+    val normalizedParams = withDefaultCurrentSelection(params)
+    decodeAndAuthorizeTargetSelection(
+      normalizedParams,
+      "get_definitions"
+    ).flatMap { selection =>
+      resolveTargetSelection(selection).map { resolved =>
+        val queryResult = runProofQueryAtSelection(
+          resolved,
+          s"get_defs ${names.mkString(" ")}"
+        )
+        val success = boolField(queryResult, "success")
+        val timedOut = boolField(queryResult, "timed_out")
+        val definitions = stringField(queryResult, "results").trim
+        val message = stringField(queryResult, "message")
+        Map(
+          "selection" -> targetSelectionToMap(resolved.selection),
+          "command" -> commandInfoMap(resolved.command),
+          "names" -> names,
+          "success" -> success,
+          "timed_out" -> timedOut,
+          "has_definitions" -> (success && definitions.nonEmpty && definitions != "No results"),
+          "definitions" -> definitions,
+          "message" -> message
+        ) ++ queryResult.get("error").map(err => Map("error" -> err.toString)).getOrElse(Map.empty)
+      }
+    }
+  }
+
+  private def diagnosticsFilterForSeverity(
+      severity: String
+  ): XML.Elem => Boolean = severity match {
+    case "error" => Protocol.is_error
+    case _ => elem => Protocol.is_warning(elem) || Protocol.is_legacy(elem)
+  }
+
+  private def collectDiagnosticsInRange(
+      snapshot: Document.Snapshot,
+      range: Text.Range,
+      severity: String,
+      lineDoc: Option[Line.Document]
+  ): List[Map[String, Any]] = {
+    val filter = diagnosticsFilterForSeverity(severity)
+    Rendering
+      .text_messages(snapshot, range, filter)
+      .flatMap { case Text.Info(messageRange, elem) =>
+        val message = XML.content(elem).trim
+        if (message.isEmpty) None
+        else {
+          val line = lineDoc
+            .flatMap(doc => scala.util.Try(doc.position(messageRange.start).line + 1).toOption)
+            .getOrElse(0)
+          Some(
+            Map(
+              "line" -> line,
+              "start_offset" -> messageRange.start,
+              "end_offset" -> messageRange.stop,
+              "message" -> message
+            )
+          )
+        }
+      }
+      .distinct
+      .toList
+  }
+
+  private def handleGetDiagnostics(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val severity = params
+      .get("severity")
+      .map(_.toString.trim.toLowerCase(Locale.ROOT))
+      .getOrElse("")
+    if (!Set("error", "warning").contains(severity)) {
+      return Left("Parameter 'severity' must be either 'error' or 'warning'")
+    }
+
+    val scope = params
+      .get("scope")
+      .map(_.toString.trim.toLowerCase(Locale.ROOT))
+      .filter(_.nonEmpty)
+      .getOrElse("selection")
+    if (!Set("selection", "file").contains(scope)) {
+      return Left("Parameter 'scope' must be either 'selection' or 'file'")
+    }
+
+    if (scope == "file") {
+      val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
+        case Some(path) =>
+          IQUtils.autoCompleteFilePath(path) match {
+            case Right(fullPath) =>
+              authorizeReadPath("get_diagnostics(path)", fullPath) match {
+                case Right(authorizedPath) => authorizedPath
+                case Left(errorMsg) => return Left(errorMsg)
+              }
+            case Left(errorMsg) => return Left(errorMsg)
+          }
+        case None =>
+          return Left("scope='file' requires parameter: path")
+      }
+
+      getFileContentAndModel(filePath) match {
+        case (Some(content), Some(model)) =>
+          val snapshot = Document_Model.snapshot(model)
+          val diagnostics = collectDiagnosticsInRange(
+            snapshot,
+            Text.Range(0, content.length),
+            severity,
+            Some(Line.Document(content))
+          )
+          Right(
+            Map(
+              "scope" -> "file",
+              "severity" -> severity,
+              "path" -> filePath,
+              "node_name" -> model.node_name.toString,
+              "count" -> diagnostics.length,
+              "diagnostics" -> diagnostics
+            )
+          )
+        case _ =>
+          Left(
+            s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting diagnostics."
+          )
+      }
+    } else {
+      val normalizedParams = withDefaultCurrentSelection(params)
+      decodeAndAuthorizeTargetSelection(
+        normalizedParams,
+        "get_diagnostics"
+      ).flatMap { selection =>
+        resolveTargetSelection(selection).map { resolved =>
+          val command = resolved.command
+          val snapshot = PIDE.session.snapshot()
+          val node = snapshot.get_node(command.node_name)
+          val diagnostics =
+            if (node == null) List.empty[Map[String, Any]]
+            else {
+              val start = node.command_start(command).getOrElse(0)
+              collectDiagnosticsInRange(
+                snapshot,
+                Text.Range(start, start + command.length),
+                severity,
+                getFileContent(command.node_name.node).map(Line.Document(_))
+              )
+            }
+          Map(
+            "scope" -> "selection",
+            "severity" -> severity,
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(command),
+            "count" -> diagnostics.length,
+            "diagnostics" -> diagnostics
+          )
+        }
+      }
     }
   }
 

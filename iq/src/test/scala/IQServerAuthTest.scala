@@ -98,6 +98,18 @@ object IQServerAuthTest {
       payload.contains("\"name\":\"get_entities\""),
       s"tools/list should expose get_entities: $payload"
     )
+    assertThat(
+      payload.contains("\"name\":\"get_proof_context\""),
+      s"tools/list should expose get_proof_context: $payload"
+    )
+    assertThat(
+      payload.contains("\"name\":\"get_definitions\""),
+      s"tools/list should expose get_definitions: $payload"
+    )
+    assertThat(
+      payload.contains("\"name\":\"get_diagnostics\""),
+      s"tools/list should expose get_diagnostics: $payload"
+    )
   }
 
   private def testResolveCommandTargetRejectsInvalidSelection(): Unit = {
@@ -169,6 +181,51 @@ object IQServerAuthTest {
     )
   }
 
+  private def testGetDefinitionsRequiresNames(): Unit = {
+    val root = Files.createTempDirectory("iq-server-definitions-missing-names-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-defs-missing","method":"tools/call","params":{"name":"get_definitions","arguments":{"command_selection":"current"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "missing names should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("Missing required parameter: names"),
+      s"expected missing names validation message: $payload"
+    )
+  }
+
+  private def testGetDiagnosticsRejectsInvalidSeverity(): Unit = {
+    val root = Files.createTempDirectory("iq-server-diagnostics-invalid-severity-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-diag-bad-severity","method":"tools/call","params":{"name":"get_diagnostics","arguments":{"severity":"info"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "invalid severity should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("Parameter 'severity' must be either 'error' or 'warning'"),
+      s"expected severity validation message: $payload"
+    )
+  }
+
+  private def testGetDiagnosticsFileScopeRequiresPath(): Unit = {
+    val root = Files.createTempDirectory("iq-server-diagnostics-file-scope-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-diag-missing-path","method":"tools/call","params":{"name":"get_diagnostics","arguments":{"severity":"error","scope":"file"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "file scope without path should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("scope='file' requires parameter: path"),
+      s"expected missing path validation message: $payload"
+    )
+  }
+
   private def testServerAuthorizeMutationPathRespectsRoots(): Unit = {
     val root = Files.createTempDirectory("iq-server-authz-mutation-root").toRealPath()
     val server = mkServer(root, None)
@@ -213,6 +270,9 @@ object IQServerAuthTest {
     testGetGoalStateRejectsInvalidSelection()
     testGetContextInfoRequiresFileOffsetParameters()
     testGetEntitiesRequiresPath()
+    testGetDefinitionsRequiresNames()
+    testGetDiagnosticsRejectsInvalidSeverity()
+    testGetDiagnosticsFileScopeRequiresPath()
     testServerAuthorizeMutationPathRespectsRoots()
     testServerAuthorizeReadPathRespectsRoots()
     println("IQServerAuthTest: all tests passed")
