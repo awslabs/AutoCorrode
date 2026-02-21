@@ -1,6 +1,6 @@
 # Layering Refactor Roadmap
 
-Status: Draft steering document  
+Status: Active (Phase 4 enforcement in place)  
 Applies to: architecture convergence for `iq` and `isabelle-assistant`  
 Last reviewed: 2026-02-21
 
@@ -62,6 +62,12 @@ Acceptance criteria:
 
 1. CI checks detect forbidden boundary violations.
 2. architecture docs and contributor docs align.
+
+Current implementation status:
+
+- `isabelle-assistant/scripts/check_layering.sh` enforces MCP-only execution for migrated proof tools in `AssistantTools`.
+- `make -C isabelle-assistant test` now runs `check-layering` before tests.
+- contributor and architecture docs include the layering gate and ownership rule.
 
 ## Risk Register
 

@@ -11,7 +11,9 @@ Isabelle Assistant combines four main layers:
 1. jEdit UI integration (`AssistantPlugin`, `AssistantDockable`, context menus, chat actions)
 2. LLM orchestration (`BedrockClient`, prompts, tool-use loop, retry/caching)
 3. Isabelle context/proof pipelines (`ContextFetcher`, `GoalExtractor`, `SuggestAction`)
-4. Optional I/Q integration for proof-state operations and verification (`IQIntegration`)
+4. I/Q capability backplane for proof-state operations and verification (`IQIntegration`, `IQMcpClient`)
+
+Layering rule: proof execution semantics are owned by I/Q. Assistant-side proof tools should orchestrate and render results, not implement local fallback execution paths.
 
 For contributor-level component and threading details, see [CONTRIBUTING.md](CONTRIBUTING.md).
 

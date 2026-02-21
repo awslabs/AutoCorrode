@@ -4,6 +4,14 @@
 
 Isabelle Assistant is a jEdit plugin written in Scala 3 that integrates AWS Bedrock LLMs with the Isabelle proof assistant. See the [Architecture section in README.md](README.md#architecture) for the high-level component map.
 
+### Layering Rules (Mandatory)
+
+Isabelle Assistant owns UI and model orchestration. Isabelle-proof execution semantics must be owned by I/Q capabilities.
+
+- In `AssistantTools`, the migrated proof tools (`find_theorems`, `verify_proof`, `run_sledgehammer`, `run_nitpick`, `run_quickcheck`, `execute_step`, `trace_simplifier`) must remain MCP-only and route through `IQMcpClient`.
+- Do not add local fallback logic for those tools via `IQIntegration` or `Extended_Query_Operation`.
+- If a capability is missing in I/Q, add it to I/Q rather than re-implementing runtime semantics in Assistant.
+
 ### Key Components
 
 | Component | Purpose |
@@ -68,6 +76,7 @@ System prompts are loaded from `prompts/system/` in sorted filename order.
 make build               # Build the plugin JAR
 make install             # Build and install (includes I/Q)
 make clean               # Clean build artifacts
+make check-layering      # Enforce Assistant/IQ architectural boundary
 ```
 
 ### Running Tests
@@ -85,7 +94,7 @@ curl -sL "https://repo1.maven.org/maven2/org/scalatest/scalatest-shouldmatchers_
 curl -sL "https://repo1.maven.org/maven2/org/scalactic/scalactic_3/3.2.17/scalactic_3-3.2.17.jar" -o lib/test/scalactic_3-3.2.17.jar
 curl -sL "https://repo1.maven.org/maven2/org/scalatest/scalatest-compatible/3.2.17/scalatest-compatible-3.2.17.jar" -o lib/test/scalatest-compatible-3.2.17.jar
 
-# Run tests
+# Run tests (includes layering guard checks)
 make test
 ```
 

@@ -47,7 +47,7 @@ TEST_SOURCES := $(wildcard src/test/scala/*.scala)
 SCALATEST_JARS = $(wildcard lib/test/*.jar)
 TEST_CLASSPATH = $(shell echo $(SCALATEST_JARS) | tr ' ' ':')
 
-.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-test-sanity verify-test-coverage fetch-test-deps
+.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-layering check-test-sanity verify-test-coverage fetch-test-deps
 
 all: check-deps iq-install build
 
@@ -119,7 +119,7 @@ clean: iq-clean
 
 TEST_CLASSES_DIR ?= $(BUILD_DIR)/test-classes
 
-test: build fetch-test-deps check-test-sanity verify-test-coverage
+test: build fetch-test-deps check-layering check-test-sanity verify-test-coverage
 	echo "Compiling tests..."
 	mkdir -p $(TEST_CLASSES_DIR)
 	$(JAVA_ENV) $(SCALAC) \
@@ -133,6 +133,9 @@ test: build fetch-test-deps check-test-sanity verify-test-coverage
 		-Dassistant.mermaid.disable_subprocess=true \
 		-cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR):$(SCALA_PARSER_COMBINATORS_JAR)" \
 		org.scalatest.tools.Runner -R $(TEST_CLASSES_DIR) -oD
+
+check-layering:
+	./scripts/check_layering.sh
 
 check-test-sanity:
 	@set -eu; \

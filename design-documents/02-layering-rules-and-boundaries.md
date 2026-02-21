@@ -86,3 +86,7 @@ A pull request passes layering checks only when:
 1. New dependencies follow allowed layer direction.
 2. No forbidden patterns are introduced.
 3. Ownership of new behavior is explicit and test-backed.
+
+Current enforcement:
+
+- `make -C isabelle-assistant check-layering` validates that migrated proof tools in `AssistantTools` remain MCP-only and do not re-introduce local `IQIntegration`/`Extended_Query_Operation` execution paths.
