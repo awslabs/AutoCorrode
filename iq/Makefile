@@ -13,6 +13,7 @@ JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
+SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror
 SCALA ?= $(SCALA_HOME)/bin/scala
 SCALA_PARSER_JAR := $(wildcard $(SCALA_HOME)/lib/scala-parser-combinators_3-*.jar)
 XZ_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz-*.jar $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz.jar))
@@ -93,6 +94,7 @@ $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling Scala sources..."
 	$(JAVA_ENV) $(SCALAC) \
+		$(SCALAC_FLAGS) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
@@ -115,6 +117,7 @@ $(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST
 	echo "Compiling I/Q tests..."
 	if [ -z "$(strip $(TEST_SOURCES))" ]; then echo "No test sources found."; touch $@; exit 0; fi
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
+		$(SCALAC_FLAGS) \
 		-classpath "$(CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
@@ -171,6 +174,7 @@ help:
 	echo "  ISABELLE_HOME - Isabelle installation path (default: $(ISABELLE_HOME))"
 	echo "  SCALA_HOME    - Scala installation path (default: $(SCALA_HOME))"
 	echo "  SCALAC        - Scala compiler path (default: $(SCALAC))"
+	echo "  SCALAC_FLAGS  - Scala compiler warning/error flags (default: $(SCALAC_FLAGS))"
 	echo "  SCALA         - Scala runner path (default: $(SCALA))"
 	echo "  BUILD_DIR     - Build output directory (default: $(BUILD_DIR))"
 	echo ""
