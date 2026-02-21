@@ -206,7 +206,7 @@ help:
 	echo "  iq-build   - Build I/Q plugin only"
 	echo "  iq-install - Install I/Q plugin only"
 	echo "  iq-clean   - Clean I/Q build directory only"
-	echo "  check-layering  - Enforce strict Assistant/IQ layering guardrails"
+	echo "  check-layering  - Enforce hard Assistant/IQ layering gate (failing)"
 	echo "  report-layering - Print non-blocking runtime boundary debt inventory"
 	echo "  debug      - Show configuration"
 	echo ""

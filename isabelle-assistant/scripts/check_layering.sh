@@ -14,7 +14,7 @@ usage() {
 Usage: check_layering.sh [--mode strict|report] [--inventory-out <path>]
 
 Modes:
-  strict  Enforce MCP-only migrated method boundaries (default).
+  strict  Enforce MCP-only migrated method boundaries and hard runtime-touchpoint allowlist (default).
   report  Emit non-blocking assistant runtime boundary debt report.
 EOF
 }
@@ -79,10 +79,44 @@ runtime_touchpoint_specs=(
   "command_iterator|command_iterator\\(|iq.command_lookup"
 )
 
+approved_runtime_touchpoint_scopes=(
+  "command_iterator|isabelle-assistant/src/AnalyzePatternsAction.scala"
+  "command_iterator|isabelle-assistant/src/IQIntegration.scala"
+  "command_iterator|isabelle-assistant/src/ProofExtractor.scala"
+  "document_model_get_model|isabelle-assistant/src/AnalyzePatternsAction.scala"
+  "document_model_get_model|isabelle-assistant/src/AssistantSupport.scala"
+  "document_model_get_model|isabelle-assistant/src/IQIntegration.scala"
+  "document_model_get_model|isabelle-assistant/src/MenuContext.scala"
+  "document_model_get_model|isabelle-assistant/src/ProofExtractor.scala"
+  "document_model_get_model|isabelle-assistant/src/ShowTypeAction.scala"
+  "document_model_get_model|isabelle-assistant/src/SuggestNameAction.scala"
+  "document_model_get_model|isabelle-assistant/src/SummarizeTheoryAction.scala"
+  "document_model_snapshot|isabelle-assistant/src/AnalyzePatternsAction.scala"
+  "document_model_snapshot|isabelle-assistant/src/AssistantSupport.scala"
+  "document_model_snapshot|isabelle-assistant/src/IQIntegration.scala"
+  "document_model_snapshot|isabelle-assistant/src/MenuContext.scala"
+  "document_model_snapshot|isabelle-assistant/src/ProofExtractor.scala"
+  "document_model_snapshot|isabelle-assistant/src/ShowTypeAction.scala"
+  "extended_query_operation|isabelle-assistant/src/IQAvailable.scala"
+  "snapshot_get_node|isabelle-assistant/src/AnalyzePatternsAction.scala"
+  "snapshot_get_node|isabelle-assistant/src/IQIntegration.scala"
+  "snapshot_get_node|isabelle-assistant/src/ProofExtractor.scala"
+)
+
+is_approved_runtime_touchpoint_scope() {
+  local key="$1"
+  for approved in "${approved_runtime_touchpoint_scopes[@]}"; do
+    if [[ "$approved" == "$key" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 scan_runtime_touchpoints() {
   local mode="$1"
-  local tmp_matches
-  tmp_matches="$(mktemp)"
+  local out_file="$2"
+  : > "$out_file"
 
   for spec in "${runtime_touchpoint_specs[@]}"; do
     local touchpoint regex target
@@ -95,7 +129,7 @@ scan_runtime_touchpoints() {
       while IFS=: read -r file line text; do
         [[ -z "${file:-}" ]] && continue
         file="${file#"$REPO_ROOT/"}"
-        printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$text" >> "$tmp_matches"
+        printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$text" >> "$out_file"
       done < <(rg -n --no-heading --color never "$regex" "$ASSISTANT_SRC" || true)
     else
       while IFS= read -r raw; do
@@ -106,36 +140,62 @@ scan_runtime_touchpoints() {
         line="${rest%%:*}"
         text="${rest#*:}"
         file="${file#"$REPO_ROOT/"}"
-        printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$text" >> "$tmp_matches"
+        printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$text" >> "$out_file"
       done < <(grep -R -n -E "$regex" "$ASSISTANT_SRC" || true)
     fi
   done
 
-  if [[ -s "$tmp_matches" ]]; then
-    sort -u "$tmp_matches" -o "$tmp_matches"
+  if [[ -s "$out_file" ]]; then
+    sort -u "$out_file" -o "$out_file"
   fi
 
   if [[ "$mode" == "report" ]]; then
     echo "Layering debt report (non-blocking):"
-    if [[ ! -s "$tmp_matches" ]]; then
+    if [[ ! -s "$out_file" ]]; then
       echo "  No runtime touchpoints detected in $ASSISTANT_SRC."
     else
-      awk -F '\t' '{count[$1]++} END {for (k in count) printf "  - %s: %d\n", k, count[k]}' "$tmp_matches" | sort
+      awk -F '\t' '{count[$1]++} END {for (k in count) printf "  - %s: %d\n", k, count[k]}' "$out_file" | sort
       echo
       printf "touchpoint\tfile\tline\ttarget_iq_capability\tsource\n"
-      cat "$tmp_matches"
+      cat "$out_file"
     fi
   fi
 
   if [[ -n "$INVENTORY_OUT" ]]; then
     printf "touchpoint\tfile\tline\ttarget_iq_capability\tsource\n" > "$INVENTORY_OUT"
-    if [[ -s "$tmp_matches" ]]; then
-      cat "$tmp_matches" >> "$INVENTORY_OUT"
+    if [[ -s "$out_file" ]]; then
+      cat "$out_file" >> "$INVENTORY_OUT"
     fi
     echo "Wrote runtime touchpoint inventory to $INVENTORY_OUT"
   fi
+}
 
-  rm -f "$tmp_matches"
+enforce_runtime_touchpoint_allowlist() {
+  local matches_file="$1"
+  local unexpected_file
+  unexpected_file="$(mktemp)"
+
+  if [[ -s "$matches_file" ]]; then
+    while IFS=$'\t' read -r touchpoint file line target source; do
+      [[ -z "${touchpoint:-}" ]] && continue
+      local key="${touchpoint}|${file}"
+      if ! is_approved_runtime_touchpoint_scope "$key"; then
+        printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$source" >> "$unexpected_file"
+      fi
+    done < "$matches_file"
+  fi
+
+  if [[ -s "$unexpected_file" ]]; then
+    echo "ERROR: layering violation: unapproved assistant runtime touchpoints detected."
+    echo "Add missing IQ capability ownership or explicitly approve scope in check_layering.sh."
+    echo
+    printf "touchpoint\tfile\tline\ttarget_iq_capability\tsource\n"
+    cat "$unexpected_file"
+    rm -f "$unexpected_file"
+    exit 1
+  fi
+
+  rm -f "$unexpected_file"
 }
 
 extract_method() {
@@ -218,10 +278,14 @@ for method in "${iq_integration_mcp_only_methods[@]}"; do
 done
 }
 
-scan_runtime_touchpoints "$MODE"
+RUNTIME_TOUCHPOINTS_FILE="$(mktemp)"
+trap 'rm -f "$RUNTIME_TOUCHPOINTS_FILE"' EXIT
+
+scan_runtime_touchpoints "$MODE" "$RUNTIME_TOUCHPOINTS_FILE"
 
 if [[ "$MODE" == "strict" ]]; then
   run_strict_mcp_guards
+  enforce_runtime_touchpoint_allowlist "$RUNTIME_TOUCHPOINTS_FILE"
   echo "Layering checks passed."
 else
   echo "Layering report completed (non-blocking)."

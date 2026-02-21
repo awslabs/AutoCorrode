@@ -89,4 +89,6 @@ A pull request passes layering checks only when:
 
 Current enforcement:
 
-- `make -C isabelle-assistant check-layering` validates that migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration` remain MCP-only and do not re-introduce local `IQIntegration`/`Extended_Query_Operation` execution paths.
+- `make -C isabelle-assistant check-layering` is a failing gate:
+  1. migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration` must remain MCP-only (no local `IQIntegration`/`Extended_Query_Operation` execution paths),
+  2. any assistant-side direct Isabelle runtime touchpoint outside the approved debt allowlist fails.

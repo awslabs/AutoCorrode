@@ -14,6 +14,7 @@ Isabelle Assistant combines four main layers:
 4. I/Q capability backplane for proof-state operations and verification (`IQIntegration`, `IQMcpClient`)
 
 Layering rule: proof execution semantics are owned by I/Q. Assistant-side proof tools should orchestrate and render results, not implement local fallback execution paths.
+The repository enforces this with a failing layering gate (`make check-layering`) in the Assistant build/test flow.
 
 For contributor-level component and threading details, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
