@@ -15,12 +15,12 @@ final class IQOperationLifecycle[A](
 ) {
   private val lock = new Object()
   @volatile private var completed = false
-  @volatile private var timeoutThread: Thread = null
+  @volatile private var timeoutThread: Option[Thread] = None
 
   def isCompleted: Boolean = completed
 
   def setTimeoutThread(thread: Thread): Unit = {
-    timeoutThread = thread
+    timeoutThread = Some(thread)
   }
 
   /** Complete from non-timeout path and interrupt timeout watcher. */
@@ -48,15 +48,14 @@ final class IQOperationLifecycle[A](
   }
 
   private def finish(result: A, interruptTimeout: Boolean): Unit = {
-    var shouldRun = false
-    lock.synchronized {
+    val shouldRun = lock.synchronized {
       if (!completed) {
         completed = true
-        shouldRun = true
-      }
+        true
+      } else false
     }
     if (shouldRun) {
-      if (interruptTimeout) Option(timeoutThread).foreach(_.interrupt())
+      if (interruptTimeout) timeoutThread.foreach(_.interrupt())
       try {
         onComplete(result)
       } finally {

@@ -82,14 +82,14 @@ object GUIThreadUtil {
   def awaitIQOperation[T](timeoutMs: Long)(activate: (T => Unit) => () => Unit): Either[String, T] = {
     val latch = new CountDownLatch(1)
     @volatile var result: Either[String, T] = Left("timeout")
-    @volatile var timeoutThread: Thread = null
+    @volatile var timeoutThread: Option[Thread] = None
     
     val cleanup = activate { value =>
       result = Right(value)
       latch.countDown()
     }
     
-    timeoutThread = Isabelle_Thread.fork(name = "iq-timeout") {
+    timeoutThread = Some(Isabelle_Thread.fork(name = "iq-timeout") {
       try {
         Thread.sleep(timeoutMs)
         result = Left("timeout")
@@ -98,11 +98,10 @@ object GUIThreadUtil {
       } catch {
         case _: InterruptedException => // Early completion
       }
-    }
+    })
     
     latch.await(timeoutMs + 2000, TimeUnit.MILLISECONDS)
-    val tt = timeoutThread
-    if (tt != null) tt.interrupt()
+    timeoutThread.foreach(_.interrupt())
     result
   }
   

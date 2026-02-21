@@ -18,10 +18,12 @@ object RefactorAction {
 
   /** Chat command handler: refactor selected proof text. */
   def chatRefactor(view: View): Unit = {
-    val selectedText = view.getTextArea.getSelectedText
-    if (selectedText != null && selectedText.trim.nonEmpty)
-      refactor(view, selectedText)
-    else ChatAction.addResponse("Please select proof text to refactor.")
+    Option(view.getTextArea.getSelectedText)
+      .map(_.trim)
+      .filter(_.nonEmpty) match {
+      case Some(selectedText) => refactor(view, selectedText)
+      case None               => ChatAction.addResponse("Please select proof text to refactor.")
+    }
   }
 
   def refactor(view: View, proofText: String): Unit = {
@@ -52,36 +54,40 @@ object RefactorAction {
         val args = BedrockClient.invokeInContextStructured(prompt, refactorSchema)
         val code = ResponseParser.toolValueToString(args.getOrElse("code", ResponseParser.NullValue))
 
-        if (!canVerify) {
-          GUI_Thread.later {
-            showResult(view, code, VerificationBadge.Unverified)
-          }
-        } else {
-          val invokeAndExtract: String => String = { retryPrompt =>
-            val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, refactorSchema)
-            ResponseParser.toolValueToString(retryArgs.getOrElse("code", ResponseParser.NullValue))
-          }
-          GUI_Thread.later {
-            VerifyWithRetry.verify(
-              view,
-              commandOpt.get,
-              code,
-              code,
-              1,
-              retryPrompt = (failed, error) =>
-                PromptLoader.load(
-                  "refactor_to_isar_retry.md",
-                  buildPromptSubstitutions(
-                    proofText,
-                    goalState,
-                    bundle,
-                    Map("failed_attempt" -> failed, "error" -> error)
-                  )
-                ),
-              invokeAndExtract = invokeAndExtract,
-              showResult = (resp, badge) => showResult(view, resp, badge)
-            )
-          }
+        commandOpt match {
+          case Some(command) if canVerify =>
+            val invokeAndExtract: String => String = { retryPrompt =>
+              val retryArgs =
+                BedrockClient.invokeNoCacheStructured(retryPrompt, refactorSchema)
+              ResponseParser.toolValueToString(
+                retryArgs.getOrElse("code", ResponseParser.NullValue)
+              )
+            }
+            GUI_Thread.later {
+              VerifyWithRetry.verify(
+                view,
+                command,
+                code,
+                code,
+                1,
+                retryPrompt = (failed, error) =>
+                  PromptLoader.load(
+                    "refactor_to_isar_retry.md",
+                    buildPromptSubstitutions(
+                      proofText,
+                      goalState,
+                      bundle,
+                      Map("failed_attempt" -> failed, "error" -> error)
+                    )
+                  ),
+                invokeAndExtract = invokeAndExtract,
+                showResult = (resp, badge) => showResult(view, resp, badge)
+              )
+            }
+          case _ =>
+            GUI_Thread.later {
+              showResult(view, code, VerificationBadge.Unverified)
+            }
         }
       } catch {
         case ex: Exception =>

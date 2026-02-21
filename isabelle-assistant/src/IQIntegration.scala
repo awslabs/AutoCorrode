@@ -101,16 +101,16 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
           val startTime = System.currentTimeMillis()
           val outputLock = new Object()
           @volatile var receivedOutput = false
-          var operation: Extended_Query_Operation = null
+          @volatile var operation: Option[Extended_Query_Operation] = None
           val lifecycle = new IQOperationLifecycle[VerificationResult](
             onComplete = newResult => {
               VerificationCache.put(command, proofText, newResult)
               callback(newResult)
             },
-            deactivate = () => Option(operation).foreach(_.deactivate())
+            deactivate = () => operation.foreach(_.deactivate())
           )
 
-          operation = new Extended_Query_Operation(
+          val op = new Extended_Query_Operation(
             PIDE.editor,
             view,
             AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
@@ -177,14 +177,15 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
               }
             }
           )
+          operation = Some(op)
 
           lifecycle.forkTimeout(name = "verify-timeout", timeoutMs = timeoutMs)(
             ProofTimeout
           )
 
           try {
-            operation.activate()
-            operation.apply_query_at_command(command, List(proofText))
+            op.activate()
+            op.apply_query_at_command(command, List(proofText))
           } catch {
             case ex: Exception =>
               lifecycle.complete(
@@ -210,13 +211,13 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
 
     val startTime = System.currentTimeMillis()
     val outputLock = new Object()
-    var operation: Extended_Query_Operation = null
+    @volatile var operation: Option[Extended_Query_Operation] = None
     val lifecycle = new IQOperationLifecycle[Either[String, ProofStepResult]](
       onComplete = callback,
-      deactivate = () => Option(operation).foreach(_.deactivate())
+      deactivate = () => operation.foreach(_.deactivate())
     )
 
-    operation = new Extended_Query_Operation(
+    val op = new Extended_Query_Operation(
       PIDE.editor,
       view,
       AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
@@ -253,14 +254,15 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
         }
       }
     )
+    operation = Some(op)
 
     lifecycle.forkTimeout(name = "step-timeout", timeoutMs = timeoutMs)(
       Left("timeout")
     )
 
     try {
-      operation.activate()
-      operation.apply_query_at_command(command, List(proofText))
+      op.activate()
+      op.apply_query_at_command(command, List(proofText))
     } catch {
       case ex: Exception =>
         lifecycle.complete(Left(s"verification setup failed: ${ex.getMessage}"))
@@ -337,13 +339,13 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
 
       val outputLock = new Object()
       val results = scala.collection.mutable.ListBuffer[String]()
-      var operation: Extended_Query_Operation = null
+      @volatile var operation: Option[Extended_Query_Operation] = None
       val lifecycle = new IQOperationLifecycle[Either[String, List[String]]](
         onComplete = callback,
-        deactivate = () => Option(operation).foreach(_.deactivate())
+        deactivate = () => operation.foreach(_.deactivate())
       )
 
-      operation = new Extended_Query_Operation(
+      val op = new Extended_Query_Operation(
         PIDE.editor,
         view,
         AssistantConstants.IQ_OPERATION_FIND_THEOREMS,
@@ -374,6 +376,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
           }
         }
       )
+      operation = Some(op)
 
       lifecycle.forkTimeout(
         name = "find-theorems-timeout",
@@ -383,9 +386,9 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       }
 
       try {
-        operation.activate()
+        op.activate()
         // find_theorems args: limit, allow_dups, query
-        operation.apply_query_at_command(
+        op.apply_query_at_command(
           command,
           List(limit.toString, "false", pattern)
         )
@@ -425,13 +428,13 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
 
       val outputLock = new Object()
       val output = new StringBuilder
-      var operation: Extended_Query_Operation = null
+      @volatile var operation: Option[Extended_Query_Operation] = None
       val lifecycle = new IQOperationLifecycle[Either[String, String]](
         onComplete = callback,
-        deactivate = () => Option(operation).foreach(_.deactivate())
+        deactivate = () => operation.foreach(_.deactivate())
       )
 
-      operation = new Extended_Query_Operation(
+      val op = new Extended_Query_Operation(
         PIDE.editor,
         view,
         AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
@@ -454,14 +457,15 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
           }
         }
       )
+      operation = Some(op)
 
       lifecycle.forkTimeout(name = "iq-query-timeout", timeoutMs = timeoutMs) {
         Right(output.synchronized { output.toString })
       }
 
       try {
-        operation.activate()
-        operation.apply_query_at_command(command, queryArgs)
+        op.activate()
+        op.apply_query_at_command(command, queryArgs)
       } catch {
         case ex: Exception =>
           lifecycle.complete(Left(s"query setup failed: ${ex.getMessage}"))
@@ -544,14 +548,14 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       val tryThisPattern =
         """Try this:\s*(.+?)\s*\((\d+(?:\.\d+)?)\s*(ms|s)\)""".r
 
-      var operation: Extended_Query_Operation = null
+      @volatile var operation: Option[Extended_Query_Operation] = None
       val lifecycle =
         new IQOperationLifecycle[Either[String, List[SledgehammerResult]]](
           onComplete = callback,
-          deactivate = () => Option(operation).foreach(_.deactivate())
+          deactivate = () => operation.foreach(_.deactivate())
         )
 
-      operation = new Extended_Query_Operation(
+      val op = new Extended_Query_Operation(
         PIDE.editor,
         view,
         AssistantConstants.IQ_OPERATION_ISAR_EXPLORE,
@@ -581,6 +585,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
           }
         }
       )
+      operation = Some(op)
 
       lifecycle.forkTimeout(
         name = "sledgehammer-timeout",
@@ -590,8 +595,8 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       }
 
       try {
-        operation.activate()
-        operation.apply_query_at_command(command, List("sledgehammer"))
+        op.activate()
+        op.apply_query_at_command(command, List("sledgehammer"))
       } catch {
         case ex: Exception =>
           lifecycle.complete(

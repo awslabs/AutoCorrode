@@ -42,33 +42,34 @@ object ContextFetcher {
     
     latch.await(AssistantConstants.CONTEXT_FETCH_TIMEOUT, TimeUnit.MILLISECONDS)
     
-    if (entities.isEmpty || commandOpt.isEmpty) None
-    else {
-      val interesting = entities.filter { case (kind, n) =>
-        (kind == Markup.CONSTANT || kind == Markup.TYPE_NAME) && !isMetaLevel(n)
-      }.map(_._2).distinct
-      
-      if (interesting.isEmpty || !IQAvailable.isAvailable) None
-      else {
-        val resultLatch = new CountDownLatch(1)
-        @volatile var result: Option[String] = None
-        
-        GUI_Thread.later {
-          fetchDefinitions(view, commandOpt.get, interesting, timeoutMs, { response =>
-            response match {
-              case Right(output) if output.trim.nonEmpty && 
-                  !output.contains("No additional context") &&
-                  !output.startsWith("Error:") =>
-                result = Some(output.trim)
-              case _ =>
-            }
-            resultLatch.countDown()
-          })
+    commandOpt match {
+      case Some(command) if entities.nonEmpty =>
+        val interesting = entities.filter { case (kind, n) =>
+          (kind == Markup.CONSTANT || kind == Markup.TYPE_NAME) && !isMetaLevel(n)
+        }.map(_._2).distinct
+
+        if (interesting.isEmpty || !IQAvailable.isAvailable) None
+        else {
+          val resultLatch = new CountDownLatch(1)
+          @volatile var result: Option[String] = None
+
+          GUI_Thread.later {
+            fetchDefinitions(view, command, interesting, timeoutMs, { response =>
+              response match {
+                case Right(output) if output.trim.nonEmpty &&
+                    !output.contains("No additional context") &&
+                    !output.startsWith("Error:") =>
+                  result = Some(output.trim)
+                case _ =>
+              }
+              resultLatch.countDown()
+            })
+          }
+
+          resultLatch.await(timeoutMs + 1000, TimeUnit.MILLISECONDS)
+          result
         }
-        
-        resultLatch.await(timeoutMs + 1000, TimeUnit.MILLISECONDS)
-        result
-      }
+      case _ => None
     }
   }
 
@@ -146,13 +147,12 @@ object ContextFetcher {
   ): Unit = {
     val outputLock = new Object()
     val output = new StringBuilder
-    var operation: Extended_Query_Operation = null
+    @volatile var operation: Option[Extended_Query_Operation] = None
     val lifecycle = new IQOperationLifecycle[Either[String, String]](
       onComplete = callback,
-      deactivate = () => Option(operation).foreach(_.deactivate())
+      deactivate = () => operation.foreach(_.deactivate())
     )
-
-    operation = new Extended_Query_Operation(
+    val op = new Extended_Query_Operation(
       PIDE.editor, view, "isar_explore",
       status => {
         if (status == Extended_Query_Operation.Status.finished ||
@@ -169,14 +169,15 @@ object ContextFetcher {
         }
       }
     )
+    operation = Some(op)
 
     lifecycle.forkTimeout(name = "context-fetch-timeout", timeoutMs = timeoutMs) {
       Right(output.synchronized { output.toString })
     }
 
     try {
-      operation.activate()
-      operation.apply_query_at_command(command, List("get_defs " + names.mkString(" ")))
+      op.activate()
+      op.apply_query_at_command(command, List("get_defs " + names.mkString(" ")))
     } catch {
       case ex: Exception =>
         lifecycle.complete(Left(s"context fetch setup failed: ${ex.getMessage}"))

@@ -29,39 +29,44 @@ object FindTheoremsAction {
       Option(JOptionPane.showInputDialog(view, "Search pattern:", "Find Theorems", JOptionPane.PLAIN_MESSAGE))
         .map(_.trim).filter(_.nonEmpty)
     }
-    
-    if (patternOpt.isEmpty) ()
-    else {
-      val pattern = patternOpt.get
+    patternOpt.foreach { pattern =>
       ChatAction.addMessage(ChatAction.User, s":find $pattern")
       AssistantDockable.showConversation(ChatAction.getHistory)
-      
+
       if (!IQAvailable.isAvailable) {
         GUI.warning_dialog(view, "Isabelle Assistant", "I/Q plugin not available")
       } else {
         val searchPattern = toSearchPattern(pattern, view)
         val buffer = view.getBuffer
         val offset = view.getTextArea.getCaretPosition
-        val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
 
-        if (commandOpt.isEmpty) {
-          GUI.warning_dialog(view, "Isabelle Assistant", "No Isabelle command at cursor position")
-        } else {
-          AssistantDockable.setStatus("Searching theorems...")
-          val quotedPattern = "\"" + searchPattern + "\""
+        IQIntegration.getCommandAtOffset(buffer, offset) match {
+          case Some(command) =>
+            AssistantDockable.setStatus("Searching theorems...")
+            val quotedPattern = "\"" + searchPattern + "\""
 
-          IQIntegration.runFindTheoremsAsync(
-            view, commandOpt.get, quotedPattern,
-            AssistantOptions.getFindTheoremsLimit,
-            AssistantOptions.getFindTheoremsTimeout,
-            {
-              case Right(results) => GUI_Thread.later { displayResults(view, searchPattern, results) }
-              case Left(error) => GUI_Thread.later {
-                AssistantDockable.respondInChat(s"Find theorems error: $error")
-                AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            IQIntegration.runFindTheoremsAsync(
+              view,
+              command,
+              quotedPattern,
+              AssistantOptions.getFindTheoremsLimit,
+              AssistantOptions.getFindTheoremsTimeout,
+              {
+                case Right(results) =>
+                  GUI_Thread.later { displayResults(view, searchPattern, results) }
+                case Left(error) =>
+                  GUI_Thread.later {
+                    AssistantDockable.respondInChat(s"Find theorems error: $error")
+                    AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+                  }
               }
-            }
-          )
+            )
+          case None =>
+            GUI.warning_dialog(
+              view,
+              "Isabelle Assistant",
+              "No Isabelle command at cursor position"
+            )
         }
       }
     }

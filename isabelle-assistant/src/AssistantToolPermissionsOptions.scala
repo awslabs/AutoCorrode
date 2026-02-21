@@ -10,12 +10,13 @@ import javax.swing.{JComboBox, JButton}
 class AssistantToolPermissionsOptions
     extends AbstractOptionPane("assistant-tool-permissions-options") {
 
-  private var permissionCombos: scala.collection.mutable.Map[String, JComboBox[String]] = _
+  private val permissionCombos =
+    scala.collection.mutable.Map.empty[String, JComboBox[String]]
 
   override def _init(): Unit = {
     addSeparator("Tool Permissions")
 
-    permissionCombos = scala.collection.mutable.Map[String, JComboBox[String]]()
+    permissionCombos.clear()
 
     for (tool <- AssistantTools.tools.sortBy(_.name)) {
       val combo = new JComboBox(ToolPermissions.PermissionLevel.displayOptions)
@@ -51,13 +52,11 @@ class AssistantToolPermissionsOptions
   }
 
   override def _save(): Unit = {
-    if (permissionCombos != null) {
-      for ((toolName, combo) <- permissionCombos) {
-        val displayLabel =
-          Option(combo.getSelectedItem).map(_.toString).getOrElse("Ask at First Use")
-        ToolPermissions.PermissionLevel.fromDisplayString(displayLabel).foreach {
-          permLevel => ToolPermissions.setConfiguredLevel(toolName, permLevel)
-        }
+    for ((toolName, combo) <- permissionCombos) {
+      val displayLabel =
+        Option(combo.getSelectedItem).map(_.toString).getOrElse("Ask at First Use")
+      ToolPermissions.PermissionLevel.fromDisplayString(displayLabel).foreach {
+        permLevel => ToolPermissions.setConfiguredLevel(toolName, permLevel)
       }
     }
   }
