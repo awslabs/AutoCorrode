@@ -3,6 +3,7 @@
 
 package isabelle.assistant
 
+import isabelle.Output
 import java.util.concurrent.CopyOnWriteArrayList
 
 /** Events representing UI updates that need to be broadcast to all instances of
@@ -40,14 +41,15 @@ object AssistantEventBus {
   /** Register a callback for UI events. \@param listener The callback function.
     */
   def subscribe(listener: AssistantEvent => Unit): Unit = {
-    listeners.add(listener)
+    val _ = listeners.add(listener)
   }
 
   /** Unregister a previously registered callback. \@param listener The specific
     * callback function instance to remove.
     */
   def unsubscribe(listener: AssistantEvent => Unit): Unit = {
-    listeners.remove(listener)
+    val removed = listeners.remove(listener)
+    if (!removed) Output.warning("[Assistant] EventBus unsubscribe: listener not found")
   }
 
   /** Broadcast an event to all registered UI views.

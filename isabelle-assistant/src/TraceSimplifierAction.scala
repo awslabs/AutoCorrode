@@ -73,7 +73,7 @@ object TraceSimplifierAction {
 
       AssistantDockable.setStatus("Explaining trace...")
 
-      Isabelle_Thread.fork(name = "explain-trace") {
+      val _ = Isabelle_Thread.fork(name = "explain-trace") {
         try {
           val subs = Map(
             "goal" -> goal,

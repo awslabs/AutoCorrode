@@ -39,7 +39,7 @@ object TidyAction {
 
       AssistantDockable.setBadge(VerificationBadge.Verifying)
 
-      Isabelle_Thread.fork(name = "assistant-tidy") {
+      val _ = Isabelle_Thread.fork(name = "assistant-tidy") {
         try {
           val bundle =
             ProofContextSupport.collect(

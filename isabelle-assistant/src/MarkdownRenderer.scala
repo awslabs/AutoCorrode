@@ -579,10 +579,10 @@ object MarkdownRenderer {
         try {
           renderMermaidImage(diagram) match {
             case Right(image) =>
-              mermaidRenderFailures.remove(cacheId)
-              cacheSyntheticImageWithId(cacheId, image)
+              val _ = mermaidRenderFailures.remove(cacheId)
+              val _ = cacheSyntheticImageWithId(cacheId, image)
             case Left(reason) =>
-              mermaidRenderFailures.put(cacheId, reason)
+              val _ = mermaidRenderFailures.put(cacheId, reason)
           }
         } finally {
           mermaidRenderInProgress.remove(cacheId)
@@ -643,7 +643,9 @@ object MarkdownRenderer {
       catch { case NonFatal(_) => () }
       try Files.deleteIfExists(output)
       catch { case NonFatal(_) => () }
-      try Files.deleteIfExists(tempDir)
+      try {
+        val _ = Files.deleteIfExists(tempDir)
+      }
       catch { case NonFatal(_) => () }
     }
   }

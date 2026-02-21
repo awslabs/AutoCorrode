@@ -654,7 +654,9 @@ object BedrockClient {
             }.mkString(",")
             val signature = s"${tu.name}($paramStr)"
             recentCalls.enqueue(signature)
-            if (recentCalls.length > LOOP_DETECTION_WINDOW) recentCalls.dequeue()
+            if (recentCalls.length > LOOP_DETECTION_WINDOW) {
+              val _ = recentCalls.dequeue()
+            }
             
             // Check for exact repetition (3+ identical calls in window)
             if (recentCalls.length >= 3 && recentCalls.takeRight(3).distinct.size == 1) {

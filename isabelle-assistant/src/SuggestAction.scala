@@ -50,7 +50,7 @@ object SuggestAction {
       buffer: JEditBuffer,
       offset: Int
   ): Unit = {
-    ErrorHandler
+    val _ = ErrorHandler
       .withErrorHandling("suggest operation") {
         val commandText = CommandExtractor.getCommandAtOffset(buffer, offset)
         val goalState = GoalExtractor.getGoalState(buffer, offset)
@@ -77,8 +77,8 @@ object SuggestAction {
 
             AssistantDockable.setStatus("Generating suggestions...")
 
-            Isabelle_Thread.fork(name = "assistant-suggest") {
-              ErrorHandler
+            val _ = Isabelle_Thread.fork(name = "assistant-suggest") {
+              val _ = ErrorHandler
                 .withErrorHandling("suggestion generation") {
                   Output.writeln(
                     s"[Assistant] Starting suggestion collection..."
@@ -219,31 +219,31 @@ object SuggestAction {
     if (!useIQ) ""
     else commandObj match {
       case Some(command) =>
-      // Run context facts and relevant theorems in parallel
-      val factsLatch = new java.util.concurrent.CountDownLatch(1)
-      val theoremsLatch = new java.util.concurrent.CountDownLatch(1)
-      @volatile var contextFacts = ""
-      @volatile var relevantTheorems = ""
+        // Run context facts and relevant theorems in parallel
+        val factsLatch = new java.util.concurrent.CountDownLatch(1)
+        val theoremsLatch = new java.util.concurrent.CountDownLatch(1)
+        @volatile var contextFacts = ""
+        @volatile var relevantTheorems = ""
 
-      Isabelle_Thread.fork(name = "suggest-context") {
-        contextFacts = getContextFacts(view, command)
-        factsLatch.countDown()
-      }
-      Isabelle_Thread.fork(name = "suggest-theorems") {
-        relevantTheorems = findRelevantTheorems(view, command, goalState)
-        theoremsLatch.countDown()
-      }
+        val _ = Isabelle_Thread.fork(name = "suggest-context") {
+          contextFacts = getContextFacts(view, command)
+          factsLatch.countDown()
+        }
+        val _ = Isabelle_Thread.fork(name = "suggest-theorems") {
+          relevantTheorems = findRelevantTheorems(view, command, goalState)
+          theoremsLatch.countDown()
+        }
 
-      factsLatch.await(
-        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-        java.util.concurrent.TimeUnit.MILLISECONDS
-      )
-      theoremsLatch.await(
-        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-        java.util.concurrent.TimeUnit.MILLISECONDS
-      )
+        factsLatch.await(
+          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+          java.util.concurrent.TimeUnit.MILLISECONDS
+        )
+        theoremsLatch.await(
+          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+          java.util.concurrent.TimeUnit.MILLISECONDS
+        )
 
-      List(contextFacts, relevantTheorems).filter(_.nonEmpty).mkString("\n\n")
+        List(contextFacts, relevantTheorems).filter(_.nonEmpty).mkString("\n\n")
       case None => ""
     }
   }
@@ -255,7 +255,7 @@ object SuggestAction {
       results: java.util.concurrent.ConcurrentLinkedQueue[Candidate],
       latch: CountDownLatch
   ): Unit = {
-    Isabelle_Thread.fork(name = "suggest-llm") {
+    val _ = Isabelle_Thread.fork(name = "suggest-llm") {
       try {
         val subs = buildPromptSubstitutions(commandText, goalState, contextInfo)
 
@@ -326,13 +326,16 @@ object SuggestAction {
 
     // Async timeout guard — uses a scheduled executor to trip the latch instead of blocking a thread
     val p = scala.concurrent.Promise[Unit]()
-    TimeoutGuard.scheduleTimeout(
+    val cancelTimeout = TimeoutGuard.scheduleTimeout(
       p,
       AssistantOptions.getSledgehammerTimeout + AssistantConstants.SLEDGEHAMMER_GUARD_TIMEOUT
     )
 
     import scala.concurrent.ExecutionContext.Implicits.global
-    p.future.recover { case _ =>
+    p.future.onComplete { _ =>
+      cancelTimeout()
+    }
+    p.future.failed.foreach { _ =>
       if (sledgeCompleted.compareAndSet(false, true)) {
         latch.countDown()
       }

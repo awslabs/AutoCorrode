@@ -66,7 +66,7 @@ object ExtractLemmaAction {
         AssistantDockable.setStatus("Extracting lemma...")
         AssistantDockable.setBadge(VerificationBadge.Verifying)
 
-        Isabelle_Thread.fork(name = "assistant-extract") {
+        val _ = Isabelle_Thread.fork(name = "assistant-extract") {
           try {
             val bundle =
               ProofContextSupport.collect(
@@ -273,7 +273,7 @@ object ExtractLemmaAction {
       AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
     }
 
-    Isabelle_Thread.fork(name = "assistant-extract-retry") {
+    val _ = Isabelle_Thread.fork(name = "assistant-extract-retry") {
       try {
         val retryPrompt = PromptLoader.load(
           "extract_lemma_retry.md",

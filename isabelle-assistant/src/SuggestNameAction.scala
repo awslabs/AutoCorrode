@@ -49,7 +49,7 @@ object SuggestNameAction {
       case (Some(commandText), Some(keyword)) =>
         AssistantDockable.setStatus("Gathering context...")
 
-        Isabelle_Thread.fork(name = "assistant-suggest-name") {
+        val _ = Isabelle_Thread.fork(name = "assistant-suggest-name") {
           try {
             // Gather context on background thread
             val context =

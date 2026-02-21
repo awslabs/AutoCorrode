@@ -232,7 +232,7 @@ object PayloadBuilder {
             ) {
               hasValidType = true
             } else {
-              parser.skipChildren()
+              val _ = parser.skipChildren()
             }
           }
         }

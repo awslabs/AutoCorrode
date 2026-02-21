@@ -104,7 +104,7 @@ object VerificationCache {
     }
 
   def put(command: Command, proofText: String, result: IQIntegration.VerificationResult): Unit = synchronized {
-    putIfCacheable(command, proofText, result)
+    val _ = putIfCacheable(command, proofText, result)
   }
 
   private[assistant] def putByKey(
@@ -115,7 +115,7 @@ object VerificationCache {
     result: IQIntegration.VerificationResult
   ): Unit = synchronized {
     val key = CacheKey(nodeName, commandId, commandSource, proofText)
-    cache.put(key, CacheEntry(result, System.currentTimeMillis()))
+    val _ = cache.put(key, CacheEntry(result, System.currentTimeMillis()))
   }
 
   def clear(): Unit = synchronized { cache.clear() }

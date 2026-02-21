@@ -164,14 +164,16 @@ object ContextFetcher {
         outputLock.synchronized {
           if (!lifecycle.isCompleted) {
             val text = results.map(XML.content(_)).mkString("\n")
-            if (text.nonEmpty) output.synchronized { output.append(text).append("\n") }
+            if (text.nonEmpty) output.synchronized {
+              val _ = output.append(text).append("\n")
+            }
           }
         }
       }
     )
     operation = Some(op)
 
-    lifecycle.forkTimeout(name = "context-fetch-timeout", timeoutMs = timeoutMs) {
+    val _ = lifecycle.forkTimeout(name = "context-fetch-timeout", timeoutMs = timeoutMs) {
       Right(output.synchronized { output.toString })
     }
 

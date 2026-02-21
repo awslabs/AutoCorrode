@@ -62,7 +62,9 @@ object AssistantDockable {
       // Evict oldest entries if we exceed the limit
       while (insertActions.size > maxInsertActions) {
         val oldest = insertActionOrder.pollFirst()
-        if (oldest != null) insertActions.remove(oldest)
+        if (oldest != null) {
+          val _ = insertActions.remove(oldest)
+        }
       }
       id
     }
@@ -1112,7 +1114,7 @@ class SyntheticImageView(elem: javax.swing.text.Element)
     val img = currentImage
     if (img != null) {
       val rect = allocation.getBounds
-      g.drawImage(img, rect.x, rect.y, null)
+      val _ = g.drawImage(img, rect.x, rect.y, null)
     }
   }
 

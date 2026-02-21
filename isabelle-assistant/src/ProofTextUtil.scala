@@ -291,7 +291,7 @@ object ProofTextUtil {
             "not"
           ).contains(t)
         ) {
-          vars.add(t)
+          val _ = vars.add(t)
         }
       }
     }

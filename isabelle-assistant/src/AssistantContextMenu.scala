@@ -118,7 +118,7 @@ class AssistantContextMenu extends DynamicContextMenuService {
             }
           }
 
-          menu.add(proofMenu)
+          val _ = menu.add(proofMenu)
         }
 
         // === Search ===
@@ -175,7 +175,7 @@ class AssistantContextMenu extends DynamicContextMenuService {
               selection.foreach(SuggestTacticAction.suggest(view, _))
             )
 
-          menu.add(genMenu)
+          val _ = menu.add(genMenu)
         }
 
         // === Analysis ===
@@ -195,6 +195,6 @@ class AssistantContextMenu extends DynamicContextMenuService {
   )(action: Unit => Unit): Unit = {
     val item = new JMenuItem(label)
     item.addActionListener(_ => action(()))
-    menu.add(item)
+    val _ = menu.add(item)
   }
 }

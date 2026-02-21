@@ -33,7 +33,7 @@ object ActionHelper {
     }
   ): Unit = {
     AssistantDockable.setStatus(status)
-    Isabelle_Thread.fork(name = name) {
+    val _ = Isabelle_Thread.fork(name = name) {
       ErrorHandler.withErrorHandling(name) {
         body
       } match {

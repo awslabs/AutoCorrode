@@ -41,7 +41,7 @@ object TryMethodsAction {
           }
         }
 
-        Isabelle_Thread.fork(name = "try-methods-wait") {
+        val _ = Isabelle_Thread.fork(name = "try-methods-wait") {
           latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
           GUI_Thread.later {
             displayResults(view, methods.map(m => (m, Option(results.get(m)))))

@@ -313,7 +313,7 @@ object ChatAction {
           .filterNot(_.transient)
           .map(m => (m.role.wireValue, m.content))
 
-        Isabelle_Thread.fork(name = "assistant-chat") {
+        val _ = Isabelle_Thread.fork(name = "assistant-chat") {
           try {
             BedrockClient.setCurrentView(view)
             val response =
@@ -353,7 +353,7 @@ object ChatAction {
       systemPrompt: String,
       messagesForApi: List[(String, String)]
   ): Unit = {
-    Isabelle_Thread.fork(name = "assistant-chat-retry") {
+    val _ = Isabelle_Thread.fork(name = "assistant-chat-retry") {
       try {
         BedrockClient.setCurrentView(view)
         val response = BedrockClient.invokeChat(systemPrompt, messagesForApi)
@@ -440,7 +440,7 @@ object ChatAction {
   private def runModels(): Unit = {
     AssistantDockable.setStatus("Refreshing models...")
 
-    Isabelle_Thread.fork(name = "chat-models") {
+    val _ = Isabelle_Thread.fork(name = "chat-models") {
       try {
         val region = AssistantOptions.getRegion
         val models = BedrockModels.refreshModels(region)
@@ -551,7 +551,7 @@ object ChatAction {
       TargetParser.resolveTarget(target, view) match {
         case Some((buffer, offset, _)) =>
           AssistantDockable.setStatus("Generating suggestions...")
-          Isabelle_Thread.fork(name = "chat-suggest") {
+          val _ = Isabelle_Thread.fork(name = "chat-suggest") {
             try {
               SuggestAction.suggestFromChat(view, buffer, offset)
               GUI_Thread.later {
@@ -636,7 +636,7 @@ object ChatAction {
             )
           }
 
-          Isabelle_Thread.fork(name = "chat-verify") {
+          val _ = Isabelle_Thread.fork(name = "chat-verify") {
             latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
             val finalResult =
               if (result.isEmpty) "[FAIL] Verification timed out (no response)"

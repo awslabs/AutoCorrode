@@ -548,7 +548,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
                 val clientSocket = socket.accept()
                 Output.writeln(s"MCP Client connected: ${clientSocket.getRemoteSocketAddress}")
 
-                executor.submit(new Runnable {
+                val _ = executor.submit(new Runnable {
                   def run(): Unit = handleClient(clientSocket)
                 })
               } catch {
@@ -1879,7 +1879,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
     // Create parent directories if they don't exist
     val parentDir = path.getParent
     if (parentDir != null && !Files.exists(parentDir)) {
-      Files.createDirectories(parentDir)
+      val _ = Files.createDirectories(parentDir)
     }
 
     // Write XML results to file
@@ -2020,7 +2020,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       }
 
       Output.writeln(s"I/Q Server: Requesting theory completion for: ${model.node_name}")
-      waitForTheoryCompletion(model, timeout_ms, timeoutPerCommandMs)
+      val _ = waitForTheoryCompletion(model, timeout_ms, timeoutPerCommandMs)
     }
 
     val documentInfo = GUI_Thread.now {
@@ -2576,7 +2576,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
     }
 
     // Wait until the edit has been processed (stable snapshot = no pending edits)
-    IQUtils.blockOnStableSnapshot(buffer_model)
+    val _ = IQUtils.blockOnStableSnapshot(buffer_model)
 
     Output.writeln(s"I/Q Server: Auto-calling get_command for modified range in $filePath")
 
@@ -2618,7 +2618,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
       // Create empty file without any default content
       val parentDir = file.getParentFile
       if (parentDir != null && !parentDir.exists()) {
-        parentDir.mkdirs()
+        val _ = parentDir.mkdirs()
       }
       file.createNewFile()
       fileCreated = true
@@ -2675,7 +2675,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
   private def createFileWithContent(file: java.io.File, filePath: String, content: String): Unit = {
     val parentDir = file.getParentFile
     if (parentDir != null && !parentDir.exists()) {
-      parentDir.mkdirs()
+      val _ = parentDir.mkdirs()
     }
 
     val writer = new java.io.FileWriter(file)
@@ -3263,7 +3263,7 @@ end"""
             case Some((_, buffer_model)) =>
               val buffer = buffer_model.buffer
               val savedFiles = if (buffer.isDirty()) {
-                GUI_Thread.now {
+                val _ = GUI_Thread.now {
                   buffer.save(null, null)
                 }
                 Output.writeln(s"I/Q Server: Saved file: $filePath")

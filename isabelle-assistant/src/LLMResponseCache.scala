@@ -33,8 +33,9 @@ object LLMResponseCache {
   }
 
   def put(prompt: String, response: String): Unit = synchronized {
-    if (looksLikeError(response)) ()
-    else cache.put(prompt, CacheEntry(response, System.currentTimeMillis(), 1))
+    if (!looksLikeError(response)) {
+      val _ = cache.put(prompt, CacheEntry(response, System.currentTimeMillis(), 1))
+    }
   }
 
   /** Heuristic: don't cache responses that are error messages. */

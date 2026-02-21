@@ -121,7 +121,9 @@ object GoalExtractor {
             body.foreach(walk)
           case XML.Elem(Markup(Markup.CONSTANT, props), body) =>
             Markup.Name.unapply(props).foreach { name =>
-              if (!isMetaConstant(name)) constants.add(name)
+              if (!isMetaConstant(name)) {
+                val _ = constants.add(name)
+              }
             }
             body.foreach(walk)
           case XML.Elem(Markup("subgoal", _), body) =>

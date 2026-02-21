@@ -125,9 +125,13 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                 // Don't immediately report success — wait to see if we received valid output.
                 // Schedule a 500ms grace period callback instead of blocking a thread.
                 val p = scala.concurrent.Promise[Unit]()
-                TimeoutGuard.scheduleTimeout(p, 500L, "Grace period elapsed")
+                val cancelTimeout =
+                  TimeoutGuard.scheduleTimeout(p, 500L, "Grace period elapsed")
                 import scala.concurrent.ExecutionContext.Implicits.global
-                p.future.recover { case _ =>
+                p.future.onComplete { _ =>
+                  cancelTimeout()
+                }
+                p.future.failed.foreach { _ =>
                   outputLock.synchronized {
                     if (!lifecycle.isCompleted && !receivedOutput) {
                       lifecycle.complete(
@@ -179,7 +183,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
           )
           operation = Some(op)
 
-          lifecycle.forkTimeout(name = "verify-timeout", timeoutMs = timeoutMs)(
+          val _ = lifecycle.forkTimeout(name = "verify-timeout", timeoutMs = timeoutMs)(
             ProofTimeout
           )
 
@@ -256,7 +260,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     )
     operation = Some(op)
 
-    lifecycle.forkTimeout(name = "step-timeout", timeoutMs = timeoutMs)(
+    val _ = lifecycle.forkTimeout(name = "step-timeout", timeoutMs = timeoutMs)(
       Left("timeout")
     )
 
@@ -378,7 +382,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       )
       operation = Some(op)
 
-      lifecycle.forkTimeout(
+      val _ = lifecycle.forkTimeout(
         name = "find-theorems-timeout",
         timeoutMs = timeoutMs
       ) {
@@ -448,18 +452,18 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
         },
         (snapshot, cmdResults, results) => {
           outputLock.synchronized {
-            if (!lifecycle.isCompleted) {
-              val text = results.map(XML.content(_)).mkString("\n")
-              if (text.nonEmpty) output.synchronized {
-                output.append(text).append("\n")
+              if (!lifecycle.isCompleted) {
+                val text = results.map(XML.content(_)).mkString("\n")
+                if (text.nonEmpty) output.synchronized {
+                  val _ = output.append(text).append("\n")
+                }
               }
             }
           }
-        }
       )
       operation = Some(op)
 
-      lifecycle.forkTimeout(name = "iq-query-timeout", timeoutMs = timeoutMs) {
+      val _ = lifecycle.forkTimeout(name = "iq-query-timeout", timeoutMs = timeoutMs) {
         Right(output.synchronized { output.toString })
       }
 
@@ -585,7 +589,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       )
       operation = Some(op)
 
-      lifecycle.forkTimeout(
+      val _ = lifecycle.forkTimeout(
         name = "sledgehammer-timeout",
         timeoutMs = timeoutMs
       ) {

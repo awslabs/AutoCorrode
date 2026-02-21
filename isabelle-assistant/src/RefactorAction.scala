@@ -38,7 +38,7 @@ object RefactorAction {
 
     AssistantDockable.setBadge(VerificationBadge.Verifying)
 
-    Isabelle_Thread.fork(name = "assistant-refactor") {
+    val _ = Isabelle_Thread.fork(name = "assistant-refactor") {
       try {
         val bundle =
           ProofContextSupport.collect(

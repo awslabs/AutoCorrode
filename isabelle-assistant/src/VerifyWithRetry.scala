@@ -83,7 +83,7 @@ object VerifyWithRetry {
   ): Unit = {
     AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
 
-    Isabelle_Thread.fork(name = "assistant-verify-retry") {
+    val _ = Isabelle_Thread.fork(name = "assistant-verify-retry") {
       try {
         val prompt = retryPrompt(failedCode, error)
         val code = invokeAndExtract(prompt)

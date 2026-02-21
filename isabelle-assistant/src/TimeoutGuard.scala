@@ -34,14 +34,17 @@ object TimeoutGuard {
   ): () => Unit = {
     val task = scheduler.schedule(
       new Runnable {
-        def run(): Unit =
-          p.tryFailure(new TimeoutException(timeoutMsg))
+        def run(): Unit = {
+          val _ = p.tryFailure(new TimeoutException(timeoutMsg))
+        }
       },
       timeoutMs,
       TimeUnit.MILLISECONDS
     )
 
     // Return cancellation thunk
-    () => task.cancel(false)
+    () => {
+      val _ = task.cancel(false)
+    }
   }
 }

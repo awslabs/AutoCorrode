@@ -207,15 +207,15 @@ object ResponseParser {
                   if (parser.currentToken() == JsonToken.START_OBJECT) {
                     parseContentBlock(parser).foreach(blocks += _)
                   } else {
-                    parser.skipChildren()
+                    val _ = parser.skipChildren()
                   }
                 }
               } else {
-                parser.skipChildren()
+                val _ = parser.skipChildren()
               }
             case _ =>
               parser.nextToken()
-              parser.skipChildren()
+              val _ = parser.skipChildren()
           }
         }
       }
@@ -255,7 +255,7 @@ object ResponseParser {
           case "input" if parser.currentToken() == JsonToken.START_OBJECT =>
             input = parseToolArgsObject(parser)
           case _ =>
-            parser.skipChildren()
+            val _ = parser.skipChildren()
         }
       }
     }
@@ -334,7 +334,7 @@ object ResponseParser {
           if (parser.currentToken() == JsonToken.VALUE_STRING) {
             list += parser.getValueAsString("")
           } else {
-            parser.skipChildren()
+            val _ = parser.skipChildren()
           }
         }
       }
