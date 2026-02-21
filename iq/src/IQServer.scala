@@ -4162,29 +4162,31 @@ end"""
           return Left("scope='file' requires parameter: path")
       }
 
-      getFileContentAndModel(filePath) match {
-        case (Some(content), Some(model)) =>
-          val snapshot = Document_Model.snapshot(model)
-          val diagnostics = collectDiagnosticsInRange(
-            snapshot,
-            Text.Range(0, content.length),
-            severity,
-            Some(Line.Document(content))
-          )
-          Right(
-            Map(
-              "scope" -> "file",
-              "severity" -> severity,
-              "path" -> filePath,
-              "node_name" -> model.node_name.toString,
-              "count" -> diagnostics.length,
-              "diagnostics" -> diagnostics
+      GUI_Thread.now {
+        getFileContentAndModel(filePath) match {
+          case (Some(content), Some(model)) =>
+            val snapshot = Document_Model.snapshot(model)
+            val diagnostics = collectDiagnosticsInRange(
+              snapshot,
+              Text.Range(0, content.length),
+              severity,
+              Some(Line.Document(content))
             )
-          )
-        case _ =>
-          Left(
-            s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting diagnostics."
-          )
+            Right(
+              Map(
+                "scope" -> "file",
+                "severity" -> severity,
+                "path" -> filePath,
+                "node_name" -> model.node_name.toString,
+                "count" -> diagnostics.length,
+                "diagnostics" -> diagnostics
+              )
+            )
+          case _ =>
+            Left(
+              s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting diagnostics."
+            )
+        }
       }
     } else {
       val normalizedParams = withDefaultCurrentSelection(params)
@@ -4193,28 +4195,30 @@ end"""
         "get_diagnostics"
       ).flatMap { selection =>
         resolveTargetSelection(selection).map { resolved =>
-          val command = resolved.command
-          val snapshot = PIDE.session.snapshot()
-          val node = snapshot.get_node(command.node_name)
-          val diagnostics =
-            if (node == null) List.empty[Map[String, Any]]
-            else {
-              val start = node.command_start(command).getOrElse(0)
-              collectDiagnosticsInRange(
-                snapshot,
-                Text.Range(start, start + command.length),
-                severity,
-                getFileContent(command.node_name.node).map(Line.Document(_))
-              )
-            }
-          Map(
-            "scope" -> "selection",
-            "severity" -> severity,
-            "selection" -> targetSelectionToMap(resolved.selection),
-            "command" -> commandInfoMap(command),
-            "count" -> diagnostics.length,
-            "diagnostics" -> diagnostics
-          )
+          GUI_Thread.now {
+            val command = resolved.command
+            val snapshot = PIDE.session.snapshot()
+            val node = snapshot.get_node(command.node_name)
+            val diagnostics =
+              if (node == null) List.empty[Map[String, Any]]
+              else {
+                val start = node.command_start(command).getOrElse(0)
+                collectDiagnosticsInRange(
+                  snapshot,
+                  Text.Range(start, start + command.length),
+                  severity,
+                  getFileContent(command.node_name.node).map(Line.Document(_))
+                )
+              }
+            Map(
+              "scope" -> "selection",
+              "severity" -> severity,
+              "selection" -> targetSelectionToMap(resolved.selection),
+              "command" -> commandInfoMap(command),
+              "count" -> diagnostics.length,
+              "diagnostics" -> diagnostics
+            )
+          }
         }
       }
     }
