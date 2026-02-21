@@ -10,6 +10,20 @@ and exposes each Explore function as an MCP tool.  Runs on stdio transport.
 
 Usage:
     python3 explore_mcp.py
+
+JSON configuration:
+
+```json
+{
+  "mcpServers": {
+    "explore": {
+      "command": "python3",
+      "args": ["{BASE}/AutoCorrode/ir/explore_mcp.py"]
+    }
+  }
+}
+```
+
 """
 
 import socket
