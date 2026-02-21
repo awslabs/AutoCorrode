@@ -14,6 +14,21 @@ import java.io.File
  */
 object IQUtils {
 
+  sealed trait CommandSelection
+  case object CurrentSelection extends CommandSelection
+  final case class FileOffsetSelection(
+      path: String,
+      requestedOffset: Int,
+      normalizedOffset: Int
+  ) extends CommandSelection
+  final case class FilePatternSelection(path: String, pattern: String)
+      extends CommandSelection
+
+  final case class TargetResolution(
+      selection: CommandSelection,
+      command: Command
+  )
+
   /**
    * Strips the file extension from a path string.
    *
@@ -357,6 +372,66 @@ object IQUtils {
         } else {
           throw new RuntimeException("No commands available in current document")
         }
+      }
+    }
+  }
+
+  /**
+   * Clamp a requested offset to the valid range for a file content length.
+   *
+   * For empty files, returns 0.
+   */
+  def normalizeRequestedOffset(requestedOffset: Int, contentLength: Int): Int = {
+    if (contentLength <= 0) 0
+    else math.max(0, math.min(requestedOffset, contentLength - 1))
+  }
+
+  /**
+   * Resolve a command selection into an actual Isabelle command.
+   *
+   * This is the canonical selection semantics for MCP tools that operate on
+   * command context.
+   */
+  def resolveCommandSelection(
+      target: String,
+      filePath: Option[String],
+      offset: Option[Int],
+      pattern: Option[String],
+      view: View = null
+  ): Try[TargetResolution] = {
+    validateTarget(target, filePath, offset, pattern).flatMap { _ =>
+      target match {
+        case "current" =>
+          getCurrentCommand(view).map(cmd =>
+            TargetResolution(CurrentSelection, cmd)
+          )
+        case "file_offset" =>
+          val path = filePath.get
+          val requested = offset.get
+          getFileContent(path).flatMap { content =>
+            val normalized = normalizeRequestedOffset(requested, content.length)
+            findCommandAtFileOffset(path, normalized).map(cmd =>
+              TargetResolution(
+                FileOffsetSelection(path, requested, normalized),
+                cmd
+              )
+            )
+          }
+        case "file_pattern" =>
+          val path = filePath.get
+          val trimmedPattern = pattern.get.trim
+          findCommandByPattern(path, trimmedPattern).map(cmd =>
+            TargetResolution(
+              FilePatternSelection(path, trimmedPattern),
+              cmd
+            )
+          )
+        case other =>
+          Failure(
+            new IllegalArgumentException(
+              s"Invalid target: $other. Must be 'current', 'file_offset', or 'file_pattern'"
+            )
+          )
       }
     }
   }

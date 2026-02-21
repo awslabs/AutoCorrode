@@ -9,7 +9,7 @@ import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, 
 import java.net.{InetAddress, ServerSocket, Socket}
 import java.util.Locale
 import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
-import scala.util.{Try, Success, Failure}
+import scala.util.Try
 import scala.annotation.unused
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -294,9 +294,26 @@ class IQServer(
   securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment(),
   capabilityBackendOverride: Option[IQCapabilityBackend] = None
 ) {
+  private lazy val reflectiveOutputWriteln: Option[String => Unit] = {
+    try {
+      val outputClass = Class.forName("isabelle.Output$")
+      val module = outputClass.getField("MODULE$").get(null)
+      val writelnMethod = outputClass.getMethod("writeln", classOf[String])
+      Some((message: String) => {
+        val _ = writelnMethod.invoke(module, message)
+      })
+    } catch {
+      case _: Throwable => None
+    }
+  }
+
   private def safeOutput(message: String): Unit = {
-    try Output.writeln(message)
-    catch { case _: Throwable => () }
+    reflectiveOutputWriteln match {
+      case Some(writeln) =>
+        try writeln(message)
+        catch { case _: Throwable => () }
+      case None => ()
+    }
   }
 
   /**
@@ -525,6 +542,9 @@ class IQServer(
         "create_file" -> (params => handleCreateFile(params)),
         "read_file" -> (params => handleReadTheoryFile(params)),
         "write_file" -> (params => handleWriteTheoryFile(params)),
+        "resolve_command_target" -> (params =>
+          handleResolveCommandTarget(params)
+        ),
         "explore" -> (params => handleExplore(params)),
         "save_file" -> (params => handleSaveFile(params))
       )
@@ -849,15 +869,15 @@ class IQServer(
    */
   private def handleToolCallFromJson(json: JSON.T): Either[(Int, String), Map[String, Any]] = {
     try {
-      Output.writeln(s"I/Q Server: Raw JSON for tool call: ${IQSecurity.redactAuthToken(json.toString)}")
+      safeOutput(s"I/Q Server: Raw JSON for tool call: ${IQSecurity.redactAuthToken(json.toString)}")
 
       val (toolName, params) = extractToolAndParams(json)
-      Output.writeln(s"I/Q Server: Extracted tool='$toolName', params=$params")
+      safeOutput(s"I/Q Server: Extracted tool='$toolName', params=$params")
 
       val result: Either[(Int, String), Map[String, Any]] =
         capabilityBackend.invoke(toolName, params).left.map {
           case IQCapabilityInvocationError.UnknownTool(name) =>
-            Output.writeln(s"I/Q Server: Unknown tool name: '$name'")
+            safeOutput(s"I/Q Server: Unknown tool name: '$name'")
             (ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name")
           case err =>
             (err.code, err.message)
@@ -866,7 +886,7 @@ class IQServer(
       result.map(wrapToolCallResult)
     } catch {
       case ex: Exception =>
-        Output.writeln(s"I/Q Server: Tool execution error: ${ex.getMessage}")
+        safeOutput(s"I/Q Server: Tool execution error: ${ex.getMessage}")
         ex.printStackTrace()
         Left((ErrorCodes.INTERNAL_ERROR, s"Tool execution error: ${ex.getMessage}"))
     }
@@ -1229,6 +1249,34 @@ class IQServer(
             )
           ),
           "required" -> List("path"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "resolve_command_target",
+        "description" -> "Resolve a canonical command selection to a concrete Isabelle command with normalized target metadata. This performs no proof execution; it only resolves context.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("command_selection"),
           "additionalProperties" -> false
         )
       ),
@@ -2870,6 +2918,167 @@ end"""
 
 
 
+  private final case class AuthorizedTargetSelection(
+      target: String,
+      path: Option[String],
+      requestedOffset: Option[Int],
+      pattern: Option[String]
+  )
+
+  private def decodeAndAuthorizeTargetSelection(
+      params: Map[String, Any],
+      operation: String
+  ): Either[String, AuthorizedTargetSelection] = {
+    val target = params
+      .get("command_selection")
+      .map(_.toString.trim)
+      .filter(_.nonEmpty)
+      .getOrElse("")
+
+    if (target.isEmpty)
+      return Left("Missing required parameter: command_selection")
+    if (!List("current", "file_offset", "file_pattern").contains(target))
+      return Left(
+        s"Invalid target: $target. Must be 'current', 'file_offset', or 'file_pattern'"
+      )
+
+    val requestedOffset = IQArgumentUtils.optionalIntParam(params, "offset") match {
+      case Right(v) => v
+      case Left(err) => return Left(err)
+    }
+
+    val pattern = params
+      .get("pattern")
+      .map(_.toString.trim)
+      .filter(_.nonEmpty)
+
+    val authorizedPath =
+      if (target == "current") None
+      else {
+        params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
+          case Some(path) =>
+            IQUtils.autoCompleteFilePath(path) match {
+              case Right(fullPath) =>
+                authorizeReadPath(s"$operation(path)", fullPath) match {
+                  case Right(pathWithinPolicy) => Some(pathWithinPolicy)
+                  case Left(errorMsg) => return Left(errorMsg)
+                }
+              case Left(errorMsg) => return Left(errorMsg)
+            }
+          case None => None
+        }
+      }
+
+    target match {
+      case "file_offset" =>
+        if (authorizedPath.isEmpty || requestedOffset.isEmpty)
+          Left("file_offset target requires path and offset parameters")
+        else
+          Right(
+            AuthorizedTargetSelection(
+              target,
+              authorizedPath,
+              requestedOffset,
+              None
+            )
+          )
+      case "file_pattern" =>
+        if (authorizedPath.isEmpty || pattern.isEmpty)
+          Left("file_pattern target requires path and pattern parameters")
+        else
+          Right(
+            AuthorizedTargetSelection(
+              target,
+              authorizedPath,
+              None,
+              pattern
+            )
+          )
+      case _ =>
+        Right(AuthorizedTargetSelection(target, None, None, None))
+    }
+  }
+
+  private def resolveTargetSelection(
+      selection: AuthorizedTargetSelection
+  ): Either[String, IQUtils.TargetResolution] = {
+    IQUtils
+      .resolveCommandSelection(
+        selection.target,
+        selection.path,
+        selection.requestedOffset,
+        selection.pattern
+      )
+      .toEither
+      .left
+      .map(_.getMessage)
+  }
+
+  private def commandRangeFor(command: Command): Option[(String, Int, Int)] = {
+    try {
+      val snapshot = PIDE.session.snapshot()
+      val node = snapshot.get_node(command.node_name)
+      if (node != null) {
+        val start = node.command_start(command).getOrElse(0)
+        Some((command.node_name.node, start, start + command.length))
+      } else None
+    } catch {
+      case _: Exception => None
+    }
+  }
+
+  private def targetSelectionToMap(
+      selection: IQUtils.CommandSelection
+  ): Map[String, Any] = {
+    selection match {
+      case IQUtils.CurrentSelection =>
+        Map("command_selection" -> "current")
+      case IQUtils.FileOffsetSelection(path, requestedOffset, normalizedOffset) =>
+        Map(
+          "command_selection" -> "file_offset",
+          "path" -> path,
+          "requested_offset" -> requestedOffset,
+          "normalized_offset" -> normalizedOffset
+        )
+      case IQUtils.FilePatternSelection(path, pattern) =>
+        Map(
+          "command_selection" -> "file_pattern",
+          "path" -> path,
+          "pattern" -> pattern
+        )
+    }
+  }
+
+  private def handleResolveCommandTarget(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    decodeAndAuthorizeTargetSelection(params, "resolve_command_target").flatMap {
+      selection =>
+        resolveTargetSelection(selection).map { resolved =>
+          val command = resolved.command
+          val commandInfoBase = Map(
+            "id" -> command.id,
+            "length" -> command.length,
+            "source" -> command.source,
+            "keyword" -> command.span.name
+          )
+          val commandInfo = commandRangeFor(command) match {
+            case Some((nodePath, startOffset, endOffset)) =>
+              commandInfoBase ++ Map(
+                "node_path" -> nodePath,
+                "start_offset" -> startOffset,
+                "end_offset" -> endOffset
+              )
+            case None => commandInfoBase
+          }
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfo
+          )
+        }
+    }
+  }
+
   /**
    * Handles the explore tool request.
    *
@@ -2880,73 +3089,28 @@ end"""
    */
   private def handleExplore(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     try {
-      // Extract parameters
-      val target = params.get("command_selection").map(_.toString).getOrElse("")
       val query = params.get("query").map(_.toString).getOrElse("")
       val arguments = params.get("arguments").map(_.toString).getOrElse("")
-
-      // Validate required parameters - arguments required except for sledgehammer
-      if (target.isEmpty || query.isEmpty) {
-        return Left("Missing required parameters: target, query")
-      }
-
-      // Arguments are required for proof and find_theorems, optional for sledgehammer
-      if (arguments.isEmpty && (query == "proof" || query == "find_theorems")) {
-        return Left(s"Arguments are required for query type '$query'")
-      }
-
-      // Validate target type
-      if (!List("current", "file_offset", "file_pattern").contains(target)) {
-        return Left(s"Invalid target: $target. Must be 'current', 'file_offset', or 'file_pattern'")
-      }
-
-      // Validate query type
-      if (!List("proof", "sledgehammer", "find_theorems").contains(query)) {
-        return Left(s"Invalid query: $query. Must be 'proof', 'sledgehammer', or 'find_theorems'")
-      }
-
-      // Extract file-related parameters for file_offset and file_pattern targets
-      val filePath = params.get("path").map(_.toString) match {
-        case Some(path) if path.trim.nonEmpty =>
-          IQUtils.autoCompleteFilePath(path.trim) match {
-            case Right(fullPath) =>
-              authorizeReadPath("explore(path)", fullPath) match {
-                case Right(authorizedPath) => Some(authorizedPath)
-                case Left(errorMsg) => return Left(errorMsg)
-              }
-            case Left(errorMsg) => return Left(errorMsg)
-          }
-        case Some(_) => None
-        case None => None
-      }
-      val offset = IQArgumentUtils.optionalIntParam(params, "offset") match {
-        case Right(v) => v
-        case Left(err) => return Left(err)
-      }
       val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
         case Right(v) => v
         case Left(err) => return Left(err)
       }
-      val pattern = params.get("pattern").map(_.toString)
 
-      // Validate target-specific parameters
-      target match {
-        case "file_offset" =>
-          if (filePath.isEmpty || offset.isEmpty) {
-            return Left("file_offset target requires path and offset parameters")
-          }
-        case "file_pattern" =>
-          if (filePath.isEmpty || pattern.isEmpty) {
-            return Left("file_pattern target requires path and pattern parameters")
-          }
-        case _ => // current target needs no additional parameters
+      if (query.isEmpty) {
+        return Left("Missing required parameter: query")
+      }
+      if (arguments.isEmpty && (query == "proof" || query == "find_theorems")) {
+        return Left(s"Arguments are required for query type '$query'")
+      }
+      if (!List("proof", "sledgehammer", "find_theorems").contains(query)) {
+        return Left(s"Invalid query: $query. Must be 'proof', 'sledgehammer', or 'find_theorems'")
       }
 
-      // Execute the exploration
-      val result = executeExploration(target, filePath, offset, pattern, query, arguments, maxResults)
-
-      Right(result)
-
+      decodeAndAuthorizeTargetSelection(params, "explore").flatMap { selection =>
+        resolveTargetSelection(selection).map { resolvedTarget =>
+          executeExploration(resolvedTarget, query, arguments, maxResults)
+        }
+      }
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error in handleExplore: ${ex.getMessage}")
@@ -3089,37 +3253,19 @@ end"""
   /**
    * Executes the actual exploration query using Extended_Query_Operation.
    *
-   * @param target The target type (current, file_offset, file_pattern)
-   * @param filePath Optional file path
-   * @param offset Optional offset
-   * @param pattern Optional pattern
+   * @param resolvedTarget Canonical resolved command target
    * @param query The query type (proof, sledgehammer, find_theorems)
    * @param arguments The query arguments
    * @return A map containing the results
    */
   private def executeExploration(
-    target: String,
-    filePath: Option[String],
-    offset: Option[Int],
-    pattern: Option[String],
+    resolvedTarget: IQUtils.TargetResolution,
     query: String,
     arguments: String,
     maxResults: Option[Int]
   ): Map[String, Any] = {
 
     try {
-      // Validate target parameters using IQUtils
-      IQUtils.validateTarget(target, filePath, offset, pattern) match {
-        case scala.util.Failure(ex) =>
-          return Map(
-            "success" -> false,
-            "error" -> ex.getMessage,
-            "results" -> "",
-            "message" -> s"Invalid target parameters: ${ex.getMessage}"
-          )
-        case _ => // Continue
-      }
-
       // Convert query type from external to internal format
       val internalQuery = IQUtils.externalToInternalQuery(query)
 
@@ -3130,124 +3276,101 @@ end"""
         arguments
       }
 
-      // Find the target command using IQUtils
-      val commandResult = target match {
-        case "current" => IQUtils.getCurrentCommand()
-        case "file_offset" => IQUtils.findCommandAtFileOffset(filePath.get, offset.get)
-        case "file_pattern" => IQUtils.findCommandByPattern(filePath.get, pattern.get)
-        case _ => scala.util.Failure(new IllegalArgumentException(s"Unknown target: $target"))
-      }
+      val command = resolvedTarget.command
+      val formattedArgs =
+        if (internalQuery == "find_theorems") {
+          val resultLimit = maxResults.filter(_ > 0).getOrElse(20)
+          List(resultLimit.toString, "false", finalArguments)
+        } else {
+          IQUtils.formatQueryArguments(internalQuery, finalArguments)
+        }
 
-      commandResult match {
-        case scala.util.Success(command) =>
-          // Format query arguments using IQUtils
-          val formattedArgs =
-            if (internalQuery == "find_theorems") {
-              val resultLimit = maxResults.filter(_ > 0).getOrElse(20)
-              List(resultLimit.toString, "false", finalArguments)
-            } else {
-              IQUtils.formatQueryArguments(internalQuery, finalArguments)
-            }
+      val collector = new ExploreResultCollector(query)
 
-          // Execute the actual query using Extended_Query_Operation
-          val collector = new ExploreResultCollector(query)
+      Output.writeln(
+        s"I/Q Server: Starting query execution for $internalQuery with arguments: $formattedArgs"
+      )
 
-          // Debug: log query execution start
-          Output.writeln(s"I/Q Server: Starting query execution for $internalQuery with arguments: $formattedArgs")
-
-          try {
-            // All Extended_Query_Operation operations must run in GUI thread
-            // Use the same pattern as I/Q Explore dockable
-            val operation = GUI_Thread.now {
-              // Get the active view
-              val activeView = jEdit.getActiveView()
-              if (activeView == null) {
-                throw new RuntimeException("No active view available")
-              }
-
-              // Debug: log operation creation
-              Output.writeln(s"I/Q Server: Creating Extended_Query_Operation for $internalQuery")
-
-              // Create the query operation (same pattern as I/Q Explore)
-              val operation = new Extended_Query_Operation(
-                PIDE.editor,
-                activeView,
-                internalQuery,
-                collector.statusCallback,
-                collector.outputCallback,
-              )
-
-              // Debug: log activation
-              Output.writeln(s"I/Q Server: Activating operation and applying query")
-
-              // Activate and execute immediately (same as I/Q Explore)
-              operation.activate()
-
-              Output.writeln(s"I/Q Server: Formatted args: $formattedArgs")
-
-              operation.apply_query_at_command(command, formattedArgs)
-              operation
-            }
-
-            // Wait for completion with timeout - NOT in GUI thread
-            val timeoutMs = 30000L // 30 seconds timeout
-            val startTime = System.currentTimeMillis()
-
-            // Debug: log waiting start
-            Output.writeln(s"I/Q Server: Waiting for query completion (timeout: ${timeoutMs}ms)")
-            val completedInTime = try {
-              collector.awaitCompletion(timeoutMs)
-            } catch {
-              case _: InterruptedException =>
-                Thread.currentThread().interrupt()
-                Output.writeln("I/Q Server: Interrupted while waiting for query completion")
-                false
-            }
-
-            // Debug: log completion or timeout
-            val elapsed = System.currentTimeMillis() - startTime
-            Output.writeln(s"I/Q Server: Finished waiting after ${elapsed}ms, isFinished=${collector.isFinished()}")
-
-            // Deactivate the operation in GUI thread
-            Output.writeln(s"I/Q Server: Deactivating operation")
-            GUI_Thread.now {
-              operation.deactivate()
-            }
-
-            // Check if we timed out
-            val timedOut = !completedInTime
-
-            // Get command text for response (thread-safe)
-            val cmdText = command.source.trim.replace("\n", "\\n")
-            val displayText = if (cmdText.length > 200) cmdText.take(200) + "..." else cmdText
-
-            Map(
-              "success" -> (collector.wasSuccessful() && !timedOut),
-              "arguments" -> finalArguments,
-              "command_found" -> displayText,
-              "results" -> collector.getResultsAsString(),
-              "timed_out" -> timedOut,
-              "message" -> (if (timedOut) "Query timed out after 30 seconds"
-                           else if (collector.wasSuccessful()) "Query completed successfully"
-                           else s"Query completed with errors. Note that to use the `proof` query type, you need to import Isar_Explore.thy from the I/Q plugin root directory.")
-            )
-
-          } catch {
-            case ex: Exception =>
-              Map(
-                "success" -> false,
-                "error" -> ex.getMessage,
-                "results" -> "",
-                "message" -> s"Failed to execute query operation: ${ex.getMessage}"
-              )
+      try {
+        val operation = GUI_Thread.now {
+          val activeView = jEdit.getActiveView()
+          if (activeView == null) {
+            throw new RuntimeException("No active view available")
           }
 
-        case scala.util.Failure(ex) =>
+          Output.writeln(
+            s"I/Q Server: Creating Extended_Query_Operation for $internalQuery"
+          )
+
+          val operation = new Extended_Query_Operation(
+            PIDE.editor,
+            activeView,
+            internalQuery,
+            collector.statusCallback,
+            collector.outputCallback,
+          )
+
+          Output.writeln("I/Q Server: Activating operation and applying query")
+          operation.activate()
+
+          Output.writeln(s"I/Q Server: Formatted args: $formattedArgs")
+          operation.apply_query_at_command(command, formattedArgs)
+          operation
+        }
+
+        val timeoutMs = 30000L
+        val startTime = System.currentTimeMillis()
+
+        Output.writeln(
+          s"I/Q Server: Waiting for query completion (timeout: ${timeoutMs}ms)"
+        )
+        val completedInTime = try {
+          collector.awaitCompletion(timeoutMs)
+        } catch {
+          case _: InterruptedException =>
+            Thread.currentThread().interrupt()
+            Output.writeln(
+              "I/Q Server: Interrupted while waiting for query completion"
+            )
+            false
+        }
+
+        val elapsed = System.currentTimeMillis() - startTime
+        Output.writeln(
+          s"I/Q Server: Finished waiting after ${elapsed}ms, isFinished=${collector.isFinished()}"
+        )
+
+        Output.writeln("I/Q Server: Deactivating operation")
+        GUI_Thread.now {
+          operation.deactivate()
+        }
+
+        val timedOut = !completedInTime
+        val cmdText = command.source.trim.replace("\n", "\\n")
+        val displayText =
+          if (cmdText.length > 200) cmdText.take(200) + "..." else cmdText
+
+        Map(
+          "success" -> (collector.wasSuccessful() && !timedOut),
+          "arguments" -> finalArguments,
+          "selection" -> targetSelectionToMap(resolvedTarget.selection),
+          "command_found" -> displayText,
+          "results" -> collector.getResultsAsString(),
+          "timed_out" -> timedOut,
+          "message" -> (if (timedOut) "Query timed out after 30 seconds"
+                        else if (collector.wasSuccessful())
+                          "Query completed successfully"
+                        else
+                          s"Query completed with errors. Note that to use the `proof` query type, you need to import Isar_Explore.thy from the I/Q plugin root directory.")
+        )
+
+      } catch {
+        case ex: Exception =>
           Map(
             "success" -> false,
             "error" -> ex.getMessage,
             "results" -> "",
-            "message" -> s"Failed to find target command: ${ex.getMessage}"
+            "message" -> s"Failed to execute query operation: ${ex.getMessage}"
           )
       }
 

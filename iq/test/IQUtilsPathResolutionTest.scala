@@ -72,5 +72,45 @@ object IQUtilsPathResolutionTest extends App {
     "untracked fallback when trackedOnly=false"
   )
 
+  // Canonical offset normalization for target resolution.
+  assertEqual(
+    IQUtils.normalizeRequestedOffset(requestedOffset = -5, contentLength = 100),
+    0,
+    "normalize offset clamps negatives to 0"
+  )
+  assertEqual(
+    IQUtils.normalizeRequestedOffset(requestedOffset = 12, contentLength = 100),
+    12,
+    "normalize offset keeps in-range values"
+  )
+  assertEqual(
+    IQUtils.normalizeRequestedOffset(requestedOffset = 1000, contentLength = 100),
+    99,
+    "normalize offset clamps past EOF to last valid index"
+  )
+  assertEqual(
+    IQUtils.normalizeRequestedOffset(requestedOffset = 7, contentLength = 0),
+    0,
+    "normalize offset for empty content"
+  )
+
+  // Canonical target validation semantics.
+  val validCurrent = IQUtils.validateTarget("current", None, None, None)
+  assertEqual(validCurrent.isSuccess, true, "validateTarget current")
+
+  val missingOffset = IQUtils.validateTarget("file_offset", Some("/tmp/Foo.thy"), None, None)
+  assertEqual(
+    missingOffset.isFailure,
+    true,
+    "validateTarget file_offset requires offset"
+  )
+
+  val missingPattern = IQUtils.validateTarget("file_pattern", Some("/tmp/Foo.thy"), None, None)
+  assertEqual(
+    missingPattern.isFailure,
+    true,
+    "validateTarget file_pattern requires non-empty pattern"
+  )
+
   println("IQUtilsPathResolutionTest: all tests passed")
 }

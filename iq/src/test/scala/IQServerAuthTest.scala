@@ -75,6 +75,46 @@ object IQServerAuthTest {
     assertThat(response.get.contains("\"result\""), s"expected successful result payload: ${response.get}")
   }
 
+  private def testToolsListIncludesResolveCommandTarget(): Unit = {
+    val root = Files.createTempDirectory("iq-server-tools-list-root").toRealPath()
+    val server = mkServer(root, None)
+    val request = """{"jsonrpc":"2.0","id":"req-tools","method":"tools/list"}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "tools/list should return response")
+    val payload = response.get
+    assertThat(
+      payload.contains("\"name\":\"resolve_command_target\""),
+      s"tools/list should expose resolve_command_target: $payload"
+    )
+  }
+
+  private def testResolveCommandTargetRejectsInvalidSelection(): Unit = {
+    val root = Files.createTempDirectory("iq-server-resolve-invalid-target-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-resolve-invalid","method":"tools/call","params":{"name":"resolve_command_target","arguments":{"command_selection":"bogus"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "invalid selection should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(payload.contains("Invalid target"), s"expected invalid target message: $payload")
+  }
+
+  private def testResolveCommandTargetRequiresPathAndOffsetForFileOffset(): Unit = {
+    val root = Files.createTempDirectory("iq-server-resolve-file-offset-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-resolve-missing","method":"tools/call","params":{"name":"resolve_command_target","arguments":{"command_selection":"file_offset"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "missing file_offset parameters should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("file_offset target requires path and offset parameters"),
+      s"expected file_offset parameter validation message: $payload"
+    )
+  }
+
   private def testServerAuthorizeMutationPathRespectsRoots(): Unit = {
     val root = Files.createTempDirectory("iq-server-authz-mutation-root").toRealPath()
     val server = mkServer(root, None)
@@ -113,9 +153,11 @@ object IQServerAuthTest {
     testAuthorizedRequestAcceptsTopLevelToken()
     testAuthorizedRequestAcceptsParamsToken()
     testNoAuthConfiguredAllowsRequests()
+    testToolsListIncludesResolveCommandTarget()
+    testResolveCommandTargetRejectsInvalidSelection()
+    testResolveCommandTargetRequiresPathAndOffsetForFileOffset()
     testServerAuthorizeMutationPathRespectsRoots()
     testServerAuthorizeReadPathRespectsRoots()
     println("IQServerAuthTest: all tests passed")
   }
 }
-
