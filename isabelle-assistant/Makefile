@@ -22,6 +22,7 @@ SCALA_SWING_JAR ?= $(SCALA_HOME)/lib/scala-swing_3-3.0.0.jar
 SCALA3_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala3-library_3-*.jar)
 SCALA2_LIB_JAR := $(wildcard $(SCALA_HOME)/lib/scala-library-*.jar)
 SCALA_XML_JAR := $(wildcard $(SCALA_HOME)/lib/scala-xml_3-*.jar)
+SCALA_PARSER_COMBINATORS_JAR := $(firstword $(wildcard $(SCALA_HOME)/lib/scala-parser-combinators_3-*.jar $(SCALA_HOME)/lib/scala-parser-combinators_2.13-*.jar))
 
 # AWS SDK JARs
 LIB_JARS = $(wildcard lib/*.jar)
@@ -127,7 +128,10 @@ test: build fetch-test-deps check-test-sanity verify-test-coverage
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
 	echo "Running tests..."
-	$(JAVA_ENV) $(JAVA) -cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR)" \
+	$(JAVA_ENV) $(JAVA) \
+		-Djava.awt.headless=true \
+		-Dassistant.mermaid.disable_subprocess=true \
+		-cp "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(TEST_CLASSPATH):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(SCALA3_LIB_JAR):$(SCALA2_LIB_JAR):$(SCALA_XML_JAR):$(SCALA_PARSER_COMBINATORS_JAR)" \
 		org.scalatest.tools.Runner -R $(TEST_CLASSES_DIR) -oD
 
 check-test-sanity:
@@ -207,6 +211,7 @@ debug:
 	echo "SCALA_HOME    = $(SCALA_HOME)"
 	echo "SCALAC_FLAGS  = $(SCALAC_FLAGS)"
 	echo "TEST_SCALAC_FLAGS = $(TEST_SCALAC_FLAGS)"
+	echo "SCALA_PARSER_COMBINATORS_JAR = $(SCALA_PARSER_COMBINATORS_JAR)"
 	echo "JAVA_HOME     = $(JAVA_HOME)"
 	echo "JAVA          = $(JAVA)"
 	echo "JAR           = $(JAR)"

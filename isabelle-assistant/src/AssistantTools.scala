@@ -766,6 +766,16 @@ object AssistantTools {
     }
   }
 
+  private def firstNonEmpty(parts: List[String]): Option[String] =
+    parts.map(_.trim).find(_.nonEmpty)
+
+  private def exploreFailureMessage(
+      result: IQMcpClient.ExploreResult,
+      fallback: String
+  ): String =
+    firstNonEmpty(List(result.error.getOrElse(""), result.message, result.results))
+      .getOrElse(fallback)
+
   /** Execute a tool by name. Returns the result as a string. Called from the
     * agentic loop on a background thread. All arguments are sanitized before
     * use to prevent injection or resource exhaustion.
@@ -920,45 +930,70 @@ object AssistantTools {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     if (pattern.isEmpty) "Error: pattern required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val max = math.min(
-            AssistantConstants.MAX_FIND_THEOREMS_RESULTS,
-            math.max(1, intArg(args, "max_results", 20))
-          )
-          val timeout = AssistantOptions.getFindTheoremsTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          val quoted =
-            if (pattern.startsWith("\"")) pattern else s"\"$pattern\""
+    else {
+      val max = math.min(
+        AssistantConstants.MAX_FIND_THEOREMS_RESULTS,
+        math.max(1, intArg(args, "max_results", 20))
+      )
+      val timeout = AssistantOptions.getFindTheoremsTimeout
+      val quoted =
+        if (pattern.startsWith("\"")) pattern else s"\"$pattern\""
 
-          GUI_Thread.later {
-            IQIntegration.runFindTheoremsAsync(
-              view,
-              command,
-              quoted,
-              max,
-              timeout,
-              {
-                case Right(results) =>
-                  result =
-                    if (results.nonEmpty) results.mkString("\n")
-                    else s"No theorems found for: $pattern"
-                  latch.countDown()
-                case Left(err) =>
-                  result = s"Error: $err"
-                  latch.countDown()
-              }
+      IQMcpClient
+        .callExplore(
+          query = "find_theorems",
+          arguments = quoted,
+          timeoutMs = timeout,
+          extraParams = Map("max_results" -> max)
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] find_theorems MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+
+                GUI_Thread.later {
+                  IQIntegration.runFindTheoremsAsync(
+                    view,
+                    command,
+                    quoted,
+                    max,
+                    timeout,
+                    {
+                      case Right(results) =>
+                        result =
+                          if (results.nonEmpty) results.mkString("\n")
+                          else s"No theorems found for: $pattern"
+                        latch.countDown()
+                      case Left(err) =>
+                        result = s"Error: $err"
+                        latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                  "find_theorems timed out."
+                else if (result.isEmpty)
+                  "Error: find_theorems completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) {
+              val text = explore.results.trim
+              if (text.nonEmpty && text != "No results") text
+              else s"No theorems found for: $pattern"
+            } else if (explore.timedOut) "find_theorems timed out."
+            else
+              s"Error: ${exploreFailureMessage(explore, "find_theorems failed")}"
           }
-          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-            "find_theorems timed out."
-          else if (result.isEmpty)
-            "Error: find_theorems completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execVerifyProof(
@@ -968,127 +1003,210 @@ object AssistantTools {
     val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
     if (proof.isEmpty) "Error: proof required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val timeout = AssistantOptions.getVerificationTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          GUI_Thread.later {
-            IQIntegration.verifyProofAsync(
-              view,
-              command,
-              proof,
-              timeout,
-              {
-                case IQIntegration.ProofSuccess(ms, _) =>
-                  result = s"[ok] Proof verified (${ms}ms)"; latch.countDown()
-                case IQIntegration.ProofFailure(err) =>
-                  result = s"[FAIL] Failed: $err"; latch.countDown()
-                case IQIntegration.ProofTimeout =>
-                  result = "[FAIL] Timed out"; latch.countDown()
-                case _ => result = "[FAIL] Unavailable"; latch.countDown()
-              }
+    else {
+      val timeout = AssistantOptions.getVerificationTimeout
+      IQMcpClient
+        .callExplore(
+          query = "proof",
+          arguments = proof,
+          timeoutMs = timeout
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] verify_proof MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+                GUI_Thread.later {
+                  IQIntegration.verifyProofAsync(
+                    view,
+                    command,
+                    proof,
+                    timeout,
+                    {
+                      case IQIntegration.ProofSuccess(ms, _) =>
+                        result = s"[ok] Proof verified (${ms}ms)"; latch.countDown()
+                      case IQIntegration.ProofFailure(err) =>
+                        result = s"[FAIL] Failed: $err"; latch.countDown()
+                      case IQIntegration.ProofTimeout =>
+                        result = "[FAIL] Timed out"; latch.countDown()
+                      case _ => result = "[FAIL] Unavailable"; latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                  "Verification timed out."
+                else if (result.isEmpty)
+                  "Error: verification completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) "[ok] Proof verified"
+            else if (explore.timedOut) "[FAIL] Timed out"
+            else
+              s"[FAIL] Failed: ${exploreFailureMessage(explore, "proof verification failed")}"
           }
-          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-            "Verification timed out."
-          else if (result.isEmpty)
-            "Error: verification completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execRunSledgehammer(view: View): String = {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val timeout = AssistantOptions.getSledgehammerTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          GUI_Thread.later {
-            IQIntegration.runSledgehammerAsync(
-              view,
-              command,
-              timeout,
-              {
-                case Right(results) if results.nonEmpty =>
-                  result = results
-                    .map(r => s"${r.proofMethod} (${r.timeMs}ms)")
-                    .mkString("\n")
-                  latch.countDown()
-                case Right(_)  => result = "No proofs found."; latch.countDown()
-                case Left(err) => result = s"Error: $err"; latch.countDown()
-              }
+    else {
+      val timeout = AssistantOptions.getSledgehammerTimeout
+      IQMcpClient
+        .callExplore(
+          query = "sledgehammer",
+          arguments = "",
+          timeoutMs = timeout
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] run_sledgehammer MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+                GUI_Thread.later {
+                  IQIntegration.runSledgehammerAsync(
+                    view,
+                    command,
+                    timeout,
+                    {
+                      case Right(results) if results.nonEmpty =>
+                        result = results
+                          .map(r => s"${r.proofMethod} (${r.timeMs}ms)")
+                          .mkString("\n")
+                        latch.countDown()
+                      case Right(_)  => result = "No proofs found."; latch.countDown()
+                      case Left(err) => result = s"Error: $err"; latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                  "Sledgehammer timed out."
+                else if (result.isEmpty)
+                  "Error: sledgehammer completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) {
+              val text = explore.results.trim
+              if (text.nonEmpty) text else "No proofs found."
+            } else if (explore.timedOut) "Sledgehammer timed out."
+            else s"Error: ${exploreFailureMessage(explore, "sledgehammer failed")}"
           }
-          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-            "Sledgehammer timed out."
-          else if (result.isEmpty)
-            "Error: sledgehammer completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execRunNitpick(view: View): String = {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val timeout = AssistantOptions.getNitpickTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          GUI_Thread.later {
-            IQIntegration.runQueryAsync(
-              view,
-              command,
-              List("nitpick"),
-              timeout,
-              {
-                case Right(output) => result = output; latch.countDown()
-                case Left(err)     => result = s"Error: $err"; latch.countDown()
-              }
+    else {
+      val timeout = AssistantOptions.getNitpickTimeout
+      IQMcpClient
+        .callExplore(
+          query = "proof",
+          arguments = "nitpick",
+          timeoutMs = timeout
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] run_nitpick MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+                GUI_Thread.later {
+                  IQIntegration.runQueryAsync(
+                    view,
+                    command,
+                    List("nitpick"),
+                    timeout,
+                    {
+                      case Right(output) => result = output; latch.countDown()
+                      case Left(err)     => result = s"Error: $err"; latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                  "Nitpick timed out."
+                else if (result.isEmpty)
+                  "Error: nitpick completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) {
+              val text = explore.results.trim
+              if (text.nonEmpty) text else "Nitpick returned no output."
+            } else if (explore.timedOut) "Nitpick timed out."
+            else s"Error: ${exploreFailureMessage(explore, "nitpick failed")}"
           }
-          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-            "Nitpick timed out."
-          else if (result.isEmpty)
-            "Error: nitpick completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execRunQuickcheck(view: View): String = {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val timeout = AssistantOptions.getQuickcheckTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          GUI_Thread.later {
-            IQIntegration.runQueryAsync(
-              view,
-              command,
-              List("quickcheck"),
-              timeout,
-              {
-                case Right(output) => result = output; latch.countDown()
-                case Left(err)     => result = s"Error: $err"; latch.countDown()
-              }
+    else {
+      val timeout = AssistantOptions.getQuickcheckTimeout
+      IQMcpClient
+        .callExplore(
+          query = "proof",
+          arguments = "quickcheck",
+          timeoutMs = timeout
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] run_quickcheck MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+                GUI_Thread.later {
+                  IQIntegration.runQueryAsync(
+                    view,
+                    command,
+                    List("quickcheck"),
+                    timeout,
+                    {
+                      case Right(output) => result = output; latch.countDown()
+                      case Left(err)     => result = s"Error: $err"; latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                  "Quickcheck timed out."
+                else if (result.isEmpty)
+                  "Error: quickcheck completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) {
+              val text = explore.results.trim
+              if (text.nonEmpty) text else "Quickcheck returned no output."
+            } else if (explore.timedOut) "Quickcheck timed out."
+            else s"Error: ${exploreFailureMessage(explore, "quickcheck failed")}"
           }
-          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-            "Quickcheck timed out."
-          else if (result.isEmpty)
-            "Error: quickcheck completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execGetType(view: View): String = {
@@ -1261,42 +1379,78 @@ object AssistantTools {
     val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
     if (proof.isEmpty) "Error: proof required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val timeout = AssistantOptions.getVerificationTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          GUI_Thread.later {
-            IQIntegration.executeStepAsync(
-              view,
-              command,
-              proof,
-              timeout,
-              {
-                case Right(stepResult) =>
-                  val status =
-                    if (stepResult.complete) "[COMPLETE]"
-                    else
-                      stepResult.numSubgoals match {
-                        case Some(n) => s"[$n subgoals]"
-                        case None    => "[subgoal count unknown]"
-                      }
-                  result = s"$status\n${stepResult.stateText}"
-                  latch.countDown()
-                case Left(err) =>
-                  result = s"[FAIL] $err"
-                  latch.countDown()
-              }
+    else {
+      val timeout = AssistantOptions.getVerificationTimeout
+      val mcpStart = System.currentTimeMillis()
+      IQMcpClient
+        .callExplore(
+          query = "proof",
+          arguments = proof,
+          timeoutMs = timeout
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] execute_step MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+                GUI_Thread.later {
+                  IQIntegration.executeStepAsync(
+                    view,
+                    command,
+                    proof,
+                    timeout,
+                    {
+                      case Right(stepResult) =>
+                        val status =
+                          if (stepResult.complete) "[COMPLETE]"
+                          else
+                            stepResult.numSubgoals match {
+                              case Some(n) => s"[$n subgoals]"
+                              case None    => "[subgoal count unknown]"
+                            }
+                        result = s"$status\n${stepResult.stateText}"
+                        latch.countDown()
+                      case Left(err) =>
+                        result = s"[FAIL] $err"
+                        latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
+                  "Step execution timed out."
+                else if (result.isEmpty)
+                  "Error: step execution completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) {
+              val text = explore.results.trim
+              if (text.isEmpty) "Error: step execution completed without a result."
+              else {
+                val stepResult = IQIntegration.parseStepResult(
+                  text,
+                  System.currentTimeMillis() - mcpStart
+                )
+                val status =
+                  if (stepResult.complete) "[COMPLETE]"
+                  else
+                    stepResult.numSubgoals match {
+                      case Some(n) => s"[$n subgoals]"
+                      case None    => "[subgoal count unknown]"
+                    }
+                s"$status\n${stepResult.stateText}"
+              }
+            } else if (explore.timedOut) "Step execution timed out."
+            else s"[FAIL] ${exploreFailureMessage(explore, "step execution failed")}"
           }
-          if (!latch.await(timeout + 2000, TimeUnit.MILLISECONDS))
-            "Step execution timed out."
-          else if (result.isEmpty)
-            "Error: step execution completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execTraceSimplifier(
@@ -1307,34 +1461,58 @@ object AssistantTools {
     val effectiveMethod =
       if (method.isEmpty || method == "simp") "simp" else method
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else
-      currentCommandAtCursor(view) match {
-        case Left(err) => err
-        case Right(command) =>
-          val timeout = AssistantOptions.getTraceTimeout
-          val depth = AssistantOptions.getTraceDepth
-          val queryTimeoutMs =
-            timeout * 1000L + AssistantConstants.TIMEOUT_BUFFER_MS
-          val latch = new CountDownLatch(1)
-          @volatile var result = ""
-          GUI_Thread.later {
-            IQIntegration.runQueryAsync(
-              view,
-              command,
-              List(s"simp_trace $effectiveMethod $timeout $depth"),
-              queryTimeoutMs,
-              {
-                case Right(output) => result = output; latch.countDown()
-                case Left(err)     => result = s"Error: $err"; latch.countDown()
-              }
+    else {
+      val timeout = AssistantOptions.getTraceTimeout
+      val depth = AssistantOptions.getTraceDepth
+      val queryTimeoutMs =
+        timeout * 1000L + AssistantConstants.TIMEOUT_BUFFER_MS
+      val queryArg = s"simp_trace $effectiveMethod $timeout $depth"
+      IQMcpClient
+        .callExplore(
+          query = "proof",
+          arguments = queryArg,
+          timeoutMs = queryTimeoutMs
+        )
+        .fold(
+          mcpErr => {
+            safeLog(
+              s"[Assistant] trace_simplifier MCP failed ($mcpErr); falling back to local integration"
             )
+            currentCommandAtCursor(view) match {
+              case Left(err) => err
+              case Right(command) =>
+                val latch = new CountDownLatch(1)
+                @volatile var result = ""
+                GUI_Thread.later {
+                  IQIntegration.runQueryAsync(
+                    view,
+                    command,
+                    List(queryArg),
+                    queryTimeoutMs,
+                    {
+                      case Right(output) => result = output; latch.countDown()
+                      case Left(err)     => result = s"Error: $err"; latch.countDown()
+                    }
+                  )
+                }
+                if (!latch.await(queryTimeoutMs + 2000, TimeUnit.MILLISECONDS))
+                  "Simplifier trace timed out."
+                else if (result.isEmpty)
+                  "Error: simplifier trace completed without a result."
+                else result
+            }
+          },
+          explore => {
+            if (explore.success) {
+              val text = explore.results.trim
+              if (text.nonEmpty) text
+              else "Error: simplifier trace completed without a result."
+            } else if (explore.timedOut) "Simplifier trace timed out."
+            else
+              s"Error: ${exploreFailureMessage(explore, "simplifier trace failed")}"
           }
-          if (!latch.await(queryTimeoutMs + 2000, TimeUnit.MILLISECONDS))
-            "Simplifier trace timed out."
-          else if (result.isEmpty)
-            "Error: simplifier trace completed without a result."
-          else result
-      }
+        )
+    }
   }
 
   private def execGetProofBlock(view: View): String = {

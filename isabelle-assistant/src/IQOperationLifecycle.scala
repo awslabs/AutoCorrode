@@ -11,7 +11,9 @@ import isabelle.{GUI_Thread, Isabelle_Thread}
  */
 final class IQOperationLifecycle[A](
   onComplete: A => Unit,
-  deactivate: () => Unit
+  deactivate: () => Unit,
+  forkThread: (String, () => Unit) => Thread = IQOperationLifecycle.forkIsabelleThread,
+  dispatchToGui: (() => Unit) => Unit = IQOperationLifecycle.dispatchToIsabelleGui
 ) {
   private val lock = new Object()
   @volatile private var completed = false
@@ -35,14 +37,14 @@ final class IQOperationLifecycle[A](
 
   /** Spawn timeout watcher that completes with the given timeout result. */
   def forkTimeout(name: String, timeoutMs: Long)(timeoutResult: => A): Thread = {
-    val thread = Isabelle_Thread.fork(name = name) {
+    val thread = forkThread(name, () => {
       try {
         Thread.sleep(timeoutMs)
         completeFromTimeout(timeoutResult)
       } catch {
         case _: InterruptedException => ()
       }
-    }
+    })
     setTimeoutThread(thread)
     thread
   }
@@ -59,8 +61,32 @@ final class IQOperationLifecycle[A](
       try {
         onComplete(result)
       } finally {
-        GUI_Thread.later { deactivate() }
+        dispatchToGui(() => deactivate())
       }
     }
   }
+}
+
+object IQOperationLifecycle {
+  private[assistant] def forkIsabelleThread(
+      name: String,
+      body: () => Unit
+  ): Thread =
+    Isabelle_Thread.fork(name = name) { body() }
+
+  private[assistant] def dispatchToIsabelleGui(body: () => Unit): Unit =
+    GUI_Thread.later { body() }
+
+  private[assistant] def forkJvmThread(
+      name: String,
+      body: () => Unit
+  ): Thread = {
+    val thread = new Thread(() => body(), name)
+    thread.setDaemon(true)
+    thread.start()
+    thread
+  }
+
+  private[assistant] def runInline(body: () => Unit): Unit =
+    body()
 }

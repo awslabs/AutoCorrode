@@ -24,7 +24,9 @@ class IQOperationLifecycleTest extends AnyFunSuite with Matchers {
       deactivate = () => {
         deactivateCount.incrementAndGet()
         deactivateLatch.countDown()
-      }
+      },
+      forkThread = IQOperationLifecycle.forkJvmThread,
+      dispatchToGui = IQOperationLifecycle.runInline
     )
 
     lifecycle.complete("first")
@@ -52,7 +54,9 @@ class IQOperationLifecycleTest extends AnyFunSuite with Matchers {
       deactivate = () => {
         deactivateCount.incrementAndGet()
         deactivateLatch.countDown()
-      }
+      },
+      forkThread = IQOperationLifecycle.forkJvmThread,
+      dispatchToGui = IQOperationLifecycle.runInline
     )
 
     lifecycle.forkTimeout(name = "iq-lifecycle-timeout-1", timeoutMs = 200)("timeout")
@@ -80,7 +84,9 @@ class IQOperationLifecycleTest extends AnyFunSuite with Matchers {
       deactivate = () => {
         deactivateCount.incrementAndGet()
         deactivateLatch.countDown()
-      }
+      },
+      forkThread = IQOperationLifecycle.forkJvmThread,
+      dispatchToGui = IQOperationLifecycle.runInline
     )
 
     lifecycle.forkTimeout(name = "iq-lifecycle-timeout-2", timeoutMs = 50)("timeout")

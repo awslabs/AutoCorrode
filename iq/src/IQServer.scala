@@ -1263,6 +1263,10 @@ class IQServer(
             "arguments" -> Map(
               "type" -> "string",
               "description" -> "Arguments for the query. For 'proof': Isar proof methods, required. Example: 'by simp' or 'apply blast'. For 'sledgehammer': Prover names - optional, uses defaults if empty. Examples: 'cvc5 verit z3 e spass vampire zipperposition'. For 'find_theorems': search criteria - required. Examples: * Goal term pattern '\\<open>(_ :: unat) = (_ :: unat)\\<close>' (MUST include cartouche or quotes aronud the pattern) * Theorem name pattern, 'name:PATTERN'."
+            ),
+            "max_results" -> Map(
+              "type" -> "integer",
+              "description" -> "Optional maximum number of results for query='find_theorems' (default: 20)."
             )
           ),
           "required" -> List("query", "command_selection"),
@@ -2919,6 +2923,10 @@ end"""
         case Right(v) => v
         case Left(err) => return Left(err)
       }
+      val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
+        case Right(v) => v
+        case Left(err) => return Left(err)
+      }
       val pattern = params.get("pattern").map(_.toString)
 
       // Validate target-specific parameters
@@ -2935,7 +2943,7 @@ end"""
       }
 
       // Execute the exploration
-      val result = executeExploration(target, filePath, offset, pattern, query, arguments)
+      val result = executeExploration(target, filePath, offset, pattern, query, arguments, maxResults)
 
       Right(result)
 
@@ -3095,7 +3103,8 @@ end"""
     offset: Option[Int],
     pattern: Option[String],
     query: String,
-    arguments: String
+    arguments: String,
+    maxResults: Option[Int]
   ): Map[String, Any] = {
 
     try {
@@ -3132,7 +3141,13 @@ end"""
       commandResult match {
         case scala.util.Success(command) =>
           // Format query arguments using IQUtils
-          val formattedArgs = IQUtils.formatQueryArguments(internalQuery, finalArguments)
+          val formattedArgs =
+            if (internalQuery == "find_theorems") {
+              val resultLimit = maxResults.filter(_ > 0).getOrElse(20)
+              List(resultLimit.toString, "false", finalArguments)
+            } else {
+              IQUtils.formatQueryArguments(internalQuery, finalArguments)
+            }
 
           // Execute the actual query using Extended_Query_Operation
           val collector = new ExploreResultCollector(query)
