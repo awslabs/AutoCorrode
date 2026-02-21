@@ -5,12 +5,22 @@ package isabelle.assistant
 
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+import org.scalatest.BeforeAndAfterEach
 
 /**
  * Tests for ToolPermissions permission checking and configuration.
  * Tests the permission model without requiring jEdit runtime.
  */
-class ToolPermissionsTest extends AnyFunSuite with Matchers {
+class ToolPermissionsTest
+    extends AnyFunSuite
+    with Matchers
+    with BeforeAndAfterEach {
+
+  override protected def beforeEach(): Unit = {
+    super.beforeEach()
+    ToolPermissions.clearSession()
+    ToolPermissions.resetToDefaults()
+  }
 
   test("PermissionLevel should have correct config strings") {
     ToolPermissions.Deny.toConfigString shouldBe "Deny"
@@ -30,6 +40,18 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     ToolPermissions.PermissionLevel.fromString("Invalid") shouldBe None
     ToolPermissions.PermissionLevel.fromString("allow") shouldBe None // case-sensitive
     ToolPermissions.PermissionLevel.fromString("") shouldBe None
+  }
+
+  test("PermissionLevel.fromDisplayString should parse valid display labels") {
+    ToolPermissions.PermissionLevel.fromDisplayString("Deny") shouldBe Some(ToolPermissions.Deny)
+    ToolPermissions.PermissionLevel.fromDisplayString("Ask Always") shouldBe Some(ToolPermissions.AskAlways)
+    ToolPermissions.PermissionLevel.fromDisplayString("Ask at First Use") shouldBe Some(ToolPermissions.AskAtFirstUse)
+    ToolPermissions.PermissionLevel.fromDisplayString("Allow") shouldBe Some(ToolPermissions.Allow)
+  }
+
+  test("PermissionLevel.fromDisplayString should reject invalid display labels") {
+    ToolPermissions.PermissionLevel.fromDisplayString("ask always") shouldBe None
+    ToolPermissions.PermissionLevel.fromDisplayString("Unknown") shouldBe None
   }
 
   test("all tools should have default permissions defined") {
@@ -129,10 +151,11 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     decision shouldBe ToolPermissions.Allowed
   }
 
-  test("getVisibleTools should exclude Deny-level tools") {
-    // This test assumes default configuration (no tools are Deny by default)
-    val visible = ToolPermissions.getVisibleTools
-    visible.length shouldBe AssistantTools.tools.length
+  test("getVisibleTools should exclude tools configured as Deny") {
+    ToolPermissions.setConfiguredLevel("web_search", ToolPermissions.Deny)
+    val visibleNames = ToolPermissions.getVisibleTools.map(_.name).toSet
+    visibleNames should not contain "web_search"
+    visibleNames should contain("read_theory")
   }
 
   test("all tools should have descriptions for permission prompts") {
@@ -227,6 +250,42 @@ class ToolPermissionsTest extends AnyFunSuite with Matchers {
     for (toolName <- taskTools) {
       val decision = ToolPermissions.checkPermission(toolName, Map.empty[String, ResponseParser.ToolValue])
       decision shouldBe ToolPermissions.Allowed
+    }
+  }
+
+  test("promptUser AskAtFirstUse allow-session should cache session allowance") {
+    ToolPermissions.withPromptChoicesForTest((_, _, _, _) => Some("Allow (for this session)")) {
+      ToolPermissions.promptUser("verify_proof", None, None, null) shouldBe ToolPermissions.Allowed
+      ToolPermissions.checkPermission("verify_proof", Map.empty[String, ResponseParser.ToolValue]) shouldBe ToolPermissions.Allowed
+    }
+  }
+
+  test("promptUser AskAtFirstUse allow-once should not cache session allowance") {
+    ToolPermissions.withPromptChoicesForTest((_, _, _, _) => Some("Allow Once")) {
+      ToolPermissions.promptUser("verify_proof", None, None, null) shouldBe ToolPermissions.Allowed
+      ToolPermissions.checkPermission("verify_proof", Map.empty[String, ResponseParser.ToolValue]) shouldBe
+        ToolPermissions.NeedPrompt("verify_proof", None, None)
+    }
+  }
+
+  test("promptUser AskAlways allow-once should keep prompting") {
+    ToolPermissions.withPromptChoicesForTest((_, _, _, _) => Some("Allow Once")) {
+      ToolPermissions.promptUser("edit_theory", None, None, null) shouldBe ToolPermissions.Allowed
+      ToolPermissions.checkPermission("edit_theory", Map.empty[String, ResponseParser.ToolValue]) shouldBe
+        ToolPermissions.NeedPrompt("edit_theory", None, None)
+    }
+  }
+
+  test("promptUser deny-session should persist denial in this session") {
+    ToolPermissions.withPromptChoicesForTest((_, _, _, _) => Some("Deny (for this session)")) {
+      ToolPermissions.promptUser("verify_proof", None, None, null) shouldBe ToolPermissions.Denied
+      ToolPermissions.checkPermission("verify_proof", Map.empty[String, ResponseParser.ToolValue]) shouldBe ToolPermissions.Denied
+    }
+  }
+
+  test("promptUser timeout/cancel should deny") {
+    ToolPermissions.withPromptChoicesForTest((_, _, _, _) => None) {
+      ToolPermissions.promptUser("verify_proof", None, None, null) shouldBe ToolPermissions.Denied
     }
   }
 }

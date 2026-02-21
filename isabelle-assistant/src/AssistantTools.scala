@@ -522,17 +522,17 @@ object AssistantTools {
       case ToolPermissions.Allowed =>
         executeTool(name, args, view)
       case ToolPermissions.Denied =>
-        Output.writeln(s"[Permissions] Tool '$name' denied by policy")
+        safeLog(s"[Permissions] Tool '$name' denied by policy")
         s"Permission denied: tool '$name' is not allowed."
       case ToolPermissions.NeedPrompt(toolName, resource, details) =>
         ToolPermissions.promptUser(toolName, resource, details, view) match {
           case ToolPermissions.Allowed =>
             executeTool(name, args, view)
           case ToolPermissions.Denied =>
-            Output.writeln(s"[Permissions] User denied tool '$name'")
+            safeLog(s"[Permissions] User denied tool '$name'")
             s"Permission denied: user declined tool '$name'."
           case _ =>
-            Output.writeln(s"[Permissions] Unexpected decision for tool '$name'")
+            safeLog(s"[Permissions] Unexpected decision for tool '$name'")
             s"Permission denied: tool '$name'."
         }
     }
@@ -619,6 +619,11 @@ object AssistantTools {
       s"$k=$rendered"
     }.mkString(", ")
 
+  private def safeLog(message: String): Unit = {
+    try Output.writeln(message)
+    catch { case _: Throwable => () }
+  }
+
   /** Execute a tool by name. Returns the result as a string. Called from the
     * agentic loop on a background thread. All arguments are sanitized before
     * use to prevent injection or resource exhaustion.
@@ -628,7 +633,7 @@ object AssistantTools {
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
-    Output.writeln(
+    safeLog(
       s"[Assistant] Tool call: $name(${summarizeToolArgsForLog(args)})"
     )
     AssistantDockable.setStatus(s"[tool] $name...")

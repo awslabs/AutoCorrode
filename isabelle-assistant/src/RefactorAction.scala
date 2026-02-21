@@ -41,11 +41,7 @@ object RefactorAction {
             goalState,
             includeDefinitions = true
           )
-        val subs = Map("proof" -> proofText) ++
-          goalState.map("goal_state" -> _) ++
-          bundle.localFactsOpt.map("local_facts" -> _) ++
-          bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
-          bundle.definitionsOpt.map("context" -> _)
+        val subs = buildPromptSubstitutions(proofText, goalState, bundle)
 
         val prompt = PromptLoader.load("refactor_to_isar.md", subs)
         val response = BedrockClient.invokeInContext(prompt)
@@ -65,15 +61,12 @@ object RefactorAction {
               retryPrompt = (failed, error) =>
                 PromptLoader.load(
                   "refactor_to_isar_retry.md",
-                  Map(
-                    "proof" -> proofText,
-                    "failed_attempt" -> failed,
-                    "error" -> error
+                  buildPromptSubstitutions(
+                    proofText,
+                    goalState,
+                    bundle,
+                    Map("failed_attempt" -> failed, "error" -> error)
                   )
-                    ++ goalState.map("goal_state" -> _) ++
-                    bundle.localFactsOpt.map("local_facts" -> _) ++
-                    bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
-                    bundle.definitionsOpt.map("context" -> _)
                 ),
               extractCode = extractCode,
               showResult = (resp, badge) => showResult(view, resp, badge)
@@ -120,4 +113,17 @@ object RefactorAction {
     val fromFences = SendbackHelper.extractCodeBlocks(response).mkString("\n").trim
     fromJson.orElse(Option(fromFences).filter(_.nonEmpty)).getOrElse(response)
   }
+
+  private[assistant] def buildPromptSubstitutions(
+      proofText: String,
+      goalState: Option[String],
+      bundle: ProofContextSupport.ContextBundle,
+      extra: Map[String, String] = Map.empty
+  ): Map[String, String] =
+    Map("proof" -> proofText) ++
+      goalState.map("goal_state" -> _) ++
+      bundle.localFactsOpt.map("local_facts" -> _) ++
+      bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+      bundle.definitionsOpt.map("context" -> _) ++
+      extra
 }

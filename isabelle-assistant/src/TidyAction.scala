@@ -44,11 +44,7 @@ object TidyAction {
               goalState,
               includeDefinitions = true
             )
-          val subs = Map("code" -> code) ++
-            goalState.map("goal_state" -> _) ++
-            bundle.localFactsOpt.map("local_facts" -> _) ++
-            bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
-            bundle.definitionsOpt.map("context" -> _)
+          val subs = buildPromptSubstitutions(code, goalState, bundle)
 
           val prompt = PromptLoader.load("tidy.md", subs)
           val response = BedrockClient.invokeInContext(prompt)
@@ -68,15 +64,12 @@ object TidyAction {
                 retryPrompt = (failed, error) =>
                   PromptLoader.load(
                     "tidy_retry.md",
-                    Map(
-                      "code" -> code,
-                      "failed_attempt" -> failed,
-                      "error" -> error
+                    buildPromptSubstitutions(
+                      code,
+                      goalState,
+                      bundle,
+                      Map("failed_attempt" -> failed, "error" -> error)
                     )
-                      ++ goalState.map("goal_state" -> _) ++
-                      bundle.localFactsOpt.map("local_facts" -> _) ++
-                      bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
-                      bundle.definitionsOpt.map("context" -> _)
                   ),
                 extractCode = extractCode,
                 showResult = (resp, badge) => showResult(view, resp, badge)
@@ -117,4 +110,17 @@ object TidyAction {
     val fromFences = SendbackHelper.extractCodeBlocks(response).mkString("\n").trim
     fromJson.orElse(Option(fromFences).filter(_.nonEmpty)).getOrElse(response)
   }
+
+  private[assistant] def buildPromptSubstitutions(
+      code: String,
+      goalState: Option[String],
+      bundle: ProofContextSupport.ContextBundle,
+      extra: Map[String, String] = Map.empty
+  ): Map[String, String] =
+    Map("code" -> code) ++
+      goalState.map("goal_state" -> _) ++
+      bundle.localFactsOpt.map("local_facts" -> _) ++
+      bundle.relevantTheoremsOpt.map("relevant_theorems" -> _) ++
+      bundle.definitionsOpt.map("context" -> _) ++
+      extra
 }

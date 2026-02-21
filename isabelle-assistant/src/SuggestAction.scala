@@ -247,11 +247,7 @@ object SuggestAction {
   ): Unit = {
     Isabelle_Thread.fork(name = "suggest-llm") {
       try {
-        val subs = Map(
-          "command" -> commandText,
-          "goal_state" -> goalState
-        ) ++ (if (contextInfo.nonEmpty) Map("relevant_theorems" -> contextInfo)
-              else Map.empty)
+        val subs = buildPromptSubstitutions(commandText, goalState, contextInfo)
 
         Output.writeln(s"[Assistant] Suggest - Goal state:\n$goalState")
         Output.writeln(s"[Assistant] Suggest - Context:\n$contextInfo")
@@ -451,6 +447,17 @@ object SuggestAction {
       .distinct
       .take(AssistantOptions.getMaxVerifyCandidates)
   }
+
+  private[assistant] def buildPromptSubstitutions(
+      commandText: String,
+      goalState: String,
+      contextInfo: String
+  ): Map[String, String] =
+    Map(
+      "command" -> commandText,
+      "goal_state" -> goalState
+    ) ++ (if (contextInfo.nonEmpty) Map("relevant_theorems" -> contextInfo)
+          else Map.empty)
 
   private def verifyCandidates(
       view: View,

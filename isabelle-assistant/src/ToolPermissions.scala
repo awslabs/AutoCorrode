@@ -69,11 +69,15 @@ object ToolPermissions {
       details: Option[String]
   ) extends PermissionDecision
 
+  type PromptChoicesFn = (String, List[String], String, View) => Option[String]
+
   // --- Session State ---
 
   private val sessionLock = new Object()
   @volatile private var sessionAllowedTools: Set[String] = Set.empty
   @volatile private var sessionDeniedTools: Set[String] = Set.empty
+  @volatile private var promptChoicesFn: PromptChoicesFn =
+    AssistantTools.promptUserWithChoices
 
   /** Clear session-scoped permission decisions. Called on chat clear and plugin stop. */
   def clearSession(): Unit = sessionLock.synchronized {
@@ -83,6 +87,15 @@ object ToolPermissions {
 
   private[assistant] def setSessionAllowedForTest(toolName: String): Unit =
     setSessionAllowed(toolName)
+
+  private[assistant] def withPromptChoicesForTest[A](
+      fn: PromptChoicesFn
+  )(body: => A): A = {
+    val previous = promptChoicesFn
+    promptChoicesFn = fn
+    try body
+    finally promptChoicesFn = previous
+  }
 
   private def isSessionAllowed(toolName: String): Boolean =
     sessionAllowedTools.contains(toolName)
@@ -188,6 +201,11 @@ object ToolPermissions {
     "task_list_show" -> "show the current task list",
     "task_list_get" -> "retrieve a specific task list item"
   )
+
+  private def safeLog(message: String): Unit = {
+    try Output.writeln(message)
+    catch { case _: Throwable => () }
+  }
 
   // --- Tool Name Formatting ---
 
@@ -344,27 +362,27 @@ object ToolPermissions {
         )
     
     // Reuse the exact same prompt mechanism as execAskUser
-    AssistantTools.promptUserWithChoices(question, options, context, view) match {
+    promptChoicesFn(question, options, context, view) match {
       case Some(choice) =>
         choice match {
           case "Allow (for this session)" =>
             setSessionAllowed(toolName)
-            Output.writeln(s"[Permissions] User allowed '$toolName' for session")
+            safeLog(s"[Permissions] User allowed '$toolName' for session")
             Allowed
           case "Allow Once" =>
-            Output.writeln(s"[Permissions] User allowed '$toolName' once")
+            safeLog(s"[Permissions] User allowed '$toolName' once")
             Allowed
           case "Deny (for this session)" =>
             setSessionDenied(toolName)
-            Output.writeln(s"[Permissions] User denied '$toolName' for session")
+            safeLog(s"[Permissions] User denied '$toolName' for session")
             Denied
           case _ =>
-            Output.writeln(s"[Permissions] Unexpected choice for '$toolName': $choice")
+            safeLog(s"[Permissions] Unexpected choice for '$toolName': $choice")
             Denied
         }
       case None =>
         // Timeout or cancellation
-        Output.writeln(s"[Permissions] User did not respond, denying '$toolName'")
+        safeLog(s"[Permissions] User did not respond, denying '$toolName'")
         Denied
     }
   }

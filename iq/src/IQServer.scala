@@ -291,6 +291,11 @@ object IQArgumentUtils {
  * @param port The port number to listen on (default: 8765)
  */
 class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment()) {
+  private def safeOutput(message: String): Unit = {
+    try Output.writeln(message)
+    catch { case _: Throwable => () }
+  }
+
   /**
    * Waits for a theory to be fully processed by marking it as required and polling until completion.
    *
@@ -463,7 +468,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
   }
 
   private def logSecurityEvent(message: String): Unit = {
-    Output.writeln(s"I/Q Server [SECURITY]: $message")
+    safeOutput(s"I/Q Server [SECURITY]: $message")
   }
 
   private def authorizeMutationPath(operation: String, rawPath: String): Either[String, String] = {
@@ -495,6 +500,14 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
         Left(errorMessage)
     }
   }
+
+  // Testing hook: validates path authorization against the current server security config.
+  def authorizeMutationPathForTest(operation: String, rawPath: String): Either[String, String] =
+    authorizeMutationPath(operation, rawPath)
+
+  // Testing hook: validates read-path authorization against the current server security config.
+  def authorizeReadPathForTest(operation: String, rawPath: String): Either[String, String] =
+    authorizeReadPath(operation, rawPath)
 
   /**
    * Starts the MCP server.
@@ -683,12 +696,12 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
    */
   private def processRequest(requestLine: String): Option[String] = {
     try {
-      Output.writeln(s"I/Q Server: Processing request: ${IQSecurity.redactAuthToken(requestLine)}")
+      safeOutput(s"I/Q Server: Processing request: ${IQSecurity.redactAuthToken(requestLine)}")
 
       val json = JSON.parse(requestLine)
       val (method, id) = extractMethodAndId(json)
 
-      Output.writeln(s"I/Q Server: Parsed method='$method', id=$id")
+      safeOutput(s"I/Q Server: Parsed method='$method', id=$id")
 
       val providedToken = getProvidedAuthToken(json)
       if (!IQSecurity.isTokenAuthorized(securityConfig.authToken, providedToken)) {
@@ -713,7 +726,7 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
             case "tools/call" =>
               handleToolCallFromJson(json)
             case _ =>
-              Output.writeln(s"I/Q Server: Unknown method '$method'")
+              safeOutput(s"I/Q Server: Unknown method '$method'")
               Left((ErrorCodes.METHOD_NOT_FOUND, s"Method not found: $method"))
           }
 
@@ -732,21 +745,25 @@ class IQServer(port: Int = 8765, securityConfig: IQServerSecurityConfig = IQSecu
         case None =>
           method match {
             case m if m.startsWith("notifications/") =>
-              Output.writeln(s"I/Q Server: Handling notification '$method'")
+              safeOutput(s"I/Q Server: Handling notification '$method'")
               handleNotification(method, json)
               None // No response for notifications
             case _ =>
-              Output.writeln(s"I/Q Server: Ignoring unknown notification '$method'")
+              safeOutput(s"I/Q Server: Ignoring unknown notification '$method'")
               None // No response for notifications
           }
       }
     } catch {
       case ex: Exception =>
-        Output.writeln(s"I/Q Server: Error processing request: ${ex.getMessage}")
+        safeOutput(s"I/Q Server: Error processing request: ${ex.getMessage}")
         ex.printStackTrace()
         Some(formatErrorResponse(None, ErrorCodes.INTERNAL_ERROR, s"Internal error: ${ex.getMessage}"))
     }
   }
+
+  // Testing hook: exposes request routing/auth behavior without opening sockets.
+  def processRequestForTest(requestLine: String): Option[String] =
+    processRequest(requestLine)
 
   /**
    * Handles JSON-RPC notifications (messages without id that don't expect responses).

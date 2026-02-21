@@ -63,12 +63,70 @@ object IQSecurityTest {
     assertThat(redacted.contains("\"auth_token\":\"***\""), "auth token should be masked in logs")
   }
 
+  private def testPathValidationEdgeCases(): Unit = {
+    val root = Files.createTempDirectory("iq-security-path-edge-root").toRealPath()
+    val nested = root.resolve("nested").resolve("new_file.thy")
+    val insideNonExisting = IQSecurity.resolveMutationPath(nested.toString, List(root))
+    assertThat(
+      insideNonExisting.isRight,
+      s"non-existing path under allowed root should still be authorized: $insideNonExisting"
+    )
+
+    val emptyPath = IQSecurity.resolveMutationPath("   ", List(root))
+    assertThat(emptyPath.isLeft, "blank path should be rejected")
+    assertThat(
+      emptyPath.left.get.contains("path parameter is required"),
+      s"blank-path error should be explicit: $emptyPath"
+    )
+  }
+
+  private def testBindResolution(): Unit = {
+    val loopback = IQSecurity.resolveBindAddress("127.0.0.1")
+    assertThat(loopback.isRight, s"loopback bind should resolve: $loopback")
+
+    val invalid = IQSecurity.resolveBindAddress("invalid host name !!!")
+    assertThat(invalid.isLeft, "invalid host should fail resolution")
+  }
+
+  private def testEnvironmentParsingWithExplicitRootsAndBounds(): Unit = {
+    val mutationRoot = Files.createTempDirectory("iq-security-env-mutation-root").toRealPath()
+    val readRoot = Files.createTempDirectory("iq-security-env-read-root").toRealPath()
+
+    val config = IQSecurity.fromEnvironment(
+      readEnv = {
+        case "IQ_MCP_BIND_HOST" => Some("127.0.0.1")
+        case "IQ_MCP_ALLOW_REMOTE_BIND" => Some("true")
+        case "IQ_MCP_AUTH_TOKEN" => Some(" abc123 ")
+        case "IQ_MCP_ALLOWED_ROOTS" => Some(mutationRoot.toString)
+        case "IQ_MCP_ALLOWED_READ_ROOTS" => Some(readRoot.toString)
+        case "IQ_MCP_MAX_CLIENT_THREADS" => Some("1")
+        case _ => None
+      },
+      cwdProvider = () => "/tmp/ignored-default-root"
+    )
+
+    assertThat(config.allowRemoteBind, "remote bind env flag should be parsed")
+    assertThat(config.authToken.contains("abc123"), "auth token should be trimmed")
+    assertThat(
+      config.allowedMutationRoots == List(mutationRoot),
+      s"explicit mutation root should be honored: ${config.allowedMutationRoots}"
+    )
+    assertThat(
+      config.allowedReadRoots == List(readRoot),
+      s"explicit read root should be honored: ${config.allowedReadRoots}"
+    )
+    assertThat(config.maxClientThreads == 2, "thread count should be clamped to minimum of 2")
+  }
+
   def main(args: Array[String]): Unit = {
     testDefaultConfig()
     testPathAllowlist()
     testReadPathAllowlist()
     testTokenAuthorization()
     testTokenRedaction()
+    testPathValidationEdgeCases()
+    testBindResolution()
+    testEnvironmentParsingWithExplicitRootsAndBounds()
     println("IQSecurityTest: all tests passed")
   }
 }

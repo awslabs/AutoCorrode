@@ -14,6 +14,9 @@ JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 SCALA ?= $(SCALA_HOME)/bin/scala
+SCALA_PARSER_JAR := $(wildcard $(SCALA_HOME)/lib/scala-parser-combinators_3-*.jar)
+XZ_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz-*.jar $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz.jar))
+ZSTD_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/zstd-jni-*/lib/zstd-jni-*.jar))
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
@@ -31,6 +34,7 @@ INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
 SCALA_SOURCES := $(wildcard src/*.scala)
 RESOURCE_FILES := $(wildcard resources/*)
 TEST_SOURCES := $(wildcard test/*.scala) $(wildcard src/test/scala/*.scala)
+TEST_RUN_CLASSPATH = $(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_PARSER_JAR):$(XZ_JAR):$(ZSTD_JAR)
 
 # Default target
 .PHONY: all
@@ -49,19 +53,23 @@ build: $(JAR_FILE)
 test: build $(TEST_CLASSES_DIR)/.compiled
 	echo "Running I/Q line/offset tests..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
-		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQLineOffsetUtilsTest
 	echo "Running I/Q argument tests..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
-		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQArgumentUtilsTest
 	echo "Running I/Q security tests..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
-		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQSecurityTest
+	echo "Running I/Q server auth/authorization tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
+		IQServerAuthTest
 	echo "Running I/Q path resolution tests..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
-		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQUtilsPathResolutionTest
 	echo "Running I/Q bridge framing tests..."
 	python3 -m unittest discover -s test -p 'test_*.py'
