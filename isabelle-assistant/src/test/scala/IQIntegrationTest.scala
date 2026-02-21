@@ -61,21 +61,21 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
   test("ProofStepResult should track completion status") {
     val complete = IQIntegration.ProofStepResult(
       complete = true, 
-      numSubgoals = 0, 
+      numSubgoals = Some(0), 
       stateText = "No subgoals", 
       timeMs = 200
     )
     complete.complete shouldBe true
-    complete.numSubgoals shouldBe 0
+    complete.numSubgoals shouldBe Some(0)
     
     val incomplete = IQIntegration.ProofStepResult(
       complete = false, 
-      numSubgoals = 3, 
+      numSubgoals = Some(3), 
       stateText = "3 subgoals", 
       timeMs = 150
     )
     incomplete.complete shouldBe false
-    incomplete.numSubgoals shouldBe 3
+    incomplete.numSubgoals shouldBe Some(3)
   }
 
   test("getIsarExploreImportSuggestion should provide helpful guidance") {
@@ -98,7 +98,7 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
       timeMs = 123L
     )
     result.complete shouldBe true
-    result.numSubgoals shouldBe 0
+    result.numSubgoals shouldBe Some(0)
     result.stateText shouldBe "No subgoals"
     result.timeMs shouldBe 123L
   }
@@ -109,7 +109,7 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
       timeMs = 88L
     )
     result.complete shouldBe false
-    result.numSubgoals shouldBe 3
+    result.numSubgoals shouldBe Some(3)
     result.stateText shouldBe "1. P\n2. Q\n3. R"
     result.timeMs shouldBe 88L
   }
@@ -118,7 +118,7 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
     val text = "goal (1 subgoal):\n 1. P ⟹ Q"
     val result = IQIntegration.parseStepResult(text, timeMs = 42L)
     result.complete shouldBe false
-    result.numSubgoals shouldBe -1
+    result.numSubgoals shouldBe None
     result.stateText shouldBe text
     result.timeMs shouldBe 42L
   }
@@ -129,14 +129,14 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
       timeMs = 17L
     )
     result.complete shouldBe false
-    result.numSubgoals shouldBe -1
+    result.numSubgoals shouldBe None
     result.stateText shouldBe "state"
   }
 
   test("parseStepResult should treat empty output as completed proof") {
     val result = IQIntegration.parseStepResult("", timeMs = 9L)
     result.complete shouldBe true
-    result.numSubgoals shouldBe 0
+    result.numSubgoals shouldBe Some(0)
     result.stateText shouldBe ""
   }
 }

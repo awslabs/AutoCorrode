@@ -60,150 +60,198 @@ object ChatAction {
       needsIQ: Boolean = false
   )
 
+  enum CommandId(val wireName: String) {
+    case Analyze extends CommandId("analyze")
+    case Deps extends CommandId("deps")
+    case Explain extends CommandId("explain")
+    case ExplainCounterexample extends CommandId("explain-counterexample")
+    case ExplainError extends CommandId("explain-error")
+    case Extract extends CommandId("extract")
+    case Find extends CommandId("find")
+    case GenerateDoc extends CommandId("generate-doc")
+    case GenerateElim extends CommandId("generate-elim")
+    case GenerateIntro extends CommandId("generate-intro")
+    case GenerateTests extends CommandId("generate-tests")
+    case Help extends CommandId("help")
+    case Models extends CommandId("models")
+    case Nitpick extends CommandId("nitpick")
+    case PrintContext extends CommandId("print-context")
+    case Quickcheck extends CommandId("quickcheck")
+    case Read extends CommandId("read")
+    case Refactor extends CommandId("refactor")
+    case Search extends CommandId("search")
+    case Set extends CommandId("set")
+    case ShowType extends CommandId("show-type")
+    case Sledgehammer extends CommandId("sledgehammer")
+    case Suggest extends CommandId("suggest")
+    case SuggestName extends CommandId("suggest-name")
+    case SuggestStrategy extends CommandId("suggest-strategy")
+    case SuggestTactic extends CommandId("suggest-tactic")
+    case Summarize extends CommandId("summarize")
+    case Theories extends CommandId("theories")
+    case Tidy extends CommandId("tidy")
+    case Trace extends CommandId("trace")
+    case TryMethods extends CommandId("try-methods")
+    case Verify extends CommandId("verify")
+  }
+
+  object CommandId {
+    private val byWire: Map[String, CommandId] =
+      values.iterator.map(id => id.wireName -> id).toMap
+
+    def fromWire(wireName: String): Option[CommandId] =
+      byWire.get(wireName.trim.toLowerCase)
+  }
+
   /** Expose command names for auto-completion. */
-  def commandNames: List[String] = dispatch.keys.toList
+  def commandNames: List[String] =
+    dispatch.keysIterator.map(_.wireName).toList.sorted
 
   /** Single dispatch table — source of truth for both execution and help. */
-  private lazy val dispatch: Map[String, CommandEntry] = Map(
-    "analyze" -> CommandEntry(
+  private lazy val dispatch: Map[CommandId, CommandEntry] = Map(
+    CommandId.Analyze -> CommandEntry(
       "Analyze proof patterns and suggest improvements for proof structure",
       (v, _) => AnalyzePatternsAction.analyze(v)
     ),
-    "deps" -> CommandEntry(
+    CommandId.Deps -> CommandEntry(
       "Display theory dependencies and imports for a specified theory file",
       (v, a) => TheoryBrowserAction.deps(v, a)
     ),
-    "explain" -> CommandEntry(
+    CommandId.Explain -> CommandEntry(
       "Provide detailed explanation of Isabelle code at specified location",
       (v, a) => runExplain(v, a)
     ),
-    "explain-counterexample" -> CommandEntry(
+    CommandId.ExplainCounterexample -> CommandEntry(
       "Explain why a counterexample was generated and what it means",
       (v, _) => ExplainCounterexampleAction.chatCommand(v)
     ),
-    "explain-error" -> CommandEntry(
+    CommandId.ExplainError -> CommandEntry(
       "Analyze and explain error messages at the current cursor position",
       (v, _) => runExplainError(v)
     ),
-    "extract" -> CommandEntry(
+    CommandId.Extract -> CommandEntry(
       "Extract selected proof text into a separate reusable lemma",
       (v, _) => ExtractLemmaAction.chatExtract(v)
     ),
-    "find" -> CommandEntry(
+    CommandId.Find -> CommandEntry(
       "Search for theorems matching a given pattern or keyword",
       (v, a) => runFind(v, a),
       needsIQ = true
     ),
-    "generate-doc" -> CommandEntry(
+    CommandId.GenerateDoc -> CommandEntry(
       "Generate documentation for definitions and theorems",
       (v, _) => GenerateDocAction.chatGenerate(v)
     ),
-    "generate-elim" -> CommandEntry(
+    CommandId.GenerateElim -> CommandEntry(
       "Generate elimination rules for datatypes and definitions",
       (v, _) => GenerateRulesAction.chatGenerateElim(v)
     ),
-    "generate-intro" -> CommandEntry(
+    CommandId.GenerateIntro -> CommandEntry(
       "Generate introduction rules for datatypes and definitions",
       (v, _) => GenerateRulesAction.chatGenerateIntro(v)
     ),
-    "generate-tests" -> CommandEntry(
+    CommandId.GenerateTests -> CommandEntry(
       "Generate test cases and examples for definitions",
       (v, _) => GenerateTestsAction.chatGenerate(v)
     ),
-    "help" -> CommandEntry(
+    CommandId.Help -> CommandEntry(
       "Display this table of available commands and their descriptions",
       (_, _) => showHelp()
     ),
-    "models" -> CommandEntry(
+    CommandId.Models -> CommandEntry(
       "Refresh the list of available Anthropic models from AWS Bedrock",
       (_, _) => runModels()
     ),
-    "nitpick" -> CommandEntry(
+    CommandId.Nitpick -> CommandEntry(
       "Run Nitpick model finder to search for counterexamples",
       (v, _) =>
         CounterexampleFinderAction.run(v, CounterexampleFinderAction.Nitpick),
       needsIQ = true
     ),
-    "print-context" -> CommandEntry(
+    CommandId.PrintContext -> CommandEntry(
       "Display current proof context including assumptions and goals",
       (v, _) => PrintContextAction.run(v),
       needsIQ = true
     ),
-    "quickcheck" -> CommandEntry(
+    CommandId.Quickcheck -> CommandEntry(
       "Run QuickCheck to test conjectures with random examples",
       (v, _) =>
         CounterexampleFinderAction
           .run(v, CounterexampleFinderAction.Quickcheck),
       needsIQ = true
     ),
-    "read" -> CommandEntry(
+    CommandId.Read -> CommandEntry(
       "Display the content of a specified theory file (optional: line count)",
       (v, a) => TheoryBrowserAction.read(v, a)
     ),
-    "refactor" -> CommandEntry(
+    CommandId.Refactor -> CommandEntry(
       "Convert proof text to structured Isar proof style",
       (v, _) => RefactorAction.chatRefactor(v)
     ),
-    "search" -> CommandEntry(
+    CommandId.Search -> CommandEntry(
       "Search for specific text patterns within a theory file",
       (v, a) => TheoryBrowserAction.search(v, a)
     ),
-    "set" -> CommandEntry(
+    CommandId.Set -> CommandEntry(
       "View or modify Assistant configuration settings",
       (_, a) => runSet(a)
     ),
-    "show-type" -> CommandEntry(
+    CommandId.ShowType -> CommandEntry(
       "Display type information for the symbol at cursor position",
       (v, _) => ShowTypeAction.showType(v)
     ),
-    "sledgehammer" -> CommandEntry(
+    CommandId.Sledgehammer -> CommandEntry(
       "Run Sledgehammer to find automatic proofs using external provers",
       (v, _) => runSledgehammer(v),
       needsIQ = true
     ),
-    "suggest" -> CommandEntry(
+    CommandId.Suggest -> CommandEntry(
       "Generate proof step suggestions for the current proof state",
       (v, a) => runSuggest(v, a)
     ),
-    "suggest-name" -> CommandEntry(
+    CommandId.SuggestName -> CommandEntry(
       "Suggest a descriptive name for the lemma, theorem, or definition at cursor",
       (v, _) => SuggestNameAction.chatSuggestName(v)
     ),
-    "suggest-strategy" -> CommandEntry(
+    CommandId.SuggestStrategy -> CommandEntry(
       "Recommend high-level proof strategies for the current goal",
       (v, _) => SuggestStrategyAction.suggest(v)
     ),
-    "suggest-tactic" -> CommandEntry(
+    CommandId.SuggestTactic -> CommandEntry(
       "Suggest specific tactics to apply at the current proof step",
       (v, _) => SuggestTacticAction.chatSuggest(v)
     ),
-    "summarize" -> CommandEntry(
+    CommandId.Summarize -> CommandEntry(
       "Generate a summary of theory content including key definitions",
       (v, _) => SummarizeTheoryAction.summarize(v)
     ),
-    "theories" -> CommandEntry(
+    CommandId.Theories -> CommandEntry(
       "List all currently loaded theory files in the session",
       (_, _) => TheoryBrowserAction.theories()
     ),
-    "tidy" -> CommandEntry(
+    CommandId.Tidy -> CommandEntry(
       "Clean up and format proof text for better readability",
       (v, _) => TidyAction.tidy(v)
     ),
-    "trace" -> CommandEntry(
+    CommandId.Trace -> CommandEntry(
       "Trace simplifier operations to understand rewriting steps",
       (v, _) => TraceSimplifierAction.trace(v),
       needsIQ = true
     ),
-    "try-methods" -> CommandEntry(
+    CommandId.TryMethods -> CommandEntry(
       "Attempt various proof methods automatically on current goal",
       (v, _) => TryMethodsAction.run(v),
       needsIQ = true
     ),
-    "verify" -> CommandEntry(
+    CommandId.Verify -> CommandEntry(
       "Verify that a given proof text is correct and complete",
       (v, a) => runVerify(v, a),
       needsIQ = true
     )
+  )
+  require(
+    dispatch.keySet == CommandId.values.toSet,
+    "ChatAction dispatch must cover all CommandId values."
   )
 
   def addMessage(message: Message): Unit = historyLock.synchronized {
@@ -328,21 +376,24 @@ object ChatAction {
 
   private def handleCommand(view: View, input: String): Unit = {
     val parts = input.drop(1).split("\\s+", 2)
-    val cmd = parts(0).toLowerCase
+    val rawCmd = parts(0).toLowerCase
     val arg = if (parts.length > 1) parts(1) else ""
 
     addMessage(Message(User, input, LocalDateTime.now()))
     AssistantDockable.showConversation(getHistory)
 
-    dispatch.get(cmd) match {
-      case Some(entry) if entry.needsIQ && !IQAvailable.isAvailable =>
+    CommandId.fromWire(rawCmd) match {
+      case Some(commandId) =>
+        dispatch(commandId) match {
+          case entry if entry.needsIQ && !IQAvailable.isAvailable =>
+            addResponse(
+              "I/Q plugin not available. Install I/Q to use this command."
+            )
+          case entry => entry.handler(view, arg)
+        }
+      case None =>
         addResponse(
-          "I/Q plugin not available. Install I/Q to use this command."
-        )
-      case Some(entry) => entry.handler(view, arg)
-      case None        =>
-        addResponse(
-          s"Unknown command `:$cmd`. Type `:help` for available commands."
+          s"Unknown command `:$rawCmd`. Type `:help` for available commands."
         )
     }
   }
@@ -355,12 +406,12 @@ object ChatAction {
     val infoBg = UIColors.InfoBox.background
     val infoBorder = UIColors.InfoBox.border
 
-    val sortedCommands = dispatch.toList.sortBy(_._1)
+    val sortedCommands = dispatch.toList.sortBy(_._1.wireName)
     val header =
       s"<tr><th style='padding:4px 8px;border-bottom:2px solid $borderColor;text-align:left;font-size:11pt;background:$headerBg;'>Command</th><th style='padding:4px 8px;border-bottom:2px solid $borderColor;text-align:left;font-size:11pt;background:$headerBg;'>Description</th><th style='padding:4px 8px;border-bottom:2px solid $borderColor;text-align:center;font-size:11pt;background:$headerBg;'>I/Q</th></tr>"
-    val rows = sortedCommands.map { case (cmd, entry) =>
+    val rows = sortedCommands.map { case (commandId, entry) =>
       val iq = if (entry.needsIQ) "yes" else ""
-      s"<tr><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-family:${MarkdownRenderer.codeFont};font-size:11pt;white-space:nowrap;color:$accentColor;'>:$cmd</td><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-size:11pt;'>${entry.description}</td><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-size:11pt;text-align:center;'>$iq</td></tr>"
+      s"<tr><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-family:${MarkdownRenderer.codeFont};font-size:11pt;white-space:nowrap;color:$accentColor;'>:${commandId.wireName}</td><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-size:11pt;'>${entry.description}</td><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-size:11pt;text-align:center;'>$iq</td></tr>"
     }.mkString
     val table =
       s"<table style='width:100%;border-collapse:collapse;'>$header$rows</table>"
@@ -527,24 +578,26 @@ object ChatAction {
   private def runExplainError(view: View): Unit = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    val error = ExplainErrorAction.extractErrorAtOffset(buffer, offset)
+    ExplainErrorAction.extractErrorAtOffset(buffer, offset) match {
+      case None =>
+        addResponse("No error at cursor position.")
+      case Some(error) =>
+        val context =
+          CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
+        val goalState = GoalExtractor.getGoalState(buffer, offset)
 
-    if (error.isEmpty) {
-      addResponse("No error at cursor position.")
-    } else {
-      val context =
-        CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
-      val goalState = GoalExtractor.getGoalState(buffer, offset)
+        ActionHelper.runAndRespond(
+          "chat-explain-error",
+          "Explaining error..."
+        ) {
+          val subs = Map(
+            "error" -> error,
+            "context" -> context
+          ) ++ goalState.map(g => Map("goal_state" -> g)).getOrElse(Map.empty)
 
-      ActionHelper.runAndRespond("chat-explain-error", "Explaining error...") {
-        val subs = Map(
-          "error" -> error.get,
-          "context" -> context
-        ) ++ goalState.map(g => Map("goal_state" -> g)).getOrElse(Map.empty)
-
-        val prompt = PromptLoader.load("explain_error.md", subs)
-        BedrockClient.invokeInContext(prompt)
-      }
+          val prompt = PromptLoader.load("explain_error.md", subs)
+          BedrockClient.invokeInContext(prompt)
+        }
     }
   }
 

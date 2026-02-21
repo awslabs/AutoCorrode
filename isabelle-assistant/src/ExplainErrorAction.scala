@@ -17,20 +17,26 @@ object ExplainErrorAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
 
-    val error = extractErrorAtOffset(buffer, offset)
-    if (error.isEmpty) {
-      ChatAction.addResponse("No error at cursor position.")
-    } else {
-      val commandText = CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
-      val goalState = GoalExtractor.getGoalState(buffer, offset)
+    extractErrorAtOffset(buffer, offset) match {
+      case None =>
+        ChatAction.addResponse("No error at cursor position.")
+      case Some(error) =>
+        val commandText =
+          CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
+        val goalState = GoalExtractor.getGoalState(buffer, offset)
 
-      ActionHelper.runAndRespond("assistant-explain-error", "Explaining error...") {
-        val defContext = ContextFetcher.getContext(view)
-        val subs = Map("error" -> error.get, "context" -> commandText) ++
-          goalState.map("goal_state" -> _) ++ defContext.map("definitions" -> _)
-        val prompt = PromptLoader.load("explain_error.md", subs)
-        BedrockClient.invokeInContext(prompt)
-      }
+        ActionHelper.runAndRespond(
+          "assistant-explain-error",
+          "Explaining error..."
+        ) {
+          val defContext = ContextFetcher.getContext(view)
+          val subs = Map("error" -> error, "context" -> commandText) ++
+            goalState.map("goal_state" -> _) ++ defContext.map(
+              "definitions" -> _
+            )
+          val prompt = PromptLoader.load("explain_error.md", subs)
+          BedrockClient.invokeInContext(prompt)
+        }
     }
   }
 

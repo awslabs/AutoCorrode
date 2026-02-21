@@ -36,7 +36,6 @@ object TidyAction {
       val offset = textArea.getCaretPosition
       val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
       val goalState = GoalExtractor.getGoalState(buffer, offset)
-      val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
 
       AssistantDockable.setBadge(VerificationBadge.Verifying)
 
@@ -56,36 +55,37 @@ object TidyAction {
           val args = BedrockClient.invokeInContextStructured(prompt, tidySchema)
           val tidied = ResponseParser.toolValueToString(args.getOrElse("code", ResponseParser.NullValue))
 
-          if (!canVerify) {
-            GUI_Thread.later {
-              showResult(view, tidied, VerificationBadge.Unverified)
-            }
-          } else {
-            val invokeAndExtract: String => String = { retryPrompt =>
-              val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, tidySchema)
-              ResponseParser.toolValueToString(retryArgs.getOrElse("code", ResponseParser.NullValue))
-            }
-            GUI_Thread.later {
-              VerifyWithRetry.verify(
-                view,
-                commandOpt.get,
-                tidied,
-                tidied,
-                1,
-                retryPrompt = (failed, error) =>
-                  PromptLoader.load(
-                    "tidy_retry.md",
-                    buildPromptSubstitutions(
-                      code,
-                      goalState,
-                      bundle,
-                      Map("failed_attempt" -> failed, "error" -> error)
-                    )
-                  ),
-                invokeAndExtract = invokeAndExtract,
-                showResult = (resp, badge) => showResult(view, resp, badge)
-              )
-            }
+          commandOpt match {
+            case Some(command) if IQAvailable.isAvailable =>
+              val invokeAndExtract: String => String = { retryPrompt =>
+                val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, tidySchema)
+                ResponseParser.toolValueToString(retryArgs.getOrElse("code", ResponseParser.NullValue))
+              }
+              GUI_Thread.later {
+                VerifyWithRetry.verify(
+                  view,
+                  command,
+                  tidied,
+                  tidied,
+                  1,
+                  retryPrompt = (failed, error) =>
+                    PromptLoader.load(
+                      "tidy_retry.md",
+                      buildPromptSubstitutions(
+                        code,
+                        goalState,
+                        bundle,
+                        Map("failed_attempt" -> failed, "error" -> error)
+                      )
+                    ),
+                  invokeAndExtract = invokeAndExtract,
+                  showResult = (resp, badge) => showResult(view, resp, badge)
+                )
+              }
+            case _ =>
+              GUI_Thread.later {
+                showResult(view, tidied, VerificationBadge.Unverified)
+              }
           }
         } catch {
           case ex: Exception =>

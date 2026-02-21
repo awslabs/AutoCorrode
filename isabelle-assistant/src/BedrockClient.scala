@@ -10,6 +10,7 @@ import software.amazon.awssdk.core.SdkBytes
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonGenerator}
 import java.io.StringWriter
+import scala.util.control.NonFatal
 
 /**
  * AWS Bedrock client for LLM interactions.
@@ -143,7 +144,8 @@ object BedrockClient {
           case Some((r, c)) if r == region => c
           case _ =>
             cachedClient.foreach { case (_, client) =>
-              try { client.close() } catch { case _: Throwable => }
+              try { client.close() }
+              catch { case NonFatal(_) => () }
             }
             val client = ErrorHandler.withErrorHandling("create Bedrock client") {
               val newClient = BedrockRuntimeClient.builder()
@@ -869,7 +871,7 @@ object BedrockClient {
   def cleanup(): Unit = clientLock.synchronized {
     cachedClient.foreach { case (_, client) =>
       try { client.close() }
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => () }
     }
     cachedClient = None
   }

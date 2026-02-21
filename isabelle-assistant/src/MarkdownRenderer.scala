@@ -12,6 +12,7 @@ import java.nio.file.Files
 import java.util.Locale
 import java.util.concurrent.{ConcurrentHashMap, Executors, ThreadFactory, TimeUnit}
 import javax.imageio.ImageIO
+import scala.util.control.NonFatal
 
 /** Markdown-to-HTML renderer for the chat panel. Handles headings, bold,
   * italic, inline code, code fences (with clickable isabelle blocks),
@@ -98,9 +99,25 @@ object MarkdownRenderer {
     if (tag.startsWith("action:")) {
       val id = tag.stripPrefix("action:")
       appendClickableBlock(sb, escaped, id)
-    } else if (tagName == "isabelle" && registerAction.isDefined) {
-      val id = registerAction.get(codeStr)
-      appendClickableBlock(sb, escaped, id)
+    } else if (tagName == "isabelle") {
+      registerAction match {
+        case Some(register) =>
+          val id = register(codeStr)
+          appendClickableBlock(sb, escaped, id)
+        case None =>
+          val codeBg = UIColors.CodeBlock.background
+          val codeBorder = UIColors.CodeBlock.border
+          val highlighted = highlightIsabelle(escaped)
+          sb.append(
+            s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;"
+          )
+          sb.append(
+            s"padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;"
+          )
+          sb.append("white-space:pre;overflow-x:auto;line-height:1.5;'>")
+          sb.append(highlighted)
+          sb.append("</pre>")
+      }
     } else if (tagName == "mermaid") {
       appendMermaidBlock(sb, codeStr)
     } else {
@@ -623,11 +640,11 @@ object MarkdownRenderer {
       case ex: Exception => Left(ex.getMessage)
     } finally {
       try Files.deleteIfExists(input)
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => () }
       try Files.deleteIfExists(output)
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => () }
       try Files.deleteIfExists(tempDir)
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => () }
     }
   }
 

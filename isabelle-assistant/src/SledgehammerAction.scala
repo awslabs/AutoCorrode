@@ -17,25 +17,26 @@ object SledgehammerAction {
     val offset = view.getTextArea.getCaretPosition
     val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
 
-    if (commandOpt.isEmpty) {
-      GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
-    } else {
-      AssistantDockable.setStatus("Running sledgehammer...")
-      val timeout = AssistantOptions.getSledgehammerTimeout
+    commandOpt match {
+      case None =>
+        GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
+      case Some(command) =>
+        AssistantDockable.setStatus("Running sledgehammer...")
+        val timeout = AssistantOptions.getSledgehammerTimeout
 
-      GUI_Thread.later {
-        IQIntegration.runSledgehammerAsync(view, commandOpt.get, timeout, {
-          case Right(results) if results.nonEmpty =>
-            displayResults(view, results)
-            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-          case Right(_) =>
-            AssistantDockable.respondInChat("Sledgehammer found no proofs.")
-            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-          case Left(error) =>
-            AssistantDockable.respondInChat(s"Sledgehammer error: $error")
-            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-        })
-      }
+        GUI_Thread.later {
+          IQIntegration.runSledgehammerAsync(view, command, timeout, {
+            case Right(results) if results.nonEmpty =>
+              displayResults(view, results)
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            case Right(_) =>
+              AssistantDockable.respondInChat("Sledgehammer found no proofs.")
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            case Left(error) =>
+              AssistantDockable.respondInChat(s"Sledgehammer error: $error")
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+          })
+        }
     }
   }
 

@@ -54,7 +54,7 @@ object IQIntegration {
     */
   case class ProofStepResult(
       complete: Boolean,
-      numSubgoals: Int,
+      numSubgoals: Option[Int],
       stateText: String,
       timeMs: Long
   )
@@ -278,7 +278,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     if (!lines.hasNext)
       return ProofStepResult(
         complete = true,
-        numSubgoals = 0,
+        numSubgoals = Some(0),
         stateText = "",
         timeMs = timeMs
       )
@@ -287,13 +287,13 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     if (header.startsWith("PROOF_COMPLETE"))
       ProofStepResult(
         complete = true,
-        numSubgoals = 0,
+        numSubgoals = Some(0),
         stateText = rest,
         timeMs = timeMs
       )
     else if (header.startsWith("PROOF_STATE ")) {
-      val n = try { header.stripPrefix("PROOF_STATE ").trim.toInt }
-      catch { case _: NumberFormatException => -1 }
+      val n =
+        scala.util.Try(header.stripPrefix("PROOF_STATE ").trim.toInt).toOption
       ProofStepResult(
         complete = false,
         numSubgoals = n,
@@ -304,7 +304,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       // Legacy format without header — treat as opaque state
       ProofStepResult(
         complete = false,
-        numSubgoals = -1,
+        numSubgoals = None,
         stateText = text,
         timeMs = timeMs
       )

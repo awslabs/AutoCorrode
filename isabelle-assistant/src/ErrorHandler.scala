@@ -6,6 +6,7 @@ package isabelle.assistant
 import isabelle._
 import scala.util.{Try, Failure}
 import java.util.concurrent.atomic.AtomicReference
+import scala.util.control.NonFatal
 
 /** Unified error handling, input validation, resource management, and operation
   * logging for Isabelle Assistant.
@@ -96,14 +97,18 @@ object ErrorHandler {
     */
   private def safeWriteln(msg: String): Unit =
     try { Output.writeln(msg) }
-    catch { case _: Throwable => System.err.println(msg) }
+    catch {
+      case NonFatal(_) | _: LinkageError => System.err.println(msg)
+    }
 
   /** Safe wrapper for Output.error_message — no-op if Isabelle runtime isn't
     * available.
     */
   private def safeErrorMessage(msg: String): Unit =
     try { Output.error_message(msg) }
-    catch { case _: Throwable => System.err.println(s"ERROR: $msg") }
+    catch {
+      case NonFatal(_) | _: LinkageError => System.err.println(s"ERROR: $msg")
+    }
 
   /** Log operation with timing information. Re-throws with user-friendly
     * message on failure.
@@ -146,7 +151,7 @@ object ErrorHandler {
     }
     toClose.foreach { r =>
       try { r.close() }
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => }
     }
   }
 
@@ -155,7 +160,7 @@ object ErrorHandler {
     val resources = resourceRegistry.getAndSet(Nil)
     resources.foreach { resource =>
       try { resource.close() }
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => }
     }
   }
 
@@ -206,8 +211,9 @@ object ErrorHandler {
   )(block: R => T): Try[T] = {
     var res: Option[R] = None
     val result = Try {
-      res = Some(resource)
-      block(res.get)
+      val acquired = resource
+      res = Some(acquired)
+      block(acquired)
     }.recoverWith { case ex: Exception =>
       val msg = makeUserFriendly(ex.getMessage, "resource operation")
       safeErrorMessage(s"Resource operation failed: $msg")
@@ -215,7 +221,7 @@ object ErrorHandler {
     }
     res.foreach { r =>
       try { r.close() }
-      catch { case _: Throwable => }
+      catch { case NonFatal(_) => }
     }
     result
   }

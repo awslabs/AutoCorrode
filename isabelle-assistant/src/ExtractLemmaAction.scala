@@ -53,73 +53,76 @@ object ExtractLemmaAction {
       if (textArea.getSelectionCount > 0) textArea.getSelection(0).getStart
       else textArea.getCaretPosition
 
-    val context = getExtractionContext(buffer, selStart, selectedText)
-    if (context.isEmpty) {
-      GUI.warning_dialog(
-        view,
-        "Isabelle Assistant",
-        "Could not determine proof context"
-      )
-    } else {
-      val ctx = context.get
-      val commandOpt = IQIntegration.getCommandAtOffset(buffer, selStart)
-      val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
+    getExtractionContext(buffer, selStart, selectedText) match {
+      case None =>
+        GUI.warning_dialog(
+          view,
+          "Isabelle Assistant",
+          "Could not determine proof context"
+        )
+      case Some(ctx) =>
+        val commandOpt = IQIntegration.getCommandAtOffset(buffer, selStart)
+        val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
 
-      AssistantDockable.setStatus("Extracting lemma...")
-      AssistantDockable.setBadge(VerificationBadge.Verifying)
+        AssistantDockable.setStatus("Extracting lemma...")
+        AssistantDockable.setBadge(VerificationBadge.Verifying)
 
-      Isabelle_Thread.fork(name = "assistant-extract") {
-        try {
-          val bundle =
-            ProofContextSupport.collect(
-              view,
-              selStart,
-              commandOpt,
-              ctx.goalStateAtSelection,
-              includeDefinitions = true
+        Isabelle_Thread.fork(name = "assistant-extract") {
+          try {
+            val bundle =
+              ProofContextSupport.collect(
+                view,
+                selStart,
+                commandOpt,
+                ctx.goalStateAtSelection,
+                includeDefinitions = true
+              )
+            val enrichedCtx = ctx.copy(
+              localFacts = bundle.localFactsOpt,
+              relevantTheorems = bundle.relevantTheoremsOpt,
+              definitions = bundle.definitionsOpt
             )
-          val enrichedCtx = ctx.copy(
-            localFacts = bundle.localFactsOpt,
-            relevantTheorems = bundle.relevantTheoremsOpt,
-            definitions = bundle.definitionsOpt
-          )
 
-          val prompt = PromptLoader.load(
-            "extract_lemma.md",
-            Map(
-              "selected_text" -> enrichedCtx.selectedText,
-              "full_proof" -> enrichedCtx.fullProofBlock,
-              "lemma_statement" -> enrichedCtx.lemmaStatement,
-              "goal_state" -> enrichedCtx.goalStateAtSelection.getOrElse("")
+            val prompt = PromptLoader.load(
+              "extract_lemma.md",
+              Map(
+                "selected_text" -> enrichedCtx.selectedText,
+                "full_proof" -> enrichedCtx.fullProofBlock,
+                "lemma_statement" -> enrichedCtx.lemmaStatement,
+                "goal_state" -> enrichedCtx.goalStateAtSelection.getOrElse("")
+              )
+                ++ enrichedCtx.localFacts.map("local_facts" -> _) ++
+                enrichedCtx.relevantTheorems.map("relevant_theorems" -> _) ++
+                enrichedCtx.definitions.map("context" -> _)
             )
-              ++ enrichedCtx.localFacts.map("local_facts" -> _) ++
-              enrichedCtx.relevantTheorems.map("relevant_theorems" -> _) ++
-              enrichedCtx.definitions.map("context" -> _)
-          )
 
-          val args = BedrockClient.invokeInContextStructured(prompt, extractSchema)
-          parseStructuredExtraction(args) match {
-            case Some(result) if canVerify =>
+            val args =
+              BedrockClient.invokeInContextStructured(prompt, extractSchema)
+            parseStructuredExtraction(args) match {
+              case Some(result) =>
+                commandOpt match {
+                  case Some(command) if canVerify =>
+                    GUI_Thread.later {
+                      startVerification(view, command, enrichedCtx, result, 1)
+                    }
+                  case _ =>
+                    GUI_Thread.later {
+                      showResult(view, result, VerificationBadge.Unverified)
+                    }
+                }
+              case None =>
+                GUI_Thread.later {
+                  AssistantDockable.setStatus("Could not parse extraction result")
+                }
+            }
+          } catch {
+            case ex: Exception =>
               GUI_Thread.later {
-                startVerification(view, commandOpt.get, enrichedCtx, result, 1)
-              }
-            case Some(result) =>
-              GUI_Thread.later {
-                showResult(view, result, VerificationBadge.Unverified)
-              }
-            case None =>
-              GUI_Thread.later {
-                AssistantDockable.setStatus("Could not parse extraction result")
+                AssistantDockable.setStatus("Error: " + ex.getMessage)
+                GUI.error_dialog(view, "Extract Lemma Error", ex.getMessage)
               }
           }
-        } catch {
-          case ex: Exception =>
-            GUI_Thread.later {
-              AssistantDockable.setStatus("Error: " + ex.getMessage)
-              GUI.error_dialog(view, "Extract Lemma Error", ex.getMessage)
-            }
         }
-      }
     }
   }
 

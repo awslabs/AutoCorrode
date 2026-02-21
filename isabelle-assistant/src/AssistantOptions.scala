@@ -20,166 +20,190 @@ import scala.collection.mutable.ListBuffer
   * parameters.
   */
 class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
-  private var regionCombo: JComboBox[String] = _
-  private var modelCombo: JComboBox[String] = _
-  private var crisCheckbox: JCheckBox = _
-  private var refreshButton: JButton = _
-  private var temperatureField: JTextField = _
-  private var maxTokensField: JTextField = _
-  private var maxRetriesField: JTextField = _
-  private var verifyTimeoutField: JTextField = _
-  private var useSledgehammerCheckbox: JCheckBox = _
-  private var verifySuggestionsCheckbox: JCheckBox = _
-  private var sledgehammerTimeoutField: JTextField = _
-  private var maxVerifyCandidatesField: JTextField = _
-  private var findTheoremsLimitField: JTextField = _
-  private var findTheoremsTimeoutField: JTextField = _
-  private var quickcheckTimeoutField: JTextField = _
-  private var nitpickTimeoutField: JTextField = _
-  private var traceTimeoutField: JTextField = _
-  private var traceDepthField: JTextField = _
-  private var maxToolIterationsField: JTextField = _
+  private var regionCombo: Option[JComboBox[String]] = None
+  private var modelCombo: Option[JComboBox[String]] = None
+  private var crisCheckbox: Option[JCheckBox] = None
+  private var refreshButton: Option[JButton] = None
+  private var temperatureField: Option[JTextField] = None
+  private var maxTokensField: Option[JTextField] = None
+  private var maxRetriesField: Option[JTextField] = None
+  private var verifyTimeoutField: Option[JTextField] = None
+  private var useSledgehammerCheckbox: Option[JCheckBox] = None
+  private var verifySuggestionsCheckbox: Option[JCheckBox] = None
+  private var sledgehammerTimeoutField: Option[JTextField] = None
+  private var maxVerifyCandidatesField: Option[JTextField] = None
+  private var findTheoremsLimitField: Option[JTextField] = None
+  private var findTheoremsTimeoutField: Option[JTextField] = None
+  private var quickcheckTimeoutField: Option[JTextField] = None
+  private var nitpickTimeoutField: Option[JTextField] = None
+  private var traceTimeoutField: Option[JTextField] = None
+  private var traceDepthField: Option[JTextField] = None
+  private var maxToolIterationsField: Option[JTextField] = None
+
+  private def requireUi[A](opt: Option[A], fieldName: String): A =
+    opt.getOrElse(
+      throw new IllegalStateException(
+        s"AssistantOptions UI field '$fieldName' accessed before initialization"
+      )
+    )
 
   override def _init(): Unit = {
     addSeparator("AWS Configuration")
 
-    regionCombo = new JComboBox(AssistantOptions.REGIONS)
-    regionCombo.setEditable(true)
-    regionCombo.setSelectedItem(AssistantOptions.getRegion)
-    addComponent("AWS Region:", regionCombo)
+    val region = new JComboBox(AssistantOptions.REGIONS)
+    region.setEditable(true)
+    region.setSelectedItem(AssistantOptions.getRegion)
+    regionCombo = Some(region)
+    addComponent("AWS Region:", region)
 
-    modelCombo = new JComboBox[String]()
+    val model = new JComboBox[String]()
+    modelCombo = Some(model)
     loadModelsFromCache()
-    addComponent("Model:", modelCombo)
+    addComponent("Model:", model)
 
-    refreshButton = new JButton("Refresh Models")
-    refreshButton.addActionListener(_ => refreshModelsAsync())
-    addComponent("", refreshButton)
+    val refresh = new JButton("Refresh Models")
+    refresh.addActionListener(_ => refreshModelsAsync())
+    refreshButton = Some(refresh)
+    addComponent("", refresh)
 
-    crisCheckbox = new JCheckBox(
+    val cris = new JCheckBox(
       "Use Cross-Region Inference (CRIS)",
       AssistantOptions.getUseCris
     )
-    crisCheckbox.setToolTipText(
+    cris.setToolTipText(
       "Prefix model ID with us./eu. for cross-region inference"
     )
-    addComponent("", crisCheckbox)
+    crisCheckbox = Some(cris)
+    addComponent("", cris)
 
     addSeparator("Model Parameters")
 
-    temperatureField =
-      new JTextField(AssistantOptions.getTemperature.toString, 10)
-    addComponent("Temperature (0.0-1.0):", temperatureField)
+    val temperature = new JTextField(AssistantOptions.getTemperature.toString, 10)
+    temperatureField = Some(temperature)
+    addComponent("Temperature (0.0-1.0):", temperature)
 
-    maxTokensField = new JTextField(AssistantOptions.getMaxTokens.toString, 10)
-    addComponent("Max Tokens:", maxTokensField)
+    val maxTokens = new JTextField(AssistantOptions.getMaxTokens.toString, 10)
+    maxTokensField = Some(maxTokens)
+    addComponent("Max Tokens:", maxTokens)
 
     val toolIterText = AssistantOptions.getMaxToolIterations match {
       case Some(n) => n.toString
       case None    => ""
     }
-    maxToolIterationsField = new JTextField(toolIterText, 10)
-    maxToolIterationsField.setToolTipText(
+    val maxToolIterations = new JTextField(toolIterText, 10)
+    maxToolIterations.setToolTipText(
       "Maximum tool-use iterations per LLM call. Leave empty or set to 0 for unlimited."
     )
-    addComponent("Max Tool Iterations:", maxToolIterationsField)
+    maxToolIterationsField = Some(maxToolIterations)
+    addComponent("Max Tool Iterations:", maxToolIterations)
 
     addSeparator("Verification (I/Q Integration)")
 
-    maxRetriesField =
+    val maxRetries =
       new JTextField(AssistantOptions.getMaxVerificationRetries.toString, 10)
-    maxRetriesField.setToolTipText(
+    maxRetries.setToolTipText(
       "Maximum LLM retry attempts when proof verification fails"
     )
-    addComponent("Max Retries:", maxRetriesField)
+    maxRetriesField = Some(maxRetries)
+    addComponent("Max Retries:", maxRetries)
 
-    verifyTimeoutField =
+    val verifyTimeout =
       new JTextField(AssistantOptions.getVerificationTimeout.toString, 10)
-    verifyTimeoutField.setToolTipText(
+    verifyTimeout.setToolTipText(
       "Timeout for proof verification in milliseconds"
     )
-    addComponent("Timeout (ms):", verifyTimeoutField)
+    verifyTimeoutField = Some(verifyTimeout)
+    addComponent("Timeout (ms):", verifyTimeout)
 
     addSeparator("Proof Suggestions")
 
-    verifySuggestionsCheckbox =
+    val verifySuggestions =
       new JCheckBox("Verify Suggestions", AssistantOptions.getVerifySuggestions)
-    verifySuggestionsCheckbox.setToolTipText(
+    verifySuggestions.setToolTipText(
       "Verify proof suggestions using I/Q before display"
     )
-    addComponent("", verifySuggestionsCheckbox)
+    verifySuggestionsCheckbox = Some(verifySuggestions)
+    addComponent("", verifySuggestions)
 
-    useSledgehammerCheckbox =
+    val useSledgehammer =
       new JCheckBox("Use Sledgehammer", AssistantOptions.getUseSledgehammer)
-    useSledgehammerCheckbox.setToolTipText(
+    useSledgehammer.setToolTipText(
       "Run sledgehammer in parallel with LLM suggestions"
     )
-    addComponent("", useSledgehammerCheckbox)
+    useSledgehammerCheckbox = Some(useSledgehammer)
+    addComponent("", useSledgehammer)
 
-    sledgehammerTimeoutField =
+    val sledgehammerTimeout =
       new JTextField(AssistantOptions.getSledgehammerTimeout.toString, 10)
-    sledgehammerTimeoutField.setToolTipText(
+    sledgehammerTimeout.setToolTipText(
       "Timeout for sledgehammer in milliseconds"
     )
-    addComponent("Sledgehammer Timeout (ms):", sledgehammerTimeoutField)
+    sledgehammerTimeoutField = Some(sledgehammerTimeout)
+    addComponent("Sledgehammer Timeout (ms):", sledgehammerTimeout)
 
-    maxVerifyCandidatesField =
+    val maxVerifyCandidates =
       new JTextField(AssistantOptions.getMaxVerifyCandidates.toString, 10)
-    maxVerifyCandidatesField.setToolTipText(
+    maxVerifyCandidates.setToolTipText(
       "Maximum number of suggestions to verify"
     )
-    addComponent("Max Verify Candidates:", maxVerifyCandidatesField)
+    maxVerifyCandidatesField = Some(maxVerifyCandidates)
+    addComponent("Max Verify Candidates:", maxVerifyCandidates)
 
-    findTheoremsLimitField =
+    val findTheoremsLimit =
       new JTextField(AssistantOptions.getFindTheoremsLimit.toString, 10)
-    findTheoremsLimitField.setToolTipText(
+    findTheoremsLimit.setToolTipText(
       "Maximum theorems to find for LLM context"
     )
-    addComponent("Find Theorems Limit:", findTheoremsLimitField)
+    findTheoremsLimitField = Some(findTheoremsLimit)
+    addComponent("Find Theorems Limit:", findTheoremsLimit)
 
-    findTheoremsTimeoutField =
+    val findTheoremsTimeout =
       new JTextField(AssistantOptions.getFindTheoremsTimeout.toString, 10)
-    findTheoremsTimeoutField.setToolTipText(
+    findTheoremsTimeout.setToolTipText(
       "Timeout for find_theorems in milliseconds"
     )
-    addComponent("Find Theorems Timeout (ms):", findTheoremsTimeoutField)
+    findTheoremsTimeoutField = Some(findTheoremsTimeout)
+    addComponent("Find Theorems Timeout (ms):", findTheoremsTimeout)
 
     addSeparator("Counterexample Search")
 
-    quickcheckTimeoutField =
+    val quickcheckTimeout =
       new JTextField(AssistantOptions.getQuickcheckTimeout.toString, 10)
-    quickcheckTimeoutField.setToolTipText(
+    quickcheckTimeout.setToolTipText(
       "Timeout for Quickcheck in milliseconds"
     )
-    addComponent("Quickcheck Timeout (ms):", quickcheckTimeoutField)
+    quickcheckTimeoutField = Some(quickcheckTimeout)
+    addComponent("Quickcheck Timeout (ms):", quickcheckTimeout)
 
-    nitpickTimeoutField =
+    val nitpickTimeout =
       new JTextField(AssistantOptions.getNitpickTimeout.toString, 10)
-    nitpickTimeoutField.setToolTipText(
+    nitpickTimeout.setToolTipText(
       "Timeout for Nitpick in milliseconds"
     )
-    addComponent("Nitpick Timeout (ms):", nitpickTimeoutField)
+    nitpickTimeoutField = Some(nitpickTimeout)
+    addComponent("Nitpick Timeout (ms):", nitpickTimeout)
 
     addSeparator("Simplifier Tracing")
 
-    traceTimeoutField =
-      new JTextField(AssistantOptions.getTraceTimeout.toString, 10)
-    traceTimeoutField.setToolTipText("Timeout for simp/auto tracing in seconds")
-    addComponent("Trace Timeout (s):", traceTimeoutField)
+    val traceTimeout = new JTextField(AssistantOptions.getTraceTimeout.toString, 10)
+    traceTimeout.setToolTipText("Timeout for simp/auto tracing in seconds")
+    traceTimeoutField = Some(traceTimeout)
+    addComponent("Trace Timeout (s):", traceTimeout)
 
-    traceDepthField =
-      new JTextField(AssistantOptions.getTraceDepth.toString, 10)
-    traceDepthField.setToolTipText("Maximum depth for simplifier trace")
-    addComponent("Trace Depth:", traceDepthField)
+    val traceDepth = new JTextField(AssistantOptions.getTraceDepth.toString, 10)
+    traceDepth.setToolTipText("Maximum depth for simplifier trace")
+    traceDepthField = Some(traceDepth)
+    addComponent("Trace Depth:", traceDepth)
 
   }
 
   private def populateModelCombo(models: Array[String], current: String): Unit = {
-    modelCombo.removeAllItems()
-    models.foreach(modelCombo.addItem)
-    if (current.nonEmpty && !models.contains(current)) modelCombo.addItem(current)
-    if (current.nonEmpty) modelCombo.setSelectedItem(current)
-    else if (models.nonEmpty) modelCombo.setSelectedIndex(0)
+    val combo = requireUi(modelCombo, "modelCombo")
+    combo.removeAllItems()
+    models.foreach(combo.addItem)
+    if (current.nonEmpty && !models.contains(current)) combo.addItem(current)
+    if (current.nonEmpty) combo.setSelectedItem(current)
+    else if (models.nonEmpty) combo.setSelectedIndex(0)
   }
 
   private def loadModelsFromCache(): Unit = {
@@ -189,19 +213,22 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
   }
 
   private def refreshModelsAsync(): Unit = {
+    val regionCombo = requireUi(this.regionCombo, "regionCombo")
+    val modelCombo = requireUi(this.modelCombo, "modelCombo")
+    val refresh = requireUi(refreshButton, "refreshButton")
     val region =
       Option(regionCombo.getSelectedItem).map(_.toString).getOrElse("us-east-1")
     val current =
       Option(modelCombo.getSelectedItem).map(_.toString).getOrElse("")
-    refreshButton.setEnabled(false)
-    refreshButton.setText("Refreshing...")
+    refresh.setEnabled(false)
+    refresh.setText("Refreshing...")
 
     new SwingWorker[Array[String], Void] {
       override def doInBackground(): Array[String] =
         BedrockModels.refreshModels(region)
       override def done(): Unit = {
-        refreshButton.setEnabled(true)
-        refreshButton.setText("Refresh Models")
+        refresh.setEnabled(true)
+        refresh.setText("Refresh Models")
         try {
           val models = get()
           populateModelCombo(models, current)
@@ -228,6 +255,46 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
   }
 
   override def _save(): Unit = {
+    val (
+      regionCombo,
+      modelCombo,
+      crisCheckbox,
+      temperatureField,
+      maxTokensField,
+      maxToolIterationsField,
+      maxRetriesField,
+      verifyTimeoutField,
+      verifySuggestionsCheckbox,
+      useSledgehammerCheckbox,
+      sledgehammerTimeoutField,
+      quickcheckTimeoutField,
+      nitpickTimeoutField,
+      maxVerifyCandidatesField,
+      findTheoremsLimitField,
+      findTheoremsTimeoutField,
+      traceTimeoutField,
+      traceDepthField
+    ) = (
+      requireUi(this.regionCombo, "regionCombo"),
+      requireUi(this.modelCombo, "modelCombo"),
+      requireUi(this.crisCheckbox, "crisCheckbox"),
+      requireUi(this.temperatureField, "temperatureField"),
+      requireUi(this.maxTokensField, "maxTokensField"),
+      requireUi(this.maxToolIterationsField, "maxToolIterationsField"),
+      requireUi(this.maxRetriesField, "maxRetriesField"),
+      requireUi(this.verifyTimeoutField, "verifyTimeoutField"),
+      requireUi(this.verifySuggestionsCheckbox, "verifySuggestionsCheckbox"),
+      requireUi(this.useSledgehammerCheckbox, "useSledgehammerCheckbox"),
+      requireUi(this.sledgehammerTimeoutField, "sledgehammerTimeoutField"),
+      requireUi(this.quickcheckTimeoutField, "quickcheckTimeoutField"),
+      requireUi(this.nitpickTimeoutField, "nitpickTimeoutField"),
+      requireUi(this.maxVerifyCandidatesField, "maxVerifyCandidatesField"),
+      requireUi(this.findTheoremsLimitField, "findTheoremsLimitField"),
+      requireUi(this.findTheoremsTimeoutField, "findTheoremsTimeoutField"),
+      requireUi(this.traceTimeoutField, "traceTimeoutField"),
+      requireUi(this.traceDepthField, "traceDepthField")
+    )
+
     val warnings = ListBuffer.empty[String]
     def warn(msg: String): Unit = warnings += msg
 

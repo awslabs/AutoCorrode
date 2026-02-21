@@ -16,24 +16,24 @@ object TraceSimplifierAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
 
-    val goalState = GoalExtractor.getGoalState(buffer, offset)
-    if (goalState.isEmpty) {
-      GUI.warning_dialog(view, "Isabelle Assistant", "No goal at cursor")
-    } else {
-      val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
-      if (commandOpt.isEmpty || !IQAvailable.isAvailable) {
+    (GoalExtractor.getGoalState(buffer, offset),
+     IQIntegration.getCommandAtOffset(buffer, offset),
+     IQAvailable.isAvailable) match {
+      case (None, _, _) =>
+        GUI.warning_dialog(view, "Isabelle Assistant", "No goal at cursor")
+      case (_, _, false) =>
+        GUI.warning_dialog(view, "Isabelle Assistant", "I/Q required for tracing")
+      case (Some(goal), Some(command), true) =>
+        AssistantDockable.setStatus(s"Running $method with trace...")
+        GUI_Thread.later {
+          runSimpTrace(view, command, goal, method)
+        }
+      case (Some(_), None, true) =>
         GUI.warning_dialog(
           view,
           "Isabelle Assistant",
-          "I/Q required for tracing"
+          "No command at cursor"
         )
-      } else {
-        AssistantDockable.setStatus(s"Running $method with trace...")
-
-        GUI_Thread.later {
-          runSimpTrace(view, commandOpt.get, goalState.get, method)
-        }
-      }
     }
   }
 

@@ -95,10 +95,12 @@ object SuggestAction {
                     s"[Assistant] Collected ${candidates.length} candidates"
                   )
 
-                  val verified = if (canVerify) {
-                    Output.writeln(s"[Assistant] Starting verification...")
-                    verifyCandidates(view, commandObj.get, candidates)
-                  } else candidates
+                  val verified = commandObj match {
+                    case Some(command) if canVerify =>
+                      Output.writeln(s"[Assistant] Starting verification...")
+                      verifyCandidates(view, command, candidates)
+                    case _ => candidates
+                  }
 
                   Output.writeln(
                     s"[Assistant] After verification: ${verified.length} candidates"
@@ -159,13 +161,15 @@ object SuggestAction {
     startLLMTask(commandText, goalState, contextInfo, results, latch)
 
     // Start Sledgehammer task if enabled
-    if (useSledgehammer && commandObj.isDefined) {
-      startSledgehammerTask(
-        view,
-        commandObj.get,
-        results,
-        latch,
-        sledgeCompleted
+    if (useSledgehammer) {
+      commandObj.foreach(command =>
+        startSledgehammerTask(
+          view,
+          command,
+          results,
+          latch,
+          sledgeCompleted
+        )
       )
     }
 
@@ -198,8 +202,8 @@ object SuggestAction {
       offset: Int
   ): TargetParser.Target = {
     val textArea = view.getTextArea
-    val selection = textArea.getSelectedText
-    if (selection != null && selection.trim.nonEmpty) {
+    val selection = Option(textArea.getSelectedText).filter(_.trim.nonEmpty)
+    if (selection.isDefined) {
       TargetParser.CurrentSelection
     } else {
       // Use cursor target for now - theory name resolution can be improved later
@@ -214,7 +218,8 @@ object SuggestAction {
       useIQ: Boolean
   ): String = {
     if (!useIQ) ""
-    else {
+    else commandObj match {
+      case Some(command) =>
       // Run context facts and relevant theorems in parallel
       val factsLatch = new java.util.concurrent.CountDownLatch(1)
       val theoremsLatch = new java.util.concurrent.CountDownLatch(1)
@@ -222,11 +227,11 @@ object SuggestAction {
       @volatile var relevantTheorems = ""
 
       Isabelle_Thread.fork(name = "suggest-context") {
-        contextFacts = getContextFacts(view, commandObj.get)
+        contextFacts = getContextFacts(view, command)
         factsLatch.countDown()
       }
       Isabelle_Thread.fork(name = "suggest-theorems") {
-        relevantTheorems = findRelevantTheorems(view, commandObj.get, goalState)
+        relevantTheorems = findRelevantTheorems(view, command, goalState)
         theoremsLatch.countDown()
       }
 
@@ -240,6 +245,7 @@ object SuggestAction {
       )
 
       List(contextFacts, relevantTheorems).filter(_.nonEmpty).mkString("\n\n")
+      case None => ""
     }
   }
 

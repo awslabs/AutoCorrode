@@ -6,6 +6,7 @@ package isabelle.assistant
 import isabelle._
 import org.gjt.sp.jedit.{jEdit, View}
 import java.util.Locale
+import scala.util.control.NonFatal
 
 /**
  * Capability-based permission system for LLM tool use.
@@ -64,7 +65,7 @@ object ToolPermissions {
   case object Allowed extends PermissionDecision
   case object Denied extends PermissionDecision
   case class NeedPrompt(
-      toolName: String,
+      toolId: ToolId,
       resource: Option[String],
       details: Option[String]
   ) extends PermissionDecision
@@ -217,7 +218,9 @@ object ToolPermissions {
 
   private def safeLog(message: String): Unit = {
     try Output.writeln(message)
-    catch { case _: Throwable => () }
+    catch {
+      case NonFatal(_) | _: LinkageError => ()
+    }
   }
 
   // --- Tool Name Formatting ---
@@ -350,12 +353,12 @@ object ToolPermissions {
         if (isSessionAllowed(toolId)) Allowed
         else
           NeedPrompt(
-            toolId.wireName,
+            toolId,
             extractResource(toolId, args),
             summarizeArgs(args)
           )
       case AskAlways =>
-        NeedPrompt(toolId.wireName, extractResource(toolId, args), summarizeArgs(args))
+        NeedPrompt(toolId, extractResource(toolId, args), summarizeArgs(args))
     }
   }
 

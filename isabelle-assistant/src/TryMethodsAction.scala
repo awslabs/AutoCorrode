@@ -17,32 +17,38 @@ object TryMethodsAction {
     val offset = view.getTextArea.getCaretPosition
     val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
 
-    if (commandOpt.isEmpty) {
-      GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
-    } else {
-      AssistantDockable.setStatus("Trying methods...")
-      val timeout = AssistantOptions.getVerificationTimeout
-      val command = commandOpt.get
+    commandOpt match {
+      case None =>
+        GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
+      case Some(command) =>
+        AssistantDockable.setStatus("Trying methods...")
+        val timeout = AssistantOptions.getVerificationTimeout
 
-      val results = new ConcurrentHashMap[String, IQIntegration.VerificationResult]()
-      val latch = new CountDownLatch(methods.length)
+        val results =
+          new ConcurrentHashMap[String, IQIntegration.VerificationResult]()
+        val latch = new CountDownLatch(methods.length)
 
-      for (method <- methods) {
-        GUI_Thread.later {
-          IQIntegration.verifyProofAsync(view, command, method, timeout, { result =>
-            results.put(method, result)
-            latch.countDown()
-          })
+        for (method <- methods) {
+          GUI_Thread.later {
+            IQIntegration.verifyProofAsync(
+              view,
+              command,
+              method,
+              timeout, { result =>
+                results.put(method, result)
+                latch.countDown()
+              }
+            )
+          }
         }
-      }
 
-      Isabelle_Thread.fork(name = "try-methods-wait") {
-        latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
-        GUI_Thread.later {
-          displayResults(view, methods.map(m => (m, Option(results.get(m)))))
-          AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+        Isabelle_Thread.fork(name = "try-methods-wait") {
+          latch.await(timeout + 2000, TimeUnit.MILLISECONDS)
+          GUI_Thread.later {
+            displayResults(view, methods.map(m => (m, Option(results.get(m)))))
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+          }
         }
-      }
     }
   }
 

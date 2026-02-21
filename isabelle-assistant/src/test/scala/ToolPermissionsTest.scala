@@ -105,7 +105,7 @@ class ToolPermissionsTest
       "edit_theory",
       Map.empty[String, ResponseParser.ToolValue]
     )
-    decision shouldBe ToolPermissions.NeedPrompt("edit_theory", None, None)
+    decision shouldBe ToolPermissions.NeedPrompt(ToolId.EditTheory, None, None)
   }
 
   test("prompt details should include a sanitized argument summary") {
@@ -118,7 +118,7 @@ class ToolPermissionsTest
       )
     )
     decision match {
-      case ToolPermissions.NeedPrompt("edit_theory", Some("Scratch"), Some(details)) =>
+      case ToolPermissions.NeedPrompt(ToolId.EditTheory, Some("Scratch"), Some(details)) =>
         details should include("operation=insert")
         details should include("theory=Scratch")
       case other =>
@@ -135,7 +135,7 @@ class ToolPermissionsTest
       )
     )
     decision match {
-      case ToolPermissions.NeedPrompt("web_search", _, Some(details)) =>
+      case ToolPermissions.NeedPrompt(ToolId.WebSearch, _, Some(details)) =>
         details should include("auth_token=***")
         details should not include "super-secret-token"
       case other =>
@@ -264,7 +264,7 @@ class ToolPermissionsTest
     ToolPermissions.withPromptChoicesForTest((_, _, _, _) => Some("Allow Once")) {
       ToolPermissions.promptUser("verify_proof", None, None, null) shouldBe ToolPermissions.Allowed
       ToolPermissions.checkPermission("verify_proof", Map.empty[String, ResponseParser.ToolValue]) shouldBe
-        ToolPermissions.NeedPrompt("verify_proof", None, None)
+        ToolPermissions.NeedPrompt(ToolId.VerifyProof, None, None)
     }
   }
 
@@ -272,7 +272,7 @@ class ToolPermissionsTest
     ToolPermissions.withPromptChoicesForTest((_, _, _, _) => Some("Allow Once")) {
       ToolPermissions.promptUser("edit_theory", None, None, null) shouldBe ToolPermissions.Allowed
       ToolPermissions.checkPermission("edit_theory", Map.empty[String, ResponseParser.ToolValue]) shouldBe
-        ToolPermissions.NeedPrompt("edit_theory", None, None)
+        ToolPermissions.NeedPrompt(ToolId.EditTheory, None, None)
     }
   }
 

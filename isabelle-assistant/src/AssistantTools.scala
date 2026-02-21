@@ -9,6 +9,7 @@ import org.gjt.sp.jedit.View
 import scala.jdk.CollectionConverters._
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import java.util.Locale
+import scala.util.control.NonFatal
 import software.amazon.awssdk.thirdparty.jackson.core.JsonGenerator
 
 /** Tool definitions and execution for LLM tool use (Anthropic function
@@ -639,8 +640,9 @@ object AssistantTools {
         val name = toolId.wireName
         safeLog(s"[Permissions] Tool '$name' denied by policy")
         PermissionDenied(s"Permission denied: tool '$name' is not allowed.")
-      case ToolPermissions.NeedPrompt(toolName, resource, details) =>
-        ToolPermissions.promptUser(toolName, resource, details, view) match {
+      case ToolPermissions.NeedPrompt(promptToolId, resource, details) =>
+        val toolName = promptToolId.wireName
+        ToolPermissions.promptUser(promptToolId, resource, details, view) match {
           case ToolPermissions.Allowed =>
             executeToolResult(toolId, args, view)
           case ToolPermissions.Denied =>
@@ -738,7 +740,29 @@ object AssistantTools {
 
   private def safeLog(message: String): Unit = {
     try Output.writeln(message)
-    catch { case _: Throwable => () }
+    catch {
+      case NonFatal(_) | _: LinkageError => ()
+    }
+  }
+
+  private def currentCommandAtCursor(view: View): Either[String, Command] = {
+    val timeoutMs =
+      AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC * 1000L
+    try {
+      GUIThreadUtil
+        .awaitOnGUIThread[Option[Command]](timeoutMs) {
+          IQIntegration.getCommandAtOffset(
+            view.getBuffer,
+            view.getTextArea.getCaretPosition
+          )
+        }
+        .toRight("Error: operation timed out (GUI thread busy)")
+        .flatMap(_.toRight("No Isabelle command at cursor position."))
+    } catch {
+      case ex: Exception =>
+        ErrorHandler.logSilentError("AssistantTools", ex)
+        Left("Error: failed to access command at cursor")
+    }
   }
 
   /** Execute a tool by name. Returns the result as a string. Called from the
@@ -895,31 +919,10 @@ object AssistantTools {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     if (pattern.isEmpty) "Error: pattern required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      // Read buffer/offset on GUI thread
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          val buffer = view.getBuffer
-          val offset = view.getTextArea.getCaretPosition
-          commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val max = math.min(
             AssistantConstants.MAX_FIND_THEOREMS_RESULTS,
             math.max(1, intArg(args, "max_results", 20))
@@ -955,7 +958,6 @@ object AssistantTools {
             "Error: find_theorems completed without a result."
           else result
       }
-    }
   }
 
   private def execVerifyProof(
@@ -965,31 +967,10 @@ object AssistantTools {
     val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
     if (proof.isEmpty) "Error: proof required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          commandOpt = IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val timeout = AssistantOptions.getVerificationTimeout
           val latch = new CountDownLatch(1)
           @volatile var result = ""
@@ -1016,36 +997,14 @@ object AssistantTools {
             "Error: verification completed without a result."
           else result
       }
-    }
   }
 
   private def execRunSledgehammer(view: View): String = {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          commandOpt = IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val timeout = AssistantOptions.getSledgehammerTimeout
           val latch = new CountDownLatch(1)
           @volatile var result = ""
@@ -1071,36 +1030,14 @@ object AssistantTools {
             "Error: sledgehammer completed without a result."
           else result
       }
-    }
   }
 
   private def execRunNitpick(view: View): String = {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          commandOpt = IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val timeout = AssistantOptions.getNitpickTimeout
           val latch = new CountDownLatch(1)
           @volatile var result = ""
@@ -1122,36 +1059,14 @@ object AssistantTools {
             "Error: nitpick completed without a result."
           else result
       }
-    }
   }
 
   private def execRunQuickcheck(view: View): String = {
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          commandOpt = IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val timeout = AssistantOptions.getQuickcheckTimeout
           val latch = new CountDownLatch(1)
           @volatile var result = ""
@@ -1173,7 +1088,6 @@ object AssistantTools {
             "Error: quickcheck completed without a result."
           else result
       }
-    }
   }
 
   private def execGetType(view: View): String = {
@@ -1321,31 +1235,10 @@ object AssistantTools {
     else {
       val nameList = names.split("\\s+").toList.filter(_.nonEmpty)
       if (nameList.isEmpty) "Error: no valid names provided"
-      else {
-        val cmdLatch = new CountDownLatch(1)
-        @volatile var commandOpt: Option[Command] = None
-        GUI_Thread.later {
-          try {
-            commandOpt = IQIntegration.getCommandAtOffset(
-              view.getBuffer,
-              view.getTextArea.getCaretPosition
-            )
-          } catch {
-            case ex: Exception =>
-              ErrorHandler.logSilentError("AssistantTools", ex)
-          }
-          cmdLatch.countDown()
-        }
-        if (
-          !cmdLatch.await(
-            AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-            TimeUnit.SECONDS
-          )
-        ) return "Error: operation timed out (GUI thread busy)"
-
-        commandOpt match {
-          case None          => "No Isabelle command at cursor position."
-          case Some(command) =>
+      else
+        currentCommandAtCursor(view) match {
+          case Left(err) => err
+          case Right(command) =>
             ContextFetcher
               .fetchDefinitionsForNames(
                 view,
@@ -1357,7 +1250,6 @@ object AssistantTools {
                 s"No definitions found for: ${nameList.mkString(", ")}"
               )
         }
-      }
     }
   }
 
@@ -1368,31 +1260,10 @@ object AssistantTools {
     val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
     if (proof.isEmpty) "Error: proof required"
     else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          commandOpt = IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val timeout = AssistantOptions.getVerificationTimeout
           val latch = new CountDownLatch(1)
           @volatile var result = ""
@@ -1406,7 +1277,11 @@ object AssistantTools {
                 case Right(stepResult) =>
                   val status =
                     if (stepResult.complete) "[COMPLETE]"
-                    else s"[${stepResult.numSubgoals} subgoals]"
+                    else
+                      stepResult.numSubgoals match {
+                        case Some(n) => s"[$n subgoals]"
+                        case None    => "[subgoal count unknown]"
+                      }
                   result = s"$status\n${stepResult.stateText}"
                   latch.countDown()
                 case Left(err) =>
@@ -1421,7 +1296,6 @@ object AssistantTools {
             "Error: step execution completed without a result."
           else result
       }
-    }
   }
 
   private def execTraceSimplifier(
@@ -1432,31 +1306,10 @@ object AssistantTools {
     val effectiveMethod =
       if (method.isEmpty || method == "simp") "simp" else method
     if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val cmdLatch = new CountDownLatch(1)
-      @volatile var commandOpt: Option[Command] = None
-      GUI_Thread.later {
-        try {
-          commandOpt = IQIntegration.getCommandAtOffset(
-            view.getBuffer,
-            view.getTextArea.getCaretPosition
-          )
-        } catch {
-          case ex: Exception =>
-            ErrorHandler.logSilentError("AssistantTools", ex)
-        }
-        cmdLatch.countDown()
-      }
-      if (
-        !cmdLatch.await(
-          AssistantConstants.GUI_DISPATCH_TIMEOUT_SEC,
-          TimeUnit.SECONDS
-        )
-      ) return "Error: operation timed out (GUI thread busy)"
-
-      commandOpt match {
-        case None          => "No Isabelle command at cursor position."
-        case Some(command) =>
+    else
+      currentCommandAtCursor(view) match {
+        case Left(err) => err
+        case Right(command) =>
           val timeout = AssistantOptions.getTraceTimeout
           val depth = AssistantOptions.getTraceDepth
           val queryTimeoutMs =
@@ -1481,7 +1334,6 @@ object AssistantTools {
             "Error: simplifier trace completed without a result."
           else result
       }
-    }
   }
 
   private def execGetProofBlock(view: View): String = {
@@ -2586,10 +2438,17 @@ object AssistantTools {
       case Some(ResponseParser.DecimalValue(d)) => d.toInt
       case Some(ResponseParser.IntValue(i))     => i
       case Some(ResponseParser.StringValue(s))  =>
-        try { s.toInt }
-        catch { case _: NumberFormatException => default }
+        scala.util.Try(s.toInt).getOrElse(
+          throw new IllegalArgumentException(
+            s"Parameter '$key' must be an integer, got: '$s'"
+          )
+        )
       case Some(ResponseParser.BooleanValue(_)) |
-          Some(ResponseParser.JsonValue(_)) | Some(ResponseParser.NullValue) =>
+          Some(ResponseParser.JsonValue(_)) =>
+        throw new IllegalArgumentException(
+          s"Parameter '$key' must be an integer"
+        )
+      case Some(ResponseParser.NullValue) =>
         default
       case _ => default
     }

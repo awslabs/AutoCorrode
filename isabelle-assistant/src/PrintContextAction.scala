@@ -49,19 +49,20 @@ object PrintContextAction {
     val offset = view.getTextArea.getCaretPosition
     val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
 
-    if (commandOpt.isEmpty) {
-      GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
-    } else {
-      AssistantDockable.setStatus("Getting context...")
+    commandOpt match {
+      case None =>
+        GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
+      case Some(command) =>
+        AssistantDockable.setStatus("Getting context...")
 
-      GUI_Thread.later {
-        runPrintContextAsync(view, commandOpt.get, 5000, { result =>
-          GUI_Thread.later {
-            displayResult(result)
-            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-          }
-        })
-      }
+        GUI_Thread.later {
+          runPrintContextAsync(view, command, 5000, { result =>
+            GUI_Thread.later {
+              displayResult(result)
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            }
+          })
+        }
     }
   }
 
