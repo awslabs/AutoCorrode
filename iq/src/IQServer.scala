@@ -1055,6 +1055,30 @@ class IQServer(
    * @return Either error message or result data
    */
   private def createToolsListResult(): Either[String, Map[String, Any]] = {
+    val commandSelectionDescription =
+      "How to select the command context. " +
+        "'current': use the command at the active caret in the active jEdit view. " +
+        "'file_offset': requires 'path' and 'offset'; resolves the command containing the normalized offset. " +
+        "'file_pattern': requires 'path' and 'pattern'; resolves the command containing the last character of the unique literal substring match."
+    val commandSelectionPathDescription =
+      "File path used with 'file_offset' and 'file_pattern'. " +
+        "Absolute paths are recommended. Relative/partial paths are auto-completed when possible. " +
+        "Path must resolve to a readable file tracked by Isabelle/jEdit and allowed by read-root policy."
+    val commandSelectionOffsetDescription =
+      "0-based character offset used with 'file_offset'. " +
+        "If out of bounds, it is clamped to valid file bounds (or 0 for empty content). " +
+        "The selected command is the one containing the normalized offset."
+    val commandSelectionPatternDescription =
+      "Literal plain-text substring used with 'file_pattern'. " +
+        "Trimmed before matching; matching is case-sensitive substring search (not regex). " +
+        "Must match exactly once in the file. " +
+        "The selected command is the one containing the last character of that match."
+    val exploreSelectionDescription =
+      "How to choose the anchor command for exploration. " +
+        "The query is applied AFTER the resolved anchor command. " +
+        "'current': anchor is command at active caret. " +
+        "'file_offset': requires 'path' and 'offset'. " +
+        "'file_pattern': requires 'path' and 'pattern'."
     val tools = List(
       Map(
         "name" -> "list_files",
@@ -1080,57 +1104,65 @@ class IQServer(
       ),
       Map(
         "name" -> "get_command_info",
-        "description" -> "Get status of commands (e.g. definitions or proof steps) in an Isabelle theory file. Includes detailed information about errors, warnings, and intermediate proof states, and timing.",
+        "description" -> "Get command status/details (errors, warnings, proof state, timing) for a current command, line range, or offset range.",
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
             "mode" -> Map(
               "type" -> "string",
-              "description" -> "Command mode. 'current' queries the command at cursor, 'line' queries a line range, and 'offset' queries a character-offset range.",
+              "description" -> ("Selection mode. " +
+                "'current': command at active caret (optional 'path' must match current buffer). " +
+                "'line': requires 'path', 'start_line', and 'end_line'. " +
+                "'offset': requires 'path', 'start_offset', and 'end_offset'."),
               "enum" -> List("current", "line", "offset")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "For 'line' and 'current' mode: Path to theory file. For 'current' mode, can be omitted; if present, must match the currently open file."
+              "description" -> ("Path to target theory file. Required for mode='line' and mode='offset'. " +
+                "For mode='current', optional; if provided, it must resolve to the currently active buffer.")
             ),
             "start_line" -> Map(
               "type" -> "integer",
-              "description" -> "Only for 'line' mode: Start line number (1-based, inclusive; default 1). Negative numbers count from the end of the file (-1 = last line)."
+              "description" -> ("Required for mode='line': start line (1-based, inclusive). " +
+                "Negative values count from file end (-1 is last line).")
             ),
             "end_line" -> Map(
               "type" -> "integer",
-              "description" -> "Only for 'line' mode: End line number (1-based, inclusive; default -1). Negative numbers count from the end of the file (-1 = last line)."
+              "description" -> ("Required for mode='line': end line (1-based, inclusive). " +
+                "Negative values count from file end (-1 is last line).")
             ),
             "start_offset" -> Map(
               "type" -> "integer",
-              "description" -> "Only for 'offset' mode: Start character offset (0-based, inclusive)."
+              "description" -> "Required for mode='offset': start character offset (0-based, inclusive)."
             ),
             "end_offset" -> Map(
               "type" -> "integer",
-              "description" -> "Only for 'offset' mode: End character offset (0-based, exclusive)."
+              "description" -> "Required for mode='offset': end character offset (0-based, exclusive)."
             ),
             "xml_result_file" -> Map(
               "type" -> "string",
-              "description" -> "Optional file path to dump full markup (e.g. references) for the results. Must be within allowed mutation roots."
+              "description" -> ("Optional absolute output path for full XML markup dump. " +
+                "Must be within configured mutation roots.")
             ),
             "wait_until_processed" -> Map(
               "type" -> "boolean",
-              "description" -> "Wait until all commands are processed successfully OR one fails before returning results (default: false)"
+              "description" -> "If true, poll until selected commands are processed/fail/cancel or timeout. Default: false."
             ),
             "timeout" -> Map(
               "type" -> "integer",
-              "description" -> "Timeout in milliseconds for wait_until_processed (default: 5000)"
+              "description" -> "Overall polling timeout in milliseconds when wait_until_processed=true. Default: 5000."
             ),
             "timeout_per_command" -> Map(
               "type" -> "integer",
-              "description" -> "Maximum time in milliseconds to wait for individual commands to complete (default: 5000)"
+              "description" -> "Per-command running grace period in milliseconds when wait_until_processed=true. Default: 5000."
             ),
             "include_results" -> Map(
               "type" -> "boolean",
-              "description" -> "Include command results in the response (default: false). When false, results are written to a temporary file and the filename is returned."
+              "description" -> ("If true, include full `results_text` in response. " +
+                "If false (default), omit `results_text` and return `full_results_file` path to a temp JSON with full data.")
             )
           ),
-          "required" -> List("scope"),
+          "required" -> List("mode"),
           "additionalProperties" -> false
         )
       ),
@@ -1142,34 +1174,34 @@ class IQServer(
           "properties" -> Map(
             "path" -> Map(
               "type" -> "string",
-              "description" -> "Path to the theory file"
+              "description" -> "Path to the target theory file."
             ),
             "include_errors" -> Map(
               "type" -> "boolean",
-              "description" -> "Include detailed error information (default: true)"
+              "description" -> "Include detailed error entries. Default: true."
             ),
             "include_warnings" -> Map(
               "type" -> "boolean",
-              "description" -> "Include warning information (default: false)"
+              "description" -> "Include detailed warning entries. Default: false."
             ),
             "timing_threshold_ms" -> Map(
               "type" -> "number",
-              "description" -> "Only include detailed timing information for commands that took longer than this threshold in milliseconds (default: 3000)"
+              "description" -> "Only include per-command timing entries at or above this threshold (ms). Default: 3000."
             ),
             "wait_until_processed" -> Map(
               "type" -> "boolean",
-              "description" -> "Wait for the theory to be fully processed before returning results. Only applies to theory files. (default: false)"
+              "description" -> "If true, wait for theory processing before collecting document status. Default: false."
             ),
             "timeout" -> Map(
               "type" -> "number",
-              "description" -> "If set, timeout in milliseconds for wait_until_processed. If unset, no timeout. Default: no timeout."
+              "description" -> "Optional timeout (ms) used when wait_until_processed=true."
             ),
             "timeout_per_command" -> Map(
               "type" -> "integer",
-              "description" -> "Maximum time in milliseconds to wait for individual commands to complete (default: 5000)"
+              "description" -> "Per-command running grace period in milliseconds when wait_until_processed=true. Default: 5000."
             )
           ),
-          "required" -> List("path", "command", "new_str"),
+          "required" -> List("path"),
           "additionalProperties" -> false
         )
       ),
@@ -1211,28 +1243,30 @@ class IQServer(
           "properties" -> Map(
             "path" -> Map(
               "type" -> "string",
-              "description" -> "Path to the theory file to read"
+              "description" -> "Path to the theory file to read."
             ),
             "mode" -> Map(
               "type" -> "string",
-              "description" -> "Mode to read the file in. 'Line' mode reads specific lines, 'Search' mode searches for a pattern.",
+              "description" -> ("Read mode. " +
+                "'Line': return formatted lines for the requested line range (defaults to full file). " +
+                "'Search': return matching lines with optional surrounding context; requires 'pattern'."),
               "enum" -> List("Line", "Search")
             ),
             "start_line" -> Map(
               "type" -> "integer",
-              "description" -> "Start line number (1-based, inclusive). Negative numbers count from the end of the file (-1 = last line). Used in 'Line' mode."
+              "description" -> "Line mode only: start line (1-based, inclusive). Negative values count from end (-1 is last line). Default: 1."
             ),
             "end_line" -> Map(
               "type" -> "integer",
-              "description" -> "End line number (1-based, inclusive). Negative numbers count from the end of the file (-1 = last line). Used in 'Line' mode."
+              "description" -> "Line mode only: end line (1-based, inclusive). Negative values count from end (-1 is last line). Default: -1."
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Pattern to search for in the file. Used in 'Search' mode."
+              "description" -> "Search mode only: non-empty literal substring to match in lines (case-insensitive containment)."
             ),
             "context_lines" -> Map(
               "type" -> "integer",
-              "description" -> "Number of context lines to include around matching lines. Used in 'Search' mode."
+              "description" -> "Search mode only: number of surrounding context lines per match. Default: 0. Negative values are treated as 0."
             )
           ),
           "required" -> List("path", "mode")
@@ -1246,51 +1280,54 @@ class IQServer(
           "properties" -> Map(
             "command" -> Map(
               "type" -> "string",
-              "description" -> "The command to run. Allowed options are: 'str_replace', 'insert', 'line'",
+              "description" -> ("Edit operation. " +
+                "'str_replace': requires 'old_str' and 'new_str'. " +
+                "'insert': requires 'insert_line' and 'new_str'. " +
+                "'line': requires 'start_line', 'end_line', and 'new_str'."),
               "enum" -> List("str_replace", "insert", "line")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "For all commands. Path to the theory file to modify. Must be open in Isabelle/jEdit."
+              "description" -> "Target theory file path. Must resolve inside mutation roots and already be open in Isabelle/jEdit."
             ),
             "new_str" -> Map(
               "type" -> "string",
-              "description" -> "For all commands. The new string to write."
+              "description" -> "Replacement/inserted text. Required by all edit operations."
             ),
             "old_str" -> Map(
               "type" -> "string",
-              "description" -> "For command 'str_replace'. String to replace. Must be unique."
+              "description" -> "str_replace only: literal text to replace. Must occur exactly once."
             ),
             "insert_line" -> Map(
               "type" -> "integer",
-              "description" -> "For command 'insert': Line number (1-based, inclusive) after which to insert. Negative numbers count from the end of the file (-1 = last line)."
+              "description" -> "insert only: insert after this line (1-based). Negative values count from end (-1 is last line)."
             ),
             "start_line" -> Map(
               "type" -> "integer",
-              "description" -> "For command 'line': Line number (1-based, inclusive) to start insertion. Negative numbers count from the end of the file (-1 = last line)."
+              "description" -> "line only: start of replaced line range (1-based, inclusive). Negative values count from end."
             ),
             "end_line" -> Map(
               "type" -> "integer",
-              "description" -> "For command 'line': End line number (1-based, inclusive). Negative numbers count from the end of the file (-1 = last line)."
+              "description" -> "line only: end of replaced line range (1-based, inclusive). Negative values count from end."
             ),
             "xml_result_file" -> Map(
               "type" -> "string",
-              "description" -> "For all commands. Optional file path to dump full XML results for new commands. Must be an absolute path within allowed mutation roots."
+              "description" -> "Optional absolute output path for XML results of affected commands. Must be inside mutation roots."
             ),
             "wait_until_processed" -> Map(
               "type" -> "boolean",
-              "description" -> "For all commands. Wait until commands are processed before returning (default: true)"
+              "description" -> "If true, wait for affected commands to process before returning. Default: true."
             ),
             "timeout" -> Map(
               "type" -> "integer",
-              "description" -> "For all commands. Timeout in milliseconds for wait_until_processed (default: 5000)"
+              "description" -> "Overall wait timeout in milliseconds when wait_until_processed=true. Default: 2500."
             ),
             "timeout_per_command" -> Map(
               "type" -> "integer",
-              "description" -> "Maximum time in milliseconds to wait for individual commands to complete (default: 5000)"
+              "description" -> "Per-command running grace period in milliseconds when wait_until_processed=true. Default: 5000."
             )
           ),
-          "required" -> List("path"),
+          "required" -> List("path", "command"),
           "additionalProperties" -> false
         )
       ),
@@ -1302,20 +1339,20 @@ class IQServer(
           "properties" -> Map(
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> commandSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+              "description" -> commandSelectionPathDescription
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
+              "description" -> commandSelectionPatternDescription
             )
           ),
           "required" -> List("command_selection"),
@@ -1330,20 +1367,20 @@ class IQServer(
           "properties" -> Map(
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> commandSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+              "description" -> commandSelectionPathDescription
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
+              "description" -> commandSelectionPatternDescription
             )
           ),
           "required" -> List("command_selection"),
@@ -1377,20 +1414,20 @@ class IQServer(
           "properties" -> Map(
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> commandSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+              "description" -> commandSelectionPathDescription
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
+              "description" -> commandSelectionPatternDescription
             )
           ),
           "required" -> List("command_selection"),
@@ -1410,20 +1447,21 @@ class IQServer(
             ),
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Selection mode for scope='selection'. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> commandSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "Path to theory file. Required for scope='file'. Used for selection modes 'file_offset' and 'file_pattern'."
+              "description" -> ("For scope='file': required target file path to scan. " +
+                "For scope='selection': required when command_selection is 'file_offset' or 'file_pattern'.")
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for command_selection='file_offset'."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for command_selection='file_pattern'."
+              "description" -> commandSelectionPatternDescription
             ),
             "max_results" -> Map(
               "type" -> "integer",
@@ -1434,6 +1472,7 @@ class IQServer(
               "description" -> "Optional minimum proof block text length for scope='file' (default: 8)."
             )
           ),
+          "required" -> List("scope"),
           "additionalProperties" -> false
         )
       ),
@@ -1445,20 +1484,20 @@ class IQServer(
           "properties" -> Map(
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> commandSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+              "description" -> commandSelectionPathDescription
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
+              "description" -> commandSelectionPatternDescription
             )
           ),
           "required" -> List("command_selection"),
@@ -1477,20 +1516,20 @@ class IQServer(
             ),
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "description" -> commandSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+              "description" -> commandSelectionPathDescription
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Unique substring pattern for 'file_pattern' selection."
+              "description" -> commandSelectionPatternDescription
             )
           ),
           "required" -> List("names", "command_selection"),
@@ -1510,25 +1549,26 @@ class IQServer(
             ),
             "scope" -> Map(
               "type" -> "string",
-              "description" -> "Diagnostic scope. 'selection' uses command_selection targeting. 'file' scans full file content.",
+              "description" -> "Diagnostic scope. 'selection' inspects only the selected command range. 'file' scans full file content.",
               "enum" -> List("selection", "file")
             ),
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "When scope='selection': method of selecting command context.",
+              "description" -> ("When scope='selection': " + commandSelectionDescription),
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "When scope='file': target file path. When scope='selection' and command_selection != current: file path for selection."
+              "description" -> ("When scope='file': required file path to scan. " +
+                "When scope='selection': required for command_selection='file_offset' or 'file_pattern'.")
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "When scope='selection' and command_selection='file_offset': character offset."
+              "description" -> ("When scope='selection' and command_selection='file_offset': " + commandSelectionOffsetDescription)
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "When scope='selection' and command_selection='file_pattern': unique substring pattern."
+              "description" -> ("When scope='selection' and command_selection='file_pattern': " + commandSelectionPatternDescription)
             )
           ),
           "required" -> List("severity"),
@@ -1543,33 +1583,39 @@ class IQServer(
           "properties" -> Map(
             "query" -> Map(
               "type" -> "string",
-              "description" -> "Query type to execute. For the `proof` query type, you need to import Isar_Explore.thy from the I/Q plugin root directory.",
+              "description" -> ("Query type: " +
+                "'proof' executes an Isar method/script candidate (requires Isar_Explore.thy imported). " +
+                "'sledgehammer' runs sledgehammer. " +
+                "'find_theorems' runs find_theorems."),
               "enum" -> List("proof", "sledgehammer", "find_theorems")
             ),
             "command_selection" -> Map(
               "type" -> "string",
-              "description" -> "Method of specifying the command AFTER which the proof exploration should be applied. Values are: * 'current', to apply query after current command. * 'file_offset', so specify command after which query should happen via file and absolute offset. Uses 'path' and 'offset' argument. * 'file_pattern', to specify command after which query should happen via filenme and a unique substring. Uses 'path' and 'pattern argument.",
+              "description" -> exploreSelectionDescription,
               "enum" -> List("current", "file_offset", "file_pattern")
             ),
             "path" -> Map(
               "type" -> "string",
-              "description" -> "File to run the query in. Required if 'command_selection' is 'file_offset' or 'file_pattern'. MUST be a full file path with extension."
+              "description" -> commandSelectionPathDescription
             ),
             "offset" -> Map(
               "type" -> "integer",
-              "description" -> "Character offset of command AFTER which to apply the query. Required if 'command_selection' is 'file_offset'."
+              "description" -> commandSelectionOffsetDescription
             ),
             "pattern" -> Map(
               "type" -> "string",
-              "description" -> "Substring pattern to match command AFTER which to apply the query. Required if 'command_selection' is 'file_pattern'. Must match exactly once in the specified file. If you want to fix a `sorry` or replace an existing proof step, use the substring of the command/proof step BEFORE the step to rework."
+              "description" -> commandSelectionPatternDescription
             ),
             "arguments" -> Map(
               "type" -> "string",
-              "description" -> "Arguments for the query. For 'proof': Isar proof methods, required. Example: 'by simp' or 'apply blast'. For 'sledgehammer': Prover names - optional, uses defaults if empty. Examples: 'cvc5 verit z3 e spass vampire zipperposition'. For 'find_theorems': search criteria - required. Examples: * Goal term pattern '\\<open>(_ :: unat) = (_ :: unat)\\<close>' (MUST include cartouche or quotes aronud the pattern) * Theorem name pattern, 'name:PATTERN'."
+              "description" -> ("Query arguments, interpreted by query type. " +
+                "For query='proof': REQUIRED Isar method/script text (examples: 'by simp', 'apply blast'). " +
+                "For query='sledgehammer': OPTIONAL prover list; empty means tool defaults. " +
+                "For query='find_theorems': REQUIRED query string passed to find_theorems (examples: 'name:map', '\\<open>(_ :: unat) = (_ :: unat)\\<close>').")
             ),
             "max_results" -> Map(
               "type" -> "integer",
-              "description" -> "Optional maximum number of results for query='find_theorems' (default: 20)."
+              "description" -> "Optional result limit for query='find_theorems'. Values <= 0 are ignored and default 20 is used."
             )
           ),
           "required" -> List("query", "command_selection"),
@@ -1584,9 +1630,10 @@ class IQServer(
           "properties" -> Map(
             "path" -> Map(
               "type" -> "string",
-              "description" -> "Optional path to specific file to save. If not provided, saves all modified files."
+              "description" -> "Optional path to a specific file to save. If omitted, saves all modified dirty buffers that pass mutation-root policy."
             )
-          )
+          ),
+          "additionalProperties" -> false
         )
       )
     )
