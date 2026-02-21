@@ -548,6 +548,11 @@ class IQServer(
         "get_goal_state" -> (params => handleGetGoalState(params)),
         "get_context_info" -> (params => handleGetContextInfo(params)),
         "get_entities" -> (params => handleGetEntities(params)),
+        "get_type_at_selection" -> (params =>
+          handleGetTypeAtSelection(params)
+        ),
+        "get_proof_block" -> (params => handleGetProofBlock(params)),
+        "get_proof_blocks" -> (params => handleGetProofBlocks(params)),
         "get_proof_context" -> (params => handleGetProofContext(params)),
         "get_definitions" -> (params => handleGetDefinitions(params)),
         "get_diagnostics" -> (params => handleGetDiagnostics(params)),
@@ -1355,6 +1360,85 @@ class IQServer(
             "max_results" -> Map(
               "type" -> "integer",
               "description" -> "Optional maximum number of entities to return (default: 500)."
+            )
+          ),
+          "required" -> List("path"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_type_at_selection",
+        "description" -> "Read-only type introspection at a canonical command selection. Returns the best typing annotation near the selected offset/command.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_proof_block",
+        "description" -> "Read-only proof-block extraction around a canonical command selection. Returns surrounding lemma/proof block text and metadata.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_proof_blocks",
+        "description" -> "Read-only proof-block extraction across a theory file. Returns multiple proof blocks and metadata for pattern analysis workflows.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "Path to theory file for proof-block extraction."
+            ),
+            "max_results" -> Map(
+              "type" -> "integer",
+              "description" -> "Optional maximum number of proof blocks to return (default: 30)."
+            ),
+            "min_chars" -> Map(
+              "type" -> "integer",
+              "description" -> "Optional minimum proof block text length to include (default: 8)."
             )
           ),
           "required" -> List("path"),
@@ -3305,6 +3389,191 @@ end"""
   private val EntityNamePattern =
     """(?:lemma|theorem|corollary|proposition|schematic_goal|definition|abbreviation|lift_definition|fun|function|primrec|datatype|codatatype|type_synonym|record|typedef|inductive|coinductive|nominal_inductive|locale|class|instantiation|interpretation)\s+([A-Za-z0-9_']+)""".r
 
+  private val ProofBlockStarters: Set[String] =
+    Set(
+      "lemma",
+      "theorem",
+      "corollary",
+      "proposition",
+      "schematic_goal",
+      "proof"
+    )
+
+  private val ProofBlockStructuralEnders: Set[String] =
+    Set("qed", "done", "sorry", "oops")
+
+  private def selectionAnchorOffset(
+      selection: IQUtils.CommandSelection,
+      commandStart: Int
+  ): Int =
+    selection match {
+      case IQUtils.FileOffsetSelection(_, _, normalizedOffset) =>
+        normalizedOffset
+      case _ =>
+        commandStart
+    }
+
+  private def extractTypingAtOffset(
+      snapshot: Document.Snapshot,
+      anchorOffset: Int,
+      fileContent: Option[String]
+  ): Option[Map[String, Any]] = {
+    val safeAnchor = math.max(0, anchorOffset)
+    val searchStart = math.max(0, safeAnchor - 80)
+    val maxEnd =
+      fileContent.map(_.length).filter(_ > 0).getOrElse(safeAnchor + 80)
+    val searchEnd = math.min(maxEnd, safeAnchor + 80)
+    if (searchEnd <= searchStart) {
+      None
+    } else {
+      val types = snapshot.cumulate(
+        Text.Range(searchStart, searchEnd),
+        List.empty[(Text.Range, String)],
+        Markup.Elements(Markup.TYPING),
+        _ => {
+          case (acc, Text.Info(r, XML.Elem(Markup(Markup.TYPING, _), body))) =>
+            Some(acc :+ (r, XML.content(body)))
+          case _ => None
+        }
+      )
+
+      types
+        .flatMap(_._2)
+        .filter { case (range, _) => range.contains(safeAnchor) }
+        .sortBy { case (range, _) => range.length }
+        .headOption
+        .map { case (range, typ) =>
+          val term = fileContent
+            .flatMap { content =>
+              if (range.start >= 0 && range.start < content.length) {
+                val available = content.length - range.start
+                val length = math.max(0, math.min(math.min(range.length, available), 120))
+                if (length > 0) Some(content.substring(range.start, range.start + length))
+                else None
+              } else None
+            }
+            .getOrElse("")
+          val line = fileContent
+            .map(Line.Document(_))
+            .flatMap(doc => scala.util.Try(doc.position(range.start).line + 1).toOption)
+            .getOrElse(0)
+          Map(
+            "has_type" -> true,
+            "type_text" -> (if (term.nonEmpty) s"$term :: $typ" else typ),
+            "term" -> term,
+            "type" -> typ,
+            "line" -> line,
+            "start_offset" -> range.start,
+            "end_offset" -> range.stop
+          )
+        }
+    }
+  }
+
+  private def extractProofBlockAtIndex(
+      commands: List[(Command, Int)],
+      anchorIndex: Int,
+      lineDoc: Option[Line.Document]
+  ): Option[Map[String, Any]] = {
+    if (anchorIndex < 0 || anchorIndex >= commands.length) {
+      None
+    } else {
+      var startIndex = -1
+      var i = anchorIndex
+      while (i >= 0 && startIndex < 0) {
+        val kw = commands(i)._1.span.name
+        if (ProofBlockStarters.contains(kw)) {
+          startIndex = i
+        }
+        i -= 1
+      }
+
+      if (startIndex < 0) {
+        None
+      } else {
+        val blockParts = scala.collection.mutable.ListBuffer.empty[String]
+        var depth = 0
+        var j = startIndex
+        var foundEnd = false
+        while (j < commands.length && !foundEnd) {
+          val (cmd, _) = commands(j)
+          val kw = cmd.span.name
+          blockParts += cmd.source
+          if (kw == "proof") depth += 1
+          if (kw == "by" && depth == 0) {
+            foundEnd = true
+          } else if (ProofBlockStructuralEnders.contains(kw)) {
+            if (depth <= 1) foundEnd = true
+            else depth -= 1
+          }
+          j += 1
+        }
+
+        if (!foundEnd) {
+          None
+        } else {
+          val endIndex = j - 1
+          val startOffset = commands(startIndex)._2
+          val endOffset = commands(endIndex)._2 + commands(endIndex)._1.length
+          val startLine =
+            lineDoc
+              .flatMap(doc => scala.util.Try(doc.position(startOffset).line + 1).toOption)
+              .getOrElse(0)
+          val endLine =
+            lineDoc
+              .flatMap(doc => scala.util.Try(doc.position(endOffset).line + 1).toOption)
+              .getOrElse(0)
+          val proofText = blockParts.mkString("\n")
+          val isApplyStyle =
+            proofText.linesIterator.exists(_.trim.startsWith("apply"))
+          Some(
+            Map(
+              "proof_text" -> proofText,
+              "start_offset" -> startOffset,
+              "end_offset" -> endOffset,
+              "start_line" -> startLine,
+              "end_line" -> endLine,
+              "command_count" -> (endIndex - startIndex + 1),
+              "is_apply_style" -> isApplyStyle
+            )
+          )
+        }
+      }
+    }
+  }
+
+  private def extractProofBlocksFromCommands(
+      commands: List[(Command, Int)],
+      lineDoc: Option[Line.Document],
+      minChars: Int
+  ): List[Map[String, Any]] = {
+    val blocks = scala.collection.mutable.ListBuffer.empty[Map[String, Any]]
+    var i = 0
+    while (i < commands.length) {
+      val starterKw = commands(i)._1.span.name
+      if (ProofBlockStarters.contains(starterKw)) {
+        extractProofBlockAtIndex(commands, i, lineDoc) match {
+          case Some(block) =>
+            val proofText = block.get("proof_text").map(_.toString).getOrElse("")
+            if (proofText.length >= minChars) {
+              blocks += block
+            }
+            val consumed = block.get("command_count").flatMap {
+              case v: Int => Some(v)
+              case v: Long => Some(v.toInt)
+              case _ => None
+            }.getOrElse(1)
+            i += math.max(1, consumed)
+          case None =>
+            i += 1
+        }
+      } else {
+        i += 1
+      }
+    }
+    blocks.toList
+  }
+
   private def commandInfoMap(command: Command): Map[String, Any] = {
     val commandInfoBase = Map(
       "id" -> command.id,
@@ -3567,6 +3836,174 @@ end"""
       case _ =>
         Left(
           s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting entities."
+        )
+    }
+  }
+
+  private def handleGetTypeAtSelection(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val normalizedParams = withDefaultCurrentSelection(params)
+    decodeAndAuthorizeTargetSelection(
+      normalizedParams,
+      "get_type_at_selection"
+    ).flatMap { selection =>
+      resolveTargetSelection(selection).map { resolved =>
+        val command = resolved.command
+        val snapshot = PIDE.session.snapshot()
+        val node = snapshot.get_node(command.node_name)
+        val filePath = command.node_name.node
+        if (node == null) {
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(command),
+            "has_type" -> false,
+            "message" -> "No snapshot node available for selection"
+          )
+        } else {
+          val commandStart = node.command_start(command).getOrElse(0)
+          val anchorOffset =
+            selectionAnchorOffset(resolved.selection, commandStart)
+          val typeResult = extractTypingAtOffset(
+            snapshot,
+            anchorOffset,
+            getFileContent(filePath)
+          )
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(command)
+          ) ++ typeResult.getOrElse(
+            Map(
+              "has_type" -> false,
+              "message" -> "No type information available at selection"
+            )
+          )
+        }
+      }
+    }
+  }
+
+  private def handleGetProofBlock(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val normalizedParams = withDefaultCurrentSelection(params)
+    decodeAndAuthorizeTargetSelection(
+      normalizedParams,
+      "get_proof_block"
+    ).flatMap { selection =>
+      resolveTargetSelection(selection).map { resolved =>
+        val command = resolved.command
+        val snapshot = PIDE.session.snapshot()
+        val node = snapshot.get_node(command.node_name)
+        val fileContent = getFileContent(command.node_name.node)
+        val lineDoc = fileContent.map(Line.Document(_))
+
+        if (node == null || node.commands.isEmpty) {
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(command),
+            "has_proof_block" -> false,
+            "message" -> "No commands available for selection"
+          )
+        } else {
+          val commands = node.command_iterator().toList
+          val fallbackStart = node.command_start(command).getOrElse(0)
+          val anchorOffset =
+            selectionAnchorOffset(resolved.selection, fallbackStart)
+          val anchorIndexFromOffset =
+            commands.indexWhere { case (cmd, cmdOffset) =>
+              anchorOffset >= cmdOffset && anchorOffset < cmdOffset + cmd.length
+            }
+          val anchorIndex =
+            if (anchorIndexFromOffset >= 0) anchorIndexFromOffset
+            else commands.indexWhere(_._1.id == command.id)
+
+          val block =
+            if (anchorIndex >= 0)
+              extractProofBlockAtIndex(commands, anchorIndex, lineDoc)
+            else None
+
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(command),
+            "has_proof_block" -> block.isDefined
+          ) ++ block.getOrElse(
+            Map("message" -> "No proof block found at selection")
+          )
+        }
+      }
+    }
+  }
+
+  private def handleGetProofBlocks(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
+      case Some(path) =>
+        IQUtils.autoCompleteFilePath(path) match {
+          case Right(fullPath) =>
+            authorizeReadPath("get_proof_blocks(path)", fullPath) match {
+              case Right(authorizedPath) => authorizedPath
+              case Left(errorMsg) => return Left(errorMsg)
+            }
+          case Left(errorMsg) => return Left(errorMsg)
+        }
+      case None =>
+        return Left("Missing required parameter: path")
+    }
+
+    val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
+      case Right(Some(v)) if v > 0 => v
+      case Right(Some(_)) => return Left("Parameter 'max_results' must be > 0")
+      case Right(None) => 30
+      case Left(err) => return Left(err)
+    }
+
+    val minChars = IQArgumentUtils.optionalIntParam(params, "min_chars") match {
+      case Right(Some(v)) if v >= 0 => v
+      case Right(Some(_)) => return Left("Parameter 'min_chars' must be >= 0")
+      case Right(None) => 8
+      case Left(err) => return Left(err)
+    }
+
+    getFileContentAndModel(filePath) match {
+      case (Some(content), Some(model)) =>
+        val snapshot = Document_Model.snapshot(model)
+        val node = snapshot.get_node(model.node_name)
+        if (node == null || node.commands.isEmpty) {
+          Right(
+            Map(
+              "path" -> filePath,
+              "node_name" -> model.node_name.toString,
+              "total_blocks" -> 0,
+              "returned_blocks" -> 0,
+              "truncated" -> false,
+              "proof_blocks" -> List.empty[Map[String, Any]]
+            )
+          )
+        } else {
+          val lineDoc = Some(Line.Document(content))
+          val allBlocks =
+            extractProofBlocksFromCommands(
+              node.command_iterator().toList,
+              lineDoc,
+              minChars
+            )
+          val returned = allBlocks.take(maxResults)
+          Right(
+            Map(
+              "path" -> filePath,
+              "node_name" -> model.node_name.toString,
+              "total_blocks" -> allBlocks.length,
+              "returned_blocks" -> returned.length,
+              "truncated" -> (allBlocks.length > returned.length),
+              "proof_blocks" -> returned
+            )
+          )
+        }
+      case _ =>
+        Left(
+          s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting proof blocks."
         )
     }
   }

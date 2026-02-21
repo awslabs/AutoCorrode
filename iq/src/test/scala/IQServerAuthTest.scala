@@ -99,6 +99,18 @@ object IQServerAuthTest {
       s"tools/list should expose get_entities: $payload"
     )
     assertThat(
+      payload.contains("\"name\":\"get_type_at_selection\""),
+      s"tools/list should expose get_type_at_selection: $payload"
+    )
+    assertThat(
+      payload.contains("\"name\":\"get_proof_block\""),
+      s"tools/list should expose get_proof_block: $payload"
+    )
+    assertThat(
+      payload.contains("\"name\":\"get_proof_blocks\""),
+      s"tools/list should expose get_proof_blocks: $payload"
+    )
+    assertThat(
       payload.contains("\"name\":\"get_proof_context\""),
       s"tools/list should expose get_proof_context: $payload"
     )
@@ -171,6 +183,48 @@ object IQServerAuthTest {
     val server = mkServer(root, None)
     val request =
       """{"jsonrpc":"2.0","id":"req-entities-missing","method":"tools/call","params":{"name":"get_entities","arguments":{}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "missing path should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("Missing required parameter: path"),
+      s"expected missing path validation message: $payload"
+    )
+  }
+
+  private def testGetTypeAtSelectionRejectsInvalidSelection(): Unit = {
+    val root = Files.createTempDirectory("iq-server-type-invalid-target-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-type-invalid","method":"tools/call","params":{"name":"get_type_at_selection","arguments":{"command_selection":"bogus"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "invalid selection should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(payload.contains("Invalid target"), s"expected invalid target message: $payload")
+  }
+
+  private def testGetProofBlockRequiresFileOffsetParameters(): Unit = {
+    val root = Files.createTempDirectory("iq-server-proof-block-file-offset-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-proof-block-missing","method":"tools/call","params":{"name":"get_proof_block","arguments":{"command_selection":"file_offset"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "missing file_offset parameters should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("file_offset target requires path and offset parameters"),
+      s"expected file_offset parameter validation message: $payload"
+    )
+  }
+
+  private def testGetProofBlocksRequiresPath(): Unit = {
+    val root = Files.createTempDirectory("iq-server-proof-blocks-missing-path-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-proof-blocks-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{}}}"""
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "missing path should return JSON-RPC error")
     val payload = response.get
@@ -270,6 +324,9 @@ object IQServerAuthTest {
     testGetGoalStateRejectsInvalidSelection()
     testGetContextInfoRequiresFileOffsetParameters()
     testGetEntitiesRequiresPath()
+    testGetTypeAtSelectionRejectsInvalidSelection()
+    testGetProofBlockRequiresFileOffsetParameters()
+    testGetProofBlocksRequiresPath()
     testGetDefinitionsRequiresNames()
     testGetDiagnosticsRejectsInvalidSeverity()
     testGetDiagnosticsFileScopeRequiresPath()

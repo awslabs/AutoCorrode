@@ -93,6 +93,52 @@ object IQMcpClient {
       entities: List[EntityInfo]
   )
 
+  final case class TypeAtSelectionResult(
+      selection: CommandSelection,
+      command: CommandInfo,
+      hasType: Boolean,
+      typeText: String,
+      term: String,
+      typ: String,
+      line: Int,
+      startOffset: Option[Int],
+      endOffset: Option[Int],
+      message: Option[String]
+  )
+
+  final case class ProofBlockResult(
+      selection: CommandSelection,
+      command: CommandInfo,
+      hasProofBlock: Boolean,
+      proofText: String,
+      startOffset: Option[Int],
+      endOffset: Option[Int],
+      startLine: Option[Int],
+      endLine: Option[Int],
+      commandCount: Option[Int],
+      isApplyStyle: Boolean,
+      message: Option[String]
+  )
+
+  final case class ProofBlockInfo(
+      proofText: String,
+      startOffset: Int,
+      endOffset: Int,
+      startLine: Int,
+      endLine: Int,
+      commandCount: Int,
+      isApplyStyle: Boolean
+  )
+
+  final case class ProofBlocksResult(
+      path: String,
+      nodeName: String,
+      totalBlocks: Int,
+      returnedBlocks: Int,
+      truncated: Boolean,
+      proofBlocks: List[ProofBlockInfo]
+  )
+
   final case class ProofContextResult(
       selection: CommandSelection,
       command: CommandInfo,
@@ -480,6 +526,65 @@ object IQMcpClient {
     )
   }
 
+  private[assistant] def decodeTypeAtSelectionResult(
+      payload: Map[String, Any]
+  ): TypeAtSelectionResult =
+    TypeAtSelectionResult(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command")),
+      hasType = boolField(payload, "has_type", default = false),
+      typeText = stringField(payload, "type_text"),
+      term = stringField(payload, "term"),
+      typ = stringField(payload, "type"),
+      line = intField(payload, "line", 0),
+      startOffset = payload.get("start_offset").flatMap(asInt),
+      endOffset = payload.get("end_offset").flatMap(asInt),
+      message = payload.get("message").map(_.toString).filter(_.nonEmpty)
+    )
+
+  private[assistant] def decodeProofBlockResult(
+      payload: Map[String, Any]
+  ): ProofBlockResult =
+    ProofBlockResult(
+      selection = decodeSelection(mapField(payload, "selection")),
+      command = decodeCommandInfo(mapField(payload, "command")),
+      hasProofBlock = boolField(payload, "has_proof_block", default = false),
+      proofText = stringField(payload, "proof_text"),
+      startOffset = payload.get("start_offset").flatMap(asInt),
+      endOffset = payload.get("end_offset").flatMap(asInt),
+      startLine = payload.get("start_line").flatMap(asInt),
+      endLine = payload.get("end_line").flatMap(asInt),
+      commandCount = payload.get("command_count").flatMap(asInt),
+      isApplyStyle = boolField(payload, "is_apply_style", default = false),
+      message = payload.get("message").map(_.toString).filter(_.nonEmpty)
+    )
+
+  private[assistant] def decodeProofBlocksResult(
+      payload: Map[String, Any]
+  ): ProofBlocksResult = {
+    val blocks = listField(payload, "proof_blocks").flatMap { raw =>
+      asObject(raw).map { block =>
+        ProofBlockInfo(
+          proofText = stringField(block, "proof_text"),
+          startOffset = intField(block, "start_offset", 0),
+          endOffset = intField(block, "end_offset", 0),
+          startLine = intField(block, "start_line", 0),
+          endLine = intField(block, "end_line", 0),
+          commandCount = intField(block, "command_count", 0),
+          isApplyStyle = boolField(block, "is_apply_style", default = false)
+        )
+      }
+    }
+    ProofBlocksResult(
+      path = stringField(payload, "path"),
+      nodeName = stringField(payload, "node_name"),
+      totalBlocks = intField(payload, "total_blocks", blocks.length),
+      returnedBlocks = intField(payload, "returned_blocks", blocks.length),
+      truncated = boolField(payload, "truncated", default = false),
+      proofBlocks = blocks
+    )
+  }
+
   private[assistant] def decodeProofContextResult(
       payload: Map[String, Any]
   ): ProofContextResult =
@@ -564,6 +669,33 @@ object IQMcpClient {
   ): Either[String, EntitiesResult] = {
     val args = Map("path" -> path) ++ maxResults.map("max_results" -> _)
     callTool("get_entities", args, timeoutMs).map(decodeEntitiesResult)
+  }
+
+  def callGetTypeAtSelection(
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, TypeAtSelectionResult] =
+    callTool("get_type_at_selection", selectionArgs, timeoutMs)
+      .map(decodeTypeAtSelectionResult)
+
+  def callGetProofBlock(
+      selectionArgs: Map[String, Any],
+      timeoutMs: Long
+  ): Either[String, ProofBlockResult] =
+    callTool("get_proof_block", selectionArgs, timeoutMs)
+      .map(decodeProofBlockResult)
+
+  def callGetProofBlocks(
+      path: String,
+      maxResults: Option[Int],
+      minChars: Option[Int],
+      timeoutMs: Long
+  ): Either[String, ProofBlocksResult] = {
+    val args = Map("path" -> path) ++
+      maxResults.map("max_results" -> _) ++
+      minChars.map("min_chars" -> _)
+    callTool("get_proof_blocks", args, timeoutMs)
+      .map(decodeProofBlocksResult)
   }
 
   def callGetProofContext(
