@@ -67,6 +67,8 @@ fi
 ML_64_OPT=""
 if [ "$BITS" = "64" ]; then ML_64_OPT="-o ML_system_64=true"; fi
 if [ -z "$SKIP_BUILD" ]; then
+  # Remove pre-built system heaps so isabelle build writes to user directory
+  rm -rf "$INSTALL_DIR/heaps"
   echo "Building Pure + HOL (${BITS}-bit) ..."
   "$INSTALL_DIR"/bin/isabelle build -b $ML_64_OPT HOL
   echo "Done."

@@ -343,21 +343,17 @@ def cmd_setup(args):
                       f"{local_platform_dir(local_home, args.ml_platform)}\n"
                       f"Use --force-write-local to overwrite, or --copy-from-local to push to remote.")
 
-    # Install Isabelle on remote if needed
-    if ssh_check(host, "test", "-d", remote_home) is None:
-        setup_script = pick_setup_script(arch, os_id)
-        step(f"Installing Isabelle on remote ({os.path.basename(setup_script)})")
-        print("", file=sys.stderr)
-        install_dir = remote_home
-        setup_args = [setup_script, host, install_dir,
-                      "64" if args.use_64 else "32"]
-        if args.copy_from_local:
-            setup_args.append("skip_build")
-        rc = subprocess.call(setup_args)
-        if rc != 0:
-            step_fail("Remote Isabelle installation failed")
-    else:
-        step(f"Checking remote Isabelle installation: {remote_home} ({arch} {os_id})")
+    # Install Isabelle on remote (idempotent: setup scripts skip existing components)
+    setup_script = pick_setup_script(arch, os_id)
+    step(f"Setting up Isabelle on remote ({os.path.basename(setup_script)})")
+    print("", file=sys.stderr)
+    setup_args = [setup_script, host, remote_home,
+                  "64" if args.use_64 else "32"]
+    if args.copy_from_local:
+        setup_args.append("skip_build")
+    rc = subprocess.call(setup_args)
+    if rc != 0:
+        step_fail("Remote Isabelle installation failed")
 
     step("Identifying ML platform")
     base_platform = query_base_platform(host, remote_home, args.use_64)
