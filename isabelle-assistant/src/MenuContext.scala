@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import scala.jdk.CollectionConverters._
@@ -117,19 +116,28 @@ object MenuContext {
   }
 
   private def hasWarningAtOffset(buffer: JEditBuffer, offset: Int): Boolean = {
-    try {
-      Document_Model.get_model(buffer).exists { model =>
-        val snapshot = Document_Model.snapshot(model)
-        // Clamp range to avoid exceeding buffer length when cursor is at end
-        val safeEnd = math.min(offset + 1, buffer.getLength)
-        val range = Text.Range(offset, safeEnd)
-        snapshot.cumulate(range, false,
-          Markup.Elements(Markup.WARNING_MESSAGE, Markup.WARNING, Markup.LEGACY), _ => {
-            case _ => Some(true)
-          }).exists(_._2)
+    if (!IQAvailable.isAvailable) false
+    else {
+      val clamped = math.max(0, math.min(offset, buffer.getLength))
+      val selectionArgs = bufferPath(buffer) match {
+        case Some(path) =>
+          Map(
+            "command_selection" -> "file_offset",
+            "path" -> path,
+            "offset" -> clamped
+          )
+        case None =>
+          Map("command_selection" -> "current")
       }
-    } catch {
-      case _: Exception => false
+      IQMcpClient
+        .callGetDiagnostics(
+          severity = IQMcpClient.DiagnosticSeverity.Warning,
+          scope = IQMcpClient.DiagnosticScope.Selection,
+          timeoutMs = 1000L,
+          selectionArgs = selectionArgs
+        )
+        .toOption
+        .exists(_.diagnostics.nonEmpty)
     }
   }
 }

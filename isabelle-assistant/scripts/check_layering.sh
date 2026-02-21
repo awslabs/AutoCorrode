@@ -82,25 +82,17 @@ runtime_touchpoint_specs=(
 approved_runtime_touchpoint_scopes=(
   "command_iterator|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "command_iterator|isabelle-assistant/src/IQIntegration.scala"
-  "command_iterator|isabelle-assistant/src/ProofExtractor.scala"
   "document_model_get_model|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "document_model_get_model|isabelle-assistant/src/AssistantSupport.scala"
   "document_model_get_model|isabelle-assistant/src/IQIntegration.scala"
-  "document_model_get_model|isabelle-assistant/src/MenuContext.scala"
-  "document_model_get_model|isabelle-assistant/src/ProofExtractor.scala"
-  "document_model_get_model|isabelle-assistant/src/ShowTypeAction.scala"
   "document_model_get_model|isabelle-assistant/src/SuggestNameAction.scala"
   "document_model_get_model|isabelle-assistant/src/SummarizeTheoryAction.scala"
   "document_model_snapshot|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "document_model_snapshot|isabelle-assistant/src/AssistantSupport.scala"
   "document_model_snapshot|isabelle-assistant/src/IQIntegration.scala"
-  "document_model_snapshot|isabelle-assistant/src/MenuContext.scala"
-  "document_model_snapshot|isabelle-assistant/src/ProofExtractor.scala"
-  "document_model_snapshot|isabelle-assistant/src/ShowTypeAction.scala"
   "extended_query_operation|isabelle-assistant/src/IQAvailable.scala"
   "snapshot_get_node|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "snapshot_get_node|isabelle-assistant/src/IQIntegration.scala"
-  "snapshot_get_node|isabelle-assistant/src/ProofExtractor.scala"
 )
 
 is_approved_runtime_touchpoint_scope() {
