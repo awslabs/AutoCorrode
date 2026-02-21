@@ -2369,7 +2369,7 @@ object AssistantTools {
        |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
        |<div style='font-size:10pt;color:${UIColors.AskUser.title};margin-bottom:3px;'>
        |<b>Assistant needs your input</b></div>
-       |<div style='font-size:12pt;margin-bottom:6px;'>
+       |<div style='font-size:12pt;color:#333333;margin-bottom:6px;'>
        |${HtmlUtil.escapeHtml(question)}</div>
        |$contextHtml
        |$optionButtons

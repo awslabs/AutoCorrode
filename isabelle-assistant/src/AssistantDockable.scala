@@ -244,7 +244,7 @@ class AssistantDockable(view: View, position: String)
   /** Apply consistent top-bar button styling (font, border, background, hover).
     */
   private def styleTopButton(btn: JButton): Unit = {
-    btn.setFocusPainted(false)
+    btn.setFocusPainted(true)
     btn.setFont(btn.getFont.deriveFont(11f))
     btn.setBorder(
       BorderFactory.createCompoundBorder(
@@ -342,7 +342,7 @@ class AssistantDockable(view: View, position: String)
     send.setMinimumSize(new java.awt.Dimension(32, 32))
     send.setMaximumSize(new java.awt.Dimension(32, 32))
     send.setMargin(new java.awt.Insets(0, 0, 0, 0))
-    send.setFocusable(false)
+    send.setFocusable(true)
     send.setContentAreaFilled(false)
     send.setForeground(Color.decode(UIColors.ChatInput.sendButton))
     send.setBorder(BorderFactory.createEmptyBorder())
@@ -802,7 +802,7 @@ class AssistantDockable(view: View, position: String)
     val fullHtml = s"""<html><head><style>
       |body { font-family: 'Segoe UI', 'Helvetica Neue', sans-serif; font-size: 12pt;
       |       margin: 0; padding: 8px; overflow-x: hidden; }
-      |a { color: #0066cc; text-decoration: none; }
+      |a { color: ${UIColors.linkColor}; text-decoration: none; }
       |a:hover { text-decoration: underline; }
       |img { max-width: 100%; }
       |table { max-width: 100%; }

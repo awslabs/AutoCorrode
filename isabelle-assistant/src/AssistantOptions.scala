@@ -5,7 +5,15 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.{jEdit, AbstractOptionPane}
-import javax.swing.{JComboBox, JTextField, JButton, JCheckBox, JScrollPane, SwingWorker}
+import javax.swing.{
+  JComboBox,
+  JTextField,
+  JButton,
+  JCheckBox,
+  SwingWorker,
+  JOptionPane
+}
+import scala.collection.mutable.ListBuffer
 
 /** jEdit option pane for Assistant configuration. Provides GUI controls for AWS
   * region, model selection, temperature, verification settings, and tracing
@@ -26,6 +34,8 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
   private var maxVerifyCandidatesField: JTextField = _
   private var findTheoremsLimitField: JTextField = _
   private var findTheoremsTimeoutField: JTextField = _
+  private var quickcheckTimeoutField: JTextField = _
+  private var nitpickTimeoutField: JTextField = _
   private var traceTimeoutField: JTextField = _
   private var traceDepthField: JTextField = _
   private var maxToolIterationsField: JTextField = _
@@ -134,6 +144,22 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
     )
     addComponent("Find Theorems Timeout (ms):", findTheoremsTimeoutField)
 
+    addSeparator("Counterexample Search")
+
+    quickcheckTimeoutField =
+      new JTextField(AssistantOptions.getQuickcheckTimeout.toString, 10)
+    quickcheckTimeoutField.setToolTipText(
+      "Timeout for Quickcheck in milliseconds"
+    )
+    addComponent("Quickcheck Timeout (ms):", quickcheckTimeoutField)
+
+    nitpickTimeoutField =
+      new JTextField(AssistantOptions.getNitpickTimeout.toString, 10)
+    nitpickTimeoutField.setToolTipText(
+      "Timeout for Nitpick in milliseconds"
+    )
+    addComponent("Nitpick Timeout (ms):", nitpickTimeoutField)
+
     addSeparator("Simplifier Tracing")
 
     traceTimeoutField =
@@ -156,16 +182,17 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
       val currentLevel = ToolPermissions.getConfiguredLevel(tool.name).toDisplayString
       combo.setSelectedItem(currentLevel)
       
-      // Convert snake_case to PascalCase for display (matches chat display)
-      val displayName = tool.name.split("_").map(_.capitalize).mkString
+      // Convert snake_case to title with spaces for readability in options UI.
+      val displayName = formatToolDisplayName(tool.name)
       
       // Use user-friendly tooltip
       val description = ToolPermissions.toolDescriptions.getOrElse(tool.name, tool.description)
-      val tooltip = if (tool.name == "ask_user") {
+      val tooltipBase = if (tool.name == "ask_user") {
         "This tool allows the assistant to ask you questions. Must always be allowed (locked)."
       } else {
         s"Allows the assistant to $description"
       }
+      val tooltip = s"$tooltipBase\nTool ID: ${tool.name}"
       
       combo.setEnabled(tool.name != "ask_user")
       combo.setToolTipText(tooltip)
@@ -187,13 +214,21 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
 
   private var permissionCombosField: scala.collection.mutable.Map[String, JComboBox[String]] = _
 
+  private def formatToolDisplayName(toolName: String): String =
+    toolName.split("_").map(_.capitalize).mkString(" ")
+
+  private def populateModelCombo(models: Array[String], current: String): Unit = {
+    modelCombo.removeAllItems()
+    models.foreach(modelCombo.addItem)
+    if (current.nonEmpty && !models.contains(current)) modelCombo.addItem(current)
+    if (current.nonEmpty) modelCombo.setSelectedItem(current)
+    else if (models.nonEmpty) modelCombo.setSelectedIndex(0)
+  }
+
   private def loadModelsFromCache(): Unit = {
     val current = AssistantOptions.getBaseModelId
     val models = BedrockModels.getModels
-    modelCombo.removeAllItems()
-    if (models.nonEmpty) models.foreach(modelCombo.addItem)
-    if (models.contains(current)) modelCombo.setSelectedItem(current)
-    else if (models.nonEmpty) modelCombo.setSelectedIndex(0)
+    populateModelCombo(models, current)
   }
 
   private def refreshModelsAsync(): Unit = {
@@ -212,34 +247,241 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
         refreshButton.setText("Refresh Models")
         try {
           val models = get()
-          modelCombo.removeAllItems()
-          models.foreach(modelCombo.addItem)
-          if (models.contains(current)) modelCombo.setSelectedItem(current)
-          else if (models.nonEmpty) modelCombo.setSelectedIndex(0)
+          populateModelCombo(models, current)
+          if (models.isEmpty) {
+            JOptionPane.showMessageDialog(
+              AssistantOptions.this,
+              "No Anthropic models were returned for this region.",
+              "Isabelle Assistant",
+              JOptionPane.INFORMATION_MESSAGE
+            )
+          }
         } catch {
           case ex: Exception =>
             ErrorHandler.logSilentError("AssistantOptions", ex)
+            JOptionPane.showMessageDialog(
+              AssistantOptions.this,
+              s"Failed to refresh model list: ${ex.getMessage}",
+              "Isabelle Assistant",
+              JOptionPane.ERROR_MESSAGE
+            )
         }
       }
     }.execute()
   }
 
   override def _save(): Unit = {
-    Option(regionCombo.getSelectedItem).foreach(item =>
-      jEdit.setProperty("assistant.aws.region", item.toString)
+    val warnings = ListBuffer.empty[String]
+    def warn(msg: String): Unit = warnings += msg
+
+    def normalizeInt(
+        raw: String,
+        settingLabel: String,
+        default: Int,
+        min: Int,
+        max: Int
+    ): String =
+      try {
+        val parsed = raw.trim.toInt
+        val clamped = math.max(min, math.min(max, parsed))
+        if (clamped != parsed)
+          warn(s"$settingLabel was clamped to $clamped (valid range: $min-$max).")
+        clamped.toString
+      } catch {
+        case _: NumberFormatException =>
+          warn(s"$settingLabel was invalid and reset to $default.")
+          default.toString
+      }
+
+    def normalizeLong(
+        raw: String,
+        settingLabel: String,
+        default: Long,
+        min: Long,
+        max: Long
+    ): String =
+      try {
+        val parsed = raw.trim.toLong
+        val clamped = math.max(min, math.min(max, parsed))
+        if (clamped != parsed)
+          warn(
+            s"$settingLabel was clamped to $clamped (valid range: $min-$max)."
+          )
+        clamped.toString
+      } catch {
+        case _: NumberFormatException =>
+          warn(s"$settingLabel was invalid and reset to $default.")
+          default.toString
+      }
+
+    def normalizeDouble(
+        raw: String,
+        settingLabel: String,
+        default: Double,
+        min: Double,
+        max: Double
+    ): String =
+      try {
+        val parsed = raw.trim.toDouble
+        val clamped = math.max(min, math.min(max, parsed))
+        if (clamped != parsed)
+          warn(s"$settingLabel was clamped to $clamped (valid range: $min-$max).")
+        clamped.toString
+      } catch {
+        case _: NumberFormatException =>
+          warn(s"$settingLabel was invalid and reset to $default.")
+          default.toString
+      }
+
+    def normalizeOptionalInt(
+        raw: String,
+        settingLabel: String,
+        default: Int,
+        min: Int,
+        max: Int
+    ): String = {
+      val normalized = raw.trim.toLowerCase
+      if (
+        normalized.isEmpty || normalized == "0" || normalized == "none" || normalized == "unlimited"
+      ) ""
+      else
+        try {
+          val parsed = normalized.toInt
+          if (parsed < min || parsed > max) {
+            warn(
+              s"$settingLabel was invalid and reset to $default (or leave empty for unlimited)."
+            )
+            default.toString
+          } else parsed.toString
+        } catch {
+          case _: NumberFormatException =>
+            warn(
+              s"$settingLabel was invalid and reset to $default (or leave empty for unlimited)."
+            )
+            default.toString
+        }
+    }
+
+    val regionValue = {
+      val value =
+        Option(regionCombo.getSelectedItem).map(_.toString.trim).getOrElse("")
+      if (value.matches("^[a-z]{2}(?:-[a-z]+)+-\\d+$")) value
+      else {
+        warn("AWS Region had an invalid format and was reset to us-east-1.")
+        "us-east-1"
+      }
+    }
+
+    val modelValue = {
+      val value =
+        Option(modelCombo.getSelectedItem).map(_.toString.trim).getOrElse("")
+      if (value.isEmpty || BedrockModels.isAnthropicModelId(value)) value
+      else {
+        warn("Model ID was invalid and has been cleared. Only Anthropic model IDs are supported.")
+        ""
+      }
+    }
+
+    val temperatureValue = normalizeDouble(
+      temperatureField.getText,
+      "Temperature",
+      AssistantConstants.DEFAULT_TEMPERATURE,
+      AssistantConstants.MIN_TEMPERATURE,
+      AssistantConstants.MAX_TEMPERATURE
     )
-    Option(modelCombo.getSelectedItem).foreach(item =>
-      jEdit.setProperty("assistant.model.id", item.toString)
+    val maxTokensValue = normalizeInt(
+      maxTokensField.getText,
+      "Max Tokens",
+      AssistantConstants.DEFAULT_MAX_TOKENS,
+      AssistantConstants.MIN_MAX_TOKENS,
+      AssistantConstants.MAX_MAX_TOKENS
     )
+    val maxToolIterationsValue = normalizeOptionalInt(
+      maxToolIterationsField.getText,
+      "Max Tool Iterations",
+      AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS,
+      1,
+      50
+    )
+    val maxRetriesValue = normalizeInt(
+      maxRetriesField.getText,
+      "Max Retries",
+      AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES,
+      1,
+      10
+    )
+    val verifyTimeoutValue = normalizeLong(
+      verifyTimeoutField.getText,
+      "Verification Timeout",
+      AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT,
+      5000L,
+      300000L
+    )
+    val sledgehammerTimeoutValue = normalizeLong(
+      sledgehammerTimeoutField.getText,
+      "Sledgehammer Timeout",
+      AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT,
+      1000L,
+      300000L
+    )
+    val quickcheckTimeoutValue = normalizeLong(
+      quickcheckTimeoutField.getText,
+      "Quickcheck Timeout",
+      AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT,
+      1000L,
+      300000L
+    )
+    val nitpickTimeoutValue = normalizeLong(
+      nitpickTimeoutField.getText,
+      "Nitpick Timeout",
+      AssistantConstants.DEFAULT_NITPICK_TIMEOUT,
+      1000L,
+      300000L
+    )
+    val maxVerifyCandidatesValue = normalizeInt(
+      maxVerifyCandidatesField.getText,
+      "Max Verify Candidates",
+      AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES,
+      1,
+      20
+    )
+    val findTheoremsLimitValue = normalizeInt(
+      findTheoremsLimitField.getText,
+      "Find Theorems Limit",
+      AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT,
+      1,
+      100
+    )
+    val findTheoremsTimeoutValue = normalizeLong(
+      findTheoremsTimeoutField.getText,
+      "Find Theorems Timeout",
+      AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT,
+      1000L,
+      300000L
+    )
+    val traceTimeoutValue = normalizeInt(
+      traceTimeoutField.getText,
+      "Trace Timeout",
+      AssistantConstants.DEFAULT_TRACE_TIMEOUT,
+      1,
+      300
+    )
+    val traceDepthValue = normalizeInt(
+      traceDepthField.getText,
+      "Trace Depth",
+      AssistantConstants.DEFAULT_TRACE_DEPTH,
+      1,
+      50
+    )
+
+    jEdit.setProperty("assistant.aws.region", regionValue)
+    jEdit.setProperty("assistant.model.id", modelValue)
     jEdit.setBooleanProperty("assistant.use.cris", crisCheckbox.isSelected)
-    jEdit.setProperty("assistant.temperature", temperatureField.getText)
-    jEdit.setProperty("assistant.max.tokens", maxTokensField.getText)
-    jEdit.setProperty(
-      "assistant.max.tool.iterations",
-      maxToolIterationsField.getText
-    )
-    jEdit.setProperty("assistant.verify.max.retries", maxRetriesField.getText)
-    jEdit.setProperty("assistant.verify.timeout", verifyTimeoutField.getText)
+    jEdit.setProperty("assistant.temperature", temperatureValue)
+    jEdit.setProperty("assistant.max.tokens", maxTokensValue)
+    jEdit.setProperty("assistant.max.tool.iterations", maxToolIterationsValue)
+    jEdit.setProperty("assistant.verify.max.retries", maxRetriesValue)
+    jEdit.setProperty("assistant.verify.timeout", verifyTimeoutValue)
     jEdit.setBooleanProperty(
       "assistant.verify.suggestions",
       verifySuggestionsCheckbox.isSelected
@@ -248,24 +490,30 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
       "assistant.use.sledgehammer",
       useSledgehammerCheckbox.isSelected
     )
-    jEdit.setProperty(
-      "assistant.sledgehammer.timeout",
-      sledgehammerTimeoutField.getText
-    )
-    jEdit.setProperty(
-      "assistant.max.verify.candidates",
-      maxVerifyCandidatesField.getText
-    )
-    jEdit.setProperty(
-      "assistant.find.theorems.limit",
-      findTheoremsLimitField.getText
-    )
-    jEdit.setProperty(
-      "assistant.find.theorems.timeout",
-      findTheoremsTimeoutField.getText
-    )
-    jEdit.setProperty("assistant.trace.timeout", traceTimeoutField.getText)
-    jEdit.setProperty("assistant.trace.depth", traceDepthField.getText)
+    jEdit.setProperty("assistant.sledgehammer.timeout", sledgehammerTimeoutValue)
+    jEdit.setProperty("assistant.quickcheck.timeout", quickcheckTimeoutValue)
+    jEdit.setProperty("assistant.nitpick.timeout", nitpickTimeoutValue)
+    jEdit.setProperty("assistant.max.verify.candidates", maxVerifyCandidatesValue)
+    jEdit.setProperty("assistant.find.theorems.limit", findTheoremsLimitValue)
+    jEdit.setProperty("assistant.find.theorems.timeout", findTheoremsTimeoutValue)
+    jEdit.setProperty("assistant.trace.timeout", traceTimeoutValue)
+    jEdit.setProperty("assistant.trace.depth", traceDepthValue)
+
+    regionCombo.setSelectedItem(regionValue)
+    modelCombo.setSelectedItem(modelValue)
+    temperatureField.setText(temperatureValue)
+    maxTokensField.setText(maxTokensValue)
+    maxToolIterationsField.setText(maxToolIterationsValue)
+    maxRetriesField.setText(maxRetriesValue)
+    verifyTimeoutField.setText(verifyTimeoutValue)
+    sledgehammerTimeoutField.setText(sledgehammerTimeoutValue)
+    quickcheckTimeoutField.setText(quickcheckTimeoutValue)
+    nitpickTimeoutField.setText(nitpickTimeoutValue)
+    maxVerifyCandidatesField.setText(maxVerifyCandidatesValue)
+    findTheoremsLimitField.setText(findTheoremsLimitValue)
+    findTheoremsTimeoutField.setText(findTheoremsTimeoutValue)
+    traceTimeoutField.setText(traceTimeoutValue)
+    traceDepthField.setText(traceDepthValue)
 
     // Save tool permissions
     if (permissionCombosField != null) {
@@ -279,6 +527,16 @@ class AssistantOptions extends AbstractOptionPane("assistant-options") {
 
     AssistantOptions.invalidateCache()
     AssistantDockable.refreshModelLabel()
+
+    if (warnings.nonEmpty) {
+      val msg = warnings.map(w => s"• $w").mkString("\n")
+      JOptionPane.showMessageDialog(
+        this,
+        s"Some settings were adjusted while saving:\n\n$msg",
+        "Isabelle Assistant",
+        JOptionPane.WARNING_MESSAGE
+      )
+    }
   }
 }
 

@@ -262,6 +262,8 @@ Access via **Plugins → Plugin Options → Isabelle Assistant** or `:set` in ch
 | `verify_suggestions` | true | Verify proofs via I/Q |
 | `use_sledgehammer` | false | Run sledgehammer in parallel with suggestions |
 | `sledgehammer_timeout` | 15000 | Sledgehammer timeout (ms) |
+| `quickcheck_timeout` | 10000 | Quickcheck timeout (ms) |
+| `nitpick_timeout` | 10000 | Nitpick timeout (ms) |
 | `max_verify_candidates` | 5 | Max suggestions to verify |
 | `find_theorems_limit` | 20 | Max theorems for context |
 | `find_theorems_timeout` | 10000 | Find theorems timeout (ms) |

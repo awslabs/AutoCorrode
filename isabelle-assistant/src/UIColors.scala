@@ -18,15 +18,12 @@ object UIColors {
 
   /** Chat bubble colors for message display in the dockable panel. */
   object ChatBubble {
-    def userBackground: String = ThemeUtils.themedHex("#2a3a4a", "#e8f0fe")
     def userBorder: String = ThemeUtils.themedHex("#5b9bd5", "#4285f4")
     def userTimestamp: String = ThemeUtils.themedHex("#a0a8b0", "#5f6368")
     
-    def assistantBackground: String = ThemeUtils.themedHex("#302040", "#f3e8fd")
     def assistantBorder: String = ThemeUtils.themedHex("#8060b0", "#9c27b0")
     def assistantTimestamp: String = ThemeUtils.themedHex("#a0a8b0", "#5f6368")
     
-    def errorBackground: String = ThemeUtils.themedHex("#4a2020", "#ffebee")
     def errorBorder: String = ThemeUtils.themedHex("#e06060", "#ef5350")
     def errorTimestamp: String = ThemeUtils.themedHex("#a0a8b0", "#5f6368")
   }
@@ -64,7 +61,7 @@ object UIColors {
   }
   
   // General link color
-  def linkColor: String = "#7b1fa2"
+  def linkColor: String = ThemeUtils.themedHex("#b090d0", "#7b1fa2")
   
   // Code block colors (Rustdoc-inspired: cream background, minimal borders)
   object CodeBlock {
@@ -72,7 +69,6 @@ object UIColors {
     def border: String = ThemeUtils.themedHex("#3a3a3a", "#e1dfdb")
     def actionBackground: String = ThemeUtils.themedHex("#2a2a2a", "#ebe9e6")
     def actionBorder: String = ThemeUtils.themedHex("#3a3a3a", "#d8d6d2")
-    def actionLinkBackground: String = ThemeUtils.themedHex("#4a3a5a", "#e8e0f0")
   }
   
   // Inline code background
@@ -86,17 +82,13 @@ object UIColors {
   
   // Tool message colors (for tool-use display in chat)
   object ToolMessage {
-    def background: String = ThemeUtils.themedHex("#203a3a", "#e0f2f1")
     def border: String = ThemeUtils.themedHex("#00897b", "#00897b")
     def timestamp: String = ThemeUtils.themedHex("#a0a8b0", "#5f6368")
-    def parameterBackground: String = ThemeUtils.themedHex("#2a4040", "#f0f8f7")
-    def parameterBorder: String = ThemeUtils.themedHex("#00695c", "#b2dfdb")
   }
   
   // Copy button colors (subtle icon next to messages)
   object CopyButton {
     def color: String = ThemeUtils.themedHex("#888888", "#999999")
-    def hoverColor: String = ThemeUtils.themedHex("#b0b0b0", "#666666")
   }
   
   // Minimal button styling for Insert/Copy (Rustdoc-inspired: subtle, text-like)
@@ -167,32 +159,24 @@ object UIColors {
   
   // Ask user widget colors (matches assistant message aesthetic with amber accent)
   object AskUser {
-    // Card container - white background like other message bubbles
+    // Keep card backgrounds white so rendered LaTeX integrates cleanly.
     def background: String = "white"
     def border: String = ThemeUtils.themedHex("#d4a020", "#f5a623")  // Amber left border
     
     // Title ("Assistant needs your input")
-    def title: String = ThemeUtils.themedHex("#a0a8b0", "#5f6368")  // Same as message timestamps
-    
-    // Question text
-    def questionText: String = ThemeUtils.themedHex("#ffffff", "#333333")  // Main text color
+    def title: String = "#5f6368"  // Same as message timestamps
     
     // Context subtitle
-    def contextText: String = ThemeUtils.themedHex("#a0a8b0", "#777777")  // Muted
+    def contextText: String = "#777777"  // Muted
     
-    // Option buttons - subtle styling
-    def optionBackground: String = ThemeUtils.themedHex("#3a3a3a", "#f8f8f8")
-    def optionBorder: String = ThemeUtils.themedHex("#555555", "#e0e0e0")
-    def optionText: String = ThemeUtils.themedHex("#d0d0d0", "#444444")
+    // Option link colors
+    def optionText: String = "#444444"
     def optionLetter: String = ThemeUtils.themedHex("#d4a020", "#f5a623")  // Amber accent
-    
-    // Hover state
-    def optionHoverBackground: String = ThemeUtils.themedHex("#454545", "#eeeeee")
   }
   
   // Task list widget colors (blue accent for task/work semantics)
   object TaskList {
-    // Card container - white background like other message bubbles
+    // Keep card backgrounds white so rendered LaTeX integrates cleanly.
     def background: String = "white"
     def border: String = ThemeUtils.themedHex("#1565c0", "#1976d2")  // Blue left border
     
@@ -211,7 +195,7 @@ object UIColors {
     // Text colors
     def irrelevantText: String = ThemeUtils.themedHex("#616161", "#9e9e9e") // strikethrough text
     def labelColor: String = ThemeUtils.themedHex("#b0bec5", "#607d8b")     // "Description:" labels
-    def taskText: String = ThemeUtils.themedHex("#e0e0e0", "#333333")       // Task title/description
+    def taskText: String = "#333333"       // Task title/description
   }
   
   
