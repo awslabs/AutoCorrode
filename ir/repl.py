@@ -424,7 +424,7 @@ class Server:
         self.sock.bind((host, port))
         self.sock.listen(8)
         self.running = True
-        self.verbose = False
+        self.verbose = True
         self.clients = {}
         self.clients_lock = threading.Lock()
         print(f"Explore server listening on {host}:{port}")
