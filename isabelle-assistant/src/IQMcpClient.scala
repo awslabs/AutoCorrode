@@ -9,6 +9,7 @@ import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWrit
 import java.net.{InetSocketAddress, Socket}
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicLong
+import java.util.Locale
 import scala.util.control.NonFatal
 
 /** Thin client for talking to the local I/Q MCP server over JSON-RPC.
@@ -277,14 +278,85 @@ object IQMcpClient {
     }
   }
 
-  private[assistant] def parseToolCallResponse(rawResponse: String): Either[String, Map[String, Any]] = {
+  private val mutationRootsDeniedPattern =
+    """(?s).*Path '([^']+)' is outside allowed mutation roots:\s*(.+)\s*""".r
+  private val readRootsDeniedPattern =
+    """(?s).*Path '([^']+)' is outside allowed read roots:\s*(.+)\s*""".r
+
+  private def normalizeErrorMessage(message: String): String = {
+    val raw = Option(message).map(_.trim).getOrElse("")
+    val withoutPrefix = raw.stripPrefix("Tool execution error:").trim
+    if (withoutPrefix.nonEmpty) withoutPrefix else raw
+  }
+
+  private def summarizeRoots(roots: String): String = {
+    val compact = Option(roots).map(_.trim.replaceAll("\\s+", " ")).getOrElse("")
+    if (compact.length <= 600) compact
+    else compact.take(600) + "..."
+  }
+
+  private def rootDeniedMessage(
+      toolName: Option[String],
+      path: String,
+      rootKind: String,
+      roots: String
+  ): String = {
+    val operation = if (rootKind == "mutation") "write/create" else "read"
+    val toolPrefix = toolName.map(name => s"Tool '$name' failed. ").getOrElse("")
+    s"${toolPrefix}I/Q denied this $operation request because path '$path' is outside allowed $rootKind roots.\n" +
+      s"Allowed $rootKind roots: ${summarizeRoots(roots)}\n" +
+      "Fix: Plugins -> Plugin Options -> I/Q -> Security. Update the allowed roots and save.\n" +
+      "Saving restarts only the I/Q MCP server (no Isabelle/jEdit restart)."
+  }
+
+  private[assistant] def makeToolErrorUserFriendly(
+      message: String,
+      toolName: Option[String] = None
+  ): String = {
+    val normalized = normalizeErrorMessage(message)
+    normalized match {
+      case mutationRootsDeniedPattern(path, roots) =>
+        rootDeniedMessage(toolName, path, "mutation", roots)
+      case readRootsDeniedPattern(path, roots) =>
+        rootDeniedMessage(toolName, path, "read", roots)
+      case other =>
+        val lower = other.toLowerCase(Locale.ROOT)
+        if (lower.contains("outside allowed mutation roots")) {
+          rootDeniedMessage(
+            toolName,
+            "<unknown>",
+            "mutation",
+            "see I/Q server error details"
+          )
+        } else if (lower.contains("outside allowed read roots")) {
+          rootDeniedMessage(
+            toolName,
+            "<unknown>",
+            "read",
+            "see I/Q server error details"
+          )
+        } else if (other.nonEmpty) {
+          other
+        } else {
+          "Unknown I/Q MCP error"
+        }
+    }
+  }
+
+  private[assistant] def parseToolCallResponse(
+      rawResponse: String,
+      toolName: Option[String] = None
+  ): Either[String, Map[String, Any]] = {
     try {
       JSON.parse(rawResponse) match {
         case JSON.Object(root) =>
           root.get("error").flatMap(asObject) match {
             case Some(errorObj) =>
-              val msg = errorObj.get("message").map(_.toString).getOrElse("Unknown I/Q MCP error")
-              Left(msg)
+              val msg = errorObj
+                .get("message")
+                .map(_.toString)
+                .getOrElse("Unknown I/Q MCP error")
+              Left(makeToolErrorUserFriendly(msg, toolName))
             case None =>
               val payloadTextOpt =
                 for {
@@ -302,7 +374,13 @@ object IQMcpClient {
         case _ => Left("I/Q MCP response is not a JSON object")
       }
     } catch {
-      case NonFatal(ex) => Left(s"Failed to parse I/Q MCP response: ${ex.getMessage}")
+      case NonFatal(ex) =>
+        Left(
+          makeToolErrorUserFriendly(
+            s"Failed to parse I/Q MCP response: ${ex.getMessage}",
+            toolName
+          )
+        )
     }
   }
 
@@ -365,10 +443,16 @@ object IQMcpClient {
       if (responseLine == null) {
         Left("I/Q MCP server closed connection without a response")
       } else {
-        parseToolCallResponse(responseLine)
+        parseToolCallResponse(responseLine, Some(toolName))
       }
     } catch {
-      case NonFatal(ex) => Left(ex.getMessage)
+      case NonFatal(ex) =>
+        Left(
+          makeToolErrorUserFriendly(
+            Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName),
+            Some(toolName)
+          )
+        )
     } finally {
       if (writer != null) {
         try writer.close()

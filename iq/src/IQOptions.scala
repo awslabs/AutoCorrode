@@ -2,7 +2,7 @@
    SPDX-License-Identifier: MIT */
 
 import org.gjt.sp.jedit.{AbstractOptionPane, jEdit}
-import javax.swing.{JCheckBox, JTextField}
+import javax.swing.{JCheckBox, JLabel, JScrollPane, JTextArea, JTextField}
 
 /** jEdit options pane for I/Q UI settings. */
 class IQOptions extends AbstractOptionPane("iq-options") {
@@ -11,6 +11,10 @@ class IQOptions extends AbstractOptionPane("iq-options") {
   private var autoScrollLogsCheckbox: JCheckBox = _
   private var autoFillDefaultsCheckbox: JCheckBox = _
   private var exploreDebugLoggingCheckbox: JCheckBox = _
+  private var allowedMutationRootsArea: JTextArea = _
+  private var allowedReadRootsArea: JTextArea = _
+  private var initialAllowedMutationRoots: String = ""
+  private var initialAllowedReadRoots: String = ""
 
   override def _init(): Unit = {
     val settings = IQUISettings.current
@@ -53,6 +57,42 @@ class IQOptions extends AbstractOptionPane("iq-options") {
       "Writes detailed explore callback diagnostics to the Isabelle output."
     )
     addComponent("", exploreDebugLoggingCheckbox)
+
+    addSeparator("Security")
+
+    val securityInfo =
+      new JLabel(
+        "<html>Saving security roots restarts the I/Q MCP server.<br/>No Isabelle/jEdit restart is required.</html>"
+      )
+    securityInfo.setToolTipText(
+      "Applies immediately by restarting only the I/Q MCP server. Existing MCP clients may need to reconnect."
+    )
+    addComponent("", securityInfo)
+
+    initialAllowedMutationRoots = settings.allowedMutationRoots.trim
+    allowedMutationRootsArea = new JTextArea(
+      settings.allowedMutationRoots,
+      4,
+      60
+    )
+    allowedMutationRootsArea.setToolTipText(
+      "Allowed mutation roots for write/create operations. Enter one absolute path per line. Saving applies immediately by restarting only the I/Q MCP server."
+    )
+    addComponent(
+      "Allowed Mutation Roots:",
+      new JScrollPane(allowedMutationRootsArea)
+    )
+
+    initialAllowedReadRoots = settings.allowedReadRoots.trim
+    allowedReadRootsArea = new JTextArea(
+      settings.allowedReadRoots,
+      4,
+      60
+    )
+    allowedReadRootsArea.setToolTipText(
+      "Allowed read roots. Enter one absolute path per line. Leave empty to use mutation roots. Saving applies immediately by restarting only the I/Q MCP server."
+    )
+    addComponent("Allowed Read Roots:", new JScrollPane(allowedReadRootsArea))
   }
 
   override def _save(): Unit = {
@@ -73,5 +113,20 @@ class IQOptions extends AbstractOptionPane("iq-options") {
       IQUISettings.ExploreDebugLoggingKey,
       exploreDebugLoggingCheckbox.isSelected
     )
+
+    val newAllowedMutationRoots = allowedMutationRootsArea.getText.trim
+    val newAllowedReadRoots = allowedReadRootsArea.getText.trim
+    jEdit.setProperty(
+      IQUISettings.AllowedMutationRootsKey,
+      newAllowedMutationRoots
+    )
+    jEdit.setProperty(IQUISettings.AllowedReadRootsKey, newAllowedReadRoots)
+
+    if (
+      newAllowedMutationRoots != initialAllowedMutationRoots ||
+      newAllowedReadRoots != initialAllowedReadRoots
+    ) {
+      IQPlugin.restartServerFromSettings()
+    }
   }
 }

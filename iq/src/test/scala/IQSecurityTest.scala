@@ -125,6 +125,55 @@ object IQSecurityTest {
     assertThat(config.maxClientThreads == 2, "thread count should be clamped to minimum of 2")
   }
 
+  private def testUiConfiguredRootsWhenEnvMissing(): Unit = {
+    val mutationRootA = Files.createTempDirectory("iq-security-ui-mutation-a").toRealPath()
+    val mutationRootB = Files.createTempDirectory("iq-security-ui-mutation-b").toRealPath()
+    val readRoot = Files.createTempDirectory("iq-security-ui-read").toRealPath()
+
+    val config = IQSecurity.fromEnvironment(
+      readEnv = _ => None,
+      cwdProvider = () => "/tmp/ignored-default-root",
+      readUiMutationRoots = () => Some(s"${mutationRootA}\n${mutationRootB}"),
+      readUiReadRoots = () => Some(readRoot.toString)
+    )
+
+    assertThat(
+      config.allowedMutationRoots == List(mutationRootA, mutationRootB),
+      s"UI mutation roots should be used when env is unset: ${config.allowedMutationRoots}"
+    )
+    assertThat(
+      config.allowedReadRoots == List(readRoot),
+      s"UI read roots should be used when env is unset: ${config.allowedReadRoots}"
+    )
+  }
+
+  private def testEnvironmentRootsTakePrecedenceOverUiRoots(): Unit = {
+    val envMutationRoot = Files.createTempDirectory("iq-security-env-first-mutation").toRealPath()
+    val envReadRoot = Files.createTempDirectory("iq-security-env-first-read").toRealPath()
+    val uiMutationRoot = Files.createTempDirectory("iq-security-env-first-ui-mutation").toRealPath()
+    val uiReadRoot = Files.createTempDirectory("iq-security-env-first-ui-read").toRealPath()
+
+    val config = IQSecurity.fromEnvironment(
+      readEnv = {
+        case "IQ_MCP_ALLOWED_ROOTS" => Some(envMutationRoot.toString)
+        case "IQ_MCP_ALLOWED_READ_ROOTS" => Some(envReadRoot.toString)
+        case _ => None
+      },
+      cwdProvider = () => "/tmp/ignored-default-root",
+      readUiMutationRoots = () => Some(uiMutationRoot.toString),
+      readUiReadRoots = () => Some(uiReadRoot.toString)
+    )
+
+    assertThat(
+      config.allowedMutationRoots == List(envMutationRoot),
+      s"environment mutation roots should override UI roots: ${config.allowedMutationRoots}"
+    )
+    assertThat(
+      config.allowedReadRoots == List(envReadRoot),
+      s"environment read roots should override UI roots: ${config.allowedReadRoots}"
+    )
+  }
+
   def main(args: Array[String]): Unit = {
     testDefaultConfig()
     testPathAllowlist()
@@ -134,6 +183,8 @@ object IQSecurityTest {
     testPathValidationEdgeCases()
     testBindResolution()
     testEnvironmentParsingWithExplicitRootsAndBounds()
+    testUiConfiguredRootsWhenEnvMissing()
+    testEnvironmentRootsTakePrecedenceOverUiRoots()
     println("IQSecurityTest: all tests passed")
   }
 }

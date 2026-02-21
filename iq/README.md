@@ -50,6 +50,9 @@ I/Q now exposes a plugin options panel at **Plugins → Plugin Options → I/Q**
 - Log auto-scroll toggle
 - Explore argument auto-fill behavior
 - Verbose explore debug logging toggle
+- Allowed mutation roots (write/create scope) and allowed read roots
+
+Saving security-root settings applies immediately by restarting only the I/Q MCP server. Isabelle/jEdit does not need to be restarted (connected MCP clients may need to reconnect).
 
 ### Connecting to I/Q (Raw)
 
@@ -84,8 +87,8 @@ Use these environment variables to configure behavior:
 - `IQ_MCP_BIND_HOST`: Host/IP to bind to (default: `127.0.0.1`).
 - `IQ_MCP_ALLOW_REMOTE_BIND`: Set to `true` to allow non-loopback bind hosts (default: `false`).
 - `IQ_MCP_AUTH_TOKEN`: If set, every JSON-RPC request must include top-level `auth_token` matching this value.
-- `IQ_MCP_ALLOWED_ROOTS`: Path-list of allowed mutation roots (separator: `:` on Unix). If unset, defaults to the current working directory.
-- `IQ_MCP_ALLOWED_READ_ROOTS`: Path-list of allowed read roots (separator: `:` on Unix). If unset, defaults to `IQ_MCP_ALLOWED_ROOTS`.
+- `IQ_MCP_ALLOWED_ROOTS`: Path-list of allowed mutation roots (supports OS path separator, comma, or newline delimiters). If unset, defaults to the current working directory or the I/Q UI setting if configured.
+- `IQ_MCP_ALLOWED_READ_ROOTS`: Path-list of allowed read roots (supports OS path separator, comma, or newline delimiters). If unset, defaults to `IQ_MCP_ALLOWED_ROOTS` or the I/Q UI setting if configured.
 - `IQ_MCP_MAX_CLIENT_THREADS`: Maximum concurrent MCP client handler threads (default: `16`, minimum `2`).
 
 The bundled `iq_bridge.py` automatically forwards `IQ_MCP_AUTH_TOKEN` as `auth_token` on outgoing requests, enforces socket read timeouts, and supports log-file rotation:

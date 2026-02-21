@@ -31,6 +31,44 @@ class IQMcpClientTest extends AnyFunSuite with Matchers {
     parsed.swap.toOption.getOrElse("") should include("Unauthorized request")
   }
 
+  test(
+    "parseToolCallResponse should provide actionable mutation-root guidance for denied writes"
+  ) {
+    val response =
+      """{"jsonrpc":"2.0","id":"1","error":{"code":-32603,"message":"Tool execution error: Path '/tmp/forbidden/Foo.thy' is outside allowed mutation roots: /Users/dominic/Programming.nosync/AutoCorrode"}}"""
+
+    val parsed = IQMcpClient.parseToolCallResponse(
+      response,
+      toolName = Some("write_file")
+    )
+
+    parsed.isLeft shouldBe true
+    val message = parsed.swap.toOption.getOrElse("")
+    message should include("Tool 'write_file' failed.")
+    message should include("outside allowed mutation roots")
+    message should include("Plugins -> Plugin Options -> I/Q -> Security")
+    message should include("no Isabelle/jEdit restart")
+  }
+
+  test(
+    "parseToolCallResponse should provide actionable read-root guidance for denied reads"
+  ) {
+    val response =
+      """{"jsonrpc":"2.0","id":"1","error":{"code":-32603,"message":"Path '/tmp/forbidden/Foo.thy' is outside allowed read roots: /Users/dominic/Programming.nosync/AutoCorrode"}}"""
+
+    val parsed = IQMcpClient.parseToolCallResponse(
+      response,
+      toolName = Some("read_file")
+    )
+
+    parsed.isLeft shouldBe true
+    val message = parsed.swap.toOption.getOrElse("")
+    message should include("Tool 'read_file' failed.")
+    message should include("outside allowed read roots")
+    message should include("Plugins -> Plugin Options -> I/Q -> Security")
+    message should include("no Isabelle/jEdit restart")
+  }
+
   test("decodeExploreResult should decode typed explore fields") {
     val result = IQMcpClient.decodeExploreResult(
       Map(

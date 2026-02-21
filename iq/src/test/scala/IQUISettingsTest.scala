@@ -25,6 +25,14 @@ object IQUISettingsTest {
       !settings.exploreDebugLogging,
       "default exploreDebugLogging should be false"
     )
+    assertThat(
+      settings.allowedMutationRoots == IQUISettings.DefaultAllowedMutationRoots,
+      s"default allowedMutationRoots mismatch: '${settings.allowedMutationRoots}'"
+    )
+    assertThat(
+      settings.allowedReadRoots == IQUISettings.DefaultAllowedReadRoots,
+      s"default allowedReadRoots mismatch: '${settings.allowedReadRoots}'"
+    )
   }
 
   private def testClampingAndBooleans(): Unit = {
@@ -55,11 +63,44 @@ object IQUISettingsTest {
     assertThat(!settings.autoScrollLogs, "autoScrollLogs should be false")
     assertThat(!settings.autoFillDefaults, "autoFillDefaults should be false")
     assertThat(settings.exploreDebugLogging, "exploreDebugLogging should be true")
+    assertThat(
+      settings.allowedMutationRoots == IQUISettings.DefaultAllowedMutationRoots,
+      "allowedMutationRoots should stay at default when unset"
+    )
+    assertThat(
+      settings.allowedReadRoots == IQUISettings.DefaultAllowedReadRoots,
+      "allowedReadRoots should stay at default when unset"
+    )
+  }
+
+  private def testSecurityRootsParsing(): Unit = {
+    val mutationRoots = "/tmp/mut-a\n/tmp/mut-b"
+    val readRoots = "/tmp/read-a"
+
+    val settings = IQUISettings.parseForTest(
+      (k, d) =>
+        k match {
+          case IQUISettings.AllowedMutationRootsKey => mutationRoots
+          case IQUISettings.AllowedReadRootsKey     => readRoots
+          case _                                    => d
+        },
+      (_, d) => d
+    )
+
+    assertThat(
+      settings.allowedMutationRoots == mutationRoots,
+      "allowedMutationRoots should preserve configured multi-line value"
+    )
+    assertThat(
+      settings.allowedReadRoots == readRoots,
+      "allowedReadRoots should preserve configured value"
+    )
   }
 
   def main(args: Array[String]): Unit = {
     testDefaults()
     testClampingAndBooleans()
+    testSecurityRootsParsing()
     println("IQUISettingsTest: all tests passed")
   }
 }

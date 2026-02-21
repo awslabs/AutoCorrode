@@ -58,7 +58,8 @@ object IQSecurity {
 
   private def parsePathList(raw: Option[String]): List[Path] =
     raw.toList
-      .flatMap(_.split(java.io.File.pathSeparator).toList)
+      .flatMap(_.split("[\\n,]+").toList)
+      .flatMap(_.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)).toList)
       .map(_.trim)
       .filter(_.nonEmpty)
       .map(path => canonicalizePath(Paths.get(path)))
@@ -72,19 +73,23 @@ object IQSecurity {
 
   def fromEnvironment(
     readEnv: String => Option[String] = key => Option(System.getenv(key)),
-    cwdProvider: () => String = () => new File(".").getAbsolutePath
+    cwdProvider: () => String = () => new File(".").getAbsolutePath,
+    readUiMutationRoots: () => Option[String] = () => None,
+    readUiReadRoots: () => Option[String] = () => None
   ): IQServerSecurityConfig = {
     val bindHost = readEnv(BindHostEnv).map(_.trim).filter(_.nonEmpty).getOrElse(DefaultBindHost)
     val allowRemoteBind = readEnv(AllowRemoteBindEnv).exists(v => parseBoolean(v, defaultValue = false))
     val authToken = readEnv(AuthTokenEnv).map(_.trim).filter(_.nonEmpty)
 
-    val configuredMutationRoots = parsePathList(readEnv(AllowedRootsEnv))
+    val configuredMutationRoots =
+      parsePathList(readEnv(AllowedRootsEnv).orElse(readUiMutationRoots()))
 
     val defaultRoot = canonicalizePath(Paths.get(cwdProvider()))
     val allowedMutationRoots =
       if (configuredMutationRoots.nonEmpty) configuredMutationRoots.distinct
       else List(defaultRoot)
-    val configuredReadRoots = parsePathList(readEnv(AllowedReadRootsEnv))
+    val configuredReadRoots =
+      parsePathList(readEnv(AllowedReadRootsEnv).orElse(readUiReadRoots()))
     val allowedReadRoots =
       if (configuredReadRoots.nonEmpty) configuredReadRoots.distinct
       else allowedMutationRoots

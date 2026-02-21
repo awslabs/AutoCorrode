@@ -14,12 +14,16 @@ object IQUISettings {
   final val AutoScrollLogsKey = "iq.ui.auto_scroll_logs"
   final val AutoFillDefaultsKey = "iq.ui.autofill_defaults"
   final val ExploreDebugLoggingKey = "iq.ui.explore_debug_logging"
+  final val AllowedMutationRootsKey = "iq.security.allowed_mutation_roots"
+  final val AllowedReadRootsKey = "iq.security.allowed_read_roots"
 
   final val DefaultMaxLogLines = 4000
   final val DefaultMaxExploreMessages = 1000
   final val DefaultAutoScrollLogs = true
   final val DefaultAutoFillDefaults = true
   final val DefaultExploreDebugLogging = false
+  final val DefaultAllowedMutationRoots = ""
+  final val DefaultAllowedReadRoots = ""
 
   private final val MinLogLines = 200
   private final val MaxLogLines = 100000
@@ -31,7 +35,9 @@ object IQUISettings {
       maxExploreMessages: Int,
       autoScrollLogs: Boolean,
       autoFillDefaults: Boolean,
-      exploreDebugLogging: Boolean
+      exploreDebugLogging: Boolean,
+      allowedMutationRoots: String,
+      allowedReadRoots: String
   )
 
   private def clampInt(value: String, default: Int, min: Int, max: Int): Int =
@@ -61,7 +67,10 @@ object IQUISettings {
       autoScrollLogs = boolProp(AutoScrollLogsKey, DefaultAutoScrollLogs),
       autoFillDefaults = boolProp(AutoFillDefaultsKey, DefaultAutoFillDefaults),
       exploreDebugLogging =
-        boolProp(ExploreDebugLoggingKey, DefaultExploreDebugLogging)
+        boolProp(ExploreDebugLoggingKey, DefaultExploreDebugLogging),
+      allowedMutationRoots =
+        prop(AllowedMutationRootsKey, DefaultAllowedMutationRoots),
+      allowedReadRoots = prop(AllowedReadRootsKey, DefaultAllowedReadRoots)
     )
 
   def current: Settings =
