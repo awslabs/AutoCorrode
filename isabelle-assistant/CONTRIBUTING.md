@@ -78,7 +78,11 @@ make build               # Build the plugin JAR
 make install             # Build and install (includes I/Q)
 make clean               # Clean build artifacts
 make check-layering      # Enforce Assistant/IQ architectural boundary
+make report-layering     # Non-blocking runtime boundary debt report
 ```
+
+For a machine-readable debt snapshot (tsv), run:
+`./scripts/check_layering.sh --mode report --inventory-out ../design-documents/10-assistant-runtime-boundary-inventory.tsv`
 
 ### Running Tests
 

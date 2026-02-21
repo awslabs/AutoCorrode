@@ -69,6 +69,29 @@ Current implementation status:
 - `make -C isabelle-assistant test` now runs `check-layering` before tests.
 - contributor and architecture docs include the layering gate and ownership rule.
 
+Current debt inventory snapshot:
+
+- machine-readable runtime touchpoint inventory:
+  `design-documents/10-assistant-runtime-boundary-inventory.tsv`
+- generated via:
+  `make -C isabelle-assistant report-layering` or
+  `isabelle-assistant/scripts/check_layering.sh --mode report --inventory-out design-documents/10-assistant-runtime-boundary-inventory.tsv`
+
+Debt buckets mapped to target `iq` capabilities:
+
+1. `iq.explore_query`
+   - direct assistant use of `Extended_Query_Operation` / `PIDE.editor` for ad-hoc queries.
+   - target: canonical `explore`/query capabilities in `iq` for context/definition extraction.
+2. `iq.goal_and_query`
+   - assistant-local goal extraction from `PIDE.editor.output`.
+   - target: `iq` goal-state and structured goal-analysis capability.
+3. `iq.document_model_lookup` + `iq.document_snapshot`
+   - assistant-local use of `Document_Model.get_model` + snapshot plumbing.
+   - target: `iq` document lookup/session-state capability returning typed structures.
+4. `iq.command_lookup`
+   - assistant-local `snapshot.get_node` / `command_iterator` command resolution and traversal.
+   - target: `iq` command-at-target / command-range / proof-block lookup capabilities.
+
 ## Risk Register
 
 - Functional regressions during behavior relocation.

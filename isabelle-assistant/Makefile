@@ -47,7 +47,7 @@ TEST_SOURCES := $(wildcard src/test/scala/*.scala)
 SCALATEST_JARS = $(wildcard lib/test/*.jar)
 TEST_CLASSPATH = $(shell echo $(SCALATEST_JARS) | tr ' ' ':')
 
-.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-layering check-test-sanity verify-test-coverage fetch-test-deps
+.PHONY: all build install clean uninstall help debug check-deps iq-build iq-install iq-clean test check-layering report-layering check-test-sanity verify-test-coverage fetch-test-deps
 
 all: check-deps iq-install build
 
@@ -137,6 +137,9 @@ test: build fetch-test-deps check-layering check-test-sanity verify-test-coverag
 check-layering:
 	./scripts/check_layering.sh
 
+report-layering:
+	./scripts/check_layering.sh --mode report
+
 check-test-sanity:
 	@set -eu; \
 	if command -v rg >/dev/null 2>&1; then \
@@ -203,6 +206,8 @@ help:
 	echo "  iq-build   - Build I/Q plugin only"
 	echo "  iq-install - Install I/Q plugin only"
 	echo "  iq-clean   - Clean I/Q build directory only"
+	echo "  check-layering  - Enforce strict Assistant/IQ layering guardrails"
+	echo "  report-layering - Print non-blocking runtime boundary debt inventory"
 	echo "  debug      - Show configuration"
 	echo ""
 	echo "First run ./fetch-deps.sh to download AWS SDK JARs"
