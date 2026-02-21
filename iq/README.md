@@ -74,7 +74,7 @@ I/Q now defaults to a hardened local-only posture:
 - Loopback bind by default (`IQ_MCP_BIND_HOST=127.0.0.1`).
 - Remote bind is blocked unless explicitly enabled (`IQ_MCP_ALLOW_REMOTE_BIND=true`).
 - Optional request authentication token (`IQ_MCP_AUTH_TOKEN`).
-- Read-oriented tools (`list_files`, `read_file`, `get_command_info`, `get_document_info`, `open_file`, `resolve_command_target`, `explore`) are restricted to allowed read roots.
+- Read-oriented tools (`list_files`, `read_file`, `get_command_info`, `get_document_info`, `open_file`, `resolve_command_target`, `get_goal_state`, `get_context_info`, `get_entities`, `explore`) are restricted to allowed read roots.
 - Mutating tools (`open_file` with `create_if_missing=true`, `create_file`, `write_file`, `save_file`) are restricted to allowed mutation roots.
 - `get_command_info` with `xml_result_file` is also treated as a mutating operation and must target an allowed mutation root.
 
@@ -143,8 +143,11 @@ You have XXX theory files open in total, ...
 6. **read_file**: Read file content with line range and pattern search support
 7. **write_file**: Write or modify content in theory files with multiple edit modes (str_replace, insert, line replacement)
 8. **resolve_command_target**: Resolve canonical command selection (`current`, `file_offset`, `file_pattern`) to a concrete command with normalized target metadata
-9. **explore**: Non-invasive proof exploration (sledgehammer, find_theorems, proof attempts)
-10. **save_file**: Save one file or all modified open files
+9. **get_goal_state**: Read-only goal inspection at a command target, including structured free-variable/constant/subgoal analysis
+10. **get_context_info**: Read-only context summary at a command target, including proof-context status and nested goal state
+11. **get_entities**: Read-only theory entity listing (lemma/definition/fun/etc.) with line and offset metadata
+12. **explore**: Non-invasive proof exploration (sledgehammer, find_theorems, proof attempts)
+13. **save_file**: Save one file or all modified open files
 
 ## Behavioral Guidance
 

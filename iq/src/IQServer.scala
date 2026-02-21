@@ -545,6 +545,9 @@ class IQServer(
         "resolve_command_target" -> (params =>
           handleResolveCommandTarget(params)
         ),
+        "get_goal_state" -> (params => handleGetGoalState(params)),
+        "get_context_info" -> (params => handleGetContextInfo(params)),
+        "get_entities" -> (params => handleGetEntities(params)),
         "explore" -> (params => handleExplore(params)),
         "save_file" -> (params => handleSaveFile(params))
       )
@@ -1277,6 +1280,81 @@ class IQServer(
             )
           ),
           "required" -> List("command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_goal_state",
+        "description" -> "Read-only goal-state introspection at a canonical command selection. Returns rendered goal text plus structured free-variable/constant/subgoal analysis.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_context_info",
+        "description" -> "Read-only context introspection at a canonical command selection. Returns command metadata, proof-context status, and nested goal-state information.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "command_selection" -> Map(
+              "type" -> "string",
+              "description" -> "Method of selecting command context. Values: 'current', 'file_offset', 'file_pattern'.",
+              "enum" -> List("current", "file_offset", "file_pattern")
+            ),
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "File path for 'file_offset' and 'file_pattern' selection."
+            ),
+            "offset" -> Map(
+              "type" -> "integer",
+              "description" -> "Character offset for 'file_offset' selection. Will be normalized (clamped) to file bounds."
+            ),
+            "pattern" -> Map(
+              "type" -> "string",
+              "description" -> "Unique substring pattern for 'file_pattern' selection."
+            )
+          ),
+          "required" -> List("command_selection"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_entities",
+        "description" -> "Read-only entity introspection for a theory file. Enumerates declaration commands (lemma/definition/fun/etc.) with line and offset metadata.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "Path to theory file for entity extraction."
+            ),
+            "max_results" -> Map(
+              "type" -> "integer",
+              "description" -> "Optional maximum number of entities to return (default: 500)."
+            )
+          ),
+          "required" -> List("path"),
           "additionalProperties" -> false
         )
       ),
@@ -3012,6 +3090,16 @@ end"""
       .toEither
       .left
       .map(_.getMessage)
+      .flatMap { resolved =>
+        val nodePath = resolved.command.node_name.node
+        if (nodePath.trim.isEmpty) Right(resolved)
+        else {
+          authorizeReadPath("target_selection(node_path)", nodePath) match {
+            case Right(_) => Right(resolved)
+            case Left(errorMsg) => Left(errorMsg)
+          }
+        }
+      }
   }
 
   private def commandRangeFor(command: Command): Option[(String, Int, Int)] = {
@@ -3055,27 +3143,330 @@ end"""
     decodeAndAuthorizeTargetSelection(params, "resolve_command_target").flatMap {
       selection =>
         resolveTargetSelection(selection).map { resolved =>
-          val command = resolved.command
-          val commandInfoBase = Map(
-            "id" -> command.id,
-            "length" -> command.length,
-            "source" -> command.source,
-            "keyword" -> command.span.name
-          )
-          val commandInfo = commandRangeFor(command) match {
-            case Some((nodePath, startOffset, endOffset)) =>
-              commandInfoBase ++ Map(
-                "node_path" -> nodePath,
-                "start_offset" -> startOffset,
-                "end_offset" -> endOffset
-              )
-            case None => commandInfoBase
-          }
           Map(
             "selection" -> targetSelectionToMap(resolved.selection),
-            "command" -> commandInfo
+            "command" -> commandInfoMap(resolved.command)
           )
         }
+    }
+  }
+
+  private val ContextProofOpeners: Set[String] =
+    Set(
+      "lemma",
+      "theorem",
+      "corollary",
+      "proposition",
+      "schematic_goal",
+      "proof",
+      "have",
+      "show",
+      "obtain",
+      "next",
+      "fix",
+      "assume",
+      "define",
+      "induction",
+      "coinduction",
+      "cases"
+    )
+
+  private val ContextProofClosers: Set[String] =
+    Set("qed", "done", "end", "sorry", "oops", "\\<close>")
+
+  private val EntityKeywords: Set[String] =
+    Set(
+      "lemma",
+      "theorem",
+      "corollary",
+      "proposition",
+      "schematic_goal",
+      "definition",
+      "abbreviation",
+      "lift_definition",
+      "fun",
+      "function",
+      "primrec",
+      "datatype",
+      "codatatype",
+      "type_synonym",
+      "record",
+      "typedef",
+      "inductive",
+      "coinductive",
+      "nominal_inductive",
+      "locale",
+      "class",
+      "instantiation",
+      "interpretation"
+    )
+
+  private val EntityNamePattern =
+    """(?:lemma|theorem|corollary|proposition|schematic_goal|definition|abbreviation|lift_definition|fun|function|primrec|datatype|codatatype|type_synonym|record|typedef|inductive|coinductive|nominal_inductive|locale|class|instantiation|interpretation)\s+([A-Za-z0-9_']+)""".r
+
+  private def commandInfoMap(command: Command): Map[String, Any] = {
+    val commandInfoBase = Map(
+      "id" -> command.id,
+      "length" -> command.length,
+      "source" -> command.source,
+      "keyword" -> command.span.name
+    )
+    commandRangeFor(command) match {
+      case Some((nodePath, startOffset, endOffset)) =>
+        commandInfoBase ++ Map(
+          "node_path" -> nodePath,
+          "start_offset" -> startOffset,
+          "end_offset" -> endOffset
+        )
+      case None => commandInfoBase
+    }
+  }
+
+  private def isMetaConstant(name: String): Boolean =
+    name.startsWith("Pure.") || name == "Trueprop" || name == "HOL.eq" ||
+      name == "HOL.implies" || name == "HOL.conj" || name == "HOL.disj" ||
+      name == "HOL.All" || name == "HOL.Ex" || name == "HOL.Not" ||
+      name == "HOL.True" || name == "HOL.False"
+
+  private def extractCommandFreeVars(
+      snapshot: Document.Snapshot,
+      command: Command,
+      startOffset: Int
+  ): List[String] = {
+    val range = Text.Range(startOffset, startOffset + command.length)
+    val vars = snapshot.cumulate(
+      range,
+      List.empty[String],
+      Markup.Elements(Markup.FREE, "fixed"),
+      _ => {
+        case (acc, Text.Info(_, XML.Elem(Markup(_, props), _))) =>
+          Markup.Name.unapply(props).map(name => acc :+ name)
+      }
+    )
+    vars.flatMap(_._2).distinct
+  }
+
+  private def analyzeGoalMessages(
+      messages: List[XML.Tree],
+      fallbackFreeVars: List[String]
+  ): Map[String, Any] = {
+    val text = messages
+      .map(elem => XML.content(elem).trim)
+      .filter(_.nonEmpty)
+      .mkString("\n\n")
+    if (text.isEmpty) {
+      Map(
+        "has_goal" -> false,
+        "goal_text" -> "",
+        "num_subgoals" -> 0,
+        "free_vars" -> List.empty[String],
+        "constants" -> List.empty[String]
+      )
+    } else {
+      val freeVars = scala.collection.mutable.LinkedHashSet[String]()
+      val constants = scala.collection.mutable.LinkedHashSet[String]()
+      var numSubgoals = 0
+
+      def walk(tree: XML.Tree): Unit = tree match {
+        case XML.Elem(Markup(Markup.FREE, props), body) =>
+          Markup.Name.unapply(props).foreach(freeVars.add)
+          body.foreach(walk)
+        case XML.Elem(Markup("fixed", props), body) =>
+          Markup.Name.unapply(props).foreach(freeVars.add)
+          body.foreach(walk)
+        case XML.Elem(Markup(Markup.CONSTANT, props), body) =>
+          Markup.Name.unapply(props).foreach { name =>
+            if (!isMetaConstant(name)) {
+              val _ = constants.add(name)
+            }
+          }
+          body.foreach(walk)
+        case XML.Elem(Markup("subgoal", _), body) =>
+          numSubgoals += 1
+          body.foreach(walk)
+        case XML.Elem(_, body) =>
+          body.foreach(walk)
+        case XML.Text(_) =>
+      }
+
+      messages.foreach(walk)
+      val resolvedFreeVars =
+        if (freeVars.nonEmpty) freeVars.toList else fallbackFreeVars
+      Map(
+        "has_goal" -> true,
+        "goal_text" -> text,
+        "num_subgoals" -> math.max(numSubgoals, 1),
+        "free_vars" -> resolvedFreeVars,
+        "constants" -> constants.toList
+      )
+    }
+  }
+
+  private def goalStateForCommand(command: Command): Map[String, Any] = {
+    try {
+      val snapshot = PIDE.session.snapshot()
+      val node = snapshot.get_node(command.node_name)
+      if (node == null) {
+        Map(
+          "has_goal" -> false,
+          "goal_text" -> "",
+          "num_subgoals" -> 0,
+          "free_vars" -> List.empty[String],
+          "constants" -> List.empty[String],
+          "analysis_error" -> "No snapshot node available for command"
+        )
+      } else {
+        val startOffset = node.command_start(command).getOrElse(0)
+        val output = PIDE.editor.output(snapshot, startOffset)
+        val fallbackFreeVars = extractCommandFreeVars(snapshot, command, startOffset)
+        analyzeGoalMessages(output.messages, fallbackFreeVars)
+      }
+    } catch {
+      case ex: Exception =>
+        Map(
+          "has_goal" -> false,
+          "goal_text" -> "",
+          "num_subgoals" -> 0,
+          "free_vars" -> List.empty[String],
+          "constants" -> List.empty[String],
+          "analysis_error" -> ex.getMessage
+        )
+    }
+  }
+
+  private def isInProofContextFromKeywords(keywords: Seq[String]): Boolean = {
+    var depth = 0
+    val iter = keywords.reverseIterator
+    while (iter.hasNext) {
+      val keyword = iter.next()
+      if (ContextProofClosers.contains(keyword)) {
+        depth += 1
+      } else if (ContextProofOpeners.contains(keyword)) {
+        if (depth > 0) depth -= 1
+        else return true
+      }
+    }
+    false
+  }
+
+  private def isInProofContextAtCommand(command: Command): Boolean = {
+    try {
+      val snapshot = PIDE.session.snapshot()
+      val node = snapshot.get_node(command.node_name)
+      if (node == null || node.commands.isEmpty) {
+        false
+      } else {
+        val startOffset = node.command_start(command).getOrElse(0)
+        val safeEnd = math.max(0, startOffset + 1)
+        val keywords =
+          node.command_iterator(Text.Range(0, safeEnd)).toList.map(_._1.span.name)
+        isInProofContextFromKeywords(keywords)
+      }
+    } catch {
+      case _: Exception => false
+    }
+  }
+
+  private def handleGetGoalState(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    decodeAndAuthorizeTargetSelection(params, "get_goal_state").flatMap {
+      selection =>
+        resolveTargetSelection(selection).map { resolved =>
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(resolved.command),
+            "goal" -> goalStateForCommand(resolved.command)
+          )
+        }
+    }
+  }
+
+  private def handleGetContextInfo(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    decodeAndAuthorizeTargetSelection(params, "get_context_info").flatMap {
+      selection =>
+        resolveTargetSelection(selection).map { resolved =>
+          val goal = goalStateForCommand(resolved.command)
+          val hasGoal = goal.get("has_goal").contains(true)
+          Map(
+            "selection" -> targetSelectionToMap(resolved.selection),
+            "command" -> commandInfoMap(resolved.command),
+            "in_proof_context" -> isInProofContextAtCommand(resolved.command),
+            "has_goal" -> hasGoal,
+            "goal" -> goal
+          )
+        }
+    }
+  }
+
+  private def handleGetEntities(
+      params: Map[String, Any]
+  ): Either[String, Map[String, Any]] = {
+    val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
+      case Some(path) =>
+        IQUtils.autoCompleteFilePath(path) match {
+          case Right(fullPath) =>
+            authorizeReadPath("get_entities(path)", fullPath) match {
+              case Right(authorizedPath) => authorizedPath
+              case Left(errorMsg) => return Left(errorMsg)
+            }
+          case Left(errorMsg) => return Left(errorMsg)
+        }
+      case None =>
+        return Left("Missing required parameter: path")
+    }
+
+    val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
+      case Right(Some(v)) if v > 0 => v
+      case Right(Some(_)) => return Left("Parameter 'max_results' must be > 0")
+      case Right(None) => 500
+      case Left(err) => return Left(err)
+    }
+
+    getFileContentAndModel(filePath) match {
+      case (Some(content), Some(model)) =>
+        val snapshot = Document_Model.snapshot(model)
+        val node = snapshot.get_node(model.node_name)
+        if (node == null) {
+          Left(s"Could not load snapshot node for file: $filePath")
+        } else {
+          val lineDoc = Line.Document(content)
+          val allEntities =
+            node.command_iterator().toList.collect {
+              case (cmd, cmdOffset) if EntityKeywords.contains(cmd.span.name) =>
+                val name = EntityNamePattern
+                  .findFirstMatchIn(cmd.source.take(300))
+                  .map(_.group(1))
+                  .getOrElse("(unnamed)")
+                val line = lineDoc.position(cmdOffset).line + 1
+                Map(
+                  "line" -> line,
+                  "keyword" -> cmd.span.name,
+                  "name" -> name,
+                  "start_offset" -> cmdOffset,
+                  "end_offset" -> (cmdOffset + cmd.length),
+                  "source_preview" -> cmd.source.take(160).trim
+                )
+            }
+
+          val entities = allEntities.take(maxResults)
+          Right(
+            Map(
+              "path" -> filePath,
+              "node_name" -> model.node_name.toString,
+              "total_entities" -> allEntities.length,
+              "returned_entities" -> entities.length,
+              "truncated" -> (allEntities.length > entities.length),
+              "entities" -> entities
+            )
+          )
+        }
+      case _ =>
+        Left(
+          s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting entities."
+        )
     }
   }
 
