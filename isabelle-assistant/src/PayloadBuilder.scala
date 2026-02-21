@@ -247,6 +247,50 @@ object PayloadBuilder {
     }
   }
 
+  /** Build Anthropic payload with a single forced tool for structured output.
+    * Uses tool_choice to guarantee the response is a tool_use block matching the schema.
+    * Does NOT include agentic tools — only the synthetic schema tool. */
+  def buildAnthropicStructuredPayload(
+    systemPrompt: String, messages: List[(String, String)],
+    schema: StructuredResponseSchema,
+    temperature: Double, maxTokens: Int
+  ): String = {
+    writeJson { g =>
+      g.writeStringField("anthropic_version", "bedrock-2023-05-31")
+      g.writeNumberField("max_tokens", maxTokens)
+      g.writeNumberField("temperature", temperature)
+      if (systemPrompt.nonEmpty) g.writeStringField("system", systemPrompt)
+      // Single synthetic tool from schema
+      g.writeArrayFieldStart("tools")
+      g.writeStartObject()
+      g.writeStringField("name", schema.name)
+      g.writeStringField("description", schema.description)
+      g.writeFieldName("input_schema")
+      g.writeRawValue(schema.jsonSchema)
+      g.writeEndObject()
+      g.writeEndArray()
+      // Force the model to call this tool
+      g.writeObjectFieldStart("tool_choice")
+      g.writeStringField("type", "tool")
+      g.writeStringField("name", schema.name)
+      g.writeEndObject()
+      // Messages
+      g.writeArrayFieldStart("messages")
+      for ((role, content) <- messages) {
+        g.writeStartObject()
+        g.writeStringField("role", role)
+        if (isAnthropicStructuredContent(content)) {
+          g.writeFieldName("content")
+          g.writeRawValue(content)
+        } else {
+          g.writeStringField("content", content)
+        }
+        g.writeEndObject()
+      }
+      g.writeEndArray()
+    }
+  }
+
   /** Write a JSON object using Jackson's JsonGenerator, which handles all escaping. */
   def writeJson(body: JsonGenerator => Unit): String = {
     val sw = new StringWriter()

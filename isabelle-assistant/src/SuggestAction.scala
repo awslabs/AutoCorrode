@@ -16,6 +16,11 @@ import scala.collection.mutable.ListBuffer
   * with insert links.
   */
 object SuggestAction {
+  private val suggestSchema = StructuredResponseSchema(
+    "return_suggestions", "Return proof method suggestions",
+    """{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"string"}}},"required":["suggestions"]}"""
+  )
+
   sealed trait CandidateSource
   case object LLM extends CandidateSource
   case object Sledgehammer extends CandidateSource
@@ -255,10 +260,10 @@ object SuggestAction {
         val prompt = PromptLoader.load("suggest_proof_step.md", subs)
         Output.writeln(s"[Assistant] Suggest - Prompt length: ${prompt.length}")
 
-        val response = BedrockClient.invokeInContext(prompt)
-        Output.writeln(s"[Assistant] Suggest - LLM response:\n$response")
+        val args = BedrockClient.invokeInContextStructured(prompt, suggestSchema)
+        Output.writeln(s"[Assistant] Suggest - Structured response: $args")
 
-        val suggestions = parseLLMSuggestions(response)
+        val suggestions = parseStructuredSuggestions(args)
         Output.writeln(
           s"[Assistant] Suggest - Parsed ${suggestions.length} suggestions: $suggestions"
         )
@@ -423,18 +428,13 @@ object SuggestAction {
     }
   }
 
-  def parseLLMSuggestions(response: String): List[String] = {
-    val jsonOpt = ResponseParser.extractJsonObjectString(response)
-    val suggestions = jsonOpt
-      .flatMap { json =>
-        val obj = ResponseParser.parseToolArgsJsonObject(json)
-        obj.get("suggestions") match {
-          case Some(ResponseParser.JsonValue(arrayJson)) =>
-            Some(ResponseParser.parseStringList(arrayJson))
-          case _ => None
-        }
-      }
-      .getOrElse(Nil)
+  /** Parse suggestions from structured tool_choice response (ToolArgs). */
+  private[assistant] def parseStructuredSuggestions(args: ResponseParser.ToolArgs): List[String] = {
+    val suggestions = args.get("suggestions") match {
+      case Some(ResponseParser.JsonValue(arrayJson)) =>
+        ResponseParser.parseStringList(arrayJson)
+      case _ => Nil
+    }
 
     suggestions
       .map(_.trim)

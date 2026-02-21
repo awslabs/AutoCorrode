@@ -29,7 +29,7 @@ object VerifyWithRetry {
    * @param fullResponse  The full LLM response (for display)
    * @param attempt    Current attempt number (1-based)
    * @param retryPrompt   Function that takes (failedCode, error) and returns a retry prompt string
-   * @param extractCode   Function to extract verifiable code from an LLM response
+   * @param invokeAndExtract  Function that takes a prompt and returns extracted code (handles LLM invocation + parsing)
    * @param showResult    Function to display the final result with a badge
    */
   def verify(
@@ -39,7 +39,7 @@ object VerifyWithRetry {
     fullResponse: String,
     attempt: Int,
     retryPrompt: (String, String) => String,
-    extractCode: String => String,
+    invokeAndExtract: String => String,
     showResult: (String, VerificationBadge.BadgeType) => Unit
   ): Unit = {
     val maxRetries = AssistantOptions.getMaxVerificationRetries
@@ -59,14 +59,14 @@ object VerifyWithRetry {
 
       case IQIntegration.ProofTimeout if attempt < maxRetries =>
         retryInBackground(view, command, codeToVerify, "Verification timed out",
-          attempt, maxRetries, retryPrompt, extractCode, showResult)
+          attempt, maxRetries, retryPrompt, invokeAndExtract, showResult)
 
       case IQIntegration.ProofTimeout =>
         showResult(fullResponse, VerificationBadge.Failed("Timed out"))
 
       case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
         retryInBackground(view, command, codeToVerify, error,
-          attempt, maxRetries, retryPrompt, extractCode, showResult)
+          attempt, maxRetries, retryPrompt, invokeAndExtract, showResult)
 
       case IQIntegration.ProofFailure(_) =>
         showResult(fullResponse, VerificationBadge.Failed(s"Failed after $maxRetries attempts"))
@@ -78,7 +78,7 @@ object VerifyWithRetry {
     failedCode: String, error: String,
     attempt: Int, maxRetries: Int,
     retryPrompt: (String, String) => String,
-    extractCode: String => String,
+    invokeAndExtract: String => String,
     showResult: (String, VerificationBadge.BadgeType) => Unit
   ): Unit = {
     AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
@@ -86,11 +86,10 @@ object VerifyWithRetry {
     Isabelle_Thread.fork(name = "assistant-verify-retry") {
       try {
         val prompt = retryPrompt(failedCode, error)
-        val response = BedrockClient.invokeNoCache(prompt)
-        val code = extractCode(response)
+        val code = invokeAndExtract(prompt)
         GUI_Thread.later {
-          verify(view, command, code, response, attempt + 1,
-            retryPrompt, extractCode, showResult)
+          verify(view, command, code, code, attempt + 1,
+            retryPrompt, invokeAndExtract, showResult)
         }
       } catch {
         case ex: Exception =>

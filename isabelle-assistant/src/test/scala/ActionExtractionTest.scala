@@ -8,39 +8,32 @@ import org.scalatest.matchers.should.Matchers
 
 class ActionExtractionTest extends AnyFunSuite with Matchers {
 
-  test("RefactorAction.extractCode should prefer JSON code field") {
-    val response =
-      """Result:
-        |{"code":"proof -\n  show ?thesis by simp\nqed"}""".stripMargin
-    RefactorAction.extractCode(response) should include("show ?thesis by simp")
-  }
-
-  test("TidyAction.extractCode should fall back to fenced Isabelle code") {
-    val response =
-      """Here is the tidied script:
-        |```isabelle
-        |lemma foo: True
-        |  by simp
-        |```""".stripMargin
-    TidyAction.extractCode(response) should include("lemma foo: True")
-  }
-
-  test("ExtractLemmaAction.parseExtractionResponse should parse valid JSON payload") {
-    val response =
-      """{
-        |  "extracted_lemma": "lemma helper_lemma: \"A ==> A\" by simp",
-        |  "updated_proof": "proof - show ?thesis by (rule helper_lemma) qed"
-        |}""".stripMargin
-
-    val parsed = ExtractLemmaAction.parseExtractionResponse(response)
+  test("ExtractLemmaAction.parseStructuredExtraction should parse valid ToolArgs") {
+    val args: ResponseParser.ToolArgs = Map(
+      "extracted_lemma" -> ResponseParser.StringValue("lemma helper_lemma: \"A ==> A\" by simp"),
+      "updated_proof" -> ResponseParser.StringValue("proof - show ?thesis by (rule helper_lemma) qed")
+    )
+    val parsed = ExtractLemmaAction.parseStructuredExtraction(args)
     parsed should not be empty
     parsed.get.lemmaName shouldBe "helper_lemma"
     parsed.get.updatedProof should include("helper_lemma")
   }
 
-  test("ExtractLemmaAction.parseExtractionResponse should reject incomplete payloads") {
-    val response = """{"updated_proof":"proof - qed"}"""
-    ExtractLemmaAction.parseExtractionResponse(response) shouldBe None
+  test("ExtractLemmaAction.parseStructuredExtraction should reject missing fields") {
+    val args: ResponseParser.ToolArgs = Map(
+      "updated_proof" -> ResponseParser.StringValue("proof - qed")
+    )
+    ExtractLemmaAction.parseStructuredExtraction(args) shouldBe None
+  }
+
+  test("ExtractLemmaAction.parseStructuredExtraction should handle NullValue fields") {
+    val args: ResponseParser.ToolArgs = Map(
+      "extracted_lemma" -> ResponseParser.NullValue,
+      "updated_proof" -> ResponseParser.StringValue("proof")
+    )
+    val parsed = ExtractLemmaAction.parseStructuredExtraction(args)
+    parsed shouldBe defined
+    parsed.get.extractedLemma shouldBe ""
   }
 
   test("FindTheoremsAction.extractGoalPattern should prefer numbered subgoal line") {

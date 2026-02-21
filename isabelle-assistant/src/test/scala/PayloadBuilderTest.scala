@@ -194,4 +194,73 @@ class PayloadBuilderTest extends AnyFunSuite with Matchers {
     json should include("42")
     json should include("true")
   }
+
+  // --- Structured output payload ---
+
+  test("buildAnthropicStructuredPayload should include tool_choice forcing") {
+    val schema = StructuredResponseSchema(
+      "return_code", "Return code",
+      """{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}"""
+    )
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      "System prompt", List(("user", "Refactor this")), schema, 0.3, 2000
+    )
+    payload should include("tool_choice")
+    payload should include("\"type\":\"tool\"")
+    payload should include("\"name\":\"return_code\"")
+  }
+
+  test("buildAnthropicStructuredPayload should include single tool definition with schema") {
+    val schema = StructuredResponseSchema(
+      "return_suggestions", "Return suggestions",
+      """{"type":"object","properties":{"suggestions":{"type":"array","items":{"type":"string"}}},"required":["suggestions"]}"""
+    )
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      "System", List(("user", "Suggest")), schema, 0.5, 1000
+    )
+    payload should include("\"name\":\"return_suggestions\"")
+    payload should include("input_schema")
+    payload should include("suggestions")
+    // Should include only the schema tool, not agentic tools
+    payload should not include "read_theory"
+    payload should not include "verify_proof"
+  }
+
+  test("buildAnthropicStructuredPayload should include anthropic_version and messages") {
+    val schema = StructuredResponseSchema(
+      "test_tool", "Test",
+      """{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}"""
+    )
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      "Sys", List(("user", "Hello")), schema, 0.3, 500
+    )
+    payload should include("anthropic_version")
+    payload should include("bedrock-2023-05-31")
+    payload should include("messages")
+    payload should include("Hello")
+  }
+
+  test("buildAnthropicStructuredPayload should handle empty system prompt") {
+    val schema = StructuredResponseSchema(
+      "test_tool", "Test",
+      """{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}"""
+    )
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      "", List(("user", "Hello")), schema, 0.3, 500
+    )
+    payload should not include "\"system\""
+  }
+
+  test("buildAnthropicStructuredPayload should handle structured content in messages") {
+    val schema = StructuredResponseSchema(
+      "test_tool", "Test",
+      """{"type":"object","properties":{"x":{"type":"string"}},"required":["x"]}"""
+    )
+    val structuredContent = """[{"type":"text","text":"hello"}]"""
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      "Sys", List(("user", structuredContent)), schema, 0.3, 500
+    )
+    // Structured content should be raw JSON, not string-escaped
+    payload should include(""""content":[{"type":"text","text":"hello"}]""")
+  }
 }

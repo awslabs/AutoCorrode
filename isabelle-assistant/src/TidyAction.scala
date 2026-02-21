@@ -10,6 +10,12 @@ import org.gjt.sp.jedit.View
   * verification and retry.
   */
 object TidyAction {
+
+  private val tidySchema = StructuredResponseSchema(
+    "return_code", "Return the tidied Isabelle code",
+    """{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}"""
+  )
+
   def tidy(view: View): Unit = {
     val buffer = view.getBuffer
     val textArea = view.getTextArea
@@ -47,19 +53,24 @@ object TidyAction {
           val subs = buildPromptSubstitutions(code, goalState, bundle)
 
           val prompt = PromptLoader.load("tidy.md", subs)
-          val response = BedrockClient.invokeInContext(prompt)
+          val args = BedrockClient.invokeInContextStructured(prompt, tidySchema)
+          val tidied = ResponseParser.toolValueToString(args.getOrElse("code", ResponseParser.NullValue))
 
           if (!canVerify) {
             GUI_Thread.later {
-              showResult(view, response, VerificationBadge.Unverified)
+              showResult(view, tidied, VerificationBadge.Unverified)
             }
           } else {
+            val invokeAndExtract: String => String = { retryPrompt =>
+              val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, tidySchema)
+              ResponseParser.toolValueToString(retryArgs.getOrElse("code", ResponseParser.NullValue))
+            }
             GUI_Thread.later {
               VerifyWithRetry.verify(
                 view,
                 commandOpt.get,
-                extractCode(response),
-                response,
+                tidied,
+                tidied,
                 1,
                 retryPrompt = (failed, error) =>
                   PromptLoader.load(
@@ -71,7 +82,7 @@ object TidyAction {
                       Map("failed_attempt" -> failed, "error" -> error)
                     )
                   ),
-                extractCode = extractCode,
+                invokeAndExtract = invokeAndExtract,
                 showResult = (resp, badge) => showResult(view, resp, badge)
               )
             }
@@ -89,26 +100,15 @@ object TidyAction {
 
   private def showResult(
       view: View,
-      response: String,
+      code: String,
       badge: VerificationBadge.BadgeType
   ): Unit = {
-    val code = extractCode(response)
     AssistantDockable.setBadge(badge)
     AssistantDockable.respondInChat(
       "Tidied code:",
       Some((code, InsertHelper.createInsertAction(view, code)))
     )
     AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-  }
-
-  private[assistant] def extractCode(response: String): String = {
-    val fromJson = ResponseParser
-      .extractJsonObjectString(response)
-      .flatMap { json =>
-        ResponseParser.parseStringField(json, "code").map(_.trim)
-      }
-    val fromFences = SendbackHelper.extractCodeBlocks(response).mkString("\n").trim
-    fromJson.orElse(Option(fromFences).filter(_.nonEmpty)).getOrElse(response)
   }
 
   private[assistant] def buildPromptSubstitutions(

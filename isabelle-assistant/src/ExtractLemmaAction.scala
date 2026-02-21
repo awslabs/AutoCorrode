@@ -14,6 +14,11 @@ import org.gjt.sp.jedit.buffer.JEditBuffer
   */
 object ExtractLemmaAction {
 
+  private val extractSchema = StructuredResponseSchema(
+    "return_extraction", "Return the extracted lemma and updated proof",
+    """{"type":"object","properties":{"extracted_lemma":{"type":"string"},"updated_proof":{"type":"string"}},"required":["extracted_lemma","updated_proof"]}"""
+  )
+
   case class ExtractionResult(
       extractedLemma: String,
       updatedProof: String,
@@ -92,8 +97,8 @@ object ExtractLemmaAction {
               enrichedCtx.definitions.map("context" -> _)
           )
 
-          val response = BedrockClient.invokeInContext(prompt)
-          parseExtractionResponse(response) match {
+          val args = BedrockClient.invokeInContextStructured(prompt, extractSchema)
+          parseStructuredExtraction(args) match {
             case Some(result) if canVerify =>
               GUI_Thread.later {
                 startVerification(view, commandOpt.get, enrichedCtx, result, 1)
@@ -104,8 +109,6 @@ object ExtractLemmaAction {
               }
             case None =>
               GUI_Thread.later {
-                ChatAction.addMessage(ChatAction.Assistant, response);
-                AssistantDockable.showConversation(ChatAction.getHistory)
                 AssistantDockable.setStatus("Could not parse extraction result")
               }
           }
@@ -143,20 +146,21 @@ object ExtractLemmaAction {
     }
   }
 
-  private[assistant] def parseExtractionResponse(
-      response: String
+  /** Parse extraction result from structured tool_choice response (ToolArgs). */
+  private[assistant] def parseStructuredExtraction(
+      args: ResponseParser.ToolArgs
   ): Option[ExtractionResult] = {
-    ResponseParser.extractJsonObjectString(response).flatMap { json =>
-      for {
-        lemma <- ResponseParser.parseStringField(json, "extracted_lemma")
-        proof <- ResponseParser.parseStringField(json, "updated_proof")
-      } yield {
-        val name = """(?:lemma|theorem)\s+(\w+)""".r
-          .findFirstMatchIn(lemma)
-          .map(_.group(1))
-          .getOrElse("extracted")
-        ExtractionResult(lemma.trim, proof.trim, name)
-      }
+    for {
+      lemmaVal <- args.get("extracted_lemma")
+      proofVal <- args.get("updated_proof")
+    } yield {
+      val lemma = ResponseParser.toolValueToString(lemmaVal)
+      val proof = ResponseParser.toolValueToString(proofVal)
+      val name = """(?:lemma|theorem)\s+(\w+)""".r
+        .findFirstMatchIn(lemma)
+        .map(_.group(1))
+        .getOrElse("extracted")
+      ExtractionResult(lemma.trim, proof.trim, name)
     }
   }
 
@@ -284,8 +288,8 @@ object ExtractLemmaAction {
             ctx.relevantTheorems.map("relevant_theorems" -> _) ++
             ctx.definitions.map("context" -> _)
         )
-        val response = BedrockClient.invokeNoCache(retryPrompt)
-        parseExtractionResponse(response) match {
+        val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, extractSchema)
+        parseStructuredExtraction(retryArgs) match {
           case Some(result) =>
             GUI_Thread.later {
               startVerification(view, command, ctx, result, attempt + 1)

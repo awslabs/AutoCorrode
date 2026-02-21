@@ -218,4 +218,52 @@ class ResponseParserTest extends AnyFunSuite with Matchers {
       case _ => fail("Expected ToolUseBlock")
     }
   }
+
+  // --- extractForcedToolArgs ---
+
+  test("extractForcedToolArgs should extract first tool_use block input") {
+    val json = """{
+      "content": [
+        {"type": "tool_use", "id": "t1", "name": "return_code", "input": {"code": "by simp"}}
+      ],
+      "stop_reason": "end_turn"
+    }"""
+    val result = ResponseParser.extractForcedToolArgs(json)
+    result shouldBe defined
+    result.get.get("code") shouldBe Some(ResponseParser.StringValue("by simp"))
+  }
+
+  test("extractForcedToolArgs should return first tool_use when multiple blocks present") {
+    val json = """{
+      "content": [
+        {"type": "text", "text": "thinking..."},
+        {"type": "tool_use", "id": "t1", "name": "return_suggestions", "input": {"suggestions": ["by simp", "by auto"]}}
+      ],
+      "stop_reason": "end_turn"
+    }"""
+    val result = ResponseParser.extractForcedToolArgs(json)
+    result shouldBe defined
+    result.get.contains("suggestions") shouldBe true
+  }
+
+  test("extractForcedToolArgs should return None for text-only response") {
+    val json = """{"content":[{"type":"text","text":"Hello world"}],"stop_reason":"end_turn"}"""
+    ResponseParser.extractForcedToolArgs(json) shouldBe None
+  }
+
+  test("extractForcedToolArgs should handle string fields correctly") {
+    val json = """{
+      "content": [
+        {"type": "tool_use", "id": "t1", "name": "return_extraction", "input": {
+          "extracted_lemma": "lemma foo: True by simp",
+          "updated_proof": "proof - show ?thesis using foo by simp qed"
+        }}
+      ],
+      "stop_reason": "end_turn"
+    }"""
+    val result = ResponseParser.extractForcedToolArgs(json)
+    result shouldBe defined
+    ResponseParser.toolValueToString(result.get("extracted_lemma")) shouldBe "lemma foo: True by simp"
+    ResponseParser.toolValueToString(result.get("updated_proof")) should include("foo")
+  }
 }

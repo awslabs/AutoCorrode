@@ -40,16 +40,4 @@ Goal: `⊢ P ∧ Q ⟹ Q ∧ P` → `by blast`
 Goal: `⊢ map f (map g xs) = map (f ∘ g) xs` → `by (induction xs) simp_all`
 Goal: `⊢ ∃x. x + 1 = n + 1` → `by (rule exI[where x=n]) simp`
 
-Provide AT MOST 5 suggestions (3-5 is ideal) ranked by likelihood of success. You MUST respond with exactly a single JSON object containing a "suggestions" array:
-
-```json
-{
-  "suggestions": [
-    "by simp",
-    "by auto",
-    "by (induction x) simp_all"
-  ]
-}
-```
-
-CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.
+Provide AT MOST 5 suggestions (3-5 is ideal) ranked by likelihood of success.

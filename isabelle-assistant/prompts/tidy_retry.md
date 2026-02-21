@@ -48,12 +48,4 @@ Common issues to check:
 - `assumes`/`shows` rewrite changed the logical structure
 - Indentation changes broke Isabelle's layout-sensitive parsing
 
-Fix the code. You MUST respond with exactly a single JSON object containing the tidied code, ensuring newlines and quotes are properly escaped:
-
-```json
-{
-  "code": "lemma foo: ‹P ⟹ Q›\n..."
-}
-```
-
-CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.
+Fix the code and return the corrected tidied code.

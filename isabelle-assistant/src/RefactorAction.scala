@@ -11,6 +11,11 @@ import org.gjt.sp.jedit.View
   */
 object RefactorAction {
 
+  private val refactorSchema = StructuredResponseSchema(
+    "return_code", "Return the refactored Isar proof code",
+    """{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]}"""
+  )
+
   /** Chat command handler: refactor selected proof text. */
   def chatRefactor(view: View): Unit = {
     val selectedText = view.getTextArea.getSelectedText
@@ -44,19 +49,24 @@ object RefactorAction {
         val subs = buildPromptSubstitutions(proofText, goalState, bundle)
 
         val prompt = PromptLoader.load("refactor_to_isar.md", subs)
-        val response = BedrockClient.invokeInContext(prompt)
+        val args = BedrockClient.invokeInContextStructured(prompt, refactorSchema)
+        val code = ResponseParser.toolValueToString(args.getOrElse("code", ResponseParser.NullValue))
 
         if (!canVerify) {
           GUI_Thread.later {
-            showResult(view, response, VerificationBadge.Unverified)
+            showResult(view, code, VerificationBadge.Unverified)
           }
         } else {
+          val invokeAndExtract: String => String = { retryPrompt =>
+            val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, refactorSchema)
+            ResponseParser.toolValueToString(retryArgs.getOrElse("code", ResponseParser.NullValue))
+          }
           GUI_Thread.later {
             VerifyWithRetry.verify(
               view,
               commandOpt.get,
-              extractCode(response),
-              response,
+              code,
+              code,
               1,
               retryPrompt = (failed, error) =>
                 PromptLoader.load(
@@ -68,7 +78,7 @@ object RefactorAction {
                     Map("failed_attempt" -> failed, "error" -> error)
                   )
                 ),
-              extractCode = extractCode,
+              invokeAndExtract = invokeAndExtract,
               showResult = (resp, badge) => showResult(view, resp, badge)
             )
           }
@@ -85,33 +95,22 @@ object RefactorAction {
 
   private def showResult(
       view: View,
-      response: String,
+      code: String,
       badge: VerificationBadge.BadgeType
   ): Unit = {
-    val insertable = extractCode(response)
     AssistantDockable.setBadge(badge)
     AssistantDockable.respondInChat(
       "Refactored to Isar:",
       Some(
         (
-          insertable,
+          code,
           () => {
-            view.getBuffer.insert(view.getTextArea.getCaretPosition, insertable)
+            view.getBuffer.insert(view.getTextArea.getCaretPosition, code)
           }
         )
       )
     )
     AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-  }
-
-  private[assistant] def extractCode(response: String): String = {
-    val fromJson = ResponseParser
-      .extractJsonObjectString(response)
-      .flatMap { json =>
-        ResponseParser.parseStringField(json, "code").map(_.trim)
-      }
-    val fromFences = SendbackHelper.extractCodeBlocks(response).mkString("\n").trim
-    fromJson.orElse(Option(fromFences).filter(_.nonEmpty)).getOrElse(response)
   }
 
   private[assistant] def buildPromptSubstitutions(

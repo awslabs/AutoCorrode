@@ -64,13 +64,4 @@ Common issues to check:
 - Free variables in the extracted lemma need to be universally quantified
 - The extracted lemma needs additional assumptions from the enclosing context
 
-Fix the extraction. You MUST respond with exactly a single JSON object containing the corrected fields, ensuring newlines and quotes are properly escaped:
-
-```json
-{
-  "extracted_lemma": "<corrected lemma code>",
-  "updated_proof": "<corrected proof code>"
-}
-```
-
-CRITICAL: The output MUST be strictly valid JSON. Do NOT add any conversational text before or after the JSON block.
+Fix the extraction and return the corrected extracted lemma and updated proof.

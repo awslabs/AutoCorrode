@@ -228,6 +228,130 @@ object BedrockClient {
     }
   }
 
+  // --- Structured output methods (forced tool_choice) ---
+
+  import ResponseParser.ToolArgs
+
+  /**
+   * Invoke a single prompt with structured output via forced tool_choice.
+   * Stateless with cache. Returns parsed tool arguments.
+   */
+  def invokeStructured(prompt: String, schema: StructuredResponseSchema, systemPrompt: String = ""): ToolArgs = {
+    ErrorHandler.logOperation("invokeStructured") {
+      val cacheKey = s"structured:${schema.name}:$prompt"
+      LLMResponseCache.get(cacheKey) match {
+        case Some(cached) =>
+          Output.writeln(s"[Assistant] Using cached structured response")
+          ResponseParser.parseToolArgsJsonObject(cached)
+        case None =>
+          val args = retryWithBackoff(maxRetries) {
+            invokeStructuredInternal(prompt, schema, systemPrompt)
+          }
+          LLMResponseCache.put(cacheKey, ResponseParser.toolArgsToJson(args))
+          args
+      }
+    }
+  }
+
+  /**
+   * Invoke with conversational context and structured output via forced tool_choice.
+   * Appends the prompt to the current chat history. Returns parsed tool arguments.
+   */
+  def invokeInContextStructured(prompt: String, schema: StructuredResponseSchema): ToolArgs = {
+    ErrorHandler.logOperation("invokeInContextStructured") {
+      Option(org.gjt.sp.jedit.jEdit.getActiveView).foreach(setCurrentView)
+      val history = ChatAction.getHistorySnapshot.filterNot(_.transient).map(m => (m.role.wireValue, m.content))
+      val messages = history :+ ("user", prompt)
+      try {
+        retryWithBackoff(maxRetries) {
+          invokeStructuredChatInternal(messages, schema)
+        }
+      } finally {
+        currentViewTL.remove()
+      }
+    }
+  }
+
+  /**
+   * Invoke a single prompt with structured output, bypassing cache.
+   * Use for retry operations where a fresh response is required.
+   */
+  def invokeNoCacheStructured(prompt: String, schema: StructuredResponseSchema): ToolArgs = {
+    ErrorHandler.logOperation("invokeNoCacheStructured") {
+      retryWithBackoff(maxRetries) {
+        invokeStructuredInternal(prompt, schema, "")
+      }
+    }
+  }
+
+  /** Single-prompt structured invocation. */
+  private def invokeStructuredInternal(
+    prompt: String, schema: StructuredResponseSchema, systemPrompt: String
+  ): ToolArgs = {
+    val modelId = AssistantOptions.getModelId
+    requireAnthropicModel(modelId)
+    val temperature = AssistantOptions.getTemperature
+    val maxTokens = AssistantOptions.getMaxTokens
+
+    val fullSystemPrompt = List(PromptLoader.getSystemPrompt, systemPrompt).filter(_.nonEmpty).mkString("\n\n")
+
+    Output.writeln(s"[Assistant] invokeStructured - Model: $modelId, Schema: ${schema.name}")
+
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      fullSystemPrompt, List(("user", prompt)), schema, temperature, maxTokens
+    )
+
+    val request = InvokeModelRequest.builder()
+      .modelId(modelId)
+      .body(SdkBytes.fromUtf8String(payload))
+      .build()
+
+    enforceRateLimit()
+    val response = getClient.invokeModel(request)
+    val responseJson = response.body().asUtf8String()
+
+    ResponseParser.extractForcedToolArgs(responseJson).getOrElse(
+      throw new RuntimeException("Structured response contained no tool_use block")
+    )
+  }
+
+  /** Chat-history structured invocation with truncation and merging. */
+  private def invokeStructuredChatInternal(
+    messages: List[(String, String)], schema: StructuredResponseSchema
+  ): ToolArgs = {
+    val modelId = AssistantOptions.getModelId
+    requireAnthropicModel(modelId)
+    val temperature = AssistantOptions.getTemperature
+    val maxTokens = AssistantOptions.getMaxTokens
+
+    val fullSystemPrompt = PromptLoader.getSystemPrompt
+
+    Output.writeln(s"[Assistant] invokeStructuredChat - Model: $modelId, Schema: ${schema.name}, Messages: ${messages.length}")
+
+    val maxChars = AssistantConstants.MAX_CHAT_CONTEXT_CHARS
+    val truncated = truncateMessages(messages, maxChars)
+    if (truncated.length < messages.length)
+      Output.writeln(s"[Assistant] invokeStructuredChat - Truncated ${messages.length - truncated.length} old messages")
+    val merged = mergeConsecutiveRoles(truncated)
+
+    val payload = PayloadBuilder.buildAnthropicStructuredPayload(
+      fullSystemPrompt, merged, schema, temperature, maxTokens
+    )
+
+    val request = InvokeModelRequest.builder()
+      .modelId(modelId)
+      .body(SdkBytes.fromUtf8String(payload))
+      .build()
+
+    enforceRateLimit()
+    val response = getClient.invokeModel(request)
+    val responseJson = response.body().asUtf8String()
+
+    ResponseParser.extractForcedToolArgs(responseJson).getOrElse(
+      throw new RuntimeException("Structured response contained no tool_use block")
+    )
+  }
+
   /**
    * Retry an operation with exponential backoff, cancellation checks, and
    * circuit-breaker integration with capped delay.
@@ -268,6 +392,43 @@ object BedrockClient {
     retry(1, None)
   }
 
+  /** Truncate old messages to fit within context budget, keeping the most recent. */
+  private[assistant] def truncateMessages(
+    messages: List[(String, String)], maxChars: Int, systemCost: Int = 0
+  ): List[(String, String)] = {
+    val available = math.max(0, maxChars - systemCost)
+    if (available <= 0) {
+      Output.warning(s"[Assistant] System prompt ($systemCost chars) exceeds context budget ($maxChars chars)")
+      List.empty
+    } else {
+      val reversed = messages.reverse
+      var accumulated = 0
+      var kept = 0
+      for ((_, content) <- reversed if accumulated + content.length <= available) {
+        accumulated += content.length
+        kept += 1
+      }
+      if (kept > 0) {
+        messages.takeRight(kept)
+      } else if (messages.nonEmpty) {
+        val lastMsg = messages.last
+        if (lastMsg._2.length > available && available > 0)
+          List((lastMsg._1, lastMsg._2.take(available) + "\n[... truncated]"))
+        else List(lastMsg)
+      } else List.empty
+    }
+  }
+
+  /** Merge consecutive same-role messages (Anthropic requires strict alternation). */
+  private[assistant] def mergeConsecutiveRoles(
+    messages: List[(String, String)]
+  ): List[(String, String)] =
+    messages.foldLeft(List.empty[(String, String)]) {
+      case (acc, (role, content)) if acc.nonEmpty && acc.last._1 == role =>
+        acc.init :+ (role, acc.last._2 + "\n\n" + content)
+      case (acc, msg) => acc :+ msg
+    }
+
   /**
    * Internal implementation of chat invocation.
    * Delegates payload construction to [[PayloadBuilder]] and response parsing
@@ -276,7 +437,7 @@ object BedrockClient {
   private def invokeChatInternal(systemPrompt: String, messages: List[(String, String)]): String = {
     val modelId = AssistantOptions.getModelId
     requireAnthropicModel(modelId)
-    
+
     val temperature = AssistantOptions.getTemperature
     val maxTokens = AssistantOptions.getMaxTokens
 
@@ -284,54 +445,13 @@ object BedrockClient {
 
     Output.writeln(s"[Assistant] invokeChat - Model: $modelId, Messages: ${messages.length}")
 
-    // Truncate old messages to fit within context budget.
-    // For Anthropic, the system prompt is sent as a separate field, not in messages,
-    // so don't count it against the message budget.
     val maxChars = AssistantConstants.MAX_CHAT_CONTEXT_CHARS
     val systemCost = if (PayloadBuilder.isProvider(modelId, "anthropic")) 0 else fullSystemPrompt.length
-    val truncated = {
-      // Guard against negative available space
-      val available = math.max(0, maxChars - systemCost)
-      if (available <= 0) {
-        // System prompt alone exceeds budget - take nothing
-        Output.warning(s"[Assistant] System prompt ($systemCost chars) exceeds context budget ($maxChars chars)")
-        List.empty
-      } else {
-        // Accumulate messages from most recent backwards until we hit the budget.
-        val reversed = messages.reverse
-        var accumulated = 0
-        var kept = 0
-        for ((role, content) <- reversed if accumulated + content.length <= available) {
-          accumulated += content.length
-          kept += 1
-        }
-        if (kept > 0) {
-          messages.takeRight(kept)
-        } else {
-          // If no messages fit (e.g., single oversized message), take the last message but truncate it
-          if (messages.nonEmpty) {
-            val lastMsg = messages.last
-            if (lastMsg._2.length > available && available > 0) {
-              List((lastMsg._1, lastMsg._2.take(available) + "\n[... truncated]"))
-            } else {
-              List(lastMsg)
-            }
-          } else {
-            List.empty
-          }
-        }
-      }
-    }
+    val truncated = truncateMessages(messages, maxChars, systemCost)
     if (truncated.length < messages.length)
       Output.writeln(s"[Assistant] invokeChat - Truncated ${messages.length - truncated.length} old messages")
 
-    // Anthropic requires strict user/assistant alternation. Merge consecutive
-    // same-role messages before sending the request.
-    val merged = truncated.foldLeft(List.empty[(String, String)]) {
-      case (acc, (role, content)) if acc.nonEmpty && acc.last._1 == role =>
-        acc.init :+ (role, acc.last._2 + "\n\n" + content)
-      case (acc, msg) => acc :+ msg
-    }
+    val merged = mergeConsecutiveRoles(truncated)
 
     invokeChatWithTools(modelId, fullSystemPrompt, merged, temperature, maxTokens)
   }

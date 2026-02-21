@@ -12,6 +12,13 @@ import java.io.StringWriter
   * Handles response formats for: Anthropic (Claude), Meta (Llama), Amazon
   * (Titan), Mistral, and generic models.
   */
+/** Schema for structured output via Anthropic tool_choice forcing. */
+case class StructuredResponseSchema(
+    name: String,
+    description: String,
+    jsonSchema: String
+)
+
 object ResponseParser {
   private val jsonFactory = new JsonFactory()
 
@@ -189,6 +196,14 @@ object ResponseParser {
     (blocks.toList, stopReason)
   }
 
+  /** Extract the first ToolUseBlock's input from a forced tool_choice response.
+    * Returns None if the response contains no tool_use block.
+    */
+  def extractForcedToolArgs(json: String): Option[ToolArgs] = {
+    val (blocks, _) = parseAnthropicContentBlocks(json)
+    blocks.collectFirst { case ToolUseBlock(_, _, input) => input }
+  }
+
   private def parseContentBlock(
       parser: software.amazon.awssdk.thirdparty.jackson.core.JsonParser
   ): Option[ContentBlock] = {
@@ -273,42 +288,6 @@ object ResponseParser {
     gen.copyCurrentStructure(parser)
     gen.close()
     sw.toString
-  }
-
-  /** Safely extract JSON object string from a response that might contain
-    * markdown or conversational filler. Finds the first '{' and the last '}'.
-    */
-  def extractJsonObjectString(response: String): Option[String] = {
-    val start = response.indexOf('{')
-    val end = response.lastIndexOf('}')
-    if (start != -1 && end != -1 && end > start) {
-      Some(response.substring(start, end + 1))
-    } else None
-  }
-
-  /** Parses a single string field from a JSON object string. */
-  def parseStringField(json: String, fieldName: String): Option[String] = {
-    val parser = jsonFactory.createParser(json)
-    try {
-      var result: Option[String] = None
-      while (parser.nextToken() != null && result.isEmpty) {
-        if (
-          parser.currentToken() == JsonToken.FIELD_NAME && parser
-            .currentName() == fieldName
-        ) {
-          parser.nextToken()
-          if (parser.currentToken() == JsonToken.VALUE_STRING) {
-            result = Some(parser.getValueAsString)
-          }
-        }
-      }
-      result
-    } catch {
-      case ex: Exception =>
-        ErrorHandler.logSilentError("parseStringField", ex); None
-    } finally {
-      parser.close()
-    }
   }
 
   /** Parses a JSON string representing an array of strings into a List[String].
