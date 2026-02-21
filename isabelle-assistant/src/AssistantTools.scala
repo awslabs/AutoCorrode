@@ -723,6 +723,11 @@ object AssistantTools {
     AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
 
   private val numberedLinePattern = """^\s*(?:→\s*)?(\d+):(.*)$""".r
+  private final case class ViewStateSnapshot(
+      path: Option[String],
+      caretOffset: Int,
+      bufferLength: Int
+  )
 
   private def normalizeTheoryFileName(raw: String): String = {
     val trimmed = raw.trim
@@ -756,39 +761,40 @@ object AssistantTools {
         )
     }
 
-  private def selectionArgsForCurrentView(view: View): Map[String, Any] =
-    Option(view) match {
-      case None => Map("command_selection" -> "current")
-      case Some(v) =>
-        try {
-          val buffer = v.getBuffer
-          val pathOpt =
-            Option(buffer).flatMap(b => Option(b.getPath)).map(_.trim).filter(_.nonEmpty)
-          pathOpt match {
-            case Some(path) =>
-              val rawOffset = Option(v.getTextArea).map(_.getCaretPosition).getOrElse(0)
-              val bufferLength = Option(buffer).map(_.getLength).getOrElse(0)
-              val offset = clampOffset(rawOffset, bufferLength)
-              Map(
-                "command_selection" -> "file_offset",
-                "path" -> path,
-                "offset" -> offset
-              )
-            case None =>
-              Map("command_selection" -> "current")
+  private def snapshotViewState(view: View): Option[ViewStateSnapshot] =
+    Option(view).flatMap { v =>
+      try {
+        Some(
+          GUI_Thread.now {
+            val bufferOpt = Option(v.getBuffer)
+            val path =
+              bufferOpt.flatMap(b => Option(b.getPath)).map(_.trim).filter(_.nonEmpty)
+            val bufferLength = bufferOpt.map(_.getLength).getOrElse(0)
+            val caretOffset = Option(v.getTextArea).map(_.getCaretPosition).getOrElse(0)
+            ViewStateSnapshot(path, caretOffset, bufferLength)
           }
-        } catch {
-          case _: Exception =>
-            Map("command_selection" -> "current")
-        }
+        )
+      } catch {
+        case _: Exception => None
+      }
     }
 
+  private def selectionArgsForCurrentView(view: View): Map[String, Any] =
+    snapshotViewState(view)
+      .flatMap(snapshot =>
+        snapshot.path.map(path =>
+          Map(
+            "command_selection" -> "file_offset",
+            "path" -> path,
+            "offset" -> clampOffset(snapshot.caretOffset, snapshot.bufferLength)
+          )
+        )
+      )
+      .getOrElse(Map("command_selection" -> "current"))
+
   private def currentBufferPath(view: View): Either[String, String] =
-    Option(view)
-      .flatMap(v => Option(v.getBuffer))
-      .flatMap(b => Option(b.getPath))
-      .map(_.trim)
-      .filter(_.nonEmpty)
+    snapshotViewState(view)
+      .flatMap(_.path)
       .toRight("Error: current buffer has no path")
 
   private def resolveTheoryPath(
