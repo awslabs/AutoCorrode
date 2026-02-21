@@ -108,6 +108,57 @@ class IQBridgeFramingTest(unittest.TestCase):
 
         self.assertIsNone(response)
         self.assertFalse(bridge.connected)
+        self.assertIsNotNone(bridge.last_forward_error)
+        self.assertIn("timed out waiting for Isabelle server response", bridge.last_forward_error)
+
+    def test_forward_failure_message_includes_tool_name_and_detail(self):
+        bridge = self.make_bridge([], timeout_after_chunks=True)
+        bridge.response_timeout_sec = 1
+        request = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": "explore", "arguments": {}},
+        }
+
+        response = bridge.forward_to_isabelle(request)
+        self.assertIsNone(response)
+
+        message = bridge._forward_failure_message(request)
+        self.assertIn("tools/call (tool=explore)", message)
+        self.assertIn("timed out waiting for Isabelle server response", message)
+
+    def test_effective_timeout_uses_tool_timeout_arguments(self):
+        bridge = MCPBridgeWithReconnect()
+        bridge.response_timeout_sec = 30
+        request = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {
+                "name": "write_file",
+                "arguments": {
+                    "timeout": 120000,
+                    "timeout_per_command": 60000,
+                },
+            },
+        }
+
+        effective = bridge._effective_response_timeout_sec(request)
+        self.assertGreaterEqual(effective, 125.0)
+
+    def test_effective_timeout_defaults_without_tool_timeout_arguments(self):
+        bridge = MCPBridgeWithReconnect()
+        bridge.response_timeout_sec = 30
+        request = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"mode": "Line"}},
+        }
+
+        effective = bridge._effective_response_timeout_sec(request)
+        self.assertEqual(effective, 30.0)
 
 
 if __name__ == "__main__":

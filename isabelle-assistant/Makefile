@@ -109,10 +109,14 @@ COMPONENT_LINE := init_component "$(PLUGIN_DIR)"
 install: iq-install $(JAR_FILE)
 	echo "Installing to $(INSTALL_DIR)..."
 	mkdir -p $(INSTALL_DIR)
-	cp $(JAR_FILE) $(INSTALL_DIR)/
+	@set -eu; \
+	tmp_jar="$(INSTALL_DIR)/.isabelle_assistant.jar.tmp.$$"; \
+	cp "$(JAR_FILE)" "$$tmp_jar"; \
+	mv -f "$$tmp_jar" "$(INSTALL_DIR)/isabelle_assistant.jar"
 	mkdir -p $(ISABELLE_SETTINGS_DIR)
 	grep -qxF '$(COMPONENT_LINE)' $(ISABELLE_SETTINGS_DIR)/settings 2>/dev/null || echo '$(COMPONENT_LINE)' >> $(ISABELLE_SETTINGS_DIR)/settings
 	echo "Installed. Restart Isabelle/jEdit to load the plugin."
+	echo "NOTE: Atomic install avoids partial writes, but running jEdit must still be restarted."
 
 clean: iq-clean
 	rm -rf $(BUILD_DIR)

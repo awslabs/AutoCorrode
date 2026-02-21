@@ -12,6 +12,14 @@ object IQServerAuthTest {
       root: java.nio.file.Path,
       token: Option[String]
   ): IQServer = {
+    mkServerWithBackend(root, token, None)
+  }
+
+  private def mkServerWithBackend(
+      root: java.nio.file.Path,
+      token: Option[String],
+      capabilityBackend: Option[IQCapabilityBackend]
+  ): IQServer = {
     val config = IQServerSecurityConfig(
       bindHost = "127.0.0.1",
       allowRemoteBind = false,
@@ -20,7 +28,11 @@ object IQServerAuthTest {
       allowedReadRoots = List(root),
       maxClientThreads = 2
     )
-    new IQServer(port = 0, securityConfig = config)
+    new IQServer(
+      port = 0,
+      securityConfig = config,
+      capabilityBackendOverride = capabilityBackend
+    )
   }
 
   private def testUnauthorizedRequestReturnsErrorWithId(): Unit = {
@@ -73,6 +85,38 @@ object IQServerAuthTest {
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "request should pass when auth token is disabled")
     assertThat(response.get.contains("\"result\""), s"expected successful result payload: ${response.get}")
+  }
+
+  private def testInternalToolFailurePreservesRequestId(): Unit = {
+    val root = Files.createTempDirectory("iq-server-internal-id-root").toRealPath()
+    val crashingBackend = new IQCapabilityBackend {
+      override val toolNames: Set[String] = Set("explore")
+      override def invoke(
+          toolName: String,
+          params: Map[String, Any]
+      ): Either[IQCapabilityInvocationError, Map[String, Any]] = {
+        throw new RuntimeException("forced-test-failure")
+      }
+    }
+    val server = mkServerWithBackend(root, None, Some(crashingBackend))
+    val request =
+      """{"jsonrpc":"2.0","id":"req-internal-1","method":"tools/call","params":{"name":"explore","arguments":{"query":"sledgehammer","command_selection":"current"}}}"""
+    val response = server.processRequestForTest(request)
+
+    assertThat(
+      response.nonEmpty,
+      "internal tool failure should return an error response"
+    )
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("req-internal-1"),
+      s"internal error response must preserve request id: $payload"
+    )
+    assertThat(
+      payload.contains("forced-test-failure"),
+      s"internal error should include underlying failure message: $payload"
+    )
   }
 
   private def testToolsListIncludesResolveCommandTarget(): Unit = {
@@ -318,6 +362,7 @@ object IQServerAuthTest {
     testAuthorizedRequestAcceptsTopLevelToken()
     testAuthorizedRequestAcceptsParamsToken()
     testNoAuthConfiguredAllowsRequests()
+    testInternalToolFailurePreservesRequestId()
     testToolsListIncludesResolveCommandTarget()
     testResolveCommandTargetRejectsInvalidSelection()
     testResolveCommandTargetRequiresPathAndOffsetForFileOffset()

@@ -128,10 +128,16 @@ $(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST
 install: $(JAR_FILE)
 	echo "Installing I/Q plugin to $(INSTALL_DIR)..."
 	mkdir -p $(INSTALL_DIR)
-	cp $(JAR_FILE) $(INSTALL_DIR)/
+	@set -eu; \
+	tmp_jar="$(INSTALL_DIR)/.iq_plugin.jar.tmp.$$"; \
+	cp "$(JAR_FILE)" "$$tmp_jar"; \
+	mv -f "$$tmp_jar" "$(INSTALL_DIR)/iq_plugin.jar"
 	echo "Plugin built and installed successfully!"
 	echo "JAR file: $(JAR_FILE)"
 	echo "Installed to: $(INSTALL_DIR)/iq_plugin.jar"
+	echo ""
+	echo "NOTE: If Isabelle/jEdit is currently running, restart it now to reload the updated plugin JAR."
+	echo "      Atomic install avoids partial writes, but a running classloader keeps old JAR state."
 	echo ""
 	echo "To use the plugin:"
 	echo "1. Start Isabelle/jEdit: $(ISABELLE_HOME)/bin/isabelle jedit"

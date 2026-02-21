@@ -14,9 +14,13 @@ import os
 from typing import Dict, Any, Optional, List
 
 class MCPBridgeWithReconnect:
+    _MAX_REQUEST_TIMEOUT_SEC = 3600.0
+    _REQUEST_TIMEOUT_GRACE_SEC = 5.0
+
     def __init__(self):
         self.isabelle_socket = None
         self.connected = False
+        self.last_forward_error: Optional[str] = None
         token = os.environ.get("IQ_MCP_AUTH_TOKEN", "").strip()
         self.auth_token = token if token else None
         self.server_host = os.environ.get("IQ_MCP_BRIDGE_HOST", "localhost").strip() or "localhost"
@@ -29,6 +33,29 @@ class MCPBridgeWithReconnect:
         )
         self._recv_buffer = b""
         self._response_queue: List[Dict[str, Any]] = []
+
+    def _set_forward_error(self, message: str) -> None:
+        self.last_forward_error = message.strip() if message else None
+
+    def _clear_forward_error(self) -> None:
+        self.last_forward_error = None
+
+    def _format_request_label(self, request: Dict[str, Any]) -> str:
+        method = request.get("method", "unknown")
+        if method == "tools/call":
+            params = request.get("params", {})
+            if isinstance(params, dict):
+                tool_name = params.get("name")
+                if isinstance(tool_name, str) and tool_name.strip():
+                    return f"{method} (tool={tool_name.strip()})"
+        return method
+
+    def _forward_failure_message(self, request: Dict[str, Any]) -> str:
+        request_label = self._format_request_label(request)
+        detail = (self.last_forward_error or "").strip()
+        if detail:
+            return f"Failed to forward {request_label} to Isabelle server: {detail}"
+        return f"Failed to forward {request_label} to Isabelle server"
 
     def _parse_positive_int_env(self, name: str, default: int) -> int:
         raw = os.environ.get(name, "").strip()
@@ -49,6 +76,50 @@ class MCPBridgeWithReconnect:
             return parsed if parsed >= 0 else default
         except ValueError:
             return default
+
+    def _coerce_positive_number(self, value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, (int, float)):
+            return float(value) if value > 0 else None
+        if isinstance(value, str):
+            raw = value.strip()
+            if not raw:
+                return None
+            try:
+                parsed = float(raw)
+                return parsed if parsed > 0 else None
+            except ValueError:
+                return None
+        return None
+
+    def _effective_response_timeout_sec(self, request: Dict[str, Any]) -> float:
+        """Use request-level timeout hints when available (expressed in milliseconds)."""
+        base_timeout_sec = float(self.response_timeout_sec)
+        if not isinstance(request, dict):
+            return base_timeout_sec
+
+        if request.get("method") != "tools/call":
+            return base_timeout_sec
+
+        params = request.get("params")
+        if not isinstance(params, dict):
+            return base_timeout_sec
+        arguments = params.get("arguments")
+        if not isinstance(arguments, dict):
+            return base_timeout_sec
+
+        timeout_candidates_ms: List[float] = []
+        for key in ("timeout", "timeout_ms", "timeout_per_command", "timeout_per_command_ms"):
+            parsed = self._coerce_positive_number(arguments.get(key))
+            if parsed is not None:
+                timeout_candidates_ms.append(parsed)
+
+        if not timeout_candidates_ms:
+            return base_timeout_sec
+
+        requested_sec = (max(timeout_candidates_ms) / 1000.0) + self._REQUEST_TIMEOUT_GRACE_SEC
+        return min(max(base_timeout_sec, requested_sec), self._MAX_REQUEST_TIMEOUT_SEC)
 
     def _rotate_log_if_needed(self) -> None:
         if self.log_max_bytes <= 0:
@@ -102,6 +173,9 @@ class MCPBridgeWithReconnect:
 
         except Exception as e:
             self.log(f"Connection failed: {e}")
+            self._set_forward_error(
+                f"cannot connect to {self.server_host}:{self.server_port} ({e})"
+            )
             self.connected = False
             if self.isabelle_socket:
                 try:
@@ -153,14 +227,21 @@ class MCPBridgeWithReconnect:
             # For requests, read the matching framed JSON line (newline-delimited JSON),
             # while preserving additional complete messages for later.
             request_id = request.get("id")
-            parsed_response = self._read_response_for_id(method, request_id)
+            response_timeout_sec = self._effective_response_timeout_sec(request)
+            self.log(
+                f"Waiting up to {int(max(1.0, response_timeout_sec))}s for {self._format_request_label(request)} "
+                f"(id={request_id})"
+            )
+            parsed_response = self._read_response_for_id(method, request_id, response_timeout_sec)
             if parsed_response is None:
                 return None
+            self._clear_forward_error()
             self.log(f"Successfully forwarded {method}")
             return parsed_response
 
         except Exception as e:
             self.log(f"Error forwarding {method}: {e}")
+            self._set_forward_error(str(e))
             self.connected = False
             return None
 
@@ -183,6 +264,9 @@ class MCPBridgeWithReconnect:
                     self.log(f"Ignoring non-object JSON response for {method}: {decoded[:200]}")
             except (UnicodeDecodeError, json.JSONDecodeError) as e:
                 self.log(f"Response decode error for {method}: {e}")
+                self._set_forward_error(
+                    f"invalid JSON response from Isabelle server ({e})"
+                )
                 return False
         return True
 
@@ -193,9 +277,9 @@ class MCPBridgeWithReconnect:
                 return self._response_queue.pop(idx)
         return None
 
-    def _read_response_for_id(self, method: str, request_id: Any) -> Optional[Dict[str, Any]]:
+    def _read_response_for_id(self, method: str, request_id: Any, response_timeout_sec: float) -> Optional[Dict[str, Any]]:
         """Read a parsed response with matching JSON-RPC id from the Isabelle socket."""
-        deadline = time.time() + self.response_timeout_sec
+        deadline = time.time() + max(1.0, response_timeout_sec)
         while True:
             queued = self._pop_matching_response(request_id)
             if queued is not None:
@@ -203,6 +287,10 @@ class MCPBridgeWithReconnect:
 
             if time.time() >= deadline:
                 self.log(f"Timed out waiting for response to {method} (id={request_id})")
+                self._set_forward_error(
+                    f"timed out waiting for Isabelle server response after {int(max(1.0, response_timeout_sec))}s; "
+                    "consider increasing the tool timeout argument and/or IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC"
+                )
                 self.connected = False
                 return None
 
@@ -212,6 +300,7 @@ class MCPBridgeWithReconnect:
                 continue
             if not chunk:
                 self.log(f"No response for {method} - connection closed")
+                self._set_forward_error("connection closed by Isabelle server")
                 self.connected = False
                 return None
 
@@ -267,7 +356,7 @@ class MCPBridgeWithReconnect:
                     else:
                         # Send error if forwarding failed for a request
                         error_response = self.create_error_response(
-                            request_id, -32603, f"Failed to forward {method} to Isabelle server"
+                            request_id, -32603, self._forward_failure_message(request)
                         )
                         print(json.dumps(error_response), flush=True)
                         self.log(f"Error response sent for {method}")

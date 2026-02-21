@@ -316,6 +316,10 @@ class IQServer(
     }
   }
 
+  private def throwableMessage(ex: Throwable): String = {
+    Option(ex.getMessage).map(_.trim).filter(_.nonEmpty).getOrElse(ex.getClass.getName)
+  }
+
   /**
    * Waits for a theory to be fully processed by marking it as required and polling until completion.
    *
@@ -712,13 +716,33 @@ class IQServer(
           }
         } catch {
           case ex: Exception =>
-            val errorResponse = formatErrorResponse(None, -32603, s"Internal error: ${ex.getMessage}")
+            val errorResponse =
+              formatErrorResponse(
+                None,
+                ErrorCodes.INTERNAL_ERROR,
+                s"Internal error: ${throwableMessage(ex)}"
+              )
             writer.println(errorResponse)
+            writer.flush()
+          case err: LinkageError =>
+            safeOutput(s"I/Q Server: Linkage error while handling request: ${throwableMessage(err)}")
+            err.printStackTrace()
+            val errorResponse =
+              formatErrorResponse(
+                None,
+                ErrorCodes.INTERNAL_ERROR,
+                s"Internal linkage error: ${throwableMessage(err)}"
+              )
+            writer.println(errorResponse)
+            writer.flush()
         }
       }
     } catch {
       case ex: Exception =>
         Output.writeln(s"Error handling MCP client: ${ex.getMessage}")
+      case err: LinkageError =>
+        safeOutput(s"I/Q Server: Linkage error handling MCP client: ${throwableMessage(err)}")
+        err.printStackTrace()
     } finally {
       try {
         clientSocket.close()
@@ -744,11 +768,13 @@ class IQServer(
    * @return Some(response) for requests, None for notifications
    */
   private def processRequest(requestLine: String): Option[String] = {
+    var requestIdForError: Option[Any] = None
     try {
       safeOutput(s"I/Q Server: Processing request: ${IQSecurity.redactAuthToken(requestLine)}")
 
       val json = JSON.parse(requestLine)
       val (method, id) = extractMethodAndId(json)
+      requestIdForError = id
 
       safeOutput(s"I/Q Server: Parsed method='$method', id=$id")
 
@@ -806,7 +832,23 @@ class IQServer(
       case ex: Exception =>
         safeOutput(s"I/Q Server: Error processing request: ${ex.getMessage}")
         ex.printStackTrace()
-        Some(formatErrorResponse(None, ErrorCodes.INTERNAL_ERROR, s"Internal error: ${ex.getMessage}"))
+        Some(
+          formatErrorResponse(
+            requestIdForError,
+            ErrorCodes.INTERNAL_ERROR,
+            s"Internal error: ${throwableMessage(ex)}"
+          )
+        )
+      case err: LinkageError =>
+        safeOutput(s"I/Q Server: Linkage error processing request: ${throwableMessage(err)}")
+        err.printStackTrace()
+        Some(
+          formatErrorResponse(
+            requestIdForError,
+            ErrorCodes.INTERNAL_ERROR,
+            s"Internal linkage error: ${throwableMessage(err)}"
+          )
+        )
     }
   }
 
@@ -897,6 +939,15 @@ class IQServer(
         safeOutput(s"I/Q Server: Tool execution error: ${ex.getMessage}")
         ex.printStackTrace()
         Left((ErrorCodes.INTERNAL_ERROR, s"Tool execution error: ${ex.getMessage}"))
+      case err: LinkageError =>
+        safeOutput(s"I/Q Server: Tool linkage error: ${throwableMessage(err)}")
+        err.printStackTrace()
+        Left(
+          (
+            ErrorCodes.INTERNAL_ERROR,
+            s"Tool execution linkage error: ${throwableMessage(err)}"
+          )
+        )
     }
   }
 
@@ -4159,6 +4210,10 @@ end"""
         Output.writeln(s"I/Q Server: Error in handleExplore: ${ex.getMessage}")
         ex.printStackTrace()
         Left(s"Internal error: ${ex.getMessage}")
+      case err: LinkageError =>
+        Output.writeln(s"I/Q Server: Linkage error in handleExplore: ${throwableMessage(err)}")
+        err.printStackTrace()
+        Left(s"Internal linkage error: ${throwableMessage(err)}")
     }
   }
 
@@ -4411,9 +4466,16 @@ end"""
         case ex: Exception =>
           Map(
             "success" -> false,
-            "error" -> ex.getMessage,
+            "error" -> throwableMessage(ex),
             "results" -> "",
-            "message" -> s"Failed to execute query operation: ${ex.getMessage}"
+            "message" -> s"Failed to execute query operation: ${throwableMessage(ex)}"
+          )
+        case err: LinkageError =>
+          Map(
+            "success" -> false,
+            "error" -> throwableMessage(err),
+            "results" -> "",
+            "message" -> s"Failed to execute query operation due to linkage error: ${throwableMessage(err)}"
           )
       }
 
@@ -4421,9 +4483,16 @@ end"""
       case ex: Exception =>
         Map(
           "success" -> false,
-          "error" -> ex.getMessage,
+          "error" -> throwableMessage(ex),
           "results" -> "",
-          "message" -> s"Failed to execute exploration: ${ex.getMessage}"
+          "message" -> s"Failed to execute exploration: ${throwableMessage(ex)}"
+        )
+      case err: LinkageError =>
+        Map(
+          "success" -> false,
+          "error" -> throwableMessage(err),
+          "results" -> "",
+          "message" -> s"Failed to execute exploration due to linkage error: ${throwableMessage(err)}"
         )
     }
   }
