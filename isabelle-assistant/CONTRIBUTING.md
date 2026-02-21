@@ -12,7 +12,7 @@ Isabelle Assistant owns UI and model orchestration. Isabelle-proof execution sem
 - In `IQIntegration`, migrated proof-query APIs (`verifyProofAsync`, `runSledgehammerAsync`, `runFindTheoremsAsync`, `runQueryAsync`, `executeStepAsync`) must remain MCP-only and route through `IQMcpClient`.
 - Do not add local fallback logic for those tools via `IQIntegration` or `Extended_Query_Operation`.
 - If a capability is missing in I/Q, add it to I/Q rather than re-implementing runtime semantics in Assistant.
-- `make check-layering` is a hard failing gate. Any new direct Isabelle runtime touchpoint outside the approved migration-debt allowlist fails CI.
+- `make check-layering` is a hard failing gate. Any direct Isabelle runtime touchpoint in Assistant fails CI (zero exceptions).
 
 ### Key Components
 
@@ -79,10 +79,10 @@ make build               # Build the plugin JAR
 make install             # Build and install (includes I/Q)
 make clean               # Clean build artifacts
 make check-layering      # Enforce hard failing Assistant/IQ architectural boundary
-make report-layering     # Non-blocking runtime boundary debt report
+make report-layering     # Runtime boundary report (must stay at zero touchpoints)
 ```
 
-For a machine-readable debt snapshot (tsv), run:
+For a machine-readable boundary snapshot (tsv), run:
 `./scripts/check_layering.sh --mode report --inventory-out ../design-documents/10-assistant-runtime-boundary-inventory.tsv`
 
 ### Running Tests

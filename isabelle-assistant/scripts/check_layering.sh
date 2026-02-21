@@ -14,8 +14,8 @@ usage() {
 Usage: check_layering.sh [--mode strict|report] [--inventory-out <path>]
 
 Modes:
-  strict  Enforce MCP-only migrated method boundaries and hard runtime-touchpoint allowlist (default).
-  report  Emit non-blocking assistant runtime boundary debt report.
+  strict  Enforce MCP-only migrated method boundaries and zero assistant runtime touchpoints (default).
+  report  Emit assistant runtime boundary report (must be zero touchpoints).
 EOF
 }
 
@@ -79,19 +79,6 @@ runtime_touchpoint_specs=(
   "command_iterator|command_iterator\\(|iq.command_lookup"
 )
 
-declare -a approved_runtime_touchpoint_scopes=()
-
-is_approved_runtime_touchpoint_scope() {
-  local key="$1"
-  for approved in "${approved_runtime_touchpoint_scopes[@]-}"; do
-    [[ -z "${approved:-}" ]] && continue
-    if [[ "$approved" == "$key" ]]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 scan_runtime_touchpoints() {
   local mode="$1"
   local out_file="$2"
@@ -129,7 +116,7 @@ scan_runtime_touchpoints() {
   fi
 
   if [[ "$mode" == "report" ]]; then
-    echo "Layering debt report (non-blocking):"
+    echo "Layering runtime-boundary report:"
     if [[ ! -s "$out_file" ]]; then
       echo "  No runtime touchpoints detected in $ASSISTANT_SRC."
     else
@@ -149,52 +136,16 @@ scan_runtime_touchpoints() {
   fi
 }
 
-enforce_runtime_touchpoint_allowlist() {
+enforce_zero_runtime_touchpoints() {
   local matches_file="$1"
-  local unexpected_file
-  unexpected_file="$(mktemp)"
-  local stale_file
-  stale_file="$(mktemp)"
-
   if [[ -s "$matches_file" ]]; then
-    while IFS=$'\t' read -r touchpoint file line target source; do
-      [[ -z "${touchpoint:-}" ]] && continue
-      local key="${touchpoint}|${file}"
-      if ! is_approved_runtime_touchpoint_scope "$key"; then
-        printf "%s\t%s\t%s\t%s\t%s\n" "$touchpoint" "$file" "$line" "$target" "$source" >> "$unexpected_file"
-      fi
-    done < "$matches_file"
-  fi
-
-  for approved in "${approved_runtime_touchpoint_scopes[@]-}"; do
-    [[ -z "${approved:-}" ]] && continue
-    if ! awk -F '\t' -v key="$approved" '$1 "|" $2 == key {found=1} END {exit(found ? 0 : 1)}' "$matches_file"; then
-      printf "%s\n" "$approved" >> "$stale_file"
-    fi
-  done
-
-  if [[ -s "$unexpected_file" ]]; then
-    echo "ERROR: layering violation: unapproved assistant runtime touchpoints detected."
-    echo "Add missing IQ capability ownership or explicitly approve scope in check_layering.sh."
+    echo "ERROR: layering violation: assistant runtime touchpoints detected."
+    echo "Assistant must remain orchestration-only; move runtime semantics into iq capabilities."
     echo
     printf "touchpoint\tfile\tline\ttarget_iq_capability\tsource\n"
-    cat "$unexpected_file"
-    rm -f "$unexpected_file"
-    rm -f "$stale_file"
+    cat "$matches_file"
     exit 1
   fi
-
-  if [[ -s "$stale_file" ]]; then
-    echo "ERROR: layering allowlist contains stale entries with no corresponding runtime touchpoint."
-    echo "Remove these dead allowlist entries from check_layering.sh:"
-    cat "$stale_file"
-    rm -f "$unexpected_file"
-    rm -f "$stale_file"
-    exit 1
-  fi
-
-  rm -f "$unexpected_file"
-  rm -f "$stale_file"
 }
 
 extract_method() {
@@ -284,7 +235,7 @@ scan_runtime_touchpoints "$MODE" "$RUNTIME_TOUCHPOINTS_FILE"
 
 if [[ "$MODE" == "strict" ]]; then
   run_strict_mcp_guards
-  enforce_runtime_touchpoint_allowlist "$RUNTIME_TOUCHPOINTS_FILE"
+  enforce_zero_runtime_touchpoints "$RUNTIME_TOUCHPOINTS_FILE"
   echo "Layering checks passed."
 else
   echo "Layering report completed (non-blocking)."

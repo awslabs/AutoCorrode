@@ -25,7 +25,7 @@ This document maps user-facing features to system capabilities and dependencies.
 | Proof verification | Verification badges and retries | iq capability + assistant presentation | Yes | Optional |
 | Find theorems and proof exploration | Tools/actions | iq capability + assistant orchestration | Yes | Optional |
 | Theory read/search navigation | Tools/actions | assistant buffer APIs + iq-backed reads where available | Optional | Optional |
-| Theory edits/creation via model tools | tool use | assistant permission gate + jEdit buffer/file operations (migration debt) | No | Yes |
+| Theory edits/creation via model tools | tool use | assistant permission gate + jEdit buffer/file operations | No | Yes |
 | Permission gating | settings + runtime prompts | isabelle-assistant | No | No |
 
 ## User-Facing Preconditions

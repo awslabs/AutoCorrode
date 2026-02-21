@@ -55,7 +55,7 @@ Responsibilities:
 ## Dependency Rules
 
 1. `isabelle-assistant` may depend on `iq` capabilities, not on `iq` internals.
-2. Any module in `isabelle-assistant` that directly performs proof-state execution should be considered migration debt unless explicitly justified.
+2. Any module in `isabelle-assistant` that directly performs proof-state execution is forbidden.
 3. `iq` must not depend on assistant UI classes.
 4. Shared data contracts should be explicit and typed.
 
@@ -91,5 +91,4 @@ Current enforcement:
 
 - `make -C isabelle-assistant check-layering` is a failing gate:
   1. migrated proof tools in `AssistantTools` and migrated proof-query APIs in `IQIntegration` must remain MCP-only (no local `IQIntegration`/`Extended_Query_Operation` execution paths),
-  2. any assistant-side direct Isabelle runtime touchpoint outside the approved debt allowlist fails,
-  3. stale allowlist entries with no corresponding touchpoint fail (dead exception cleanup is mandatory).
+  2. any assistant-side direct Isabelle runtime touchpoint fails (zero exceptions).

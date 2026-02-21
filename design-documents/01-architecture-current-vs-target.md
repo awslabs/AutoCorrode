@@ -10,15 +10,13 @@ This document records current architecture, defines target architecture, and mak
 
 ## Current Architecture
 
-The current system is layered with a hard boundary gate, plus explicit residual migration debt.
+The current system is layered with a hard boundary gate and zero assistant-side runtime exceptions.
 
 ```mermaid
 graph TD
   UI["isabelle-assistant UI layer"] --> ORCH["LLM orchestration and prompts"]
   ORCH --> TOOLS["Assistant tool dispatch + permission gate"]
   TOOLS --> IQ["iq MCP and query operations"]
-  TOOLS --> DEBT["Allowlisted runtime debt only"]
-  DEBT --> PIDE["Direct PIDE and jEdit interactions"]
   IQ --> PIDE
 ```
 
@@ -29,7 +27,6 @@ graph TD
   - Bedrock model invocation and tool-use loop.
   - Prompt loading and response rendering.
   - Tool permission checks.
-  - Bounded residual direct runtime debt under explicit allowlist governance.
 - `iq` owns:
   - MCP server and socket protocol entrypoint.
   - Isabelle query/explore operations.
@@ -37,17 +34,7 @@ graph TD
 
 ### Known Coupling Points
 
-Allowlisted direct runtime touchpoints currently exist in:
-
-- `isabelle-assistant/src/AnalyzePatternsAction.scala`
-- `isabelle-assistant/src/AssistantSupport.scala`
-- `isabelle-assistant/src/IQIntegration.scala`
-- `isabelle-assistant/src/IQAvailable.scala`
-- `isabelle-assistant/src/MenuContext.scala`
-- `isabelle-assistant/src/ProofExtractor.scala`
-- `isabelle-assistant/src/ShowTypeAction.scala`
-- `isabelle-assistant/src/SuggestNameAction.scala`
-- `isabelle-assistant/src/SummarizeTheoryAction.scala`
+Assistant-side direct runtime touchpoints are prohibited. Current expected count: zero.
 
 Inventory source of truth:
 - `design-documents/10-assistant-runtime-boundary-inventory.tsv`
@@ -81,7 +68,7 @@ graph TD
 2. New proof-related tools should be defined at the `iq` layer first, then consumed by assistant.
 3. Assistant should treat tool outputs as typed capability responses, not raw ad hoc strings.
 4. Security and permission decisions must remain visible to the user.
-5. Residual runtime debt is temporary, explicit, and enforced by failing gates.
+5. Direct runtime touchpoints in assistant are disallowed and enforced by failing gates.
 
 ## Migration Direction
 
@@ -96,4 +83,4 @@ A new feature is architecturally compliant when:
 1. The Isabelle interaction path is represented as an `iq` capability.
 2. Assistant-side code remains orchestration-only for that interaction.
 3. Failures are recoverable and clearly surfaced at UI level.
-4. No new direct runtime touchpoint is introduced without explicit allowlist approval.
+4. No direct runtime touchpoint is introduced in assistant code.

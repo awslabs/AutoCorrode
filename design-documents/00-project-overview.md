@@ -40,9 +40,9 @@ Current capabilities are implemented across both subsystems:
 - `iq` provides MCP tools for read/edit/query/explore/save operations and normalized typed responses for assistant integration.
 - `isabelle-assistant` provides chat UI, prompt loading, Bedrock orchestration, right-click actions, verification workflows, and user-facing tool permissions.
 - Core assistant actions now route command/goal/context/diagnostic/definition/entity lookups through `IQMcpClient`-backed paths.
-- Remaining direct assistant runtime touchpoints are explicit migration debt tracked in:
+- Assistant runtime touchpoint inventory is tracked in:
   `design-documents/10-assistant-runtime-boundary-inventory.tsv`
-  and bounded by a hard allowlist gate in `isabelle-assistant/scripts/check_layering.sh`.
+  and is expected to remain empty under the hard layering gate in `isabelle-assistant/scripts/check_layering.sh`.
 
 ## Target Capability Split
 
@@ -56,8 +56,7 @@ This target split is normative for future refactoring and new feature work.
 ## Enforcement Status
 
 - `make -C isabelle-assistant check-layering` is a failing architectural gate.
-- New direct assistant-side Isabelle runtime touchpoints are rejected unless explicitly allowlisted.
-- Stale allowlist entries are rejected to prevent dead boundary exceptions from accumulating.
+- Any direct assistant-side Isabelle runtime touchpoint is rejected (zero-exception policy).
 
 ## Stakeholders
 

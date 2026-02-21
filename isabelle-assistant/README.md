@@ -15,7 +15,7 @@ Isabelle Assistant combines four main layers:
 
 Layering rule: proof execution semantics are owned by I/Q. Assistant-side proof tools should orchestrate and render results, not implement local fallback execution paths.
 The repository enforces this with a failing layering gate (`make check-layering`) in the Assistant build/test flow.
-Residual direct-runtime migration debt is intentionally tracked in `design-documents/10-assistant-runtime-boundary-inventory.tsv`.
+Runtime-boundary inventory is tracked in `design-documents/10-assistant-runtime-boundary-inventory.tsv` and is expected to remain empty (header-only) under the zero-exception layering policy.
 
 For contributor-level component and threading details, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
