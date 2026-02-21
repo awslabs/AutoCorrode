@@ -32,9 +32,10 @@ object RefactorAction {
 
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
     val goalState = GoalExtractor.getGoalState(buffer, offset)
-    val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
+    val hasCommand =
+      CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
+    val canVerify = IQAvailable.isAvailable && hasCommand
 
     AssistantDockable.setBadge(VerificationBadge.Verifying)
 
@@ -44,7 +45,6 @@ object RefactorAction {
           ProofContextSupport.collect(
             view,
             offset,
-            commandOpt,
             goalState,
             includeDefinitions = true
           )
@@ -54,40 +54,38 @@ object RefactorAction {
         val args = BedrockClient.invokeInContextStructured(prompt, refactorSchema)
         val code = ResponseParser.toolValueToString(args.getOrElse("code", ResponseParser.NullValue))
 
-        commandOpt match {
-          case Some(command) if canVerify =>
-            val invokeAndExtract: String => String = { retryPrompt =>
-              val retryArgs =
-                BedrockClient.invokeNoCacheStructured(retryPrompt, refactorSchema)
-              ResponseParser.toolValueToString(
-                retryArgs.getOrElse("code", ResponseParser.NullValue)
-              )
-            }
-            GUI_Thread.later {
-              VerifyWithRetry.verify(
-                view,
-                command,
-                code,
-                code,
-                1,
-                retryPrompt = (failed, error) =>
-                  PromptLoader.load(
-                    "refactor_to_isar_retry.md",
-                    buildPromptSubstitutions(
-                      proofText,
-                      goalState,
-                      bundle,
-                      Map("failed_attempt" -> failed, "error" -> error)
-                    )
-                  ),
-                invokeAndExtract = invokeAndExtract,
-                showResult = (resp, badge) => showResult(view, resp, badge)
-              )
-            }
-          case _ =>
-            GUI_Thread.later {
-              showResult(view, code, VerificationBadge.Unverified)
-            }
+        if (canVerify) {
+          val invokeAndExtract: String => String = { retryPrompt =>
+            val retryArgs =
+              BedrockClient.invokeNoCacheStructured(retryPrompt, refactorSchema)
+            ResponseParser.toolValueToString(
+              retryArgs.getOrElse("code", ResponseParser.NullValue)
+            )
+          }
+          GUI_Thread.later {
+            VerifyWithRetry.verify(
+              view,
+              code,
+              code,
+              1,
+              retryPrompt = (failed, error) =>
+                PromptLoader.load(
+                  "refactor_to_isar_retry.md",
+                  buildPromptSubstitutions(
+                    proofText,
+                    goalState,
+                    bundle,
+                    Map("failed_attempt" -> failed, "error" -> error)
+                  )
+                ),
+              invokeAndExtract = invokeAndExtract,
+              showResult = (resp, badge) => showResult(view, resp, badge)
+            )
+          }
+        } else {
+          GUI_Thread.later {
+            showResult(view, code, VerificationBadge.Unverified)
+          }
         }
       } catch {
         case ex: Exception =>

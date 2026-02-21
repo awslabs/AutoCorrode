@@ -605,9 +605,9 @@ object ChatAction {
     else {
       val buffer = view.getBuffer
       val offset = view.getTextArea.getCaretPosition
-      IQIntegration.getCommandAtOffset(buffer, offset) match {
+      CommandExtractor.getCommandAtOffset(buffer, offset) match {
         case None => addResponse("No Isabelle command at cursor position.")
-        case Some(command) =>
+        case Some(_) =>
           AssistantDockable.setStatus(AssistantConstants.STATUS_VERIFYING)
           val timeout = AssistantOptions.getVerificationTimeout
           val latch = new CountDownLatch(1)
@@ -616,7 +616,6 @@ object ChatAction {
           GUI_Thread.later {
             IQIntegration.verifyProofAsync(
               view,
-              command,
               proof,
               timeout,
               {
@@ -678,16 +677,15 @@ object ChatAction {
   private def runSledgehammer(view: View): Unit = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    IQIntegration.getCommandAtOffset(buffer, offset) match {
+    CommandExtractor.getCommandAtOffset(buffer, offset) match {
       case None => addResponse("No Isabelle command at cursor position.")
-      case Some(command) =>
+      case Some(_) =>
         AssistantDockable.setStatus("Running sledgehammer...")
         val timeout = AssistantOptions.getSledgehammerTimeout
 
         GUI_Thread.later {
           IQIntegration.runSledgehammerAsync(
             view,
-            command,
             timeout,
             {
               case Right(results) if results.nonEmpty =>
@@ -726,9 +724,9 @@ object ChatAction {
     else {
       val buffer = view.getBuffer
       val offset = view.getTextArea.getCaretPosition
-      IQIntegration.getCommandAtOffset(buffer, offset) match {
+      CommandExtractor.getCommandAtOffset(buffer, offset) match {
         case None => addResponse("No Isabelle command at cursor position.")
-        case Some(command) =>
+        case Some(_) =>
           AssistantDockable.setStatus("Searching theorems...")
           val limit = AssistantOptions.getFindTheoremsLimit
           val timeout = AssistantOptions.getFindTheoremsTimeout
@@ -738,7 +736,6 @@ object ChatAction {
           GUI_Thread.later {
             IQIntegration.runFindTheoremsAsync(
               view,
-              command,
               quotedPattern,
               limit,
               timeout,

@@ -3,8 +3,6 @@
 
 package isabelle.assistant
 
-import isabelle._
-
 /**
  * LRU cache for I/Q proof verification results.
  * Keyed by (node name, command ID, command source, proof text) to avoid
@@ -54,8 +52,16 @@ object VerificationCache {
       this.size() > maxSize
   }
 
-  private def keyFor(command: Command, proofText: String): CacheKey =
-    CacheKey(command.node_name.node, command.id, command.source, proofText)
+  private def keyFor(
+      command: IQMcpClient.CommandInfo,
+      proofText: String
+  ): CacheKey =
+    CacheKey(
+      command.nodePath.getOrElse(""),
+      command.id,
+      command.source,
+      proofText
+    )
 
   private[assistant] def classifyFailure(error: String): FailureCause = {
     val normalized = Option(error).getOrElse("").toLowerCase
@@ -79,7 +85,10 @@ object VerificationCache {
   private[assistant] def shouldCacheResult(result: IQIntegration.VerificationResult): Boolean =
     classifyResult(result) == ResultClass.StableSuccess
 
-  def get(command: Command, proofText: String): Option[IQIntegration.VerificationResult] = synchronized {
+  def get(
+      command: IQMcpClient.CommandInfo,
+      proofText: String
+  ): Option[IQIntegration.VerificationResult] = synchronized {
     val key = keyFor(command, proofText)
     Option(cache.get(key)).map(_.result)
   }
@@ -94,7 +103,11 @@ object VerificationCache {
     Option(cache.get(key)).map(_.result)
   }
 
-  def putIfCacheable(command: Command, proofText: String, result: IQIntegration.VerificationResult): Boolean =
+  def putIfCacheable(
+      command: IQMcpClient.CommandInfo,
+      proofText: String,
+      result: IQIntegration.VerificationResult
+  ): Boolean =
     synchronized {
       if (shouldCacheResult(result)) {
         val key = keyFor(command, proofText)
@@ -103,7 +116,11 @@ object VerificationCache {
       } else false
     }
 
-  def put(command: Command, proofText: String, result: IQIntegration.VerificationResult): Unit = synchronized {
+  def put(
+      command: IQMcpClient.CommandInfo,
+      proofText: String,
+      result: IQIntegration.VerificationResult
+  ): Unit = synchronized {
     val _ = putIfCacheable(command, proofText, result)
   }
 

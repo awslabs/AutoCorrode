@@ -1725,13 +1725,15 @@ object AssistantTools {
       if (methods.isEmpty) "Error: no valid methods provided"
       else {
         val cmdLatch = new CountDownLatch(1)
-        @volatile var commandOpt: Option[Command] = None
+        @volatile var hasCommand = false
         GUI_Thread.later {
           try {
-            commandOpt = IQIntegration.getCommandAtOffset(
+            hasCommand = CommandExtractor
+              .getCommandAtOffset(
               view.getBuffer,
               view.getTextArea.getCaretPosition
             )
+              .isDefined
           } catch {
             case ex: Exception =>
               ErrorHandler.logSilentError("AssistantTools", ex)
@@ -1745,9 +1747,8 @@ object AssistantTools {
           )
         ) return "Error: operation timed out (GUI thread busy)"
 
-        commandOpt match {
-          case None          => "No Isabelle command at cursor position."
-          case Some(command) =>
+        if (!hasCommand) "No Isabelle command at cursor position."
+        else {
             val results = scala.collection.mutable.ListBuffer[String]()
             for (method <- methods) {
               val timeout = AssistantOptions.getVerificationTimeout
@@ -1756,7 +1757,6 @@ object AssistantTools {
               GUI_Thread.later {
                 IQIntegration.verifyProofAsync(
                   view,
-                  command,
                   method,
                   timeout,
                   {
@@ -1780,7 +1780,7 @@ object AssistantTools {
               else results += methodResult
             }
             s"Tried ${methods.length} methods:\n${results.mkString("\n")}"
-        }
+          }
       }
     }
   }

@@ -35,30 +35,28 @@ object CounterexampleFinderAction {
   def run(view: View, config: Config): Unit = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
+    val hasCommand = CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
 
-    commandOpt match {
-      case None =>
-        GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
-      case Some(command) =>
-        val goal = GoalExtractor.getGoalState(buffer, offset).getOrElse("")
-        AssistantDockable.setStatus(s"Running ${config.toolName}...")
-        val timeout = config.getTimeout()
+    if (!hasCommand) {
+      GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
+    } else {
+      val goal = GoalExtractor.getGoalState(buffer, offset).getOrElse("")
+      AssistantDockable.setStatus(s"Running ${config.toolName}...")
+      val timeout = config.getTimeout()
 
-        GUI_Thread.later {
-          IQIntegration.runQueryAsync(
-            view,
-            command,
-            config.queryArgs,
-            timeout,
-            { result =>
-              GUI_Thread.later {
-                displayResult(view, result, goal, config)
-                AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-              }
+      GUI_Thread.later {
+        IQIntegration.runQueryAsync(
+          view,
+          config.queryArgs,
+          timeout,
+          { result =>
+            GUI_Thread.later {
+              displayResult(view, result, goal, config)
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
             }
-          )
-        }
+          }
+        )
+      }
     }
   }
 

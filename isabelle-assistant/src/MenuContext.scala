@@ -3,7 +3,6 @@
 
 package isabelle.assistant
 
-import isabelle._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import scala.jdk.CollectionConverters._
@@ -16,19 +15,19 @@ object MenuContext {
   case class ViewContext(
     buffer: JEditBuffer,
     offset: Int,
-    command: Option[Command],
+    hasCommand: Boolean,
     selection: Option[String]
   ) {
-    def hasIQ: Boolean = IQAvailable.isAvailable && command.isDefined
+    def hasIQ: Boolean = IQAvailable.isAvailable && hasCommand
   }
 
   object ViewContext {
     def apply(view: View): ViewContext = {
       val buffer = view.getBuffer
       val offset = view.getTextArea.getCaretPosition
-      val command = IQIntegration.getCommandAtOffset(buffer, offset)
+      val hasCommand = CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
       val selection = Option(view.getTextArea.getSelectedText).filter(_.trim.nonEmpty)
-      ViewContext(buffer, offset, command, selection)
+      ViewContext(buffer, offset, hasCommand, selection)
     }
   }
 

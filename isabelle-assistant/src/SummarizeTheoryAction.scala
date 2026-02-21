@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import javax.swing.JOptionPane
 
@@ -38,8 +37,8 @@ object SummarizeTheoryAction {
   }
 
   private def doSummarize(view: View, buffer: org.gjt.sp.jedit.Buffer, source: String): Unit = {
-    val theoryName = Document_Model.get_model(buffer)
-      .map(_.node_name.theory).getOrElse(buffer.getName.stripSuffix(".thy"))
+    val theoryName =
+      TheoryMetadata.theoryName(buffer).getOrElse(buffer.getName.stripSuffix(".thy"))
 
     val promptOpt = try {
       Some(PromptLoader.load("summarize_theory.md", Map("theory_name" -> theoryName, "source" -> source)))

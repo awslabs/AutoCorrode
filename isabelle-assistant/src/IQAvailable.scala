@@ -5,26 +5,22 @@ package isabelle.assistant
 
 import isabelle._
 
-/**
- * Checks I/Q plugin availability via class loading, with periodic re-checking.
- * I/Q (Isabelle/Q) provides proof verification, sledgehammer, find_theorems,
- * and other Isabelle query capabilities. When unavailable, Assistant runs in
- * LLM-only mode with reduced functionality.
- *
- * The availability status is cached but can be refreshed via `recheck()`,
- * for example if I/Q is installed after Assistant starts.
- */
+/** Checks I/Q availability via MCP reachability probes, with periodic re-checking.
+  *
+  * I/Q (Isabelle/Q) provides proof verification, sledgehammer, find_theorems,
+  * and other Isabelle query capabilities. When unavailable, Assistant runs in
+  * LLM-only mode with reduced functionality.
+  *
+  * The availability status is cached but can be refreshed via `recheck()`.
+  */
 object IQAvailable {
   @volatile private var _cached: Option[Boolean] = None
+  private val AvailabilityProbeTimeoutMs = 1000L
 
   private def check(): Boolean = {
-    try {
-      Class.forName("isabelle.Extended_Query_Operation")
-      true
-    } catch {
-      case _: ClassNotFoundException => false
-      case _: NoClassDefFoundError => false
-    }
+    IQMcpClient
+      .callTool("list_files", Map.empty, AvailabilityProbeTimeoutMs)
+      .isRight
   }
 
   def isAvailable: Boolean = _cached match {
@@ -51,6 +47,6 @@ object IQAvailable {
     if (isAvailable)
       Output.writeln("[Assistant] I/Q plugin detected - proof verification features enabled")
     else
-      Output.writeln("[Assistant] I/Q plugin not found - running in LLM-only mode. Restart Isabelle/jEdit after installing I/Q to enable verification.")
+      Output.writeln("[Assistant] I/Q MCP endpoint unavailable - running in LLM-only mode.")
   }
 }

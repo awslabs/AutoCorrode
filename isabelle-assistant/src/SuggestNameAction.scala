@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.util.concurrent.{CountDownLatch, TimeUnit}
@@ -136,8 +135,8 @@ object SuggestNameAction {
         .sorted
     }
 
-    // Get theory name from buffer (via PIDE document model)
-    val theoryName = Document_Model.get_model(buffer).map(_.node_name.theory)
+    // Get theory name from buffer header parsing
+    val theoryName = TheoryMetadata.theoryName(buffer)
 
     // Get surrounding context (commands near cursor) - optional for now
     val surroundingContext: Option[String] = None

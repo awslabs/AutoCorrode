@@ -69,11 +69,10 @@ object SuggestAction {
               "No goal state available"
             )
           case (Some(cmd), Some(goal)) =>
-            val commandObj = IQIntegration.getCommandAtOffset(buffer, offset)
             val canVerify =
-              IQAvailable.isAvailable && AssistantOptions.getVerifySuggestions && commandObj.isDefined
+              IQAvailable.isAvailable && AssistantOptions.getVerifySuggestions
             val useSledgehammer =
-              AssistantOptions.getUseSledgehammer && IQAvailable.isAvailable && commandObj.isDefined
+              AssistantOptions.getUseSledgehammer && IQAvailable.isAvailable
 
             AssistantDockable.setStatus("Generating suggestions...")
 
@@ -87,19 +86,17 @@ object SuggestAction {
                     view,
                     cmd,
                     goal,
-                    commandObj,
                     useSledgehammer
                   )
                   Output.writeln(
                     s"[Assistant] Collected ${candidates.length} candidates"
                   )
 
-                  val verified = commandObj match {
-                    case Some(command) if canVerify =>
+                  val verified =
+                    if (canVerify) {
                       Output.writeln(s"[Assistant] Starting verification...")
-                      verifyCandidates(view, command, candidates)
-                    case _ => candidates
-                  }
+                      verifyCandidates(view, candidates)
+                    } else candidates
 
                   Output.writeln(
                     s"[Assistant] After verification: ${verified.length} candidates"
@@ -132,7 +129,6 @@ object SuggestAction {
       view: View,
       commandText: String,
       goalState: String,
-      commandObj: Option[Command],
       useSledgehammer: Boolean
   ): List[Candidate] = {
     import java.util.concurrent.{
@@ -144,11 +140,11 @@ object SuggestAction {
     import scala.jdk.CollectionConverters._
 
     val results = new ConcurrentLinkedQueue[Candidate]()
-    val useIQ = IQAvailable.isAvailable && commandObj.isDefined
+    val useIQ = IQAvailable.isAvailable
     val sledgeCompleted = new AtomicBoolean(false)
 
     // Prepare context information
-    val contextInfo = prepareContextInfo(view, commandObj, goalState, useIQ)
+    val contextInfo = prepareContextInfo(view, goalState, useIQ)
 
     val taskCount = if (useSledgehammer) 2 else 1
     val latch = new CountDownLatch(taskCount)
@@ -161,14 +157,11 @@ object SuggestAction {
 
     // Start Sledgehammer task if enabled
     if (useSledgehammer) {
-      commandObj.foreach(command =>
-        startSledgehammerTask(
-          view,
-          command,
-          results,
-          latch,
-          sledgeCompleted
-        )
+      startSledgehammerTask(
+        view,
+        results,
+        latch,
+        sledgeCompleted
       )
     }
 
@@ -212,39 +205,36 @@ object SuggestAction {
 
   private def prepareContextInfo(
       view: View,
-      commandObj: Option[Command],
       goalState: String,
       useIQ: Boolean
   ): String = {
     if (!useIQ) ""
-    else commandObj match {
-      case Some(command) =>
-        // Run context facts and relevant theorems in parallel
-        val factsLatch = new java.util.concurrent.CountDownLatch(1)
-        val theoremsLatch = new java.util.concurrent.CountDownLatch(1)
-        @volatile var contextFacts = ""
-        @volatile var relevantTheorems = ""
+    else {
+      // Run context facts and relevant theorems in parallel
+      val factsLatch = new java.util.concurrent.CountDownLatch(1)
+      val theoremsLatch = new java.util.concurrent.CountDownLatch(1)
+      @volatile var contextFacts = ""
+      @volatile var relevantTheorems = ""
 
-        val _ = Isabelle_Thread.fork(name = "suggest-context") {
-          contextFacts = getContextFacts(view, command)
-          factsLatch.countDown()
-        }
-        val _ = Isabelle_Thread.fork(name = "suggest-theorems") {
-          relevantTheorems = findRelevantTheorems(view, command, goalState)
-          theoremsLatch.countDown()
-        }
+      val _ = Isabelle_Thread.fork(name = "suggest-context") {
+        contextFacts = getContextFacts(view)
+        factsLatch.countDown()
+      }
+      val _ = Isabelle_Thread.fork(name = "suggest-theorems") {
+        relevantTheorems = findRelevantTheorems(view, goalState)
+        theoremsLatch.countDown()
+      }
 
-        factsLatch.await(
-          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-          java.util.concurrent.TimeUnit.MILLISECONDS
-        )
-        theoremsLatch.await(
-          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-          java.util.concurrent.TimeUnit.MILLISECONDS
-        )
+      factsLatch.await(
+        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+        java.util.concurrent.TimeUnit.MILLISECONDS
+      )
+      theoremsLatch.await(
+        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+        java.util.concurrent.TimeUnit.MILLISECONDS
+      )
 
-        List(contextFacts, relevantTheorems).filter(_.nonEmpty).mkString("\n\n")
-      case None => ""
+      List(contextFacts, relevantTheorems).filter(_.nonEmpty).mkString("\n\n")
     }
   }
 
@@ -291,7 +281,6 @@ object SuggestAction {
 
   private def startSledgehammerTask(
       view: View,
-      command: Command,
       results: java.util.concurrent.ConcurrentLinkedQueue[Candidate],
       latch: CountDownLatch,
       sledgeCompleted: java.util.concurrent.atomic.AtomicBoolean
@@ -299,7 +288,6 @@ object SuggestAction {
     GUI_Thread.later {
       IQIntegration.runSledgehammerAsync(
         view,
-        command,
         AssistantOptions.getSledgehammerTimeout,
         {
           case Right(sledgeResults) =>
@@ -342,7 +330,7 @@ object SuggestAction {
     }
   }
 
-  private def getContextFacts(view: View, command: Command): String = {
+  private def getContextFacts(view: View): String = {
     ErrorHandler
       .withErrorHandling(
         "context facts retrieval",
@@ -354,7 +342,6 @@ object SuggestAction {
         GUI_Thread.later {
           PrintContextAction.runPrintContextAsync(
             view,
-            command,
             AssistantConstants.CONTEXT_FETCH_TIMEOUT,
             { result =>
               result match {
@@ -380,7 +367,6 @@ object SuggestAction {
 
   private def findRelevantTheorems(
       view: View,
-      command: Command,
       goalState: String
   ): String = {
     // Use PIDE markup from GoalExtractor to get actual constants from the goal,
@@ -413,7 +399,6 @@ object SuggestAction {
       GUI_Thread.later {
         IQIntegration.runFindTheoremsAsync(
           view,
-          command,
           pattern,
           limit,
           timeout,
@@ -469,7 +454,6 @@ object SuggestAction {
 
   private def verifyCandidates(
       view: View,
-      command: Command,
       candidates: List[Candidate]
   ): List[Candidate] = {
     val timeout = AssistantOptions.getVerificationTimeout
@@ -491,7 +475,6 @@ object SuggestAction {
         } else {
           IQIntegration.verifyProofAsync(
             view,
-            command,
             candidate.proof,
             timeout,
             {

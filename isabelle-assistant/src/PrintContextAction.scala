@@ -5,7 +5,6 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.View
-import scala.annotation.unused
 
 /** Displays proof context (local facts) at cursor via I/Q print_context query. */
 object PrintContextAction {
@@ -37,7 +36,7 @@ object PrintContextAction {
 
   def run(view: View): Unit = {
     AssistantDockable.setStatus("Getting context...")
-    runPrintContextAsync(view, command = null, 5000, { result =>
+    runPrintContextAsync(view, 5000, { result =>
       GUI_Thread.later {
         displayResult(result)
         AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
@@ -48,7 +47,6 @@ object PrintContextAction {
   /** Run print_context query via I/Q MCP typed adapter. */
   def runPrintContextAsync(
     view: View,
-    @unused command: Command,
     timeoutMs: Long,
     callback: Either[String, String] => Unit
   ): Unit = {

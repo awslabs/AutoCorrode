@@ -60,8 +60,9 @@ object ExtractLemmaAction {
           "Could not determine proof context"
         )
       case Some(ctx) =>
-        val commandOpt = IQIntegration.getCommandAtOffset(buffer, selStart)
-        val canVerify = IQAvailable.isAvailable && commandOpt.isDefined
+        val hasCommand =
+          CommandExtractor.getCommandAtOffset(buffer, selStart).isDefined
+        val canVerify = IQAvailable.isAvailable && hasCommand
 
         AssistantDockable.setStatus("Extracting lemma...")
         AssistantDockable.setBadge(VerificationBadge.Verifying)
@@ -72,7 +73,6 @@ object ExtractLemmaAction {
               ProofContextSupport.collect(
                 view,
                 selStart,
-                commandOpt,
                 ctx.goalStateAtSelection,
                 includeDefinitions = true
               )
@@ -99,15 +99,14 @@ object ExtractLemmaAction {
               BedrockClient.invokeInContextStructured(prompt, extractSchema)
             parseStructuredExtraction(args) match {
               case Some(result) =>
-                commandOpt match {
-                  case Some(command) if canVerify =>
-                    GUI_Thread.later {
-                      startVerification(view, command, enrichedCtx, result, 1)
-                    }
-                  case _ =>
-                    GUI_Thread.later {
-                      showResult(view, result, VerificationBadge.Unverified)
-                    }
+                if (canVerify) {
+                  GUI_Thread.later {
+                    startVerification(view, enrichedCtx, result, 1)
+                  }
+                } else {
+                  GUI_Thread.later {
+                    showResult(view, result, VerificationBadge.Unverified)
+                  }
                 }
               case None =>
                 GUI_Thread.later {
@@ -168,7 +167,6 @@ object ExtractLemmaAction {
 
   private def startVerification(
       view: View,
-      command: Command,
       ctx: ExtractionContext,
       result: ExtractionResult,
       attempt: Int
@@ -183,7 +181,6 @@ object ExtractLemmaAction {
     GUI_Thread.later {
       IQIntegration.verifyProofAsync(
         view,
-        command,
         result.extractedLemma,
         timeout,
         {
@@ -192,7 +189,6 @@ object ExtractLemmaAction {
               AssistantDockable.setStatus("Verifying updated proof...")
               IQIntegration.verifyProofAsync(
                 view,
-                command,
                 result.updatedProof,
                 timeout,
                 {
@@ -208,7 +204,6 @@ object ExtractLemmaAction {
                       if attempt < maxRetries =>
                     retryInBackground(
                       view,
-                      command,
                       ctx,
                       result,
                       s"Updated proof failed: $error",
@@ -236,7 +231,6 @@ object ExtractLemmaAction {
           case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
             retryInBackground(
               view,
-              command,
               ctx,
               result,
               s"Extracted lemma failed: $error",
@@ -262,7 +256,6 @@ object ExtractLemmaAction {
 
   private def retryInBackground(
       view: View,
-      command: Command,
       ctx: ExtractionContext,
       failedResult: ExtractionResult,
       error: String,
@@ -294,7 +287,7 @@ object ExtractLemmaAction {
         parseStructuredExtraction(retryArgs) match {
           case Some(result) =>
             GUI_Thread.later {
-              startVerification(view, command, ctx, result, attempt + 1)
+              startVerification(view, ctx, result, attempt + 1)
             }
           case None =>
             GUI_Thread.later {

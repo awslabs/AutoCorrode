@@ -4,9 +4,7 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.View
-import org.gjt.sp.jedit.buffer.JEditBuffer
 import scala.annotation.unused
 import java.util.Locale
 
@@ -165,6 +163,18 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       .toList
       .distinct
 
+  private def resolveCommandForSelection(
+      selectionParams: Map[String, Any],
+      timeoutMs: Long
+  ): Option[IQMcpClient.CommandInfo] =
+    IQMcpClient
+      .callResolveCommandTarget(
+        selectionArgs = selectionParams,
+        timeoutMs = timeoutMs
+      )
+      .toOption
+      .map(_.command)
+
   def resolveCommandTargetAsync(
       view: View,
       timeoutMs: Long,
@@ -279,8 +289,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     *
     * @param view
     *   The current jEdit view
-    * @param command
-    *   The Isabelle command to verify against
     * @param proofText
     *   The proof text to verify
     * @param timeoutMs
@@ -290,7 +298,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def verifyProofAsync(
       view: View,
-      command: Command,
       proofText: String,
       timeoutMs: Long,
       callback: VerificationResult => Unit
@@ -299,11 +306,14 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       callbackOnGui(callback, IQUnavailable)
     } else {
       // Check cache first
-      VerificationCache.get(command, proofText) match {
+      val selectionParams = selectionParamsForView(view)
+      val commandInfoOpt = resolveCommandForSelection(selectionParams, timeoutMs)
+      commandInfoOpt.flatMap(commandInfo =>
+        VerificationCache.get(commandInfo, proofText)
+      ) match {
         case Some(cachedResult) =>
           callbackOnGui(callback, cachedResult)
         case None =>
-          val selectionParams = selectionParamsForView(view)
           val _ = IQOperationLifecycle.forkJvmThread(
             name = "assistant-verify-via-mcp",
             body = () => {
@@ -333,7 +343,9 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                     }
                   }
                 )
-              VerificationCache.put(command, proofText, result)
+              commandInfoOpt.foreach(commandInfo =>
+                VerificationCache.put(commandInfo, proofText, result)
+              )
               callbackOnGui(callback, result)
             }
           )
@@ -347,7 +359,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def executeStepAsync(
       view: View,
-      @unused command: Command,
       proofText: String,
       timeoutMs: Long,
       callback: Either[String, ProofStepResult] => Unit
@@ -429,8 +440,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     *
     * @param view
     *   The current jEdit view
-    * @param command
-    *   Retained for API compatibility
     * @param pattern
     *   The search pattern (should be quoted)
     * @param limit
@@ -442,7 +451,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def runFindTheoremsAsync(
       view: View,
-      @unused command: Command,
       pattern: String,
       limit: Int,
       timeoutMs: Long,
@@ -482,8 +490,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     *
     * @param view
     *   The current jEdit view
-    * @param command
-    *   Retained for API compatibility
     * @param queryArgs
     *   Arguments to pass to isar_explore
     * @param timeoutMs
@@ -493,7 +499,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def runQueryAsync(
       view: View,
-      @unused command: Command,
       queryArgs: List[String],
       timeoutMs: Long,
       callback: Either[String, String] => Unit
@@ -530,37 +535,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     }
   }
 
-  /** Get the Isabelle command at a specific buffer offset.
-    *
-    * @param buffer
-    *   The jEdit buffer
-    * @param offset
-    *   The character offset in the buffer
-    * @return
-    *   Some(Command) if found, None otherwise
-    */
-  def getCommandAtOffset(buffer: JEditBuffer, offset: Int): Option[Command] = {
-    try {
-      Document_Model.get_model(buffer).flatMap { model =>
-        val snapshot = Document_Model.snapshot(model)
-        val node = snapshot.get_node(model.node_name)
-        if (node.commands.isEmpty) None
-        else {
-          val clamped = math.max(0, math.min(offset, buffer.getLength))
-          val safeOffset =
-            if (buffer.getLength > 0 && clamped == buffer.getLength) clamped - 1
-            else clamped
-          val safeEnd = math.min(safeOffset + 1, buffer.getLength)
-          node
-            .command_iterator(Text.Range(safeOffset, safeEnd))
-            .toList
-            .headOption
-            .map(_._1)
-        }
-      }
-    } catch { case _: Exception => None }
-  }
-
   // I/Q Status for dockable header
 
   /** Status types for I/Q integration. */
@@ -581,7 +555,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     * @return
     *   Current I/Q status
     */
-  def getStatus(buffer: JEditBuffer): IQStatus =
+  def getStatus(@unused buffer: org.gjt.sp.jedit.buffer.JEditBuffer): IQStatus =
     if (IQAvailable.isAvailable) IQConnected else IQDisconnected
 
   /** Run sledgehammer asynchronously via I/Q MCP. Callback is dispatched on
@@ -589,7 +563,6 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
     */
   def runSledgehammerAsync(
       view: View,
-      @unused command: Command,
       timeoutMs: Long,
       callback: Either[String, List[SledgehammerResult]] => Unit
   ): Unit = {

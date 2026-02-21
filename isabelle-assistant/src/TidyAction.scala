@@ -34,7 +34,8 @@ object TidyAction {
       )
     } else {
       val offset = textArea.getCaretPosition
-      val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
+      val hasCommand =
+        CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
       val goalState = GoalExtractor.getGoalState(buffer, offset)
 
       AssistantDockable.setBadge(VerificationBadge.Verifying)
@@ -45,7 +46,6 @@ object TidyAction {
             ProofContextSupport.collect(
               view,
               offset,
-              commandOpt,
               goalState,
               includeDefinitions = true
             )
@@ -55,37 +55,38 @@ object TidyAction {
           val args = BedrockClient.invokeInContextStructured(prompt, tidySchema)
           val tidied = ResponseParser.toolValueToString(args.getOrElse("code", ResponseParser.NullValue))
 
-          commandOpt match {
-            case Some(command) if IQAvailable.isAvailable =>
-              val invokeAndExtract: String => String = { retryPrompt =>
-                val retryArgs = BedrockClient.invokeNoCacheStructured(retryPrompt, tidySchema)
-                ResponseParser.toolValueToString(retryArgs.getOrElse("code", ResponseParser.NullValue))
-              }
-              GUI_Thread.later {
-                VerifyWithRetry.verify(
-                  view,
-                  command,
-                  tidied,
-                  tidied,
-                  1,
-                  retryPrompt = (failed, error) =>
-                    PromptLoader.load(
-                      "tidy_retry.md",
-                      buildPromptSubstitutions(
-                        code,
-                        goalState,
-                        bundle,
-                        Map("failed_attempt" -> failed, "error" -> error)
-                      )
-                    ),
-                  invokeAndExtract = invokeAndExtract,
-                  showResult = (resp, badge) => showResult(view, resp, badge)
-                )
-              }
-            case _ =>
-              GUI_Thread.later {
-                showResult(view, tidied, VerificationBadge.Unverified)
-              }
+          if (IQAvailable.isAvailable && hasCommand) {
+            val invokeAndExtract: String => String = { retryPrompt =>
+              val retryArgs =
+                BedrockClient.invokeNoCacheStructured(retryPrompt, tidySchema)
+              ResponseParser.toolValueToString(
+                retryArgs.getOrElse("code", ResponseParser.NullValue)
+              )
+            }
+            GUI_Thread.later {
+              VerifyWithRetry.verify(
+                view,
+                tidied,
+                tidied,
+                1,
+                retryPrompt = (failed, error) =>
+                  PromptLoader.load(
+                    "tidy_retry.md",
+                    buildPromptSubstitutions(
+                      code,
+                      goalState,
+                      bundle,
+                      Map("failed_attempt" -> failed, "error" -> error)
+                    )
+                  ),
+                invokeAndExtract = invokeAndExtract,
+                showResult = (resp, badge) => showResult(view, resp, badge)
+              )
+            }
+          } else {
+            GUI_Thread.later {
+              showResult(view, tidied, VerificationBadge.Unverified)
+            }
           }
         } catch {
           case ex: Exception =>

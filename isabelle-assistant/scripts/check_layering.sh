@@ -79,21 +79,12 @@ runtime_touchpoint_specs=(
   "command_iterator|command_iterator\\(|iq.command_lookup"
 )
 
-approved_runtime_touchpoint_scopes=(
-  "command_iterator|isabelle-assistant/src/IQIntegration.scala"
-  "document_model_get_model|isabelle-assistant/src/AssistantSupport.scala"
-  "document_model_get_model|isabelle-assistant/src/IQIntegration.scala"
-  "document_model_get_model|isabelle-assistant/src/SuggestNameAction.scala"
-  "document_model_get_model|isabelle-assistant/src/SummarizeTheoryAction.scala"
-  "document_model_snapshot|isabelle-assistant/src/AssistantSupport.scala"
-  "document_model_snapshot|isabelle-assistant/src/IQIntegration.scala"
-  "extended_query_operation|isabelle-assistant/src/IQAvailable.scala"
-  "snapshot_get_node|isabelle-assistant/src/IQIntegration.scala"
-)
+declare -a approved_runtime_touchpoint_scopes=()
 
 is_approved_runtime_touchpoint_scope() {
   local key="$1"
-  for approved in "${approved_runtime_touchpoint_scopes[@]}"; do
+  for approved in "${approved_runtime_touchpoint_scopes[@]-}"; do
+    [[ -z "${approved:-}" ]] && continue
     if [[ "$approved" == "$key" ]]; then
       return 0
     fi
@@ -175,7 +166,8 @@ enforce_runtime_touchpoint_allowlist() {
     done < "$matches_file"
   fi
 
-  for approved in "${approved_runtime_touchpoint_scopes[@]}"; do
+  for approved in "${approved_runtime_touchpoint_scopes[@]-}"; do
+    [[ -z "${approved:-}" ]] && continue
     if ! awk -F '\t' -v key="$approved" '$1 "|" $2 == key {found=1} END {exit(found ? 0 : 1)}' "$matches_file"; then
       printf "%s\n" "$approved" >> "$stale_file"
     fi

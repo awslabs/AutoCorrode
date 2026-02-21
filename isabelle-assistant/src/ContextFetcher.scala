@@ -8,7 +8,6 @@ import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
 import java.util.concurrent.{CountDownLatch, TimeUnit}
 import javax.swing.SwingUtilities
-import scala.annotation.unused
 
 /** Fetches definitions of constants/types referenced in code.
   * Uses I/Q typed MCP capabilities for goal-aware definition lookup.
@@ -40,7 +39,7 @@ object ContextFetcher {
         .getOrElse(Nil)
 
     if (names.isEmpty) None
-    else fetchDefinitionsForNames(view, command = null, names, timeoutMs)
+    else fetchDefinitionsForNames(view, names, timeoutMs)
   }
 
   /** Extract entity-like names near cursor via goal/context introspection. */
@@ -64,7 +63,6 @@ object ContextFetcher {
     */
   def fetchDefinitionsForNames(
       view: View,
-      @unused command: Command,
       names: List[String],
       timeoutMs: Long = 3000
   ): Option[String] = {

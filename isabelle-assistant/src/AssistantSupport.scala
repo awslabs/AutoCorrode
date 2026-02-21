@@ -4,7 +4,6 @@
 package isabelle.assistant
 
 import isabelle._
-import isabelle.jedit._
 import org.gjt.sp.jedit.buffer.JEditBuffer
 
 /**
@@ -19,16 +18,9 @@ object AssistantSupport {
   case object PartialSupport extends Status   // I/Q available or Eisbach imported  
   case object NoSupport extends Status        // No special support
   
-  /** Check if a theory is in the loaded dependencies */
+  /** Check if a theory appears in explicit or open-buffer-resolvable imports. */
   private def hasTheoryImport(buffer: JEditBuffer, theoryName: String): Boolean = {
-    Document_Model.get_model(buffer).exists { model =>
-      val snapshot = Document_Model.snapshot(model)
-      val nodes = snapshot.version.nodes
-      nodes.domain.exists { name =>
-        val str = name.theory
-        str == theoryName || str.endsWith("." + theoryName)
-      }
-    }
+    TheoryMetadata.hasImport(buffer, theoryName)
   }
   
   private def hasAssistantSupport(buffer: JEditBuffer): Boolean =

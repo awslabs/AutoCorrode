@@ -1,10 +1,1 @@
 touchpoint	file	line	target_iq_capability	source
-command_iterator	isabelle-assistant/src/IQIntegration.scala	555	iq.command_lookup	            .command_iterator(Text.Range(safeOffset, safeEnd))
-document_model_get_model	isabelle-assistant/src/AssistantSupport.scala	24	iq.document_model_lookup	    Document_Model.get_model(buffer).exists { model =>
-document_model_get_model	isabelle-assistant/src/IQIntegration.scala	544	iq.document_model_lookup	      Document_Model.get_model(buffer).flatMap { model =>
-document_model_get_model	isabelle-assistant/src/SuggestNameAction.scala	140	iq.document_model_lookup	    val theoryName = Document_Model.get_model(buffer).map(_.node_name.theory)
-document_model_get_model	isabelle-assistant/src/SummarizeTheoryAction.scala	41	iq.document_model_lookup	    val theoryName = Document_Model.get_model(buffer)
-document_model_snapshot	isabelle-assistant/src/AssistantSupport.scala	25	iq.document_snapshot	      val snapshot = Document_Model.snapshot(model)
-document_model_snapshot	isabelle-assistant/src/IQIntegration.scala	545	iq.document_snapshot	        val snapshot = Document_Model.snapshot(model)
-extended_query_operation	isabelle-assistant/src/IQAvailable.scala	22	iq.explore_query	      Class.forName("isabelle.Extended_Query_Operation")
-snapshot_get_node	isabelle-assistant/src/IQIntegration.scala	546	iq.command_lookup	        val node = snapshot.get_node(model.node_name)

@@ -34,7 +34,6 @@ object VerifyWithRetry {
    */
   def verify(
     view: View,
-    command: Command,
     codeToVerify: String,
     fullResponse: String,
     attempt: Int,
@@ -47,7 +46,7 @@ object VerifyWithRetry {
 
     AssistantDockable.setBadge(VerificationBadge.Verifying)
 
-    IQIntegration.verifyProofAsync(view, command, codeToVerify, timeout, {
+    IQIntegration.verifyProofAsync(view, codeToVerify, timeout, {
       case IQIntegration.ProofSuccess(timeMs, _) =>
         showResult(fullResponse, VerificationBadge.Verified(Some(timeMs)))
 
@@ -58,14 +57,14 @@ object VerifyWithRetry {
         showResult(fullResponse, VerificationBadge.Unverified)
 
       case IQIntegration.ProofTimeout if attempt < maxRetries =>
-        retryInBackground(view, command, codeToVerify, "Verification timed out",
+        retryInBackground(view, codeToVerify, "Verification timed out",
           attempt, maxRetries, retryPrompt, invokeAndExtract, showResult)
 
       case IQIntegration.ProofTimeout =>
         showResult(fullResponse, VerificationBadge.Failed("Timed out"))
 
       case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
-        retryInBackground(view, command, codeToVerify, error,
+        retryInBackground(view, codeToVerify, error,
           attempt, maxRetries, retryPrompt, invokeAndExtract, showResult)
 
       case IQIntegration.ProofFailure(_) =>
@@ -74,7 +73,7 @@ object VerifyWithRetry {
   }
 
   private def retryInBackground(
-    view: View, command: Command,
+    view: View,
     failedCode: String, error: String,
     attempt: Int, maxRetries: Int,
     retryPrompt: (String, String) => String,
@@ -88,7 +87,7 @@ object VerifyWithRetry {
         val prompt = retryPrompt(failedCode, error)
         val code = invokeAndExtract(prompt)
         GUI_Thread.later {
-          verify(view, command, code, code, attempt + 1,
+          verify(view, code, code, attempt + 1,
             retryPrompt, invokeAndExtract, showResult)
         }
       } catch {

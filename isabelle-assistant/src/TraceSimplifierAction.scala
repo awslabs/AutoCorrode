@@ -16,16 +16,16 @@ object TraceSimplifierAction {
     val offset = view.getTextArea.getCaretPosition
 
     (GoalExtractor.getGoalState(buffer, offset),
-     IQIntegration.getCommandAtOffset(buffer, offset),
+     CommandExtractor.getCommandAtOffset(buffer, offset),
      IQAvailable.isAvailable) match {
       case (None, _, _) =>
         GUI.warning_dialog(view, "Isabelle Assistant", "No goal at cursor")
       case (_, _, false) =>
         GUI.warning_dialog(view, "Isabelle Assistant", "I/Q required for tracing")
-      case (Some(goal), Some(command), true) =>
+      case (Some(goal), Some(_), true) =>
         AssistantDockable.setStatus(s"Running $method with trace...")
         GUI_Thread.later {
-          runSimpTrace(view, command, goal, method)
+          runSimpTrace(view, goal, method)
         }
       case (Some(_), None, true) =>
         GUI.warning_dialog(
@@ -38,7 +38,6 @@ object TraceSimplifierAction {
 
   private def runSimpTrace(
       view: View,
-      command: Command,
       goal: String,
       method: String
   ): Unit = {
@@ -48,7 +47,6 @@ object TraceSimplifierAction {
 
     IQIntegration.runQueryAsync(
       view,
-      command,
       List(s"simp_trace $method $timeout $depth"),
       queryTimeoutMs,
       {

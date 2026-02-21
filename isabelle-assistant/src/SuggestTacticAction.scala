@@ -24,7 +24,6 @@ object SuggestTacticAction {
     val hasEisbach = AssistantSupport.hasEisbach(view.getBuffer)
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
     val goalState = GoalExtractor.getGoalState(buffer, offset)
     
     ActionHelper.runAsync("assistant-suggest-tactic", "Generating Eisbach method...") {
@@ -32,7 +31,6 @@ object SuggestTacticAction {
         ProofContextSupport.collect(
           view,
           offset,
-          commandOpt,
           goalState,
           includeDefinitions = true
         )

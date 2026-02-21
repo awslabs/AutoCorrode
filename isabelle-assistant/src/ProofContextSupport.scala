@@ -34,13 +34,11 @@ object ProofContextSupport {
   def collect(
       view: View,
       offset: Int,
-      commandOpt: Option[Command],
       goalStateOpt: Option[String],
       includeDefinitions: Boolean = false
   ): ContextBundle = {
-    val localFacts = fetchLocalFacts(view, commandOpt)
-    val relevantTheorems =
-      fetchRelevantTheorems(view, offset, commandOpt, goalStateOpt)
+    val localFacts = fetchLocalFacts(view)
+    val relevantTheorems = fetchRelevantTheorems(view, offset, goalStateOpt)
     val definitions =
       if (includeDefinitions)
         ContextFetcher
@@ -55,47 +53,42 @@ object ProofContextSupport {
     )
   }
 
-  private def fetchLocalFacts(view: View, commandOpt: Option[Command]): String =
-    commandOpt match {
-      case None if !IQAvailable.isAvailable => ""
-      case None                             => ""
-      case Some(command) =>
-        val latch = new CountDownLatch(1)
-        @volatile var contextResult = ""
+  private def fetchLocalFacts(view: View): String =
+    if (!IQAvailable.isAvailable) ""
+    else {
+      val latch = new CountDownLatch(1)
+      @volatile var contextResult = ""
 
-        GUI_Thread.later {
-          PrintContextAction.runPrintContextAsync(
-            view,
-            command,
-            AssistantConstants.CONTEXT_FETCH_TIMEOUT,
-            { result =>
-              result match {
-                case Right(output)
-                    if output.trim.nonEmpty && !output
-                      .contains("No local facts") =>
-                  contextResult = output.trim
-                case _ =>
-              }
-              latch.countDown()
+      GUI_Thread.later {
+        PrintContextAction.runPrintContextAsync(
+          view,
+          AssistantConstants.CONTEXT_FETCH_TIMEOUT,
+          { result =>
+            result match {
+              case Right(output)
+                  if output.trim.nonEmpty && !output.contains("No local facts") =>
+                contextResult = output.trim
+              case _ =>
             }
-          )
-        }
-
-        latch.await(
-          AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-          TimeUnit.MILLISECONDS
+            latch.countDown()
+          }
         )
-        contextResult
+      }
+
+      latch.await(
+        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
+        TimeUnit.MILLISECONDS
+      )
+      contextResult
     }
 
   private def fetchRelevantTheorems(
       view: View,
       offset: Int,
-      commandOpt: Option[Command],
       goalStateOpt: Option[String]
   ): String =
-    (commandOpt, goalStateOpt.filter(_.trim.nonEmpty)) match {
-      case (Some(command), Some(goalState)) if IQAvailable.isAvailable =>
+    goalStateOpt.filter(_.trim.nonEmpty) match {
+      case Some(goalState) if IQAvailable.isAvailable =>
         val analysisOpt = GoalExtractor.analyzeGoal(view.getBuffer, offset)
         val symbols = extractNamesForFindTheorems(goalState, analysisOpt)
         if (symbols.isEmpty) ""
@@ -109,7 +102,6 @@ object ProofContextSupport {
           GUI_Thread.later {
             IQIntegration.runFindTheoremsAsync(
               view,
-              command,
               pattern,
               limit,
               timeout,

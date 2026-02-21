@@ -39,14 +39,13 @@ object FindTheoremsAction {
         val buffer = view.getBuffer
         val offset = view.getTextArea.getCaretPosition
 
-        IQIntegration.getCommandAtOffset(buffer, offset) match {
-          case Some(command) =>
+        CommandExtractor.getCommandAtOffset(buffer, offset) match {
+          case Some(_) =>
             AssistantDockable.setStatus("Searching theorems...")
             val quotedPattern = "\"" + searchPattern + "\""
 
             IQIntegration.runFindTheoremsAsync(
               view,
-              command,
               quotedPattern,
               AssistantOptions.getFindTheoremsLimit,
               AssistantOptions.getFindTheoremsTimeout,

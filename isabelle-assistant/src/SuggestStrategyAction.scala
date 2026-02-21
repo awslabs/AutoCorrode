@@ -22,7 +22,6 @@ object SuggestStrategyAction {
       case Some(goalState) =>
         val command =
           CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
-        val commandOpt = IQIntegration.getCommandAtOffset(buffer, offset)
 
         ActionHelper.runAndRespond(
           "assistant-suggest-strategy",
@@ -32,7 +31,6 @@ object SuggestStrategyAction {
             ProofContextSupport.collect(
               view,
               offset,
-              commandOpt,
               Some(goalState),
               includeDefinitions = true
             )
