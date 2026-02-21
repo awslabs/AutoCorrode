@@ -80,18 +80,14 @@ runtime_touchpoint_specs=(
 )
 
 approved_runtime_touchpoint_scopes=(
-  "command_iterator|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "command_iterator|isabelle-assistant/src/IQIntegration.scala"
-  "document_model_get_model|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "document_model_get_model|isabelle-assistant/src/AssistantSupport.scala"
   "document_model_get_model|isabelle-assistant/src/IQIntegration.scala"
   "document_model_get_model|isabelle-assistant/src/SuggestNameAction.scala"
   "document_model_get_model|isabelle-assistant/src/SummarizeTheoryAction.scala"
-  "document_model_snapshot|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "document_model_snapshot|isabelle-assistant/src/AssistantSupport.scala"
   "document_model_snapshot|isabelle-assistant/src/IQIntegration.scala"
   "extended_query_operation|isabelle-assistant/src/IQAvailable.scala"
-  "snapshot_get_node|isabelle-assistant/src/AnalyzePatternsAction.scala"
   "snapshot_get_node|isabelle-assistant/src/IQIntegration.scala"
 )
 
