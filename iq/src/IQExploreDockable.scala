@@ -593,14 +593,14 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   // Find command at file+offset
   private def findCommandAtFileOffset(file_path: String, offset: Int): Option[Command] = {
     IQUtils.findCommandAtFileOffset(file_path, offset) match {
-      case scala.util.Success(command) =>
+      case Right(command) =>
         // Log the found command for debugging
         val cmdText = command.source.trim.replace("\n", "\\n")
         val displayText = if (cmdText.length > 100) cmdText.take(100) + "..." else cmdText
         appendOutput(s"Found command at offset $offset: [$displayText]")
         Some(command)
-      case scala.util.Failure(ex) =>
-        appendOutput(s"Error: ${ex.getMessage}")
+      case Left(error) =>
+        appendOutput(s"Error: $error")
         None
     }
   }
@@ -608,9 +608,9 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   // Find command by substring pattern in file
   private def findCommandByPattern(file_path: String, pattern: String): Option[Command] = {
     IQUtils.findCommandByPattern(file_path, pattern) match {
-      case scala.util.Success(command) => Some(command)
-      case scala.util.Failure(ex) =>
-        appendOutput(ex.getMessage)
+      case Right(command) => Some(command)
+      case Left(error) =>
+        appendOutput(error)
         None
     }
   }

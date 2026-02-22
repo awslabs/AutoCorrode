@@ -274,6 +274,35 @@ object IQArgumentUtils {
     }
   }
 
+  def parseBooleanParamValue(param: String, value: Any): Either[String, Boolean] = {
+    value match {
+      case b: Boolean => Right(b)
+      case s: String =>
+        s.trim.toLowerCase(Locale.ROOT) match {
+          case "true" | "1" | "yes" | "on" => Right(true)
+          case "false" | "0" | "no" | "off" => Right(false)
+          case _ =>
+            Left(
+              s"Invalid parameter '$param': expected boolean, got ${describeValue(value)}"
+            )
+        }
+      case _ =>
+        Left(
+          s"Invalid parameter '$param': expected boolean, got ${describeValue(value)}"
+        )
+    }
+  }
+
+  def optionalBooleanParam(
+      params: Map[String, Any],
+      name: String
+  ): Either[String, Option[Boolean]] = {
+    params.get(name) match {
+      case None => Right(None)
+      case Some(value) => parseBooleanParamValue(name, value).map(Some(_))
+    }
+  }
+
   private def convertJsonValue(value: JSON.T): Any = value match {
     case JSON.Object(obj) =>
       obj.map { case (k, v) => k -> convertJsonValue(v) }
@@ -371,6 +400,14 @@ class IQServer(
     }
   }
 
+  private final case class OpenFileOperationResult(
+    path: String,
+    created: Boolean,
+    overwritten: Boolean,
+    opened: Boolean,
+    inView: Boolean
+  )
+
   /**
    * Waits for a theory to be fully processed by marking it as required and polling until completion.
    *
@@ -447,11 +484,14 @@ class IQServer(
           // Check if per-command timer has fired
           timeoutPerCommandMs match {
             case Some(perCmdTimeout) =>
-              val timerStart = perCommandTimerStart.get
-              val perCommandElapsed = System.currentTimeMillis() - timerStart
-              if (perCommandElapsed >= perCmdTimeout) {
-                Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
-                completed = true
+              perCommandTimerStart match {
+                case Some(timerStart) =>
+                  val perCommandElapsed = System.currentTimeMillis() - timerStart
+                  if (perCommandElapsed >= perCmdTimeout) {
+                    Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
+                    completed = true
+                  }
+                case None =>
               }
             case None => // No per-command timeout set
           }
@@ -498,7 +538,7 @@ class IQServer(
   private var acceptThread: Option[Thread] = None
 
   /** Flag indicating whether the server is running */
-  private var isRunning = false
+  @volatile private var isRunning = false
 
   /** Thread pool for handling client connections */
   private val executor: ExecutorService =
@@ -522,26 +562,9 @@ class IQServer(
     Option(clientAddressTL.get()).getOrElse("unknown")
   }
 
-  private def getProvidedAuthToken(json: JSON.T): Option[String] = {
-    def extractToken(value: Any): Option[String] = {
-      value match {
-        case token: String => Option(token.trim).filter(_.nonEmpty)
-        case _ => None
-      }
-    }
-
-    json match {
-      case JSON.Object(obj) =>
-        extractToken(obj.getOrElse("auth_token", null))
-          .orElse {
-            obj.get("params") match {
-              case Some(JSON.Object(params)) => extractToken(params.getOrElse("auth_token", null))
-              case _ => None
-            }
-          }
-      case _ => None
-    }
-  }
+  private def getProvidedAuthToken(
+      request: IQProtocol.JsonRpcRequest
+  ): Option[String] = IQProtocol.extractAuthToken(request)
 
   private def logSecurityEvent(message: String): Unit = {
     safeOutput(s"I/Q Server [SECURITY]: $message")
@@ -591,26 +614,54 @@ class IQServer(
   private def createDefaultCapabilityBackend(): IQCapabilityBackend =
     IQCapabilityBackend.fromHandlers(
       Map(
-        "list_files" -> (params => handleListFiles(params)),
-        "get_command_info" -> (params => handleGetCommand(params)),
-        "get_document_info" -> (params => handleGetDocumentInfo(params)),
-        "open_file" -> (params => handleOpenFile(params)),
-        "read_file" -> (params => handleReadTheoryFile(params)),
-        "write_file" -> (params => handleWriteTheoryFile(params)),
-        "resolve_command_target" -> (params =>
-          handleResolveCommandTarget(params)
+        IQToolName.ListFiles -> (params =>
+          handleListFiles(params.toMap).map(IQToolResult.fromMap)
         ),
-        "get_context_info" -> (params => handleGetContextInfo(params)),
-        "get_entities" -> (params => handleGetEntities(params)),
-        "get_type_at_selection" -> (params =>
-          handleGetTypeAtSelection(params)
+        IQToolName.GetCommandInfo -> (params =>
+          handleGetCommand(params.toMap).map(IQToolResult.fromMap)
         ),
-        "get_proof_blocks" -> (params => handleGetProofBlocks(params)),
-        "get_proof_context" -> (params => handleGetProofContext(params)),
-        "get_definitions" -> (params => handleGetDefinitions(params)),
-        "get_diagnostics" -> (params => handleGetDiagnostics(params)),
-        "explore" -> (params => handleExplore(params)),
-        "save_file" -> (params => handleSaveFile(params))
+        IQToolName.GetDocumentInfo -> (params =>
+          handleGetDocumentInfo(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.OpenFile -> (params =>
+          handleOpenFile(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.ReadFile -> (params =>
+          handleReadTheoryFile(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.WriteFile -> (params =>
+          handleWriteTheoryFile(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.ResolveCommandTarget -> (params =>
+          handleResolveCommandTarget(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetContextInfo -> (params =>
+          handleGetContextInfo(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetEntities -> (params =>
+          handleGetEntities(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetTypeAtSelection -> (params =>
+          handleGetTypeAtSelection(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetProofBlocks -> (params =>
+          handleGetProofBlocks(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetProofContext -> (params =>
+          handleGetProofContext(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetDefinitions -> (params =>
+          handleGetDefinitions(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.GetDiagnostics -> (params =>
+          handleGetDiagnostics(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.Explore -> (params =>
+          handleExplore(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.SaveFile -> (params =>
+          handleSaveFile(params.toMap).map(IQToolResult.fromMap)
+        )
       )
     )
 
@@ -856,12 +907,24 @@ class IQServer(
             )
           )
       }
-      val (method, id) = extractMethodAndId(json)
+      val request = IQProtocol.decodeJsonRpcRequest(json) match {
+        case Right(decoded) => decoded
+        case Left(errorMessage) =>
+          return Some(
+            formatErrorResponse(
+              None,
+              ErrorCodes.INVALID_REQUEST,
+              errorMessage
+            )
+          )
+      }
+      val method = request.method
+      val id = request.id
       requestIdForError = id
 
       safeOutput(s"I/Q Server: Parsed method='$method', id=$id")
 
-      val providedToken = getProvidedAuthToken(json)
+      val providedToken = getProvidedAuthToken(request)
       if (!IQSecurity.isTokenAuthorized(securityConfig.authToken, providedToken)) {
         logSecurityEvent(
           s"DENY unauthorized request method='$method' id=$id client=${currentClientAddress()}"
@@ -882,7 +945,7 @@ class IQServer(
             case "tools/list" =>
               createToolsListResult().left.map(msg => (ErrorCodes.METHOD_NOT_FOUND, msg))
             case "tools/call" =>
-              handleToolCallFromJson(json)
+              handleToolCall(request)
             case _ =>
               safeOutput(s"I/Q Server: Unknown method '$method'")
               Left((ErrorCodes.METHOD_NOT_FOUND, s"Method not found: $method"))
@@ -955,33 +1018,6 @@ class IQServer(
   }
 
   /**
-   * Extracts the method and ID from a JSON-RPC request.
-   *
-   * @param json The parsed JSON-RPC request
-   * @return A tuple containing (method, id) where id is None for notifications
-   */
-  private def extractMethodAndId(json: JSON.T): (String, Option[Any]) = {
-    json match {
-      case JSON.Object(obj) =>
-        val method = obj.get("method") match {
-          case Some(s: String) => s
-          case Some(other) => other.toString
-          case None => ""
-        }
-
-        // Preserve request ID, whatever type it may have
-        // (None, Some(String), Some(Int), Some(Double), ...)
-        val id = obj.get("id")
-
-        (method, id)
-
-      case _ =>
-        Output.writeln(s"I/Q Server: JSON is not an object: $json")
-        ("", None)
-    }
-  }
-
-  /**
    * Wraps tool call results for JSON-RPC response.
    *
    * @param result The result data from a tool handler
@@ -997,18 +1033,30 @@ class IQServer(
    *
    * Extracts the tool name and parameters from the request and dispatches to the appropriate handler.
    *
-   * @param json The parsed JSON-RPC request
+   * @param request The decoded JSON-RPC request
    * @return Either error message or result data
    */
-  private def handleToolCallFromJson(json: JSON.T): Either[(Int, String), Map[String, Any]] = {
+  private def handleToolCall(
+      request: IQProtocol.JsonRpcRequest
+  ): Either[(Int, String), Map[String, Any]] = {
     try {
-      safeOutput(s"I/Q Server: Raw JSON for tool call: ${IQSecurity.redactAuthToken(json.toString)}")
+      val toolCall = IQProtocol.decodeToolCall(request).left.map { err =>
+        if (err.startsWith("Unknown tool:")) {
+          (ErrorCodes.METHOD_NOT_FOUND, err)
+        } else {
+          (ErrorCodes.INVALID_PARAMS, err)
+        }
+      } match {
+        case Right(value) => value
+        case Left(error) => return Left(error)
+      }
+      val params = IQToolParams.fromMap(extractArguments(toolCall.arguments))
+      safeOutput(
+        s"I/Q Server: Extracted tool='${toolCall.toolName.wire}', params=${params.toMap}"
+      )
 
-      val (toolName, params) = extractToolAndParams(json)
-      safeOutput(s"I/Q Server: Extracted tool='$toolName', params=$params")
-
-      val result: Either[(Int, String), Map[String, Any]] =
-        capabilityBackend.invoke(toolName, params).left.map {
+      val result: Either[(Int, String), IQToolResult] =
+        capabilityBackend.invoke(toolCall.toolName, params).left.map {
           case IQCapabilityInvocationError.UnknownTool(name) =>
             safeOutput(s"I/Q Server: Unknown tool name: '$name'")
             (ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name")
@@ -1016,7 +1064,7 @@ class IQServer(
             (err.code, err.message)
         }
 
-      result.map(wrapToolCallResult)
+      result.map(res => wrapToolCallResult(res.toMap))
     } catch {
       case ex: Exception =>
         safeOutput(s"I/Q Server: Tool execution error: ${ex.getMessage}")
@@ -1031,37 +1079,6 @@ class IQServer(
             s"Tool execution linkage error: ${throwableMessage(err)}"
           )
         )
-    }
-  }
-
-  /**
-   * Extracts the tool name and parameters from a tools/call request.
-   *
-   * @param json The parsed JSON-RPC request
-   * @return A tuple containing (toolName, params)
-   */
-  private def extractToolAndParams(json: JSON.T): (String, Map[String, Any]) = {
-    json match {
-      case JSON.Object(obj) =>
-        obj.get("params") match {
-          case Some(JSON.Object(params)) =>
-            val toolName = params.get("name") match {
-              case Some(nameStr: String) => nameStr
-              case Some(other) => other.toString
-              case None => ""
-            }
-
-            val arguments = params.get("arguments") match {
-              case Some(JSON.Object(args)) => extractArguments(args)
-              case _ => Map.empty[String, Any]
-            }
-
-            (toolName, arguments)
-
-          case _ => ("", Map.empty[String, Any])
-        }
-
-      case _ => ("", Map.empty[String, Any])
     }
   }
 
@@ -1952,8 +1969,17 @@ class IQServer(
     // Extract parameters
 
     val mode = params.get("mode") match {
-      case Some(value: String) if value.trim.nonEmpty => Some(value.trim)
-      case _ => None
+      case Some(value: String) if value.trim.nonEmpty =>
+        GetCommandMode.fromWire(value.trim) match {
+          case Right(decoded) => Some(decoded)
+          case Left(raw) =>
+            return Left(
+              s"Unknown mode '$raw'. Expected one of: current, line, offset"
+            )
+        }
+      case Some(_) =>
+        return Left("Invalid parameter 'mode': expected string")
+      case None => None
     }
 
     val xmlResultFile = params.get("xml_result_file") match {
@@ -1990,7 +2016,7 @@ class IQServer(
     }
 
     val (content, model, startOffsetRaw, endOffsetRaw) = (mode, filePath, startLineOpt, endLineOpt, startOffsetOpt, endOffsetOpt) match {
-      case (Some ("line"), Some (filePath), Some (startLine), Some(endLine), _, _) =>
+      case (Some(GetCommandMode.Line), Some(filePath), Some(startLine), Some(endLine), _, _) =>
         // Lookup buffer associated with file
         val (content, model) = getFileContentAndModel(filePath) match {
           case (Some(content), Some(model)) => (content, model)
@@ -2000,14 +2026,14 @@ class IQServer(
         val endOffset = lineNumberToOffset(content, endLine, increment=true, withLastNewLine=false)
         (content, model, startOffset, endOffset)
 
-      case (Some ("offset"), Some (filePath), _, _, Some(startOffset), Some(endOffset)) =>
+      case (Some(GetCommandMode.Offset), Some(filePath), _, _, Some(startOffset), Some(endOffset)) =>
         val (content, model) = getFileContentAndModel(filePath) match {
           case (Some(content), Some(model)) => (content, model)
           case _ => return Left(s"File $filePath is not tracked by Isabelle/jEdit")
         }
         (content, model, startOffset, endOffset)
 
-      case (Some ("current"), filePathOpt, None, None, None, None) => // Current buffer
+      case (Some(GetCommandMode.Current), filePathOpt, None, None, None, None) => // Current buffer
         val (content, model, caretPos) = getCurrentView()
         authorizeReadPath("get_command_info(current)", model.node_name.node) match {
           case Left(errorMsg) => return Left(errorMsg)
@@ -2032,7 +2058,8 @@ class IQServer(
 
         (content, model, caretPos, caretPos + 1)
 
-      case _ => return Left(s"Unknown mode $mode or invalid parameters for mode.")
+      case _ =>
+        return Left(s"Unknown mode $mode or invalid parameters for mode.")
     }
     val (startOffset, endOffset) =
       IQLineOffsetUtils.normalizeOffsetRange(startOffsetRaw, endOffsetRaw, content.length)
@@ -2770,9 +2797,8 @@ class IQServer(
           val xml_elem = warning_markup.info
           val message = XML.content(xml_elem.body).trim
 
-          // Convert text offsets to line/column positions
-          val (start_line, start_col) = offsetToLineCol(range.start)
-          val (end_line, end_col) = offsetToLineCol(range.stop)
+          // Convert text offsets to line numbers
+          val (start_line, _) = offsetToLineCol(range.start)
 
           Map(
             "message" -> message,
@@ -2817,11 +2843,24 @@ class IQServer(
   }
 
   private def handleOpenFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
-    val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
+    val createIfMissing = IQArgumentUtils.optionalBooleanParam(
+      params,
+      "create_if_missing"
+    ) match {
+      case Right(Some(value)) => value
+      case Right(None) => false
+      case Left(err) => return Left(err)
+    }
     val hasContent = params.contains("content")
     val content = params.get("content").map(_.toString)
-    val overwriteIfExists =
-      params.getOrElse("overwrite_if_exists", "false").toString.toBoolean
+    val overwriteIfExists = IQArgumentUtils.optionalBooleanParam(
+      params,
+      "overwrite_if_exists"
+    ) match {
+      case Right(Some(value)) => value
+      case Right(None) => false
+      case Left(err) => return Left(err)
+    }
 
     val resolvedPath = params.getOrElse("path", "").toString match {
       case path if path.trim.nonEmpty =>
@@ -2841,7 +2880,11 @@ class IQServer(
         case Left(errorMsg) => return Left(errorMsg)
       }
     } else readablePath
-    val view = params.getOrElse("view", "true").toString.toBoolean
+    val view = IQArgumentUtils.optionalBooleanParam(params, "view") match {
+      case Right(Some(value)) => value
+      case Right(None) => true
+      case Left(err) => return Left(err)
+    }
 
     if (!createIfMissing && (hasContent || overwriteIfExists)) {
       return Left(
@@ -2864,19 +2907,19 @@ class IQServer(
           openFileInBuffer(filePath, createIfMissing, content, overwriteIfExists)
         }
       }
-      val tracked = waitForTrackedFile(result("path"))
+      val tracked = waitForTrackedFile(result.path)
       if (!tracked) {
         Output.writeln(
-          s"I/Q Server: Timed out waiting for tracked model after open_file for ${result("path")}"
+          s"I/Q Server: Timed out waiting for tracked model after open_file for ${result.path}"
         )
       }
 
       val response = Map(
-        "path" -> result("path"),
-        "created" -> result("created").toBoolean,
-        "overwritten" -> result.getOrElse("overwritten", "false").toBoolean,
-        "opened" -> result("opened").toBoolean,
-        "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
+        "path" -> result.path,
+        "created" -> result.created,
+        "overwritten" -> result.overwritten,
+        "opened" -> result.opened,
+        "in_view" -> result.inView,
         "tracked" -> tracked,
         "message" -> (if (tracked) "File opened successfully"
                       else "File open was requested but tracking did not stabilize before timeout")
@@ -2910,14 +2953,21 @@ class IQServer(
       Output.writeln(s"I/Q Server: Reading theory file: $filePath in mode $mode_opt")
 
       val mode = mode_opt match {
-        case Some(mode: String) => mode
-        case _ => "Unknown"
+        case Some(raw: String) =>
+          ReadFileMode.fromWire(raw) match {
+            case Right(value) => value
+            case Left(_) => return Left(s"Unknown mode: $raw")
+          }
+        case Some(other) =>
+          return Left(s"Invalid mode type: ${other.getClass.getSimpleName}")
+        case None =>
+          return Left("Missing required parameter: mode")
       }
 
       Output.writeln(s"I/Q Server: Reading theory file: $filePath in $mode mode")
 
       val result = mode match {
-        case "Line" =>
+        case ReadFileMode.Line =>
 
           val startLine: Int = IQArgumentUtils.optionalIntParam(params, "start_line") match {
             case Right(Some(line)) => line
@@ -2935,7 +2985,7 @@ class IQServer(
           GUI_Thread.now {
             readTheoryFile(filePath, startLine, endLine)
           }
-        case "Search" =>
+        case ReadFileMode.Search =>
           val contextLines = IQArgumentUtils.optionalIntParam(params, "context_lines") match {
             case Right(Some(lines)) => lines
             case Right(None) => 0
@@ -2949,7 +2999,6 @@ class IQServer(
             case Some(_) => return Left("`pattern` must be non-empty for mode 'Search'")
             case _ => return Left("`pattern` argument mandatory for mode 'Search'")
           }
-        case _ => return Left("Unknown mode")
       }
 
       result match {
@@ -3114,7 +3163,7 @@ class IQServer(
       inView: Boolean,
       content: Option[String],
       overwriteIfExists: Boolean
-  ): Map[String, String] = {
+  ): OpenFileOperationResult = {
     val authorizedPath =
       if (createIfMissing) {
         authorizeMutationPath("open_file_common(create)", filePath) match {
@@ -3149,7 +3198,14 @@ class IQServer(
           s"File already exists and overwrite_if_exists is false: $authorizedPath"
         )
       }
-      createFileWithContent(file, authorizedPath, content.get)
+      content match {
+        case Some(existingContent) =>
+          createFileWithContent(file, authorizedPath, existingContent)
+        case None =>
+          throw new IllegalStateException(
+            "Expected content when overwrite_if_exists is true"
+          )
+      }
       fileOverwritten = true
       Output.writeln(
         s"I/Q Server: Overwrote existing file${if (inView) "" else " for buffer"}: $authorizedPath"
@@ -3187,12 +3243,12 @@ class IQServer(
       Output.writeln(s"I/Q Server: Provided file to buffer: $authorizedPath")
     }
 
-    Map(
-      "path" -> authorizedPath,
-      "created" -> fileCreated.toString,
-      "overwritten" -> fileOverwritten.toString,
-      "opened" -> "true",
-      "in_view" -> inView.toString
+    OpenFileOperationResult(
+      path = authorizedPath,
+      created = fileCreated,
+      overwritten = fileOverwritten,
+      opened = true,
+      inView = inView
     )
   }
 
@@ -3201,7 +3257,7 @@ class IQServer(
       createIfMissing: Boolean,
       content: Option[String],
       overwriteIfExists: Boolean
-  ): Map[String, String] = {
+  ): OpenFileOperationResult = {
     openFileCommon(filePath, createIfMissing, inView = true, content, overwriteIfExists)
   }
 
@@ -3210,7 +3266,7 @@ class IQServer(
       createIfMissing: Boolean,
       content: Option[String],
       overwriteIfExists: Boolean
-  ): Map[String, String] = {
+  ): OpenFileOperationResult = {
     openFileCommon(filePath, createIfMissing, inView = false, content, overwriteIfExists)
   }
 
@@ -3318,7 +3374,7 @@ end"""
       val startLine = math.max(0, lineIdx - safeContextLines)
       val endLine = math.min(totalLines - 1, lineIdx + safeContextLines)
 
-      // Create match object - use a List of tuples instead of Map for better JSON serialization
+      // Create one match object per line with numbered context for clients.
       Map(
         "line_number" -> lineNum,
         "context" -> formatLinesWithNumbers(lines, startLine, endLine, Some(lineIdx))
@@ -3330,7 +3386,7 @@ end"""
 
 
   private final case class AuthorizedTargetSelection(
-      target: String,
+      target: CommandSelectionTarget,
       path: Option[String],
       requestedOffset: Option[Int],
       pattern: Option[String]
@@ -3340,18 +3396,21 @@ end"""
       params: Map[String, Any],
       operation: String
   ): Either[String, AuthorizedTargetSelection] = {
-    val target = params
+    val targetRaw = params
       .get("command_selection")
       .map(_.toString.trim)
       .filter(_.nonEmpty)
       .getOrElse("")
 
-    if (target.isEmpty)
+    if (targetRaw.isEmpty)
       return Left("Missing required parameter: command_selection")
-    if (!List("current", "file_offset", "file_pattern").contains(target))
-      return Left(
-        s"Invalid target: $target. Must be 'current', 'file_offset', or 'file_pattern'"
-      )
+    val target = CommandSelectionTarget.fromWire(targetRaw) match {
+      case Right(value) => value
+      case Left(raw) =>
+        return Left(
+          s"Invalid target: $raw. Must be 'current', 'file_offset', or 'file_pattern'"
+        )
+    }
 
     val requestedOffset = IQArgumentUtils.optionalIntParam(params, "offset") match {
       case Right(v) => v
@@ -3364,7 +3423,7 @@ end"""
       .filter(_.nonEmpty)
 
     val authorizedPath =
-      if (target == "current") None
+      if (target == CommandSelectionTarget.Current) None
       else {
         params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
           case Some(path) =>
@@ -3381,7 +3440,7 @@ end"""
       }
 
     target match {
-      case "file_offset" =>
+      case CommandSelectionTarget.FileOffset =>
         if (authorizedPath.isEmpty || requestedOffset.isEmpty)
           Left("file_offset target requires path and offset parameters")
         else
@@ -3393,7 +3452,7 @@ end"""
               None
             )
           )
-      case "file_pattern" =>
+      case CommandSelectionTarget.FilePattern =>
         if (authorizedPath.isEmpty || pattern.isEmpty)
           Left("file_pattern target requires path and pattern parameters")
         else
@@ -3405,7 +3464,7 @@ end"""
               pattern
             )
           )
-      case _ =>
+      case CommandSelectionTarget.Current =>
         Right(AuthorizedTargetSelection(target, None, None, None))
     }
   }
@@ -3419,11 +3478,7 @@ end"""
         selection.path,
         selection.requestedOffset,
         selection.pattern
-      )
-      .toEither
-      .left
-      .map(_.getMessage)
-      .flatMap { resolved =>
+      ).flatMap { resolved =>
         val nodePath = resolved.command.node_name.node
         if (nodePath.trim.isEmpty) Right(resolved)
         else {
@@ -4021,14 +4076,19 @@ end"""
   ): Either[String, Map[String, Any]] = {
     val scope = params
       .get("scope")
-      .map(_.toString.trim.toLowerCase(Locale.ROOT))
+      .map(_.toString.trim)
       .filter(_.nonEmpty) match {
       case Some(value) => value
       case None => return Left("Missing required parameter: scope")
     }
+    val parsedScope = ProofBlocksScope.fromWire(scope) match {
+      case Right(value) => value
+      case Left(_) =>
+        return Left("Parameter 'scope' must be either 'selection' or 'file'")
+    }
 
-    scope match {
-      case "selection" =>
+    parsedScope match {
+      case ProofBlocksScope.Selection =>
         val normalizedParams = withDefaultCurrentSelection(params)
         decodeAndAuthorizeTargetSelection(
           normalizedParams,
@@ -4074,7 +4134,7 @@ end"""
                   else Map.empty)
           }
         }
-      case "file" =>
+      case ProofBlocksScope.File =>
         val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
           case Some(path) =>
             IQUtils.autoCompleteFilePath(path) match {
@@ -4145,8 +4205,6 @@ end"""
               s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting proof blocks."
             )
         }
-      case _ =>
-        Left("Parameter 'scope' must be either 'selection' or 'file'")
     }
   }
 
@@ -4178,7 +4236,7 @@ end"""
   ): Map[String, Any] =
     executeExploration(
       resolvedTarget = resolvedTarget,
-      query = "proof",
+      query = ExploreQuery.Proof,
       arguments = arguments,
       maxResults = None
     )
@@ -4252,16 +4310,17 @@ end"""
   }
 
   private def diagnosticsFilterForSeverity(
-      severity: String
+      severity: DiagnosticsSeverity
   ): XML.Elem => Boolean = severity match {
-    case "error" => Protocol.is_error
-    case _ => elem => Protocol.is_warning(elem) || Protocol.is_legacy(elem)
+    case DiagnosticsSeverity.Error => Protocol.is_error
+    case DiagnosticsSeverity.Warning =>
+      elem => Protocol.is_warning(elem) || Protocol.is_legacy(elem)
   }
 
   private def collectDiagnosticsInRange(
       snapshot: Document.Snapshot,
       range: Text.Range,
-      severity: String,
+      severity: DiagnosticsSeverity,
       lineDoc: Option[Line.Document]
   ): List[Map[String, Any]] = {
     val filter = diagnosticsFilterForSeverity(severity)
@@ -4291,24 +4350,25 @@ end"""
   private def handleGetDiagnostics(
       params: Map[String, Any]
   ): Either[String, Map[String, Any]] = {
-    val severity = params
-      .get("severity")
-      .map(_.toString.trim.toLowerCase(Locale.ROOT))
-      .getOrElse("")
-    if (!Set("error", "warning").contains(severity)) {
-      return Left("Parameter 'severity' must be either 'error' or 'warning'")
+    val severity = params.get("severity").map(_.toString.trim).getOrElse("")
+    val parsedSeverity = DiagnosticsSeverity.fromWire(severity) match {
+      case Right(value) => value
+      case Left(_) =>
+        return Left("Parameter 'severity' must be either 'error' or 'warning'")
     }
 
     val scope = params
       .get("scope")
-      .map(_.toString.trim.toLowerCase(Locale.ROOT))
+      .map(_.toString.trim)
       .filter(_.nonEmpty)
-      .getOrElse("selection")
-    if (!Set("selection", "file").contains(scope)) {
-      return Left("Parameter 'scope' must be either 'selection' or 'file'")
+      .getOrElse(DiagnosticsScope.Selection.wire)
+    val parsedScope = DiagnosticsScope.fromWire(scope) match {
+      case Right(value) => value
+      case Left(_) =>
+        return Left("Parameter 'scope' must be either 'selection' or 'file'")
     }
 
-    if (scope == "file") {
+    if (parsedScope == DiagnosticsScope.File) {
       val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
         case Some(path) =>
           IQUtils.autoCompleteFilePath(path) match {
@@ -4330,13 +4390,13 @@ end"""
             val diagnostics = collectDiagnosticsInRange(
               snapshot,
               Text.Range(0, content.length),
-              severity,
+              parsedSeverity,
               Some(Line.Document(content))
             )
             Right(
               Map(
                 "scope" -> "file",
-                "severity" -> severity,
+                "severity" -> parsedSeverity.wire,
                 "path" -> filePath,
                 "node_name" -> model.node_name.toString,
                 "count" -> diagnostics.length,
@@ -4364,16 +4424,16 @@ end"""
               if (node == null) List.empty[Map[String, Any]]
               else {
                 val start = node.command_start(command).getOrElse(0)
-                collectDiagnosticsInRange(
-                  snapshot,
-                  Text.Range(start, start + command.length),
-                  severity,
-                  getFileContent(command.node_name.node).map(Line.Document(_))
-                )
+                  collectDiagnosticsInRange(
+                    snapshot,
+                    Text.Range(start, start + command.length),
+                    parsedSeverity,
+                    getFileContent(command.node_name.node).map(Line.Document(_))
+                  )
               }
             Map(
               "scope" -> "selection",
-              "severity" -> severity,
+              "severity" -> parsedSeverity.wire,
               "selection" -> targetSelectionToMap(resolved.selection),
               "command" -> commandInfoMap(command),
               "count" -> diagnostics.length,
@@ -4395,7 +4455,7 @@ end"""
    */
   private def handleExplore(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     try {
-      val query = params.get("query").map(_.toString).getOrElse("")
+      val query = params.get("query").map(_.toString.trim).getOrElse("")
       val arguments = params.get("arguments").map(_.toString).getOrElse("")
       val maxResults = IQArgumentUtils.optionalIntParam(params, "max_results") match {
         case Right(v) => v
@@ -4405,16 +4465,20 @@ end"""
       if (query.isEmpty) {
         return Left("Missing required parameter: query")
       }
-      if (arguments.isEmpty && (query == "proof" || query == "find_theorems")) {
-        return Left(s"Arguments are required for query type '$query'")
+      val parsedQuery = ExploreQuery.fromWire(query) match {
+        case Right(value) => value
+        case Left(raw) =>
+          return Left(
+            s"Invalid query: $raw. Must be 'proof', 'sledgehammer', or 'find_theorems'"
+          )
       }
-      if (!List("proof", "sledgehammer", "find_theorems").contains(query)) {
-        return Left(s"Invalid query: $query. Must be 'proof', 'sledgehammer', or 'find_theorems'")
+      if (arguments.isEmpty && (parsedQuery == ExploreQuery.Proof || parsedQuery == ExploreQuery.FindTheorems)) {
+        return Left(s"Arguments are required for query type '${parsedQuery.wire}'")
       }
 
       decodeAndAuthorizeTargetSelection(params, "explore").flatMap { selection =>
         resolveTargetSelection(selection).map { resolvedTarget =>
-          executeExploration(resolvedTarget, query, arguments, maxResults)
+          executeExploration(resolvedTarget, parsedQuery, arguments, maxResults)
         }
       }
     } catch {
@@ -4570,17 +4634,16 @@ end"""
    */
   private def executeExploration(
     resolvedTarget: IQUtils.TargetResolution,
-    query: String,
+    query: ExploreQuery,
     arguments: String,
     maxResults: Option[Int]
   ): Map[String, Any] = {
 
     try {
-      // Convert query type from external to internal format
-      val internalQuery = IQUtils.externalToInternalQuery(query)
+      val internalQuery = query.internalName
 
       // Handle default arguments (only for sledgehammer)
-      val finalArguments = if (arguments.trim.isEmpty && query == "sledgehammer") {
+      val finalArguments = if (arguments.trim.isEmpty && query == ExploreQuery.Sledgehammer) {
         IQUtils.getDefaultArguments("sledgehammer")
       } else {
         arguments
@@ -4588,14 +4651,14 @@ end"""
 
       val command = resolvedTarget.command
       val formattedArgs =
-        if (internalQuery == "find_theorems") {
+        if (query == ExploreQuery.FindTheorems) {
           val resultLimit = maxResults.filter(_ > 0).getOrElse(20)
           List(resultLimit.toString, "false", finalArguments)
         } else {
           IQUtils.formatQueryArguments(internalQuery, finalArguments)
         }
 
-      val collector = new ExploreResultCollector(query)
+      val collector = new ExploreResultCollector(query.wire)
 
       Output.writeln(
         s"I/Q Server: Starting query execution for $internalQuery with arguments: $formattedArgs"

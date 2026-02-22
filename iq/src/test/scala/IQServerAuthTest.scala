@@ -90,11 +90,11 @@ object IQServerAuthTest {
   private def testInternalToolFailurePreservesRequestId(): Unit = {
     val root = Files.createTempDirectory("iq-server-internal-id-root").toRealPath()
     val crashingBackend = new IQCapabilityBackend {
-      override val toolNames: Set[String] = Set("explore")
+      override val toolNames: Set[IQToolName] = Set(IQToolName.Explore)
       override def invoke(
-          toolName: String,
-          params: Map[String, Any]
-      ): Either[IQCapabilityInvocationError, Map[String, Any]] = {
+          toolName: IQToolName,
+          params: IQToolParams
+      ): Either[IQCapabilityInvocationError, IQToolResult] = {
         throw new RuntimeException("forced-test-failure")
       }
     }
@@ -356,6 +356,35 @@ object IQServerAuthTest {
     )
   }
 
+  private def testInvalidRequestMethodTypeRejected(): Unit = {
+    val root = Files.createTempDirectory("iq-server-invalid-method-type-root").toRealPath()
+    val server = mkServer(root, None)
+    val request = """{"jsonrpc":"2.0","id":"req-invalid-method","method":123}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "invalid method type should return error response")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("'method' must be a string"),
+      s"expected invalid method type message: $payload"
+    )
+  }
+
+  private def testOpenFileRejectsInvalidBooleanParam(): Unit = {
+    val root = Files.createTempDirectory("iq-server-open-file-bool-root").toRealPath()
+    val server = mkServer(root, None)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-open-bool","method":"tools/call","params":{"name":"open_file","arguments":{"path":"demo.thy","create_if_missing":"maybe"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "invalid boolean parameter should return JSON-RPC error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(
+      payload.contains("Invalid parameter 'create_if_missing': expected boolean"),
+      s"expected boolean validation message: $payload"
+    )
+  }
+
   def main(args: Array[String]): Unit = {
     testUnauthorizedRequestReturnsErrorWithId()
     testUnauthorizedNotificationReturnsNone()
@@ -377,6 +406,8 @@ object IQServerAuthTest {
     testGetDiagnosticsFileScopeRequiresPath()
     testServerAuthorizeMutationPathRespectsRoots()
     testServerAuthorizeReadPathRespectsRoots()
+    testInvalidRequestMethodTypeRejected()
+    testOpenFileRejectsInvalidBooleanParam()
     println("IQServerAuthTest: all tests passed")
   }
 }

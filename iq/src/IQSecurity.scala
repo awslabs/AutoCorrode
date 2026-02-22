@@ -43,15 +43,18 @@ object IQSecurity {
     if (Files.exists(normalized)) {
       normalized.toRealPath()
     } else {
-      var ancestor: Path = normalized
-      while (ancestor != null && !Files.exists(ancestor)) {
-        ancestor = ancestor.getParent
+      var ancestorOpt: Option[Path] = Some(normalized)
+      while (
+        ancestorOpt.exists(candidate => !Files.exists(candidate))
+      ) {
+        ancestorOpt = ancestorOpt.flatMap(path => Option(path.getParent))
       }
 
-      if (ancestor == null) normalized
-      else {
-        val canonicalAncestor = ancestor.toRealPath()
-        canonicalAncestor.resolve(ancestor.relativize(normalized)).normalize()
+      ancestorOpt match {
+        case None => normalized
+        case Some(ancestor) =>
+          val canonicalAncestor = ancestor.toRealPath()
+          canonicalAncestor.resolve(ancestor.relativize(normalized)).normalize()
       }
     }
   }

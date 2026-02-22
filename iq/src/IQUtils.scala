@@ -5,54 +5,14 @@ import isabelle._
 import isabelle.jedit._
 
 import org.gjt.sp.jedit.{View, jEdit}
-import scala.util.{Try, Success, Failure}
 import java.io.File
+import scala.util.{Failure, Success, Try}
 
 /**
  * Utilities for I/Q Explore functionality.
  * Contains pure functions that can be shared between GUI and MCP implementations.
  */
 object IQUtils {
-  private sealed trait ValidatedTarget
-  private case object CurrentTarget extends ValidatedTarget
-  private final case class FileOffsetTarget(path: String, requestedOffset: Int)
-      extends ValidatedTarget
-  private final case class FilePatternTarget(path: String, pattern: String)
-      extends ValidatedTarget
-
-  private def decodeTarget(
-      target: String,
-      filePath: Option[String],
-      offset: Option[Int],
-      pattern: Option[String]
-  ): Either[String, ValidatedTarget] = {
-    target match {
-      case "current" =>
-        Right(CurrentTarget)
-      case "file_offset" =>
-        (filePath, offset) match {
-          case (Some(path), Some(requestedOffset)) =>
-            Right(FileOffsetTarget(path, requestedOffset))
-          case (None, _) =>
-            Left("file_offset target requires file_path parameter")
-          case (_, None) =>
-            Left("file_offset target requires offset parameter")
-        }
-      case "file_pattern" =>
-        (filePath, pattern.map(_.trim).filter(_.nonEmpty)) match {
-          case (Some(path), Some(trimmedPattern)) =>
-            Right(FilePatternTarget(path, trimmedPattern))
-          case (None, _) =>
-            Left("file_pattern target requires file_path parameter")
-          case (_, None) =>
-            Left("file_pattern target requires non-empty pattern parameter")
-        }
-      case other =>
-        Left(
-          s"Invalid target: $other. Must be 'current', 'file_offset', or 'file_pattern'"
-        )
-    }
-  }
 
   sealed trait CommandSelection
   case object CurrentSelection extends CommandSelection
@@ -155,28 +115,24 @@ object IQUtils {
    *
    * @param filePath The path to the theory file
    * @param offset The character offset in the file
-   * @return Try[Command] containing the command if found, or failure with error message
+   * @return Either error message or the matching command
    */
-  def findCommandAtFileOffset(filePath: String, offset: Int): Try[Command] = {
-    Try {
-      // Convert file path to node name
-      val node_name = PIDE.resources.node_name(filePath)
-      val snapshot = PIDE.session.snapshot()
+  def findCommandAtFileOffset(
+      filePath: String,
+      offset: Int
+  ): Either[String, Command] = {
+    val nodeName = PIDE.resources.node_name(filePath)
+    val snapshot = PIDE.session.snapshot()
+    val node = snapshot.get_node(nodeName)
 
-      // Get the node from the snapshot
-      val node = snapshot.get_node(node_name)
-
-      if (node != null && node.commands.nonEmpty) {
-        // Find the command that contains the given offset
-        val targetRange = Text.Range(offset, offset + 1)
-        val commandsAtOffset = node.command_iterator(targetRange).toList
-
-        commandsAtOffset.headOption match {
-          case Some((command, _)) => command
-          case None => throw new RuntimeException(s"No command found at offset $offset in $filePath")
-        }
-      } else {
-        throw new RuntimeException(s"Node not found or empty for $filePath")
+    if (node == null || node.commands.isEmpty) {
+      Left(s"Node not found or empty for $filePath")
+    } else {
+      val targetRange = Text.Range(offset, offset + 1)
+      val commandsAtOffset = node.command_iterator(targetRange).toList
+      commandsAtOffset.headOption match {
+        case Some((command, _)) => Right(command)
+        case None => Left(s"No command found at offset $offset in $filePath")
       }
     }
   }
@@ -308,20 +264,15 @@ object IQUtils {
    * Gets the full text content of a file from the buffer.
    *
    * @param filePath The path to the theory file
-   * @return Try[String] containing the file content, or failure if file not found/opened
+   * @return Either error message or the file content
    */
-  def getFileContent(filePath: String): Try[String] = {
-    Try {
-      // Convert file path to node name
-      val node_name = PIDE.resources.node_name(filePath)
-
-      // Try to get buffer model first (for open files)
-      Document_Model.get_model(node_name) match {
-        case Some(buffer_model: Buffer_Model) =>
-          JEdit_Lib.buffer_text(buffer_model.buffer)
-        case _ =>
-          throw new RuntimeException(s"File $filePath is not opened in jEdit")
-      }
+  def getFileContent(filePath: String): Either[String, String] = {
+    val nodeName = PIDE.resources.node_name(filePath)
+    Document_Model.get_model(nodeName) match {
+      case Some(bufferModel: Buffer_Model) =>
+        Right(JEdit_Lib.buffer_text(bufferModel.buffer))
+      case _ =>
+        Left(s"File $filePath is not opened in jEdit")
     }
   }
 
@@ -332,38 +283,33 @@ object IQUtils {
    *
    * @param filePath The path to the theory file
    * @param pattern The substring pattern to match (will be trimmed)
-   * @return Try[Command] containing the unique matching command, or failure if not found/unique
+   * @return Either error message or the unique matching command
    */
-  def findCommandByPattern(filePath: String, pattern: String): Try[Command] = {
-    Try {
-      // Trim whitespace and newlines from the pattern
-      val trimmedPattern = pattern.trim
+  def findCommandByPattern(
+      filePath: String,
+      pattern: String
+  ): Either[String, Command] = {
+    val trimmedPattern = pattern.trim
+    if (trimmedPattern.isEmpty) {
+      Left("Pattern cannot be empty after trimming")
+    } else {
+      getFileContent(filePath).flatMap { fileContent =>
+        val matchOffset = findUniqueSubstringOffset(fileContent, trimmedPattern) match {
+          case Right(offset) => Right(offset)
+          case Left(SubstringNotFound) =>
+            Left(s"Pattern '$trimmedPattern' not found in $filePath")
+          case Left(SubstringNotUnique) =>
+            Left(s"Pattern '$trimmedPattern' is not unique in $filePath")
+          case Left(SubstringEmpty) =>
+            Left("Pattern cannot be empty")
+        }
 
-      if (trimmedPattern.isEmpty) {
-        throw new RuntimeException("Pattern cannot be empty after trimming")
-      }
-
-      // Get the full file content
-      val fileContent = getFileContent(filePath) match {
-        case Success(content) => content
-        case Failure(ex) => throw ex
-      }
-
-      // Find unique substring offset
-      val matchOffset = findUniqueSubstringOffset(fileContent, trimmedPattern) match {
-        case Right(offset) => offset
-        case Left(SubstringNotFound) => throw new RuntimeException(s"Pattern '$trimmedPattern' not found in $filePath")
-        case Left(SubstringNotUnique) => throw new RuntimeException(s"Pattern '$trimmedPattern' is not unique in $filePath")
-        case Left(SubstringEmpty) => throw new RuntimeException(s"Pattern cannot be empty")
-      }
-
-      // Calculate the offset of the last character of the match
-      val lastCharOffset = matchOffset + trimmedPattern.length - 1
-
-      // Find the command at that offset
-      findCommandAtFileOffset(filePath, lastCharOffset) match {
-        case Success(command) => command
-        case Failure(ex) => throw new RuntimeException(s"No command found at calculated offset $lastCharOffset: ${ex.getMessage}")
+        matchOffset.flatMap { offset =>
+          val lastCharOffset = offset + trimmedPattern.length - 1
+          findCommandAtFileOffset(filePath, lastCharOffset).left.map { err =>
+            s"No command found at calculated offset $lastCharOffset: $err"
+          }
+        }
       }
     }
   }
@@ -371,47 +317,40 @@ object IQUtils {
   /**
    * Gets the current command at the cursor position in the active view.
    *
-   * @param view The jEdit view (can be null, will use active view)
-   * @return Try[Command] containing the current command, or failure if none found
+   * @param viewOpt The jEdit view (if empty, uses active view)
+   * @return Either error message or current command
    */
-  def getCurrentCommand(view: View = null): Try[Command] = {
-    Try {
-      // All GUI and document model operations in GUI thread
-      GUI_Thread.now {
-        val activeView = if (view != null) view else jEdit.getActiveView()
-        if (activeView == null) {
-          throw new RuntimeException("No active view available")
-        }
-
-        val buffer = activeView.getBuffer()
-        if (buffer == null) {
-          throw new RuntimeException("No buffer in active view")
-        }
-
-        // Get the document model
-        val model = Document_Model.get_model(buffer) match {
-          case Some(m) => m
-          case None => throw new RuntimeException("No document model for current buffer")
-        }
-
-        val textArea = activeView.getTextArea()
-        val caretPos = textArea.getCaretPosition()
-
-        // Find command at caret position - all in GUI thread
-        val snapshot = Document_Model.snapshot(model)
-        val node = snapshot.get_node(model.node_name)
-
-        if (node != null && node.commands.nonEmpty) {
-          val targetRange = Text.Range(caretPos, caretPos + 1)
-          val commandsAtCaret = node.command_iterator(targetRange).toList
-
-          commandsAtCaret.headOption match {
-            case Some((command, _)) => command
-            case None => throw new RuntimeException("No command found at current cursor position")
+  def getCurrentCommand(viewOpt: Option[View] = None): Either[String, Command] = {
+    GUI_Thread.now {
+      val activeView = viewOpt.orElse(Option(jEdit.getActiveView()))
+      activeView match {
+        case None =>
+          Left("No active view available")
+        case Some(view) =>
+          Option(view.getBuffer()) match {
+            case None =>
+              Left("No buffer in active view")
+            case Some(buffer) =>
+              Document_Model.get_model(buffer) match {
+                case None =>
+                  Left("No document model for current buffer")
+                case Some(model) =>
+                  val caretPos = view.getTextArea().getCaretPosition()
+                  val snapshot = Document_Model.snapshot(model)
+                  val node = snapshot.get_node(model.node_name)
+                  if (node == null || node.commands.isEmpty) {
+                    Left("No commands available in current document")
+                  } else {
+                    val targetRange = Text.Range(caretPos, caretPos + 1)
+                    val commandsAtCaret = node.command_iterator(targetRange).toList
+                    commandsAtCaret.headOption match {
+                      case Some((command, _)) => Right(command)
+                      case None =>
+                        Left("No command found at current cursor position")
+                    }
+                  }
+              }
           }
-        } else {
-          throw new RuntimeException("No commands available in current document")
-        }
       }
     }
   }
@@ -433,22 +372,20 @@ object IQUtils {
    * command context.
    */
   def resolveCommandSelection(
-      target: String,
+      target: CommandSelectionTarget,
       filePath: Option[String],
       offset: Option[Int],
       pattern: Option[String],
-      view: View = null
-  ): Try[TargetResolution] = {
-    decodeTarget(target, filePath, offset, pattern) match {
-      case Left(errorMessage) =>
-        Failure(new IllegalArgumentException(errorMessage))
-      case Right(validTarget) =>
-        validTarget match {
-          case CurrentTarget =>
-            getCurrentCommand(view).map(cmd =>
-              TargetResolution(CurrentSelection, cmd)
-            )
-          case FileOffsetTarget(path, requested) =>
+      viewOpt: Option[View] = None
+  ): Either[String, TargetResolution] = {
+    target match {
+      case CommandSelectionTarget.Current =>
+        getCurrentCommand(viewOpt).map(cmd =>
+          TargetResolution(CurrentSelection, cmd)
+        )
+      case CommandSelectionTarget.FileOffset =>
+        (filePath, offset) match {
+          case (Some(path), Some(requested)) =>
             getFileContent(path).flatMap { content =>
               val normalized = normalizeRequestedOffset(requested, content.length)
               findCommandAtFileOffset(path, normalized).map(cmd =>
@@ -458,13 +395,24 @@ object IQUtils {
                 )
               )
             }
-          case FilePatternTarget(path, trimmedPattern) =>
+          case (None, _) =>
+            Left("file_offset target requires file_path parameter")
+          case (_, None) =>
+            Left("file_offset target requires offset parameter")
+        }
+      case CommandSelectionTarget.FilePattern =>
+        (filePath, pattern.map(_.trim).filter(_.nonEmpty)) match {
+          case (Some(path), Some(trimmedPattern)) =>
             findCommandByPattern(path, trimmedPattern).map(cmd =>
               TargetResolution(
                 FilePatternSelection(path, trimmedPattern),
                 cmd
               )
             )
+          case (None, _) =>
+            Left("file_pattern target requires file_path parameter")
+          case (_, None) =>
+            Left("file_pattern target requires non-empty pattern parameter")
         }
       }
   }
@@ -514,24 +462,55 @@ object IQUtils {
   }
 
   /**
-   * Validates target parameters for exploration.
-   *
-   * @param target The target type (current, file_offset, file_pattern)
-   * @param filePath Optional file path
-   * @param offset Optional offset
-   * @param pattern Optional pattern
-   * @return Try[Unit] indicating success or failure with error message
+   * Backwards-compatible target validation helper used by tests.
    */
   def validateTarget(
-    target: String,
-    filePath: Option[String],
-    offset: Option[Int],
-    pattern: Option[String]
+      target: String,
+      filePath: Option[String],
+      offset: Option[Int],
+      pattern: Option[String]
   ): Try[Unit] = {
-    decodeTarget(target, filePath, offset, pattern) match {
-      case Right(_) => Success(())
-      case Left(errorMessage) =>
-        Failure(new IllegalArgumentException(errorMessage))
+    CommandSelectionTarget.fromWire(target) match {
+      case Left(raw) =>
+        Failure(
+          new IllegalArgumentException(
+            s"Invalid target: $raw. Must be 'current', 'file_offset', or 'file_pattern'"
+          )
+        )
+      case Right(CommandSelectionTarget.Current) =>
+        Success(())
+      case Right(CommandSelectionTarget.FileOffset) =>
+        (filePath, offset) match {
+          case (Some(_), Some(_)) => Success(())
+          case (None, _) =>
+            Failure(
+              new IllegalArgumentException(
+                "file_offset target requires file_path parameter"
+              )
+            )
+          case (_, None) =>
+            Failure(
+              new IllegalArgumentException(
+                "file_offset target requires offset parameter"
+              )
+            )
+        }
+      case Right(CommandSelectionTarget.FilePattern) =>
+        (filePath, pattern.map(_.trim).filter(_.nonEmpty)) match {
+          case (Some(_), Some(_)) => Success(())
+          case (None, _) =>
+            Failure(
+              new IllegalArgumentException(
+                "file_pattern target requires file_path parameter"
+              )
+            )
+          case (_, None) =>
+            Failure(
+              new IllegalArgumentException(
+                "file_pattern target requires non-empty pattern parameter"
+              )
+            )
+        }
     }
   }
 
@@ -543,21 +522,6 @@ object IQUtils {
    */
   def validateQuery(queryType: String): Boolean = {
     Set("isar_explore", "sledgehammer", "find_theorems").contains(queryType)
-  }
-
-  /**
-   * Converts a query type from external format to internal format.
-   *
-   * @param externalQuery The external query type (proof, sledgehammer, find_theorems)
-   * @return The internal query type
-   */
-  def externalToInternalQuery(externalQuery: String): String = {
-    externalQuery match {
-      case "proof" => "isar_explore"
-      case "sledgehammer" => "sledgehammer"
-      case "find_theorems" => "find_theorems"
-      case _ => externalQuery
-    }
   }
 
   /**
