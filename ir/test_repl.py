@@ -206,9 +206,26 @@ def main():
                       'show_theory_in_source = #show_theory_in_source c, '
                       'auto_replay = #auto_replay c});')
 
+        def test_multiline_step():
+            """Multi-line Isar text sent as escaped ML string (via MCP path)."""
+            send_recv(sock, 'Explore.init "ml1" "Main";')
+            # Multi-line: lemma + proof on separate lines, escaped as ML string
+            out = send_recv(sock, 'Explore.step "lemma ml_test: True\\nby simp";')
+            assert "ml_test" in out, f"Expected ml_test theorem, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ml1";')
+
+        def test_multiline_step_raw_newline():
+            """Multi-line Isar text with raw newline (TCP multi-line accumulation)."""
+            send_recv(sock, 'Explore.init "ml2" "Main";')
+            # Raw newline: TCP handler accumulates lines until ;
+            out = send_recv(sock, 'Explore.step "lemma ml_raw: True\nby simp";')
+            assert "ml_raw" in out, f"Expected ml_raw theorem, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ml2";')
+
         for t in [test_help, test_theories, test_init_show, test_step,
                   test_state, test_text, test_edit_replay, test_fork_focus_merge,
-                  test_repls, test_source, test_remove, test_config]:
+                  test_repls, test_source, test_remove, test_config,
+                  test_multiline_step, test_multiline_step_raw_newline]:
             run_test(t.__name__, t)
 
         sock.close()

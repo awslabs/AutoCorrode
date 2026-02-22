@@ -33,12 +33,12 @@ sig
   val help : unit -> unit
 end;
 
-(* Shared refs for sledgehammer compiler bridge — must be in global namespace *)
+(* Shared refs for sledgehammer compiler bridge -- must be in global namespace *)
 val sh_state_ref = Unsynchronized.ref (Toplevel.make_state NONE);
 val sh_timeout_ref = Unsynchronized.ref 30;
 val sh_result_ref = Unsynchronized.ref "";
 
-(* Probe for stored_segments — may or may not exist in the loaded heap *)
+(* Probe for stored_segments -- may or may not exist in the loaded heap *)
 val stored_segments_probe =
   Unsynchronized.ref (NONE : (string * Document_Output.segment list) list Synchronized.var option);
 val _ = Exn.capture (fn () =>
@@ -561,6 +561,9 @@ fun sledgehammer timeout_secs =
 
 fun help () = out
   "=== Explore API ===\n\
+  \\n\
+  \  Sessions start in the context of a named theory -- do NOT issue\n\
+  \  'theory' commands. Steps are Isar: lemma, definition, fun, by, etc.\n\
   \\n\
   \  init id spec       create REPL from \"Theory\" or \"Theory:idx\"\n\
   \  fork id state_idx  fork sub-REPL from current at state (~1=latest)\n\

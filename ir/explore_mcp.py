@@ -11,17 +11,30 @@ and exposes each Explore function as an MCP tool.  Runs on stdio transport.
 Usage:
     python3 explore_mcp.py
 
-JSON configuration:
+MCP configuration for communication via stdin/stdout. Adjust BASE as needed.
 
 ```json
-{
   "mcpServers": {
+    ...
     "explore": {
       "command": "python3",
-      "args": ["{BASE}/AutoCorrode/ir/explore_mcp.py"]
+      "args": ["{BASE}/ir/explore_mcp.py"]
     }
+    ...
   }
-}
+```
+
+MCP configuration for communication via streaming-http
+(adjust host and port as needed):
+
+```json
+  "mcpServers": {
+    ...
+    "explore": {
+      "url": "http://localhost:9148/mcp",
+    }
+    ...
+  }
 ```
 
 """
@@ -38,7 +51,7 @@ SENTINEL = "<<DONE>>"
 class ReplClient:
     """Synchronous TCP client for the Explore REPL server."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9147):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9148):
         self.host = host
         self.port = port
         self.sock: socket.socket | None = None
@@ -97,13 +110,17 @@ def ml_int(n: int) -> str:
 
 mcp = FastMCP("Explore REPL",
               instructions="Isabelle/ML Explore REPL for interactive theory exploration. "
-              "Use `list` to see REPLs, `init` to create one, `step` to advance, "
-              "`show` to inspect, `state` to view proof state.")
+              "Use `connect` first, then `theories` to list available theories, "
+              "`init` to create a REPL session rooted at a theory, `step` to advance, "
+              "`show` to inspect, `state` to view proof state. "
+              "IMPORTANT: Do NOT send 'theory' commands via `step` — the theory context "
+              "is established by `init`. Steps are Isar commands like `lemma`, `apply`, "
+              "`by`, `definition`, `fun`, `declare`, etc.")
 
 repl = ReplClient()
 
 @mcp.tool(description="Connect to the Explore REPL server. Call this before using any other tool. Can also reconnect after a dropped connection.")
-def connect(port: int = 9147, host: str = "127.0.0.1") -> str:
+def connect(port: int = 9148, host: str = "127.0.0.1") -> str:
     repl.connect(host, port)
     return f"Connected to {repl.host}:{repl.port}"
 
@@ -114,7 +131,7 @@ def disconnect() -> str:
     repl.disconnect()
     return "Disconnected"
 
-@mcp.tool(description="Create a new REPL session. `thy` is \"TheoryName\" or \"TheoryName:source_idx\".")
+@mcp.tool(description="Create a new REPL session. `thy` is \"TheoryName\" or \"TheoryName:source_idx\". The session starts in the context of that theory — do NOT send a 'theory' command via step.")
 def init(id: str, thy: str) -> str:
     return repl.send(f"Explore.init {ml_str(id)} {ml_str(thy)};")
 
@@ -126,7 +143,7 @@ def fork(id: str, state_idx: int) -> str:
 def focus(id: str) -> str:
     return repl.send(f"Explore.focus {ml_str(id)};")
 
-@mcp.tool(description="Append an Isar proof step to the current REPL.")
+@mcp.tool(description="Append an Isar command to the current REPL. Examples: 'lemma \"True\"', 'by simp', 'definition ...'. Do NOT use 'theory' commands — the theory context is set by init.")
 def step(isar_text: str) -> str:
     return repl.send(f"Explore.step {ml_str(isar_text)};")
 
@@ -214,7 +231,20 @@ def raw_ml(ml_code: str) -> str:
 # ---------------------------------------------------------------------------
 
 def main():
-    mcp.run(transport="stdio")
+    import argparse
+    p = argparse.ArgumentParser(description="Explore MCP server")
+    p.add_argument("--transport", choices=["stdio", "sse", "streamable-http"],
+                   default="stdio")
+    p.add_argument("--port", type=int, default=9148,
+                   help="Port for SSE/streamable-http transport (default: 9148)")
+    args = p.parse_args()
+
+    if args.transport in ("sse", "streamable-http"):
+        mcp.settings.host = "0.0.0.0"
+        mcp.settings.port = args.port
+        mcp.run(transport=args.transport)
+    else:
+        mcp.run(transport="stdio")
 
 if __name__ == "__main__":
     main()

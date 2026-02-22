@@ -11,6 +11,11 @@ TCP connections on localhost. Clients send commands as single lines
 by a sentinel line "<<DONE>>\\n". Multiple commands can be sent on the
 same connection. Commands are serialized across all clients.
 
+Note: The Explore REPL operates at the Isar level. A session (created
+via Explore.init) starts in the context of a named theory — there is
+no need to issue 'theory' commands. Steps are Isar commands such as
+lemma, definition, fun, apply, by, etc.
+
 The server operator gets a management console on stdin/stdout:
   - Lines starting with / are management commands
   - Everything else is sent to the REPL directly
@@ -685,6 +690,10 @@ def main():
                    help="Expose TCP server only; do not start a REPL on stdin")
     p.add_argument("--host", default="127.0.0.1",
                    help="Host address to bind the TCP server on (default: 127.0.0.1)")
+    p.add_argument("--mcp", action="store_true",
+                   help="Start explore_mcp.py in the background (streamable-http by default)")
+    p.add_argument("--mcp-options", default="--transport streamable-http",
+                   help="Options for explore_mcp.py (default: '--transport streamable-http')")
     args = p.parse_args()
 
     ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore.ML")
@@ -720,11 +729,37 @@ def main():
         print(f"{RED}Failed to load {ml_path}:{RST}\n{out}", file=sys.stderr)
         poly.close()
         sys.exit(1)
+    # Verify the structure is actually available
+    probe = poly.send('Explore.help ();')
+    if "Explore.init" not in probe:
+        print(f"{RED}Explore structure not available after load.{RST}", file=sys.stderr)
+        print(f"{DIM}Load output:{RST}\n{out}", file=sys.stderr)
+        print(f"{DIM}Probe output:{RST}\n{probe}", file=sys.stderr)
+        poly.close()
+        sys.exit(1)
     print(f"{GREEN}Explore loaded.{RST}", flush=True)
 
     server = Server(poly, args.port, host=args.host)
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
+
+    mcp_proc = None
+    if args.mcp:
+        mcp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore_mcp.py")
+        mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options)
+        mcp_proc = subprocess.Popen(mcp_cmd, stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, start_new_session=True)
+
+        def _mcp_log_reader():
+            for raw in mcp_proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    print(f"{DIM}[MCP]{RST} {line}")
+
+        threading.Thread(target=_mcp_log_reader, daemon=True).start()
+        print(f"{GREEN}MCP server started{RST} {DIM}(pid={mcp_proc.pid}, "
+              f"args={' '.join(mcp_cmd[1:])}){RST}", flush=True)
 
     if args.server_only:
         print(f"{DIM}Running in server-only mode (no stdin REPL). "
@@ -754,6 +789,12 @@ def main():
             pass
 
     print("Shutting down...", flush=True)
+    if mcp_proc and mcp_proc.poll() is None:
+        os.killpg(mcp_proc.pid, signal.SIGTERM)
+        try:
+            mcp_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(mcp_proc.pid, signal.SIGKILL)
     server.shutdown()
     poly.close()
     if bash_server:
