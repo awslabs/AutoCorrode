@@ -51,7 +51,7 @@ SENTINEL = "<<DONE>>"
 class ReplClient:
     """Synchronous TCP client for the Explore REPL server."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9148):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9147):
         self.host = host
         self.port = port
         self.sock: socket.socket | None = None
@@ -120,7 +120,7 @@ mcp = FastMCP("Explore REPL",
 repl = ReplClient()
 
 @mcp.tool(description="Connect to the Explore REPL server. Call this before using any other tool. Can also reconnect after a dropped connection.")
-def connect(port: int = 9148, host: str = "127.0.0.1") -> str:
+def connect(port: int = 9147, host: str = "127.0.0.1") -> str:
     repl.connect(host, port)
     return f"Connected to {repl.host}:{repl.port}"
 
