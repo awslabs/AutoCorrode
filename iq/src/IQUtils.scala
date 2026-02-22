@@ -13,6 +13,46 @@ import java.io.File
  * Contains pure functions that can be shared between GUI and MCP implementations.
  */
 object IQUtils {
+  private sealed trait ValidatedTarget
+  private case object CurrentTarget extends ValidatedTarget
+  private final case class FileOffsetTarget(path: String, requestedOffset: Int)
+      extends ValidatedTarget
+  private final case class FilePatternTarget(path: String, pattern: String)
+      extends ValidatedTarget
+
+  private def decodeTarget(
+      target: String,
+      filePath: Option[String],
+      offset: Option[Int],
+      pattern: Option[String]
+  ): Either[String, ValidatedTarget] = {
+    target match {
+      case "current" =>
+        Right(CurrentTarget)
+      case "file_offset" =>
+        (filePath, offset) match {
+          case (Some(path), Some(requestedOffset)) =>
+            Right(FileOffsetTarget(path, requestedOffset))
+          case (None, _) =>
+            Left("file_offset target requires file_path parameter")
+          case (_, None) =>
+            Left("file_offset target requires offset parameter")
+        }
+      case "file_pattern" =>
+        (filePath, pattern.map(_.trim).filter(_.nonEmpty)) match {
+          case (Some(path), Some(trimmedPattern)) =>
+            Right(FilePatternTarget(path, trimmedPattern))
+          case (None, _) =>
+            Left("file_pattern target requires file_path parameter")
+          case (_, None) =>
+            Left("file_pattern target requires non-empty pattern parameter")
+        }
+      case other =>
+        Left(
+          s"Invalid target: $other. Must be 'current', 'file_offset', or 'file_pattern'"
+        )
+    }
+  }
 
   sealed trait CommandSelection
   case object CurrentSelection extends CommandSelection
@@ -399,41 +439,34 @@ object IQUtils {
       pattern: Option[String],
       view: View = null
   ): Try[TargetResolution] = {
-    validateTarget(target, filePath, offset, pattern).flatMap { _ =>
-      target match {
-        case "current" =>
-          getCurrentCommand(view).map(cmd =>
-            TargetResolution(CurrentSelection, cmd)
-          )
-        case "file_offset" =>
-          val path = filePath.get
-          val requested = offset.get
-          getFileContent(path).flatMap { content =>
-            val normalized = normalizeRequestedOffset(requested, content.length)
-            findCommandAtFileOffset(path, normalized).map(cmd =>
+    decodeTarget(target, filePath, offset, pattern) match {
+      case Left(errorMessage) =>
+        Failure(new IllegalArgumentException(errorMessage))
+      case Right(validTarget) =>
+        validTarget match {
+          case CurrentTarget =>
+            getCurrentCommand(view).map(cmd =>
+              TargetResolution(CurrentSelection, cmd)
+            )
+          case FileOffsetTarget(path, requested) =>
+            getFileContent(path).flatMap { content =>
+              val normalized = normalizeRequestedOffset(requested, content.length)
+              findCommandAtFileOffset(path, normalized).map(cmd =>
+                TargetResolution(
+                  FileOffsetSelection(path, requested, normalized),
+                  cmd
+                )
+              )
+            }
+          case FilePatternTarget(path, trimmedPattern) =>
+            findCommandByPattern(path, trimmedPattern).map(cmd =>
               TargetResolution(
-                FileOffsetSelection(path, requested, normalized),
+                FilePatternSelection(path, trimmedPattern),
                 cmd
               )
             )
-          }
-        case "file_pattern" =>
-          val path = filePath.get
-          val trimmedPattern = pattern.get.trim
-          findCommandByPattern(path, trimmedPattern).map(cmd =>
-            TargetResolution(
-              FilePatternSelection(path, trimmedPattern),
-              cmd
-            )
-          )
-        case other =>
-          Failure(
-            new IllegalArgumentException(
-              s"Invalid target: $other. Must be 'current', 'file_offset', or 'file_pattern'"
-            )
-          )
+        }
       }
-    }
   }
 
   /**
@@ -495,30 +528,10 @@ object IQUtils {
     offset: Option[Int],
     pattern: Option[String]
   ): Try[Unit] = {
-    Try {
-      target match {
-        case "current" =>
-          // No additional parameters needed
-          ()
-        case "file_offset" =>
-          if (filePath.isEmpty) {
-            throw new IllegalArgumentException("file_offset target requires file_path parameter")
-          }
-          if (offset.isEmpty) {
-            throw new IllegalArgumentException("file_offset target requires offset parameter")
-          }
-          ()
-        case "file_pattern" =>
-          if (filePath.isEmpty) {
-            throw new IllegalArgumentException("file_pattern target requires file_path parameter")
-          }
-          if (pattern.isEmpty || pattern.get.trim.isEmpty) {
-            throw new IllegalArgumentException("file_pattern target requires non-empty pattern parameter")
-          }
-          ()
-        case _ =>
-          throw new IllegalArgumentException(s"Invalid target: $target. Must be 'current', 'file_offset', or 'file_pattern'")
-      }
+    decodeTarget(target, filePath, offset, pattern) match {
+      case Right(_) => Success(())
+      case Left(errorMessage) =>
+        Failure(new IllegalArgumentException(errorMessage))
     }
   }
 
@@ -529,7 +542,7 @@ object IQUtils {
    * @return True if valid, false otherwise
    */
   def validateQuery(queryType: String): Boolean = {
-    List("isar_explore", "sledgehammer", "find_theorems").contains(queryType)
+    Set("isar_explore", "sledgehammer", "find_theorems").contains(queryType)
   }
 
   /**

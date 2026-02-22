@@ -27,8 +27,16 @@ object PIDEMarkupLogger {
     if (dockableInstance.contains(dockable)) dockableInstance = None
   }
 
-  def logMarkup(markupType: String, message: String, properties: Properties.T = Nil, xmlBody: XML.Body = Nil): Unit = {
-    dockableInstance.foreach(_.logMarkupMessage(markupType, message, properties, xmlBody, None))
+  def logMarkup(
+      markupType: String,
+      message: String,
+      properties: Properties.T = Nil,
+      xmlBody: XML.Body = Nil,
+      fullOutput: Option[Prover.Output] = None
+  ): Unit = {
+    dockableInstance.foreach(
+      _.logMarkupMessage(markupType, message, properties, xmlBody, fullOutput)
+    )
   }
 
   def isLoggingEnabled: Boolean = {
@@ -243,7 +251,13 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
             // Log if it's a type we're interested in
             if (shouldLogMarkupType(markupType) && content.nonEmpty) {
-              logMarkupMessage(markupType, content, output.properties, output.body, Some(output))
+              PIDEMarkupLogger.logMarkup(
+                markupType,
+                content,
+                output.properties,
+                output.body,
+                Some(output)
+              )
             }
           case _ => // Ignore non-output messages
         }

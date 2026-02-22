@@ -9,73 +9,87 @@ import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, 
 import java.net.{InetAddress, ServerSocket, Socket}
 import java.util.Locale
 import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
+import java.util.concurrent.atomic.AtomicInteger
 import scala.util.Try
 import scala.annotation.unused
+import scala.util.Using
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 import org.gjt.sp.jedit.{View, jEdit, Buffer}
 
-// Data structures
 /**
- * Information about an open file in Isabelle/jEdit.
- *
- * @param file_path The path to the file
- * @param is_isabelle_file Whether the file is an Isabelle theory file
- * @param is_modified Whether the file has been modified since last save
- * @param content_preview A preview of the file content (truncated)
- * @param is_in_view Whether the file is currently in a view
- * @param is_active_view Whether the file is in the active view
+ * Closed status vocabulary for command processing states.
  */
-case class OpenFileInfo(
-  file_path: String,
-  is_isabelle_file: Boolean,
-  is_modified: Boolean,
-  content_preview: String,
-  is_in_view: Boolean,
-  is_active_view: Boolean
-)
+enum CommandStatusSummary {
+  case Unprocessed, Running, Finished, Failed, Canceled, Unknown, Error
 
-/**
- * Information about an Isabelle command (e.g., a proof step, definition, etc.).
- *
- * @param file_path The path to the file containing the command
- * @param command_source The source code of the command
- * @param command_type The type of command (e.g., "statement", "proof_method", etc.)
- * @param results_xml XML results from processing the command
- * @param results_text Text results from processing the command
- * @param range Information about the command's position in the file
- * @param status Status information about the command's processing state
- */
-case class CommandInfo(
+  def asWire: String = this match {
+    case Unprocessed => "unprocessed"
+    case Running => "running"
+    case Finished => "finished"
+    case Failed => "failed"
+    case Canceled => "canceled"
+    case Unknown => "unknown"
+    case Error => "error"
+  }
+}
+
+object CommandStatusSummary {
+  def fromWire(value: String): CommandStatusSummary = value match {
+    case "unprocessed" => CommandStatusSummary.Unprocessed
+    case "running" => CommandStatusSummary.Running
+    case "finished" => CommandStatusSummary.Finished
+    case "failed" => CommandStatusSummary.Failed
+    case "canceled" => CommandStatusSummary.Canceled
+    case "error" => CommandStatusSummary.Error
+    case _ => CommandStatusSummary.Unknown
+  }
+}
+
+final case class CommandRangeInfo(
+  startLine: Int,
+  startColumn: Int,
+  endLine: Int,
+  endColumn: Int,
+  textStartOffset: Int,
+  textEndOffset: Int
+) {
+  def toMap: Map[String, Any] = Map(
+    "start_line" -> startLine,
+    "start_column" -> startColumn,
+    "end_line" -> endLine,
+    "end_column" -> endColumn,
+    "text_start_offset" -> textStartOffset,
+    "text_end_offset" -> textEndOffset
+  )
+}
+
+final case class CommandStatusInfo(
+  summary: CommandStatusSummary,
+  timingSeconds: Double,
+  error: Option[String] = None
+) {
+  def toMap: Map[String, Any] = {
+    val base = Map[String, Any](
+      "status_summary" -> summary.asWire,
+      "timing_seconds" -> timingSeconds
+    )
+    error match {
+      case Some(message) => base + ("error" -> message)
+      case None => base
+    }
+  }
+}
+
+final case class CommandInfo(
   file_path: String,
   command_source: String,
   command_type: String,
   results_xml: List[String],
   results_text: List[String],
-  range: Map[String, Any],
-  status: Map[String, Any]  // New field for command status
-)
-
-/**
- * Status information about an Isabelle document.
- *
- * @param file_path The path to the document file
- * @param is_processed Whether the document has been fully processed
- * @param errors Number of errors in the document
- * @param warnings Number of warnings in the document
- * @param running Number of commands currently being processed
- * @param finished Number of commands that have finished processing
- * @param unprocessed Number of commands that have not been processed yet
- */
-case class DocumentStatusInfo(
-  file_path: String,
-  is_processed: Boolean,
-  errors: Int,
-  warnings: Int,
-  running: Int,
-  finished: Int,
-  unprocessed: Int
+  range: CommandRangeInfo,
+  status: CommandStatusInfo
 )
 
 object IQLineOffsetUtils {
@@ -261,10 +275,12 @@ object IQArgumentUtils {
   }
 
   private def convertJsonValue(value: JSON.T): Any = value match {
-    case obj: Map[_, _] =>
-      obj.asInstanceOf[Map[String, JSON.T]].map { case (k, v) => k -> convertJsonValue(v) }
-    case list: List[_] =>
-      list.map(v => convertJsonValue(v.asInstanceOf[JSON.T]))
+    case JSON.Object(obj) =>
+      obj.map { case (k, v) => k -> convertJsonValue(v) }
+    case list: List[?] =>
+      list.map {
+        case nested: JSON.T @unchecked => convertJsonValue(nested)
+      }
     case s: String => s
     case b: Boolean => b
     case n: Number => n
@@ -276,9 +292,6 @@ object IQArgumentUtils {
     jsonMap.map { case (key, value) => key -> convertJsonValue(value) }
   }
 }
-
-// TODO: The code uses seemingly random negative error IDs. Explain where
-// they come from if the values matter, or otherwise introduce an enum.
 
 /**
  * Model-Client-Protocol (MCP) server for Isabelle/jEdit.
@@ -318,6 +331,44 @@ class IQServer(
 
   private def throwableMessage(ex: Throwable): String = {
     Option(ex.getMessage).map(_.trim).filter(_.nonEmpty).getOrElse(ex.getClass.getName)
+  }
+
+  private final case class GetCommandCoreResult(
+    commandsData: List[Map[String, Any]],
+    summary: Map[String, Any]
+  )
+
+  private final case class TrackedFileEntry(
+    path: String,
+    nodeName: String,
+    isOpen: Boolean,
+    isTheory: Boolean,
+    theoryName: String,
+    isModified: Boolean,
+    contentPreview: String,
+    isInView: Boolean,
+    isActiveView: Boolean,
+    modelType: String,
+    timing: Option[Map[String, Any]]
+  ) {
+    def toMap: Map[String, Any] = {
+      val base = Map[String, Any](
+        "path" -> path,
+        "node_name" -> nodeName,
+        "is_open" -> isOpen,
+        "is_theory" -> isTheory,
+        "theory_name" -> theoryName,
+        "is_modified" -> isModified,
+        "content_preview" -> contentPreview,
+        "is_in_view" -> isInView,
+        "is_active_view" -> isActiveView,
+        "model_type" -> modelType
+      )
+      timing match {
+        case Some(timingInfo) => base + ("timing" -> timingInfo)
+        case None => base
+      }
+    }
   }
 
   /**
@@ -456,6 +507,7 @@ class IQServer(
   // Timestamp formatter for socket logging
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
   private val clientAddressTL = new ThreadLocal[String]()
+  private val activeClientCount = new AtomicInteger(0)
 
   /**
    * Gets the current timestamp formatted as HH:mm:ss.SSS
@@ -656,8 +708,9 @@ class IQServer(
    * The connection is kept open until the client disconnects or an error occurs.
    *
    * @param clientSocket The client socket to handle
-   */
+  */
   private def handleClient(clientSocket: Socket): Unit = {
+    var registeredClient = false
     try {
       clientAddressTL.set(Option(clientSocket.getRemoteSocketAddress).map(_.toString).getOrElse("unknown"))
 
@@ -667,15 +720,18 @@ class IQServer(
 
       Output.writeln(s"MCP Client connected with buffer size: ${clientSocket.getSendBufferSize} (no timeout)")
 
-      // Update client connection status
-      IQCommunicationLogger.updateClientStatus(true)
+      val clientCount = activeClientCount.incrementAndGet()
+      registeredClient = true
+      IQCommunicationLogger.updateClientStatus(clientCount > 0)
 
       val reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream))
       // Use a larger buffer for the PrintWriter to handle large responses
       val writer = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream), 65536), true)
 
-      var line: String = null
-      while ({ line = reader.readLine(); line != null }) {
+      Iterator
+        .continually(reader.readLine())
+        .takeWhile(_ != null)
+        .foreach { line =>
         try {
           val redactedLine = IQSecurity.redactAuthToken(line)
 
@@ -748,8 +804,14 @@ class IQServer(
         clientSocket.close()
         Output.writeln("MCP Client disconnected")
 
-        // Update client connection status
-        IQCommunicationLogger.updateClientStatus(false)
+        if (registeredClient) {
+          val remaining = activeClientCount.decrementAndGet()
+          val clampedRemaining = if (remaining < 0) {
+            activeClientCount.set(0)
+            0
+          } else remaining
+          IQCommunicationLogger.updateClientStatus(clampedRemaining > 0)
+        }
       } catch {
         case _: Exception => // Ignore close errors
       } finally {
@@ -772,7 +834,28 @@ class IQServer(
     try {
       safeOutput(s"I/Q Server: Processing request: ${IQSecurity.redactAuthToken(requestLine)}")
 
-      val json = JSON.parse(requestLine)
+      val json = try {
+        JSON.parse(requestLine)
+      } catch {
+        case ex: Exception =>
+          safeOutput(s"I/Q Server: Failed to parse JSON-RPC payload: ${throwableMessage(ex)}")
+          return Some(
+            formatErrorResponse(
+              None,
+              ErrorCodes.PARSE_ERROR,
+              s"Parse error: ${throwableMessage(ex)}"
+            )
+          )
+        case err: LinkageError =>
+          safeOutput(s"I/Q Server: Linkage error while parsing JSON-RPC payload: ${throwableMessage(err)}")
+          return Some(
+            formatErrorResponse(
+              None,
+              ErrorCodes.INTERNAL_ERROR,
+              s"Internal linkage error: ${throwableMessage(err)}"
+            )
+          )
+      }
       val (method, id) = extractMethodAndId(json)
       requestIdForError = id
 
@@ -1669,8 +1752,12 @@ class IQServer(
 
         // Process each model
         val processedFiles = models_map.map { case (node_name, model) =>
-          val filePath = node_name.node  // Use same extraction as getAllTrackedFiles()
-          val isOpen = model.isInstanceOf[Buffer_Model]
+          val filePath = node_name.node
+          val bufferModelOpt = model match {
+            case bufferModel: Buffer_Model => Some(bufferModel)
+            case _ => None
+          }
+          val isOpen = bufferModelOpt.isDefined
           val isTheory = node_name.is_theory
           val theoryName = if (isTheory) node_name.theory else ""
 
@@ -1678,24 +1765,20 @@ class IQServer(
 
           // Get additional info for open files
           val (isModified, contentPreview, isInView, isActiveView) =
-            if (isOpen) {
-              val buffer = model.asInstanceOf[Buffer_Model].buffer
-              val preview = if (buffer.getLength() > 100) {
-                buffer.getText(0, 100).replace("\n", "\\n").replace("\r", "\\r")
-              } else {
-                buffer.getText(0, buffer.getLength()).replace("\n", "\\n").replace("\r", "\\r")
-              }
+            bufferModelOpt match {
+              case Some(bufferModel) =>
+                val buffer = bufferModel.buffer
+                val preview = if (buffer.getLength() > 100) {
+                  buffer.getText(0, 100).replace("\n", "\\n").replace("\r", "\\r")
+                } else {
+                  buffer.getText(0, buffer.getLength()).replace("\n", "\\n").replace("\r", "\\r")
+                }
 
-              val isInAnyView = views.exists(_.getBuffers().contains(buffer))
-              val isInActiveView = if (activeView != null) {
-                activeView.getBuffer() == buffer
-              } else {
-                false
-              }
-
-              (buffer.isDirty(), preview, isInAnyView, isInActiveView)
-            } else {
-              (false, "", false, false)
+                val isInAnyView = views.exists(_.getBuffers().contains(buffer))
+                val isInActiveView = Option(activeView).exists(_.getBuffer() == buffer)
+                (buffer.isDirty(), preview, isInAnyView, isInActiveView)
+              case None =>
+                (false, "", false, false)
             }
 
           // Calculate timing information for theory files
@@ -1719,34 +1802,28 @@ class IQServer(
             None
           }
 
-          val baseMap = Map(
-            "path" -> filePath,
-            "node_name" -> node_name.toString,
-            "is_open" -> isOpen,
-            "is_theory" -> isTheory,
-            "theory_name" -> theoryName,
-            "is_modified" -> isModified,
-            "content_preview" -> contentPreview,
-            "is_in_view" -> isInView,
-            "is_active_view" -> isActiveView,
-            "model_type" -> (if (isOpen) "buffer" else "file")
+          TrackedFileEntry(
+            path = filePath,
+            nodeName = node_name.toString,
+            isOpen = isOpen,
+            isTheory = isTheory,
+            theoryName = theoryName,
+            isModified = isModified,
+            contentPreview = contentPreview,
+            isInView = isInView,
+            isActiveView = isActiveView,
+            modelType = (if (isOpen) "buffer" else "file"),
+            timing = timingInfo
           )
-
-          // Add timing information if available
-          timingInfo match {
-            case Some(timing) => baseMap + ("timing" -> timing)
-            case None => baseMap
-          }
         }.toList
 
         Output.writeln(s"I/Q Server: Processed ${processedFiles.length} files")
         processedFiles
       }
 
-      val (readableTrackedFiles, hiddenCount) = trackedFiles.foldLeft((List.empty[Map[String, Any]], 0)) {
+      val (readableTrackedFiles, hiddenCount) = trackedFiles.foldLeft((List.empty[TrackedFileEntry], 0)) {
         case ((acc, hidden), file) =>
-          val path = file.get("path").map(_.toString).getOrElse("")
-          IQSecurity.resolveReadPath(path, securityConfig.allowedReadRoots) match {
+          IQSecurity.resolveReadPath(file.path, securityConfig.allowedReadRoots) match {
             case Right(_) => (file :: acc, hidden)
             case Left(_) => (acc, hidden + 1)
           }
@@ -1758,14 +1835,24 @@ class IQServer(
       }
       val visibleTrackedFiles = readableTrackedFiles.reverse
 
+      val filterOpen: Option[Boolean] = params.get("filter_open") match {
+        case Some(value: Boolean) => Some(value)
+        case _ => None
+      }
+
+      val filterTheory: Option[Boolean] = params.get("filter_theory") match {
+        case Some(value: Boolean) => Some(value)
+        case _ => None
+      }
+
       // Filter results based on parameters
-      val filteredFiles = params.get("filter_open") match {
+      val filteredFiles = filterOpen match {
         case Some(true) =>
-          val filtered = visibleTrackedFiles.filter(file => file("is_open").asInstanceOf[Boolean])
+          val filtered = visibleTrackedFiles.filter(_.isOpen)
           Output.writeln(s"I/Q Server: Filtered to open files: ${filtered.length}")
           filtered
         case Some(false) =>
-          val filtered = visibleTrackedFiles.filter(file => !file("is_open").asInstanceOf[Boolean])
+          val filtered = visibleTrackedFiles.filter(file => !file.isOpen)
           Output.writeln(s"I/Q Server: Filtered to non-open files: ${filtered.length}")
           filtered
         case _ =>
@@ -1773,13 +1860,13 @@ class IQServer(
           visibleTrackedFiles
       }
 
-      val theoryFilteredFiles = params.get("filter_theory") match {
+      val theoryFilteredFiles = filterTheory match {
         case Some(true) =>
-          val filtered = filteredFiles.filter(file => file("is_theory").asInstanceOf[Boolean])
+          val filtered = filteredFiles.filter(_.isTheory)
           Output.writeln(s"I/Q Server: Filtered to theory files: ${filtered.length}")
           filtered
         case Some(false) =>
-          val filtered = filteredFiles.filter(file => !file("is_theory").asInstanceOf[Boolean])
+          val filtered = filteredFiles.filter(file => !file.isTheory)
           Output.writeln(s"I/Q Server: Filtered to non-theory files: ${filtered.length}")
           filtered
         case _ =>
@@ -1789,19 +1876,20 @@ class IQServer(
 
       // Sort results if requested
       val sortedFiles = params.get("sort_by") match {
-        case Some("path") => theoryFilteredFiles.sortBy(file => file("path").asInstanceOf[String])
-        case Some("theory") => theoryFilteredFiles.sortBy(file => file("theory_name").asInstanceOf[String])
-        case Some("type") => theoryFilteredFiles.sortBy(file => file("model_type").asInstanceOf[String])
+        case Some("path") => theoryFilteredFiles.sortBy(_.path)
+        case Some("theory") => theoryFilteredFiles.sortBy(_.theoryName)
+        case Some("type") => theoryFilteredFiles.sortBy(_.modelType)
         case _ => theoryFilteredFiles
       }
 
       Output.writeln(s"I/Q Server: Final sorted files count: ${sortedFiles.length}")
+      val responseFiles = sortedFiles.map(_.toMap)
 
       val result = Map(
-        "files" -> sortedFiles,
+        "files" -> responseFiles,
         "total_count" -> sortedFiles.length,
-        "open_count" -> sortedFiles.count(f => f("is_open").asInstanceOf[Boolean]),
-        "theory_count" -> sortedFiles.count(f => f("is_theory").asInstanceOf[Boolean])
+        "open_count" -> sortedFiles.count(_.isOpen),
+        "theory_count" -> sortedFiles.count(_.isTheory)
       )
 
       Output.writeln(s"I/Q Server: Returning response with ${sortedFiles.length} files")
@@ -1822,8 +1910,18 @@ class IQServer(
   private def getCurrentView(): (String, Buffer_Model, Int) = {
     GUI_Thread.now {
       val activeView = jEdit.getActiveView()
+      if (activeView == null) {
+        throw new RuntimeException("No active jEdit view available")
+      }
       val buffer = activeView.getBuffer()
-      val buffer_model = Document_Model.get_model(buffer).get
+      if (buffer == null) {
+        throw new RuntimeException("No buffer in active jEdit view")
+      }
+      val buffer_model = Document_Model.get_model(buffer) match {
+        case Some(model: Buffer_Model) => model
+        case None =>
+          throw new RuntimeException("No document model for active buffer")
+      }
       val text = JEdit_Lib.buffer_text(buffer)
       val textArea = activeView.getTextArea()
       val caretPos = textArea.getCaretPosition()
@@ -1832,8 +1930,9 @@ class IQServer(
     }
   }
 
-  private def handleGetCommandCore(params: Map[String, Any]):
-      Either[(List[Map[String, Any]], Map[String, Any]), String] = {
+  private def handleGetCommandCore(
+      params: Map[String, Any]
+  ): Either[String, GetCommandCoreResult] = {
     Output.writeln(s"I/Q Server: Processing get_command core request")
 
     val filePath = params.get("path") match {
@@ -1843,9 +1942,9 @@ class IQServer(
           case Right(fullPath) =>
             authorizeReadPath("get_command_info(path)", fullPath) match {
               case Right(authorizedPath) => Some(authorizedPath)
-              case Left(errorMsg) => return Right(errorMsg)
+              case Left(errorMsg) => return Left(errorMsg)
             }
-          case Left(errorMsg) => return Right(errorMsg)
+          case Left(errorMsg) => return Left(errorMsg)
         }
       case _ => None
     }
@@ -1865,29 +1964,29 @@ class IQServer(
       case Some(path) =>
         authorizeMutationPath("get_command_info(xml_result_file)", path) match {
           case Right(canonicalPath) => Some(canonicalPath)
-          case Left(errorMsg) => return Right(errorMsg)
+          case Left(errorMsg) => return Left(errorMsg)
         }
       case None => None
     }
 
     val startLineOpt = IQArgumentUtils.optionalIntParam(params, "start_line") match {
       case Right(v) => v
-      case Left(err) => return Right(err)
+      case Left(err) => return Left(err)
     }
 
     val endLineOpt = IQArgumentUtils.optionalIntParam(params, "end_line") match {
       case Right(v) => v
-      case Left(err) => return Right(err)
+      case Left(err) => return Left(err)
     }
 
     val startOffsetOpt = IQArgumentUtils.optionalIntParam(params, "start_offset") match {
       case Right(v) => v
-      case Left(err) => return Right(err)
+      case Left(err) => return Left(err)
     }
 
     val endOffsetOpt = IQArgumentUtils.optionalIntParam(params, "end_offset") match {
       case Right(v) => v
-      case Left(err) => return Right(err)
+      case Left(err) => return Left(err)
     }
 
     val (content, model, startOffsetRaw, endOffsetRaw) = (mode, filePath, startLineOpt, endLineOpt, startOffsetOpt, endOffsetOpt) match {
@@ -1895,7 +1994,7 @@ class IQServer(
         // Lookup buffer associated with file
         val (content, model) = getFileContentAndModel(filePath) match {
           case (Some(content), Some(model)) => (content, model)
-          case _ => return Right(s"File $filePath is not tracked by Isabelle/jEdit")
+          case _ => return Left(s"File $filePath is not tracked by Isabelle/jEdit")
         }
         val startOffset = lineNumberToOffset(content, startLine)
         val endOffset = lineNumberToOffset(content, endLine, increment=true, withLastNewLine=false)
@@ -1904,14 +2003,14 @@ class IQServer(
       case (Some ("offset"), Some (filePath), _, _, Some(startOffset), Some(endOffset)) =>
         val (content, model) = getFileContentAndModel(filePath) match {
           case (Some(content), Some(model)) => (content, model)
-          case _ => return Right(s"File $filePath is not tracked by Isabelle/jEdit")
+          case _ => return Left(s"File $filePath is not tracked by Isabelle/jEdit")
         }
         (content, model, startOffset, endOffset)
 
       case (Some ("current"), filePathOpt, None, None, None, None) => // Current buffer
         val (content, model, caretPos) = getCurrentView()
         authorizeReadPath("get_command_info(current)", model.node_name.node) match {
-          case Left(errorMsg) => return Right(errorMsg)
+          case Left(errorMsg) => return Left(errorMsg)
           case Right(_) =>
         }
 
@@ -1920,18 +2019,20 @@ class IQServer(
             // If filePath is given, check that it matches the current model
             val pathModel = getFileContentAndModel(filePath) match {
               case (_, Some(model)) => model
-              case _ => return Right (s"File $filePath is not tracked by Isabelle/jEdit")
+              case _ => return Left(s"File $filePath is not tracked by Isabelle/jEdit")
             }
 
             if (model.node_name != pathModel.node_name) {
-              return Right (s"The provided filename $filePath does not match the currently open buffer (node: ${pathModel.node_name})")
+              return Left(
+                s"The provided filename $filePath does not match the currently open buffer (node: ${pathModel.node_name})"
+              )
             }
           case _ =>
         }
 
         (content, model, caretPos, caretPos + 1)
 
-      case _ => return Right(s"Unknown mode $mode or invalid parameters for mode.")
+      case _ => return Left(s"Unknown mode $mode or invalid parameters for mode.")
     }
     val (startOffset, endOffset) =
       IQLineOffsetUtils.normalizeOffsetRange(startOffsetRaw, endOffsetRaw, content.length)
@@ -1944,13 +2045,13 @@ class IQServer(
     val timeoutMs = IQArgumentUtils.optionalLongParam(params, "timeout") match {
       case Right(Some(v)) => Some(v)
       case Right(None) => Some(5000L) // Default timeout of 5 seconds
-      case Left(err) => return Right(err)
+      case Left(err) => return Left(err)
     }
 
     val timeoutPerCommandMs: Option[Int] = IQArgumentUtils.optionalIntParam(params, "timeout_per_command") match {
       case Right(Some(v)) => Some(v)
       case Right(None) => Some(5000) // Default per-command timeout of 5 seconds
-      case Left(err) => return Right(err)
+      case Left(err) => return Left(err)
     }
 
     Output.writeln(s"I/Q Server: Parameters - mode: $mode, startLine: $startLineOpt, endLine: $endLineOpt, startOffset: $startOffsetOpt, endOffset: $endOffsetOpt, filePath: $filePath, waitUntilProcessed: $waitUntilProcessed, timeout: $timeoutMs, timeout_per_command: ${timeoutPerCommandMs}ms")
@@ -1994,8 +2095,13 @@ class IQServer(
       } else {
         // Check if all commands are processed OR running too long
         val allCommandsProcessedOrRunning = commandInfos.forall { info =>
-          val status = info.status("status_summary").toString
-          status == "finished" || status == "canceled" || status == "failed" || status == "running"
+          info.status.summary match {
+            case CommandStatusSummary.Finished |
+                CommandStatusSummary.Canceled |
+                CommandStatusSummary.Failed |
+                CommandStatusSummary.Running => true
+            case _ => false
+          }
         }
 
         if (allCommandsProcessedOrRunning && perCommandTimerStart.isEmpty) {
@@ -2004,8 +2110,12 @@ class IQServer(
         }
 
         val allProcessed = commandInfos.forall { info =>
-          val status = info.status("status_summary").toString
-          status == "finished" || status == "canceled" || status == "failed"
+          info.status.summary match {
+            case CommandStatusSummary.Finished |
+                CommandStatusSummary.Canceled |
+                CommandStatusSummary.Failed => true
+            case _ => false
+          }
         }
 
         if (allProcessed) {
@@ -2035,7 +2145,7 @@ class IQServer(
           } else {
             // Log status and wait before next poll
             val statusCounts = commandInfos.groupBy { info =>
-              info.status.getOrElse("status_summary", "unknown").toString
+              info.status.summary.asWire
             }.view.mapValues(_.size).toMap
             Output.writeln(s"I/Q Server: Iteration $loopCount - Status: ${statusCounts.map { case (k, v) => s"$k: $v" }.mkString(", ")} - waiting ${pollIntervalMs}ms...")
             Thread.sleep(pollIntervalMs)
@@ -2043,12 +2153,6 @@ class IQServer(
         }
       }
     }
-
-    val finishedCount   = commandInfos.count { info => info.status("status_summary") == "finished" }
-    val failedCount     = commandInfos.count { info => info.status("status_summary") == "failed" }
-    val canceledCount   = commandInfos.count { info => info.status("status_summary") == "canceled" }
-    val unfinishedCount = commandInfos.length - (finishedCount + failedCount + canceledCount)
-    Output.writeln(s"I/Q Server: $finishedCount commands finished, $failedCount failed, $canceledCount canceled, $unfinishedCount unfinished")
 
     val totalElapsed = System.currentTimeMillis() - startTime
     if (waitUntilProcessed) {
@@ -2072,13 +2176,25 @@ class IQServer(
 
     // Create command data array
     val commandInfosTrimmed = commandInfos.filter(_.command_source.trim.nonEmpty)
+    val finishedCount =
+      commandInfosTrimmed.count(_.status.summary == CommandStatusSummary.Finished)
+    val failedCount =
+      commandInfosTrimmed.count(_.status.summary == CommandStatusSummary.Failed)
+    val canceledCount =
+      commandInfosTrimmed.count(_.status.summary == CommandStatusSummary.Canceled)
+    val unfinishedCount =
+      commandInfosTrimmed.length - (finishedCount + failedCount + canceledCount)
+    Output.writeln(
+      s"I/Q Server: $finishedCount commands finished, $failedCount failed, $canceledCount canceled, $unfinishedCount unfinished"
+    )
+
     val commandsData = commandInfosTrimmed.map { case info =>
       Map(
         "command_source" -> info.command_source,
         "command_type" -> info.command_type,
-        "range" -> info.range,
+        "range" -> info.range.toMap,
         "results_text" -> info.results_text,
-        "status" -> info.status,
+        "status" -> info.status.toMap,
         "path" -> info.file_path
       )
     }
@@ -2098,15 +2214,15 @@ class IQServer(
     val summary = summaryBuilder.toMap
 
     Output.writeln(s"I/Q Server: Generated command data with ${commandInfos.length} commands")
-    Left((commandsData, summary))
+    Right(GetCommandCoreResult(commandsData, summary))
   }
 
   private def handleGetCommand(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     Output.writeln("handleGetCommand")
     try {
-      val (commandsData, summary) = handleGetCommandCore(params) match {
-        case Left (c,s) => (c,s)
-        case Right (err) => return Left(s"handleGetCommandCore failed with error: $err")
+      val coreResult = handleGetCommandCore(params) match {
+        case Right(result) => result
+        case Left(err) => return Left(s"handleGetCommandCore failed with error: $err")
       }
 
       // Check include_results parameter (default: false)
@@ -2116,13 +2232,15 @@ class IQServer(
       }
 
       val result = Map(
-        "content" -> commandsData,
-        "summary" -> summary
+        "content" -> coreResult.commandsData,
+        "summary" -> coreResult.summary
       )
 
       if (includeResults) {
         // Original behavior: include results in response
-        Output.writeln(s"I/Q Server: Generated command response with ${commandsData.length} commands")
+        Output.writeln(
+          s"I/Q Server: Generated command response with ${coreResult.commandsData.length} commands"
+        )
         Right(result)
       } else {
         // New behavior: write full results to temp file and return trimmed response
@@ -2133,17 +2251,19 @@ class IQServer(
         Files.write(tempFile, fullJsonResponse.getBytes("UTF-8"))
 
         // Create trimmed response by removing result fields from commands
-        val trimmedCommandsData = commandsData.map { command =>
+        val trimmedCommandsData = coreResult.commandsData.map { command =>
           command - "results_text"
         }
 
         val trimmedResult = Map(
           "content" -> trimmedCommandsData,
-          "summary" -> summary,
+          "summary" -> coreResult.summary,
           "full_results_file" -> tempFile.toString
         )
 
-        Output.writeln(s"I/Q Server: Generated trimmed command response with ${commandsData.length} commands, full results written to ${tempFile.toString}")
+        Output.writeln(
+          s"I/Q Server: Generated trimmed command response with ${coreResult.commandsData.length} commands, full results written to ${tempFile.toString}"
+        )
         Right(trimmedResult)
       }
     } catch {
@@ -2197,7 +2317,7 @@ class IQServer(
 
     Output.writeln(s"I/Q Server: Found ${commandsInRange.length} commands in line range")
 
-    commandsInRange.zipWithIndex.map { case ((command, commandStart), index) =>
+    commandsInRange.map { case (command, commandStart) =>
       val results = snapshot.command_results(command)
       val (resultsXml, resultsText) = extractBothXmlAndText(results)
       val commandType = determineCommandType(command.source)
@@ -2216,7 +2336,11 @@ class IQServer(
     }
   }
 
-  private def getCommandRangeInfo(content: String, command: Command, commandStart: Int): Map[String, Any] = {
+  private def getCommandRangeInfo(
+      content: String,
+      command: Command,
+      commandStart: Int
+  ): CommandRangeInfo = {
     // val node = snapshot.get_node(command.node_name)
     // val commandStart = node.command_start(command).getOrElse(0)
     val commandEnd = commandStart + command.range.length
@@ -2226,13 +2350,13 @@ class IQServer(
     val startPos = lineDoc.position(commandStart)
     val endPos = lineDoc.position(commandEnd)
 
-    Map(
-      "start_line" -> (startPos.line + 1),      // Convert to 1-based
-      "start_column" -> (startPos.column + 1),  // Convert to 1-based
-      "end_line" -> (endPos.line + 1),
-      "end_column" -> (endPos.column + 1),
-      "text_start_offset" -> commandStart,
-      "text_end_offset" -> commandEnd
+    CommandRangeInfo(
+      startLine = startPos.line + 1,
+      startColumn = startPos.column + 1,
+      endLine = endPos.line + 1,
+      endColumn = endPos.column + 1,
+      textStartOffset = commandStart,
+      textEndOffset = commandEnd
     )
   }
 
@@ -2291,7 +2415,10 @@ class IQServer(
     (xmlResults, textResults)
   }
 
-  private def getCommandStatus(command: Command, snapshot: Document.Snapshot): Map[String, Any] = {
+  private def getCommandStatus(
+      command: Command,
+      snapshot: Document.Snapshot
+  ): CommandStatusInfo = {
     try {
       // Get all command states
       val states = snapshot.state.command_states(snapshot.version, command)
@@ -2305,29 +2432,30 @@ class IQServer(
 
       // Improved status determination logic
       val final_status_summary = {
-        if (status.is_failed) "failed"
-        else if (status.is_canceled) "canceled"
-        else if (status.is_running) "running"
-        else if (status.is_finished) "finished"
-        else if (status.is_terminated && !status.is_failed && !status.is_running) "finished"  // Additional check
-        else if (status.is_unprocessed) "unprocessed"
+        if (status.is_failed) CommandStatusSummary.Failed
+        else if (status.is_canceled) CommandStatusSummary.Canceled
+        else if (status.is_running) CommandStatusSummary.Running
+        else if (status.is_finished) CommandStatusSummary.Finished
+        else if (status.is_terminated && !status.is_failed && !status.is_running) CommandStatusSummary.Finished
+        else if (status.is_unprocessed) CommandStatusSummary.Unprocessed
         else {
           // If none of the above, but we have some processing activity, consider it finished
-          if (status.runs > 0 || status.forks > 0) "finished"
-          else "unknown"
+          if (status.runs > 0 || status.forks > 0) CommandStatusSummary.Finished
+          else CommandStatusSummary.Unknown
         }
       }
 
-      Map(
-        "status_summary" -> final_status_summary,
-        "timing_seconds" -> formatDecimal(timing_seconds)
+      CommandStatusInfo(
+        summary = final_status_summary,
+        timingSeconds = formatDecimal(timing_seconds)
       )
     } catch {
       case ex: Exception =>
         Output.writeln(s"I/Q Server: Error getting command status: ${ex.getMessage}")
-        Map(
-          "status_summary" -> "error",
-          "error" -> ex.getMessage
+        CommandStatusInfo(
+          summary = CommandStatusSummary.Error,
+          timingSeconds = 0.0,
+          error = Some(ex.getMessage)
         )
     }
   }
@@ -2524,19 +2652,25 @@ class IQServer(
 
       Output.writeln(s"I/Q Server: calculateTimingInfo - timingThreshold=$timingThresholdMs ms")
 
-      baseTimingInfo ++ Map(
-        "timing_threshold_ms" -> timingThresholdMs,
-        "commands_with_timing" -> commands_above_threshold.map { case (cmd, timings) =>
-          // Get the absolute document offset for this command
+      val commandTimingEntries = commands_above_threshold.toList.map {
+        case (cmd, timings) =>
           val commandStart = node.command_start(cmd).getOrElse(0)
           val start_line = offsetToLine(commandStart)
-          val timing = timings.sum(Date.now())
-          Map(
-            "line" -> start_line,
-            "source_preview" -> cmd.source.take(50), // First 50 chars for identification
-            "timing_seconds" -> formatDecimal(timing.seconds)
+          val timingSeconds = formatDecimal(timings.sum(Date.now()).seconds)
+          (
+            timingSeconds,
+            Map[String, Any](
+              "line" -> start_line,
+              "source_preview" -> cmd.source.take(50),
+              "timing_seconds" -> timingSeconds
+            )
           )
-        }.toList.sortBy(_.apply("timing_seconds").asInstanceOf[Double]).reverse // Sort by timing descending
+      }
+
+      baseTimingInfo ++ Map(
+        "timing_threshold_ms" -> timingThresholdMs,
+        "commands_with_timing" ->
+          commandTimingEntries.sortBy(_._1).reverse.map(_._2)
       )
     }
   }
@@ -2660,6 +2794,28 @@ class IQServer(
     Some(result.toMap)
   }
 
+  private def waitForTrackedFile(path: String, timeoutMs: Long = 2000L): Boolean = {
+    val nodeName = PIDE.resources.node_name(path)
+    val deadline = System.currentTimeMillis() + timeoutMs
+    var tracked = false
+
+    while (!tracked && System.currentTimeMillis() < deadline) {
+      tracked = GUI_Thread.now {
+        Document_Model.get_model(nodeName).nonEmpty
+      }
+      if (!tracked) {
+        try {
+          Thread.sleep(25)
+        } catch {
+          case _: InterruptedException =>
+            Thread.currentThread().interrupt()
+            return false
+        }
+      }
+    }
+    tracked
+  }
+
   private def handleOpenFile(params: Map[String, Any]): Either[String, Map[String, Any]] = {
     val createIfMissing = params.getOrElse("create_if_missing", "false").toString.toBoolean
     val hasContent = params.contains("content")
@@ -2708,9 +2864,12 @@ class IQServer(
           openFileInBuffer(filePath, createIfMissing, content, overwriteIfExists)
         }
       }
-
-      // TODO: How do we make sure we don't return to the caller before
-      // the file has been opened?
+      val tracked = waitForTrackedFile(result("path"))
+      if (!tracked) {
+        Output.writeln(
+          s"I/Q Server: Timed out waiting for tracked model after open_file for ${result("path")}"
+        )
+      }
 
       val response = Map(
         "path" -> result("path"),
@@ -2718,7 +2877,9 @@ class IQServer(
         "overwritten" -> result.getOrElse("overwritten", "false").toBoolean,
         "opened" -> result("opened").toBoolean,
         "in_view" -> result.getOrElse("in_view", view.toString).toBoolean,
-        "message" -> "File opened successfully"
+        "tracked" -> tracked,
+        "message" -> (if (tracked) "File opened successfully"
+                      else "File open was requested but tracking did not stabilize before timeout")
       )
       Right(response)
     } catch {
@@ -2939,12 +3100,12 @@ class IQServer(
     )
 
     // Call get_command internally
-    val (commands, summary) = handleGetCommandCore(getCommandParams.toMap) match {
-      case Left (c,s) => (c,s)
-      case Right (err) => return Left(f"handleGetCommandCore failed with $err")
+    val coreResult = handleGetCommandCore(getCommandParams.toMap) match {
+      case Right(result) => result
+      case Left(err) => return Left(f"handleGetCommandCore failed with $err")
     }
 
-    Right(Map("commands" -> commands, "summary" -> summary))
+    Right(Map("commands" -> coreResult.commandsData, "summary" -> coreResult.summary))
   }
 
   private def openFileCommon(
@@ -3015,7 +3176,7 @@ class IQServer(
     } else {
       // Read file content and provide it to document model
       val content = if (file.exists()) {
-        scala.io.Source.fromFile(file, "UTF-8").mkString
+        Using.resource(scala.io.Source.fromFile(file, "UTF-8"))(_.mkString)
       } else {
         ""
       }
