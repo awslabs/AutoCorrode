@@ -21,6 +21,11 @@ session Micro_Rust_Examples = HOL +
     Linked_List_Executable_Physical_Memory
     Reference_Examples
     Showcase
+    MLKEM_Parameters
+    MLKEM_Specification
+    MLKEM_Zq
+    MLKEM_Polynomial
+    MLKEM_NTT
   theories [document=false]
     Micro_Rust_Examples
   document_files
