@@ -460,8 +460,9 @@ fun truncate raw_idx =
       val steps = #steps r
       val n = length steps
       val idx = if raw_idx < 0 then n + raw_idx - 1 else raw_idx
-      val _ = if idx < 0 orelse idx >= n
-              then error ("Step " ^ string_of_int raw_idx ^ " out of range") else ()
+      val _ = if idx < ~1 orelse idx >= n
+              then error ("Step " ^ string_of_int raw_idx ^ " out of range ("
+                          ^ string_of_int n ^ " steps)") else ()
       (* Remove sub-REPLs attached to dropped steps *)
       val dropped = length steps - idx - 1
       val _ = Synchronized.change repl_tab (fn tab =>
@@ -471,7 +472,7 @@ fun truncate raw_idx =
               if pid = id andalso si > idx then Symtab.delete rid else I
           | _ => I) tab tab)
       val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = List.take (steps, idx + 1)}
+                        steps = if idx < 0 then [] else List.take (steps, idx + 1)}
   in update_repl id r';
      out ("Truncated to step " ^ string_of_int idx ^ ", dropped " ^
           string_of_int dropped ^ " steps")
