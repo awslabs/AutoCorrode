@@ -5,6 +5,7 @@ theory C_To_Core_Translation
   imports
     Micro_C_Syntax
     "Shallow_Micro_Rust.Core_Expression"
+    "Shallow_Micro_Rust.Core_Syntax"
   keywords "micro_c_translate" :: thy_decl
 begin
 
@@ -98,12 +99,22 @@ text \<open>
 ML \<open>
 structure C_Term_Build : sig
   val mk_literal_unit : term
+  val mk_literal : term -> term
   val mk_function_body : term -> term
   val mk_sequence : term -> term -> term
   val mk_literal_int : int -> term
   val mk_return_func : term -> term
+  val mk_bind : term -> term -> term
+  val mk_var_alloc : term -> term
+  val mk_var_read : term -> term
+  val mk_var_write : term -> term -> term
+  val mk_bindlift2 : term -> term -> term -> term
 end =
 struct
+  (* literal v *)
+  fun mk_literal v =
+    Const (\<^const_name>\<open>literal\<close>, dummyT --> dummyT) $ v
+
   (* literal () : the "skip" operation *)
   val mk_literal_unit =
     Const (\<^const_name>\<open>literal\<close>, \<^typ>\<open>unit\<close> --> dummyT) $ HOLogic.unit
@@ -116,14 +127,44 @@ struct
   fun mk_sequence e1 e2 =
     Const (\<^const_name>\<open>sequence\<close>, dummyT --> dummyT --> dummyT) $ e1 $ e2
 
-  (* literal n, where n is an integer constant *)
+  (* literal n, where n is an integer constant (typed as int to avoid phantom TYPE params) *)
   fun mk_literal_int n =
-    Const (\<^const_name>\<open>literal\<close>, dummyT --> dummyT)
-      $ HOLogic.mk_number dummyT n
+    Const (\<^const_name>\<open>literal\<close>, \<^typ>\<open>int\<close> --> dummyT)
+      $ HOLogic.mk_number \<^typ>\<open>int\<close> n
 
   (* return_func e : for C return statements *)
   fun mk_return_func body =
     Const (\<^const_name>\<open>return_func\<close>, dummyT --> dummyT) $ body
+
+  (* bind e f : monadic bind *)
+  fun mk_bind e f =
+    Const (\<^const_name>\<open>bind\<close>, dummyT --> dummyT --> dummyT) $ e $ f
+
+  (* Allocate a new mutable variable: funcall1 store_reference_const init_expr *)
+  fun mk_var_alloc init_expr =
+    Const (\<^const_name>\<open>funcall1\<close>, dummyT --> dummyT --> dummyT)
+      $ Const (\<^const_name>\<open>store_reference_const\<close>, dummyT)
+      $ init_expr
+
+  (* Read a mutable variable: bind (literal ref) (deep_compose1 call store_dereference_const) *)
+  fun mk_var_read ref_var =
+    Const (\<^const_name>\<open>bind\<close>, dummyT --> dummyT --> dummyT)
+      $ mk_literal ref_var
+      $ (Const (\<^const_name>\<open>deep_compose1\<close>, dummyT --> dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>call\<close>, dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>store_dereference_const\<close>, dummyT))
+
+  (* Write a mutable variable: bind2 (deep_compose2 call store_update_const) (literal ref) val_expr *)
+  fun mk_var_write ref_var val_expr =
+    Const (\<^const_name>\<open>bind2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ (Const (\<^const_name>\<open>deep_compose2\<close>, dummyT --> dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>call\<close>, dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>store_update_const\<close>, dummyT))
+      $ mk_literal ref_var
+      $ val_expr
+  fun mk_bindlift2 f e1 e2 =
+    Const (\<^const_name>\<open>bindlift2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ f $ e1 $ e2
 end
 \<close>
 
@@ -141,19 +182,59 @@ structure C_Translate : sig
   val translate_fundef : Proof.context -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
 end =
 struct
+  (* Save Isabelle term constructors before C_Ast shadows them *)
+  val Isa_Const = Const
+  val Isa_Free = Free
+  val isa_dummyT = dummyT
+
   open C_Ast
 
   fun unsupported construct =
     error ("micro_c_translate: unsupported C construct: " ^ construct)
 
+  (* Translate a C binary operator to a HOL function constant *)
+  fun translate_binop CAddOp0 = Isa_Const (\<^const_name>\<open>plus\<close>, isa_dummyT)
+    | translate_binop CSubOp0 = Isa_Const (\<^const_name>\<open>minus\<close>, isa_dummyT)
+    | translate_binop CMulOp0 = Isa_Const (\<^const_name>\<open>times\<close>, isa_dummyT)
+    | translate_binop CDivOp0 = Isa_Const (\<^const_name>\<open>divide\<close>, isa_dummyT)
+    | translate_binop CRmdOp0 = Isa_Const (\<^const_name>\<open>modulo\<close>, isa_dummyT)
+    | translate_binop CLeOp0 = Isa_Const (\<^const_name>\<open>less\<close>, isa_dummyT)
+    | translate_binop CLeqOp0 = Isa_Const (\<^const_name>\<open>less_eq\<close>, isa_dummyT)
+    | translate_binop CGrOp0 = Isa_Const (\<^const_name>\<open>less\<close>, isa_dummyT) (* reversed operands *)
+    | translate_binop CGeqOp0 = Isa_Const (\<^const_name>\<open>less_eq\<close>, isa_dummyT) (* reversed operands *)
+    | translate_binop CEqOp0 = Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+    | translate_binop CNeqOp0 = unsupported "!= operator"
+    | translate_binop CLndOp0 = Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT)
+    | translate_binop CLorOp0 = Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT)
+    | translate_binop _ = unsupported "binary operator"
+
   fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
         C_Term_Build.mk_literal_int (IntInf.toInt n)
-    | translate_expr _ (CVar0 _) =
-        unsupported "variable reference (Task 1.6)"
-    | translate_expr _ (CBinary0 _) =
-        unsupported "binary expression (Task 1.6)"
+    | translate_expr tctx (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in case C_Trans_Ctxt.lookup_local tctx name of
+             SOME var => C_Term_Build.mk_var_read var
+           | NONE => error ("micro_c_translate: undefined variable: " ^ name)
+        end
+    | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
+        let val lhs' = translate_expr tctx lhs
+            val rhs' = translate_expr tctx rhs
+        in
+          (* For > and >=, swap operands to use < and <= *)
+          case binop of
+            CGrOp0 => C_Term_Build.mk_bindlift2 (translate_binop binop) rhs' lhs'
+          | CGeqOp0 => C_Term_Build.mk_bindlift2 (translate_binop binop) rhs' lhs'
+          | _ => C_Term_Build.mk_bindlift2 (translate_binop binop) lhs' rhs'
+        end
+    | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+            val rhs' = translate_expr tctx rhs
+        in case C_Trans_Ctxt.lookup_local tctx name of
+             SOME var => C_Term_Build.mk_var_write var rhs'
+           | NONE => error ("micro_c_translate: undefined variable: " ^ name)
+        end
     | translate_expr _ (CAssign0 _) =
-        unsupported "assignment (Task 1.6)"
+        unsupported "compound assignment or non-variable lhs"
     | translate_expr _ (CCall0 _) =
         unsupported "function call (Task 1.8)"
     | translate_expr _ (CUnary0 _) =
@@ -165,18 +246,43 @@ struct
     | translate_expr _ _ =
         unsupported "expression"
 
-  fun translate_block_item tctx (CBlockStmt0 stmt) = SOME (translate_stmt tctx stmt)
-    | translate_block_item _ (CBlockDecl0 _) =
-        unsupported "local declaration (Task 1.6)"
-    | translate_block_item _ (CNestedFunDef0 _) =
+  (* Extract variable name and initializer from a C declaration *)
+  fun translate_decl tctx (CDecl0 (_, [(( Some declr, Some (CInitExpr0 (init, _))), _)], _)) =
+        let val name = C_Ast_Utils.declr_name declr
+            val init' = translate_expr tctx init
+        in (name, init') end
+    | translate_decl _ (CDecl0 (_, [((Some declr, None), _)], _)) =
+        (* Uninitialized variable: default to literal 0 *)
+        let val name = C_Ast_Utils.declr_name declr
+        in (name, C_Term_Build.mk_literal_int 0) end
+    | translate_decl _ _ = unsupported "complex declaration"
+
+  (* Translate a compound block, right-folding declarations into nested binds *)
+  fun translate_compound_items _ [] = C_Term_Build.mk_literal_unit
+    | translate_compound_items tctx [CBlockStmt0 stmt] = translate_stmt tctx stmt
+    | translate_compound_items tctx [CBlockDecl0 decl] =
+        (* Declaration at end of block with no following statements *)
+        let val (name, init_term) = translate_decl tctx decl
+            val var = Isa_Free (name, isa_dummyT)
+        in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
+             (Term.lambda var C_Term_Build.mk_literal_unit) end
+    | translate_compound_items _ [CNestedFunDef0 _] =
         unsupported "nested function definition"
+    | translate_compound_items tctx (CBlockDecl0 decl :: rest) =
+        let val (name, init_term) = translate_decl tctx decl
+            val var = Isa_Free (name, isa_dummyT)
+            val tctx' = C_Trans_Ctxt.add_local name var tctx
+            val rest_term = translate_compound_items tctx' rest
+        in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
+             (Term.lambda var rest_term) end
+    | translate_compound_items tctx (CBlockStmt0 stmt :: rest) =
+        let val stmt_term = translate_stmt tctx stmt
+            val rest_term = translate_compound_items tctx rest
+        in C_Term_Build.mk_sequence stmt_term rest_term end
+    | translate_compound_items _ _ = unsupported "block item"
 
   and translate_stmt tctx (CCompound0 (_, items, _)) =
-        (case List.mapPartial (translate_block_item tctx) items of
-           [] => C_Term_Build.mk_literal_unit
-         | [single] => single
-         | first :: rest => List.foldl (fn (next, acc) =>
-             C_Term_Build.mk_sequence acc next) first rest)
+        translate_compound_items tctx items
     | translate_stmt _ (CReturn0 (None, _)) =
         C_Term_Build.mk_return_func C_Term_Build.mk_literal_unit
     | translate_stmt tctx (CReturn0 (Some expr, _)) =
@@ -280,9 +386,9 @@ val _ =
       end))
 \<close>
 
-subsection \<open>Smoke Test\<close>
+subsection \<open>Smoke Tests\<close>
 
-text \<open>Verify the command works end-to-end with a trivial void function.\<close>
+text \<open>Verify the command works end-to-end.\<close>
 
 micro_c_translate \<open>
 void f(void) {
@@ -300,5 +406,14 @@ int g(void) {
 
 thm c_g_def
 
-end
+text \<open>Test variable declaration, assignment, and arithmetic.\<close>
+
+micro_c_translate \<open>
+void h(void) {
+  int x = 5;
+  x = x + 1;
+}
+\<close>
+
+thm c_h_def
 
