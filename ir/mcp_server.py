@@ -144,7 +144,7 @@ def fork(id: str, state_idx: int) -> str:
 def focus(id: str) -> str:
     return repl.send(f"Ir.focus {ml_str(id)};")
 
-@mcp.tool(description="Append an Isar command to the current REPL. Examples: 'lemma \"True\"', 'by simp', 'definition ...'. Do NOT use 'theory' commands — the theory context is set by init.")
+@mcp.tool(description="Apply an Isar command in the current REPL. Examples: 'lemma \"True\"', 'by simp', 'definition ...'. Don't use 'theory' commands — the theory context is set by 'init'.")
 def step(isar_text: str) -> str:
     return repl.send(f"Ir.step {ml_str(isar_text)};")
 
@@ -212,28 +212,30 @@ def theories() -> str:
 def source(theory_name: str, start: int, stop: int) -> str:
     return repl.send(f"Ir.source {ml_str(theory_name)} {ml_int(start)} {ml_int(stop)};")
 
-@mcp.tool(description="Update I/R config. Only provided fields are changed; others are left as-is.")
-def config(color: bool | None = None, show_ignored: bool | None = None,
-           full_spans: bool | None = None, show_theory_in_source: bool | None = None,
-           auto_replay: bool | None = None) -> str:
-    fields = {"color": color, "show_ignored": show_ignored, "full_spans": full_spans,
-              "show_theory_in_source": show_theory_in_source, "auto_replay": auto_replay}
-    parts = []
-    for name, val in fields.items():
-        if val is not None:
-            parts.append(f"{name} = {'true' if val else 'false'}")
-        else:
-            parts.append(f"{name} = #{name} c")
-    ml = "fn c => {" + ", ".join(parts) + "}"
-    return repl.send(f"Ir.config ({ml});")
+@mcp.tool(description="Set verbosity of theory source listings. 0 (default): abbreviated command spans. 1: full command spans.")
+def set_verbosity(level: int) -> str:
+    val = "true" if level > 0 else "false"
+    return repl.send(f"Ir.config (fn c => {{color = #color c, show_ignored = #show_ignored c, "
+                     f"full_spans = {val}, show_theory_in_source = #show_theory_in_source c, "
+                     f"auto_replay = #auto_replay c}});")
+
+@mcp.tool(description="Enable or disable auto-replay after edits to REPLs. 0: disable, 1: enable (default).")
+def set_auto_replay(enabled: int) -> str:
+    val = "true" if enabled > 0 else "false"
+    return repl.send(f"Ir.config (fn c => {{color = #color c, show_ignored = #show_ignored c, "
+                     f"full_spans = #full_spans c, show_theory_in_source = #show_theory_in_source c, "
+                     f"auto_replay = {val}}});")
 
 @mcp.tool(description="Show the I/R help text.")
 def help() -> str:
     return repl.send("Ir.help ();")
 
-@mcp.tool(description="Send a raw ML expression to the Poly/ML console. Use for anything not covered by other tools.")
+@mcp.tool(description="Send a raw ML expression to the Poly/ML console. Use for anything not covered by other tools. The expression must end with a semicolon.")
 def raw_ml(ml_code: str) -> str:
-    return repl.send(ml_code)
+    code = ml_code.rstrip()
+    if not code.endswith(";"):
+        code += ";"
+    return repl.send(code)
 
 # ---------------------------------------------------------------------------
 # Main
