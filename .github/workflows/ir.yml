@@ -5,7 +5,7 @@ permissions:
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
@@ -141,3 +141,83 @@ jobs:
         echo "$output"
         echo "$output" | grep -q "source commands available"
         echo "$output" | grep -qv "not available"
+
+  docker:
+    name: Docker (${{ matrix.config.name }}, ${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        config:
+          - name: local
+            dockerfile: ir/docker/Dockerfile
+            tag: explore-repl:local
+            build_args: ""
+          - name: standalone
+            dockerfile: ir/docker/Dockerfile.standalone
+            tag: explore-repl:standalone
+            build_args: "--build-arg AUTOCORRODE_BRANCH=${{ github.head_ref || github.ref_name }}"
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t ${{ matrix.config.tag }} -f ${{ matrix.config.dockerfile }} ${{ matrix.config.build_args }} .
+
+      - name: Test with server-only (full test suite)
+        run: |
+          docker run -d --name test-${{ matrix.config.name }}-suite ${{ matrix.config.tag }} \
+            python3 /opt/AutoCorrode/ir/repl.py \
+              --session HOL --host 0.0.0.0 --isabelle /usr/local/bin/isabelle --server-only
+          sleep 30
+          docker logs test-${{ matrix.config.name }}-suite
+          docker exec test-${{ matrix.config.name }}-suite python3 /opt/AutoCorrode/ir/test_repl.py \
+            --isabelle /usr/local/bin/isabelle --session HOL
+          docker stop test-${{ matrix.config.name }}-suite
+          docker rm test-${{ matrix.config.name }}-suite
+
+      - name: Test default entrypoint (REPL + MCP)
+        run: |
+          docker run -d -p 9147:9147 -p 9148:9148 --name test-${{ matrix.config.name }}-default ${{ matrix.config.tag }}
+          # Wait for REPL to be fully ready (retry actual command, not just TCP connect)
+          for i in $(seq 1 60); do
+            if python3 -c "
+          import socket
+          s = socket.create_connection(('127.0.0.1', 9147), timeout=2)
+          s.sendall(b'Explore.help ();\n')
+          buf = b''
+          while b'<<DONE>>' not in buf:
+              chunk = s.recv(4096)
+              if not chunk: break
+              buf += chunk
+          s.close()
+          assert b'Explore.init' in buf
+          " 2>/dev/null; then echo "REPL ready at attempt $i"; break; fi
+            sleep 2
+          done
+          docker logs test-${{ matrix.config.name }}-default
+          # Test REPL via TCP
+          python3 -c "
+          import socket
+          s = socket.create_connection(('127.0.0.1', 9147), timeout=30)
+          s.sendall(b'Explore.theories ();\n')
+          buf = b''
+          while b'<<DONE>>' not in buf:
+              buf += s.recv(4096)
+          s.close()
+          assert b'Main' in buf, f'Expected Main in output: {buf[:200]}'
+          print('REPL OK')
+          "
+          # Test MCP via HTTP
+          python3 -c "
+          import urllib.request, json
+          req = urllib.request.Request('http://127.0.0.1:9148/mcp',
+              data=json.dumps({'jsonrpc':'2.0','id':1,'method':'initialize',
+                  'params':{'protocolVersion':'2024-11-05','capabilities':{},
+                  'clientInfo':{'name':'ci','version':'1'}}}).encode(),
+              headers={'Content-Type':'application/json',
+                       'Accept':'application/json, text/event-stream'})
+          resp = urllib.request.urlopen(req, timeout=10)
+          body = resp.read().decode()
+          assert 'Explore REPL' in body, f'Unexpected MCP response: {body[:200]}'
+          print('MCP OK')
+          "
+          docker stop test-${{ matrix.config.name }}-default
+          docker rm test-${{ matrix.config.name }}-default
