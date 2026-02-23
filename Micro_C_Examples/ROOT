@@ -1,0 +1,8 @@
+session Micro_C_Examples = HOL +
+  options [document = pdf, document_output = "output"]
+  sessions
+    "HOL-Library"
+    Micro_C_Interfaces
+    Crush
+  theories [document=false]
+    Micro_C_Examples
