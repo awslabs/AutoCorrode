@@ -6,6 +6,7 @@ theory C_To_Core_Translation
     Micro_C_Syntax
     "Shallow_Micro_Rust.Core_Expression"
     "Shallow_Micro_Rust.Core_Syntax"
+    "Shallow_Micro_Rust.Bool_Type"
   keywords "micro_c_translate" :: thy_decl
 begin
 
@@ -33,6 +34,7 @@ structure C_Ast_Utils : sig
   val abr_string_to_string : C_Ast.abr_string -> string
   val ident_name : C_Ast.ident -> string
   val declr_name : C_Ast.nodeInfo C_Ast.cDeclarator -> string
+  val extract_params : C_Ast.nodeInfo C_Ast.cDeclarator -> string list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
 end =
@@ -52,6 +54,18 @@ struct
     | declr_name (CDeclr0 (None, _, _, _, _)) =
         error "C_Ast_Utils.declr_name: anonymous declarator"
 
+  (* Extract parameter names from a function declarator.
+     Handles void parameters (empty list) and named parameters. *)
+  fun param_name (CDecl0 (_, [((Some declr, _), _)], _)) = SOME (declr_name declr)
+    | param_name (CDecl0 (_, [], _)) = NONE  (* void parameter *)
+    | param_name _ = NONE
+
+  fun extract_params (CDeclr0 (_, derived, _, _, _)) =
+    (case List.find (fn CFunDeclr0 _ => true | _ => false) derived of
+       SOME (CFunDeclr0 (Right (params, _), _, _)) =>
+         List.mapPartial param_name params
+     | _ => [])
+
   fun extract_fundefs (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
       (fn CFDefExt0 fundef => SOME fundef | _ => NONE)
@@ -69,23 +83,25 @@ text \<open>
 
 ML \<open>
 structure C_Trans_Ctxt : sig
+  datatype var_kind = Param | Local  (* Param = by-value, Local = mutable reference *)
   type t
   val empty : t
-  val add_local : string -> term -> t -> t
-  val lookup_local : t -> string -> term option
+  val add_var : string -> var_kind -> term -> t -> t
+  val lookup_var : t -> string -> (var_kind * term) option
 end =
 struct
+  datatype var_kind = Param | Local
   type t = {
-    locals : term Symtab.table  (* C variable name -> Isabelle free variable *)
+    vars : (var_kind * term) Symtab.table
   }
 
-  val empty : t = { locals = Symtab.empty }
+  val empty : t = { vars = Symtab.empty }
 
-  fun add_local name tm ({ locals } : t) : t =
-    { locals = Symtab.update (name, tm) locals }
+  fun add_var name kind tm ({ vars } : t) : t =
+    { vars = Symtab.update (name, (kind, tm)) vars }
 
-  fun lookup_local ({ locals, ... } : t) name =
-    Symtab.lookup locals name
+  fun lookup_var ({ vars, ... } : t) name =
+    Symtab.lookup vars name
 end
 \<close>
 
@@ -109,6 +125,8 @@ structure C_Term_Build : sig
   val mk_var_read : term -> term
   val mk_var_write : term -> term -> term
   val mk_bindlift2 : term -> term -> term -> term
+  val mk_two_armed_cond : term -> term -> term -> term
+  val mk_one_armed_cond : term -> term -> term
 end =
 struct
   (* literal v *)
@@ -162,9 +180,20 @@ struct
            $ Const (\<^const_name>\<open>store_update_const\<close>, dummyT))
       $ mk_literal ref_var
       $ val_expr
+
   fun mk_bindlift2 f e1 e2 =
     Const (\<^const_name>\<open>bindlift2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
       $ f $ e1 $ e2
+
+  (* two_armed_conditional test then_br else_br *)
+  fun mk_two_armed_cond test then_br else_br =
+    Const (\<^const_name>\<open>two_armed_conditional\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ test $ then_br $ else_br
+
+  (* one_armed_conditional test then_br *)
+  fun mk_one_armed_cond test then_br =
+    Const (\<^const_name>\<open>two_armed_conditional\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ test $ then_br $ mk_literal_unit
 end
 \<close>
 
@@ -212,8 +241,9 @@ struct
         C_Term_Build.mk_literal_int (IntInf.toInt n)
     | translate_expr tctx (CVar0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
-        in case C_Trans_Ctxt.lookup_local tctx name of
-             SOME var => C_Term_Build.mk_var_read var
+        in case C_Trans_Ctxt.lookup_var tctx name of
+             SOME (C_Trans_Ctxt.Param, var) => C_Term_Build.mk_literal var
+           | SOME (C_Trans_Ctxt.Local, var) => C_Term_Build.mk_var_read var
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
@@ -229,8 +259,10 @@ struct
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
             val rhs' = translate_expr tctx rhs
-        in case C_Trans_Ctxt.lookup_local tctx name of
-             SOME var => C_Term_Build.mk_var_write var rhs'
+        in case C_Trans_Ctxt.lookup_var tctx name of
+             SOME (C_Trans_Ctxt.Local, var) => C_Term_Build.mk_var_write var rhs'
+           | SOME (C_Trans_Ctxt.Param, _) =>
+               error ("micro_c_translate: assignment to parameter: " ^ name)
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
     | translate_expr _ (CAssign0 _) =
@@ -271,7 +303,7 @@ struct
     | translate_compound_items tctx (CBlockDecl0 decl :: rest) =
         let val (name, init_term) = translate_decl tctx decl
             val var = Isa_Free (name, isa_dummyT)
-            val tctx' = C_Trans_Ctxt.add_local name var tctx
+            val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var tctx
             val rest_term = translate_compound_items tctx' rest
         in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
              (Term.lambda var rest_term) end
@@ -291,8 +323,12 @@ struct
         translate_expr tctx expr
     | translate_stmt _ (CExpr0 (None, _)) =
         C_Term_Build.mk_literal_unit
-    | translate_stmt _ (CIf0 _) =
-        unsupported "if statement (Task 1.7)"
+    | translate_stmt tctx (CIf0 (cond, then_br, Some else_br, _)) =
+        C_Term_Build.mk_two_armed_cond
+          (translate_expr tctx cond) (translate_stmt tctx then_br) (translate_stmt tctx else_br)
+    | translate_stmt tctx (CIf0 (cond, then_br, None, _)) =
+        C_Term_Build.mk_two_armed_cond
+          (translate_expr tctx cond) (translate_stmt tctx then_br) C_Term_Build.mk_literal_unit
     | translate_stmt _ (CFor0 _) =
         unsupported "for loop (Task 1.9)"
     | translate_stmt _ (CWhile0 _) =
@@ -313,9 +349,19 @@ struct
   fun translate_fundef ctxt (CFunDef0 (_, declr, _, body, _)) =
     let
       val name = C_Ast_Utils.declr_name declr
-      val tctx = C_Trans_Ctxt.empty
+      val param_names = C_Ast_Utils.extract_params declr
+      (* Create free variables for each parameter *)
+      val param_vars = List.map (fn n => (n, Isa_Free (n, isa_dummyT))) param_names
+      (* Add parameters to the translation context as Param (by-value) *)
+      val tctx = List.foldl
+        (fn ((n, v), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v ctx)
+        C_Trans_Ctxt.empty param_vars
       val body_term = translate_stmt tctx body
       val fn_term = C_Term_Build.mk_function_body body_term
+      (* Wrap in lambdas for each parameter *)
+      val fn_term = List.foldr
+        (fn ((_, v), t) => Term.lambda v t)
+        fn_term param_vars
       val fn_term' = Syntax.check_term ctxt fn_term
     in
       (name, fn_term')
@@ -417,3 +463,18 @@ void h(void) {
 
 thm c_h_def
 
+text \<open>Test if/else translation.\<close>
+
+micro_c_translate \<open>
+int max_c(int a, int b) {
+  if (a > b) {
+    return a;
+  } else {
+    return b;
+  }
+}
+\<close>
+
+thm c_max_c_def
+
+end
