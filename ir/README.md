@@ -1,15 +1,14 @@
-# I/R: Interactive/Remote Isabelle REPL
+# Isabelle/REPL (I/R)
 
-I/R is a TCP server wrapping an Isabelle/Poly/ML console with the
-Explore REPL, plus an MCP server for AI agent integration.
+Isabelle/REPL (I/R) provides a REPL as an interactive and programmatic interface to Isabelle/ML. Its primary purpose is
+to enable autonomous agentic proof development without Isabelle/Scala in the loop.
 
-It loads a pre-built Isabelle heap and lets you spawn REPLs rooted at
-theories. You then push/pop Isar commands to explore proofs interactively
-or via an agent.
+I/R manages a set of REPLs, each basically a list of Isar texts; you push/pop Isar to/from a REPL to explore proofs.
+REPLs can be rooted in theories, locations within theories (assuming a suitably augmented heap build, see [Stored
+Segments](#stored-segments-forking-repls-at-arbitrary-theory-points)), or at points within other REPLs (for sub-proof
+exploration).
 
-If you add a build hook (see `segment_storage.ML`) to store intermediate
-proof states in the heap, you can also fork REPLs at arbitrary points
-in a theory.
+An MCP wrapper ([mcp.py](mcp.py)) is provided exposing I/R to AI agents. See [Agent Integration](#agent-integration).
 
 ## Quick Start
 
@@ -84,13 +83,13 @@ in a Kiro CLI agent config:
 {
   "mcpServers": {
     "i/r": {
-      "url": "http://localhost:9148/mcp"
+      "type": "http",
+      "url": "http://localhost:9148/mcp",
+      "description": "Isabelle Isar REPL"
     }
   }
 }
 ```
-
-The agent must call `connect` before using any other tool.
 
 When an MCP client connects successfully, you should see:
 
