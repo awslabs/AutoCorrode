@@ -9,5 +9,7 @@ session Micro_C_Examples = HOL +
     Crush
   theories
     Simple_C_Functions
+    C_Struct_Examples
+    C_Array_Examples
   theories [document=false]
     Micro_C_Examples
