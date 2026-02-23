@@ -4,6 +4,7 @@ session Micro_C_Examples = HOL +
     "HOL-Library"
     Micro_C_Parsing_Frontend
     Micro_C_Interfaces
+    Shallow_Micro_C
     Micro_Rust_Std_Lib
     Crush
   theories

@@ -4,6 +4,7 @@
 theory Simple_C_Functions
   imports
     "Micro_C_Parsing_Frontend.C_To_Core_Translation"
+    "Shallow_Micro_C.C_Arithmetic_Rules"
     "Micro_Rust_Std_Lib.StdLib_All"
 begin
 
@@ -27,13 +28,13 @@ text \<open>
 
 locale c_verification_ctx =
     reference reference_types +
-    ref_int: reference_allocatable reference_types _ _ _ _ _ _ _ int_prism
+    ref_c_int: reference_allocatable reference_types _ _ _ _ _ _ _ c_int_prism
   for
     reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow> 'o prompt_output \<Rightarrow> unit\<close>
-    and int_prism :: \<open>('gv, int) prism\<close>
+    and c_int_prism :: \<open>('gv, c_int) prism\<close>
 begin
 
-adhoc_overloading store_reference_const \<rightleftharpoons> ref_int.new
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_int.new
 adhoc_overloading store_update_const \<rightleftharpoons> update_fun
 
 subsection \<open>C Swap Function\<close>
@@ -55,8 +56,8 @@ text \<open>
   other's original values.
 \<close>
 definition c_swap_contract ::
-    \<open>('addr, 'gv, int) Global_Store.ref \<Rightarrow> ('addr, 'gv, int) Global_Store.ref \<Rightarrow>
-     'gv \<Rightarrow> 'gv \<Rightarrow> int \<Rightarrow> int \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
+    \<open>('addr, 'gv, c_int) Global_Store.ref \<Rightarrow> ('addr, 'gv, c_int) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> 'gv \<Rightarrow> c_int \<Rightarrow> c_int \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_swap_contract lref rref lg rg lval rval \<equiv>
     let pre  = can_alloc_reference \<star>
                lref \<mapsto>\<langle>\<top>\<rangle> lg\<down>lval \<star> rref \<mapsto>\<langle>\<top>\<rangle> rg\<down>rval in
@@ -86,18 +87,23 @@ int max(int a, int b) {
 
 thm c_max_def
 
+text \<open>
+  The contract for max uses signed comparison on words.
+  The translated code uses @{const c_signed_less} which compares
+  @{term "sint b < sint a"} (operands swapped for >).
+\<close>
 definition c_max_contract ::
-    \<open>int \<Rightarrow> int \<Rightarrow> ('s::{sepalg}, int, 'b) function_contract\<close> where
+    \<open>c_int \<Rightarrow> c_int \<Rightarrow> ('s::{sepalg}, c_int, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_max_contract a b \<equiv>
     let pre  = \<langle>True\<rangle>;
-        post = \<lambda>r. \<langle>r = Orderings.max a b\<rangle>
+        post = \<lambda>r. \<langle>r = (if sint b < sint a then a else b)\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_max_contract
 
 lemma c_max_spec [crush_specs]:
   shows \<open>\<Gamma>; c_max a b \<Turnstile>\<^sub>F c_max_contract a b\<close>
   apply (crush_boot f: c_max_def contract: c_max_contract_def)
-  apply (crush_base simp add: max_def)
+  apply (crush_base simp add: c_signed_less_def)
   done
 
 subsection \<open>C Abs Function\<close>
@@ -111,20 +117,26 @@ int abs_val(int x) {
 
 thm c_abs_val_def
 
+text \<open>
+  The abs function requires a no-overflow precondition: subtraction
+  overflows when x is the minimum signed value. The precondition
+  ensures the negation is safe.
+\<close>
 definition c_abs_val_contract ::
-    \<open>int \<Rightarrow> ('s::{sepalg}, int, 'b) function_contract\<close> where
+    \<open>c_int \<Rightarrow> ('s::{sepalg}, c_int, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_abs_val_contract x \<equiv>
-    let pre  = \<langle>True\<rangle>;
-        post = \<lambda>r. \<langle>r = abs x\<rangle>
+    let pre  = \<langle>-(2^31 :: int) < sint x\<rangle>;
+        post = \<lambda>r. \<langle>r = (if sint x > sint (0 :: c_int) then x else word_of_int (0 - sint x))\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_abs_val_contract
 
 lemma c_abs_val_spec [crush_specs]:
   shows \<open>\<Gamma>; c_abs_val x \<Turnstile>\<^sub>F c_abs_val_contract x\<close>
   apply (crush_boot f: c_abs_val_def contract: c_abs_val_contract_def)
-  apply (crush_base simp add: abs_if)
+  apply (crush_base simp add: c_signed_less_def c_signed_sub_def c_signed_overflow_def Let_def)
   done
 
 end
 
 end
+
