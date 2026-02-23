@@ -200,6 +200,77 @@ lemma c_swap_coords_spec:
 
 end
 
+
+section \<open>C Unsigned Arithmetic Verification\<close>
+
+text \<open>
+  This section demonstrates verification of C code using unsigned integer types.
+  Unsigned arithmetic wraps modulo @{term \<open>2^32\<close>} and uses @{const c_unsigned_add}
+  instead of @{const c_signed_add}.
+\<close>
+
+locale c_uint_verification_ctx =
+    reference reference_types +
+    ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism
+  for
+    reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow> 'o prompt_output \<Rightarrow> unit\<close>
+    and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+unsigned int u_add(unsigned int a, unsigned int b) {
+  return a + b;
+}
+\<close>
+
+thm c_u_add_def
+
+text \<open>
+  The contract for @{text u_add}: unsigned addition wraps, so the result is
+  always @{term \<open>a + b\<close>} (Isabelle word addition already wraps).
+  No overflow precondition needed.
+\<close>
+definition c_u_add_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_add_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_u_add_contract
+
+lemma c_u_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_u_add a b \<Turnstile>\<^sub>F c_u_add_contract a b\<close>
+  apply (crush_boot f: c_u_add_def contract: c_u_add_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+micro_c_translate \<open>
+unsigned int u_max(unsigned int a, unsigned int b) {
+  if (a > b) return a;
+  else return b;
+}
+\<close>
+
+thm c_u_max_def
+
+definition c_u_max_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_max_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = (if b < a then a else b)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_u_max_contract
+
+lemma c_u_max_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_u_max a b \<Turnstile>\<^sub>F c_u_max_contract a b\<close>
+  apply (crush_boot f: c_u_max_def contract: c_u_max_contract_def)
+  apply (crush_base simp add: c_unsigned_less_def)
+  done
+
+end
 section \<open>C Array Verification\<close>
 
 text \<open>
