@@ -55,7 +55,7 @@ except ImportError:
     _HAVE_PROMPT_TOOLKIT = False
 
 IR_CMDS = {
-    'Ir.init':           'id thy  — create REPL "id" at "Theory" or "Theory:idx"',
+    'Ir.init':           'id ["thy"]  — create REPL "id" importing theories',
     'Ir.fork':           'id state_idx  — fork new REPL from current at given state (0=base, ~1=latest)',
     'Ir.focus':          'id  — switch to REPL "id"',
     'Ir.step':           '"isar text"  — execute Isar text as next step in current REPL',
@@ -70,10 +70,13 @@ IR_CMDS = {
     'Ir.remove':         'id  — delete REPL "id" and all its sub-REPLs',
     'Ir.repls':           '()  — list all REPLs with step counts and origins',
     'Ir.theories':  '()  — list all theories loaded in the session',
+    'Ir.load_theory': 'name  — load theory by name, e.g. "HOL-Library.Multiset"',
     'Ir.source':       'thy start stop  — list theory commands (start/stop are 0-based, ~N from end)',
     'Ir.sledgehammer':   'secs  — run sledgehammer on current proof goal with timeout',
     'Ir.timeout':        'secs  — set step timeout (0=unlimited, default 5s)',
     'Ir.explode':        'idx  — split multi-command step idx into individual steps',
+    'Ir.find_theorems':  'n "query"  — search theorems (n=max results, 0=unlimited)',
+    'Ir.back':           '()  — revert last step (synonym for truncate ~1)',
     'Ir.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
     'Ir.help':           '()  — show full help text',
     '/connections':           'show open client connections',
@@ -84,7 +87,7 @@ IR_CMDS = {
 
 # Structured signatures: (params_list, description)
 IR_SIGS = {
-    'Ir.init':          (['id', 'thy'], 'create REPL "id" at "Theory" or "Theory:idx"'),
+    'Ir.init':          (['id', '["thy"]'], 'create REPL "id" importing theories'),
     'Ir.fork':          (['id', 'state_idx'], 'fork new REPL from current at given state (0=base, ~1=latest)'),
     'Ir.focus':         (['id'], 'switch to REPL "id"'),
     'Ir.step':          (['"isar text"'], 'execute Isar text as next step in current REPL'),
@@ -99,37 +102,117 @@ IR_SIGS = {
     'Ir.remove':        (['id'], 'delete REPL "id" and all its sub-REPLs'),
     'Ir.repls':          ([], 'list all REPLs with step counts and origins'),
     'Ir.theories': ([], 'list all theories loaded in the session'),
+    'Ir.load_theory': (['name'], 'load theory by name, e.g. "HOL-Library.Multiset"'),
     'Ir.source':      (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
     'Ir.sledgehammer':  (['secs'], 'run sledgehammer on current proof goal with timeout'),
     'Ir.timeout':       (['secs'], 'set step timeout (0=unlimited, default 5s)'),
     'Ir.explode':       (['idx'], 'split multi-command step idx into individual steps'),
+    'Ir.find_theorems': (['n', '"query"'], 'search theorems (n=max results, 0=unlimited)'),
+    'Ir.back':          ([], 'revert last step (synonym for truncate ~1)'),
     'Ir.config':        (['f'], 'update config (color, show_ignored, full_spans, auto_replay)'),
     'Ir.help':          ([], 'show full help text'),
 }
 
-# Maps (command, argument_index) to completion type
-_ARG_COMPLETIONS = {
-    ('Ir.init', 1): 'theory',      # 2nd arg is theory
-    ('Ir.source', 0): 'theory',   # 1st arg is theory
-    ('Ir.focus', 0): 'repl',
-    ('Ir.remove', 0): 'repl',
-    ('Ir.fork', 0): 'repl',
-}
+if _HAVE_PROMPT_TOOLKIT:
+    from prompt_toolkit.contrib.regular_languages.compiler import compile as grammar_compile
+    from prompt_toolkit.contrib.regular_languages.completion import GrammarCompleter
+    from prompt_toolkit.completion import WordCompleter
+
+
+class _DynWordCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
+    """A WordCompleter whose word list can be updated at runtime."""
+    def __init__(self):
+        self.words = []
+
+    def get_completions(self, document, complete_event):
+        word = document.text_before_cursor
+        for w in self.words:
+            if w.startswith(word):
+                yield Completion(w, start_position=-len(word))
 
 
 class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
-    """Context-aware completer for the I/R REPL."""
+    """Grammar-based completer for the I/R REPL.
+
+    Uses prompt_toolkit's regular_languages module to define the syntax of
+    each command and attach completers to the variable positions.
+    """
 
     def __init__(self):
-        self.theories = []
-        self.repl_ids = []
-        self.source_cache = {}  # theory_name -> [(idx, text), ...]
+        self._theory_completer = _DynWordCompleter()
+        self._repl_completer = _DynWordCompleter()
+        self.source_cache = {}
+
+        if not _HAVE_PROMPT_TOOLKIT:
+            return
+
+        # Grammar for all Ir.* commands.
+        # The prompt_toolkit grammar compiler ignores whitespace and supports
+        # (?P<name>...) for named variables that get their own completer.
+        g = grammar_compile(
+            r"""
+                (
+                    # init: id then theory list
+                    (?P<cmd>Ir\.init) \s+ (?P<sid>"[^"]*") \s+
+                        \[ \s* (?P<thy>"[^"]*") \s*
+                           (, \s* (?P<thy>"[^"]*") \s* )*
+                        \]?
+                |
+                    (?P<cmd>Ir\.load_theory) \s+ (?P<thy>"[^"]*")
+                |
+                    (?P<cmd>Ir\.source) \s+ (?P<thy>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.focus)  \s+ (?P<rid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.remove) \s+ (?P<rid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.fork)   \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.step)      \s+ (?P<sid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.step_file) \s+ (?P<sid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.edit)   \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.state)        \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.truncate)     \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.timeout)      \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.sledgehammer) \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.explode)      \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>Ir\.find_theorems) \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
+                |
+                    # No-arg commands and slash commands
+                    (?P<cmd>[^\s]+)
+                )
+            """,
+            unescape_funcs={'thy': lambda s: s.strip('"')},
+            escape_funcs={'thy': lambda s: '"' + s + '"'},
+        )
+
+        cmd_completer = WordCompleter(sorted(IR_CMDS.keys()), sentence=True)
+        self._grammar = g
+        self._grammar_completer = GrammarCompleter(
+            g,
+            {
+                'cmd': cmd_completer,
+                'thy': self._theory_completer,
+                'rid': self._repl_completer,
+            },
+        )
+
+    @property
+    def theories(self):
+        return self._theory_completer.words
 
     def learn_theories(self, output):
-        self.theories = [l.strip() for l in output.splitlines() if l.strip()]
+        self._theory_completer.words = [l.strip() for l in output.splitlines() if l.strip()]
 
     def learn_source(self, theory, output):
-        """Parse output of Ir.source and cache per theory."""
         entries = []
         for line in output.splitlines():
             m = re.match(r'\s*(\d+)\s+(.*)', line)
@@ -138,114 +221,15 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
         self.source_cache[theory] = entries
 
     def learn_repls(self, output):
-        import re
-        self.repl_ids = re.findall(r'[>]?\s*(\S+)\s+\(', output)
-
-    def _parse_context(self, text):
-        """Parse text to determine: command name, whether we're inside an
-        open string, and which argument position the cursor is at.
-        Returns (cmd, in_string, arg_idx, partial)."""
-        cmd = ""
-        in_string = False
-        arg_idx = 0
-        string_start = 0
-        in_bare = False
-
-        m = re.match(r'(\S+)', text)
-        if m:
-            cmd = m.group(1)
-
-        # Start scanning after the command
-        i = len(cmd)
-        while i < len(text):
-            c = text[i]
-            if in_string:
-                if c == '\\' and i + 1 < len(text):
-                    i += 2
-                    continue
-                if c == '"':
-                    in_string = False
-                    in_bare = False
-            else:
-                if c == '"':
-                    in_string = True
-                    in_bare = False
-                    string_start = i + 1
-                elif c == ' ' or c == '\t':
-                    if in_bare:
-                        in_bare = False
-                elif not in_bare and not in_string:
-                    in_bare = True
-            # Count transitions into a new argument
-            if (in_string or in_bare) and i > len(cmd):
-                pass  # inside an argument
-            i += 1
-
-        # Count arguments: split the part after the command
-        after_cmd = text[len(cmd):]
-        # Tokenize respecting quotes
-        args = []
-        current = ""
-        qs = False
-        for ch in after_cmd:
-            if qs:
-                current += ch
-                if ch == '"':
-                    qs = False
-                    args.append(current)
-                    current = ""
-            elif ch == '"':
-                qs = True
-                current += ch
-            elif ch in ' \t':
-                if current:
-                    args.append(current)
-                    current = ""
-            else:
-                current += ch
-        # current holds the in-progress token (if any)
-        arg_idx = len(args)  # completed args = index of current/next arg
-        in_string = qs
-        partial = current[1:] if qs and current.startswith('"') else ""
-
-        return cmd, in_string, arg_idx, partial
-
-    def _yield_for_type(self, comp_type, partial):
-        if comp_type == 'theory':
-            for t in self.theories:
-                if t.startswith(partial):
-                    yield Completion(t, start_position=-len(partial))
-        elif comp_type == 'repl':
-            for r in self.repl_ids:
-                if r.startswith(partial):
-                    yield Completion(r, start_position=-len(partial))
+        self._repl_completer.words = re.findall(r'[>]?\s*(\S+)\s+\(', output)
 
     def get_completions(self, document, complete_event):
-        text = document.text_before_cursor
-        cmd, in_string, arg_idx, partial = self._parse_context(text)
-
-        if in_string:
-            key = (cmd, arg_idx)
-            yield from self._yield_for_type(_ARG_COMPLETIONS.get(key), partial)
+        if not _HAVE_PROMPT_TOOLKIT:
             return
-
-        # Between arguments — preview what the next string arg would complete
-        if ' ' in text:
-            key = (cmd, arg_idx)
-            comp_type = _ARG_COMPLETIONS.get(key)
-            if comp_type:
-                for c in self._yield_for_type(comp_type, ""):
-                    yield c
-            return
-
-        # Command completion — only while typing the first token
-        word = document.get_word_before_cursor(WORD=True)
-        for c, sig in IR_CMDS.items():
-            if c.startswith(word):
-                yield Completion(c, start_position=-len(word), display_meta=sig)
+        yield from self._grammar_completer.get_completions(document, complete_event)
 
 PROMPT = "Poly/ML> "
-PROMPT_RE = re.compile(re.escape(PROMPT) + r"$")
+PROMPT_RE = re.compile(re.escape(PROMPT) + r"$", re.MULTILINE)
 SENTINEL = "<<DONE>>"
 
 
@@ -536,13 +520,29 @@ class Server:
 def make_toolbar(completer):
     """Create a bottom toolbar that shows the current command's signature,
     and source context when typing Theory:N arguments."""
+
     def toolbar():
         app = __import__('prompt_toolkit').application.get_app()
         text = app.current_buffer.text
-        cmd, in_string, arg_idx, partial = completer._parse_context(text)
 
-        # Check if we're typing a Theory:N argument (2nd arg of init, 1st of source)
-        if in_string and partial and ':' in partial:
+        # Use the grammar to parse the current input
+        grammar = completer._grammar
+        match = grammar.match_prefix(text) if grammar else None
+
+        cmd = ""
+        active_var = None
+        partial = ""
+        if match:
+            variables = match.variables()
+            cmd = variables.get('cmd', '')
+            # Find which variable the cursor is currently in (end_nodes)
+            for node in match.end_nodes():
+                if node.varname != 'cmd':
+                    active_var = node.varname
+                    partial = node.value
+
+        # Check if we're typing a Theory:N argument for source preview
+        if active_var == 'thy' and partial and ':' in partial:
             thy, idx_str = partial.rsplit(':', 1)
             segs = completer.source_cache.get(thy)
             if segs and idx_str.lstrip('~').isdigit():
@@ -552,7 +552,6 @@ def make_toolbar(completer):
                         n = max(s[0] for s in segs) + 1 + n
                 except ValueError:
                     n = 0
-                # Show 5 source lines around n
                 ctx = 3
                 lines = []
                 ansi_re = re.compile(r'\033\[[0-9;]*m')
@@ -577,9 +576,37 @@ def make_toolbar(completer):
         params, desc = sig
         if not params:
             return HTML(f" <b>{cmd}</b> ()  <i>{desc}</i>")
+
+        # Map grammar variable names to param indices for highlighting.
+        # For commands with multiple params of the same grammar type (e.g.
+        # source has thy, num, num), we track all occurrences and use the
+        # cursor position to pick the right one.
+        var_to_params = {}  # varname -> [param_idx, ...]
+        for i, p in enumerate(params):
+            if p in ('"thy"', '["thy"]', 'name', 'thy'):
+                var_to_params.setdefault('thy', []).append(i)
+            elif p == 'id':
+                var_to_params.setdefault('sid', []).append(i)
+                var_to_params.setdefault('rid', []).append(i)
+            elif p in ('idx', 'state_idx', 'secs', 'start', 'stop', 'n'):
+                var_to_params.setdefault('num', []).append(i)
+            elif p in ('"isar text"', '"text"', '"query"', 'path'):
+                var_to_params.setdefault('sid', []).append(i)
+
+        active_idx = None
+        if active_var and active_var in var_to_params:
+            indices = var_to_params[active_var]
+            if len(indices) == 1:
+                active_idx = indices[0]
+            elif match:
+                # Count how many times this variable appears up to cursor
+                count = sum(1 for mv in match.variables()
+                            if mv.varname == active_var and mv.stop <= len(text))
+                active_idx = indices[min(count, len(indices) - 1)]
+
         parts = []
         for i, p in enumerate(params):
-            if i == arg_idx:
+            if i == active_idx:
                 parts.append(f"<b><u>{p}</u></b>")
             else:
                 parts.append(f"<ansigray>{p}</ansigray>")
@@ -662,8 +689,12 @@ def console_loop(server, session):
                 output = server.poly.send(command)
             print(output)
             # Update completer from command output
-            if "theories" in command:
+            if command.startswith("Ir.theories"):
                 session.completer.learn_theories(output)
+            elif command.startswith("Ir.load_theory"):
+                # After loading, refresh the theory list
+                refresh = server.poly.send("Ir.theories ();")
+                session.completer.learn_theories(refresh)
             elif command.startswith("Ir.repls"):
                 session.completer.learn_repls(output)
             elif command.startswith("Ir.source"):
@@ -806,6 +837,9 @@ def main():
     else:
         histfile = os.path.expanduser("~/.ir_repl_history")
         completer = IrCompleter()
+        # Seed completer with loaded theories
+        with server.lock:
+            completer.learn_theories(server.poly.send("Ir.theories ();"))
         session = PromptSession(history=FileHistory(histfile), completer=completer,
                                 complete_while_typing=Always())
         try:
