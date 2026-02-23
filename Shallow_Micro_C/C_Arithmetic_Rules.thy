@@ -192,6 +192,92 @@ lemma wp_c_signed_eqI [micro_rust_wp_intros]:
   shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_eq a b) \<psi> \<rho> \<theta>\<close>
   using assms by (simp add: c_signed_eq_def wp_literalI)
 
+subsection \<open>Unsigned Addition\<close>
+
+lemma wp_c_unsigned_add [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_add a b) \<psi> \<rho> \<theta> = \<psi> (a + b)\<close>
+  using assms
+  by (simp add: c_unsigned_add_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_addI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a + b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_add a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_add_def wp_literalI)
+
+subsection \<open>Unsigned Subtraction\<close>
+
+lemma wp_c_unsigned_sub [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_sub a b) \<psi> \<rho> \<theta> = \<psi> (a - b)\<close>
+  using assms
+  by (simp add: c_unsigned_sub_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_subI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a - b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_sub a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_sub_def wp_literalI)
+
+subsection \<open>Unsigned Multiplication\<close>
+
+lemma wp_c_unsigned_mul [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_mul a b) \<psi> \<rho> \<theta> = \<psi> (a * b)\<close>
+  using assms
+  by (simp add: c_unsigned_mul_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_mulI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a * b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_mul a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_mul_def wp_literalI)
+
+subsection \<open>Unsigned Comparison Operations\<close>
+
+lemma wp_c_unsigned_less [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_less a b) \<psi> \<rho> \<theta> = \<psi> (a < b)\<close>
+  using assms
+  by (simp add: c_unsigned_less_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_lessI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a < b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_less a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_less_def wp_literalI)
+
+lemma wp_c_unsigned_le [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_le a b) \<psi> \<rho> \<theta> = \<psi> (a \<le> b)\<close>
+  using assms
+  by (simp add: c_unsigned_le_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_leI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a \<le> b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_le a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_le_def wp_literalI)
+
+lemma wp_c_unsigned_eq [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_eq a b) \<psi> \<rho> \<theta> = \<psi> (a = b)\<close>
+  using assms
+  by (simp add: c_unsigned_eq_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_eqI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a = b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_eq a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_eq_def wp_literalI)
+
 subsection \<open>Unsigned Division and Modulo\<close>
 
 lemma wp_c_unsigned_div [micro_rust_wp_simps]:

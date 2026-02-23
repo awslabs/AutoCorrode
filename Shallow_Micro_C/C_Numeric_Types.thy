@@ -91,6 +91,18 @@ text \<open>
   still undefined behavior.
 \<close>
 
+definition c_unsigned_add :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_add a b \<equiv> literal (a + b)\<close>
+
+definition c_unsigned_sub :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_sub a b \<equiv> literal (a - b)\<close>
+
+definition c_unsigned_mul :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_mul a b \<equiv> literal (a * b)\<close>
+
 definition c_unsigned_div :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_div a b \<equiv>
@@ -102,6 +114,20 @@ definition c_unsigned_mod :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
   \<open>c_unsigned_mod a b \<equiv>
      if b = 0 then c_abort DivisionByZero
      else literal (a mod b)\<close>
+
+section \<open>C Unsigned Comparison Operations\<close>
+
+definition c_unsigned_less :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_less a b \<equiv> literal (a < b)\<close>
+
+definition c_unsigned_le :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_le a b \<equiv> literal (a \<le> b)\<close>
+
+definition c_unsigned_eq :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_eq a b \<equiv> literal (a = b)\<close>
 
 section \<open>C Comparison Operations\<close>
 
