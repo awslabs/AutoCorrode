@@ -11,5 +11,6 @@ session Micro_C_Examples = HOL +
     Simple_C_Functions
     C_Struct_Examples
     C_Array_Examples
+    C_Bitwise_Examples
   theories [document=false]
     Micro_C_Examples

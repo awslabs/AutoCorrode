@@ -351,8 +351,11 @@ struct
     let val T = C_Ast_Utils.hol_type_of cty
     in Const (\<^const_name>\<open>literal\<close>, T --> dummyT) $ HOLogic.mk_number T n end
 
-  (* literal n, where n is a C integer constant typed as c_int (= 32 sword) *)
-  fun mk_literal_int n = mk_literal_num C_Ast_Utils.CInt n
+  (* literal n, where n is a C integer constant.
+     Uses dummyT so Isabelle infers the correct word type from context
+     (e.g. 32 sword in signed expressions, 32 word in unsigned). *)
+  fun mk_literal_int n =
+    Const (\<^const_name>\<open>literal\<close>, dummyT --> dummyT) $ HOLogic.mk_number dummyT n
 
   (* return_func e : for C return statements *)
   fun mk_return_func body =
@@ -621,9 +624,12 @@ struct
         end
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
         let val (lhs', lhs_cty) = translate_expr tctx lhs
-            val (rhs', _) = translate_expr tctx rhs
-            (* Use left operand type for dispatch (C requires same type for binops) *)
-            val cty = lhs_cty
+            val (rhs', rhs_cty) = translate_expr tctx rhs
+            (* C usual arithmetic conversion: if either operand is unsigned,
+               use unsigned dispatch.  This handles integer literals (which
+               default to CInt) mixed with unsigned variables. *)
+            val cty = if lhs_cty = C_Ast_Utils.CUInt orelse rhs_cty = C_Ast_Utils.CUInt
+                      then C_Ast_Utils.CUInt else lhs_cty
             (* For > and >=, swap operands to use < and <= *)
             val (l, r) = case binop of CGrOp0 => (rhs', lhs')
                                      | CGeqOp0 => (rhs', lhs')
