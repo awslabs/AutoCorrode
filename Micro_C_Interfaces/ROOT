@@ -1,0 +1,9 @@
+session Micro_C_Interfaces = HOL +
+  options [document = pdf, document_output = "output"]
+  sessions
+    "HOL-Library"
+    Micro_Rust_Interfaces_Core
+    Separation_Lenses
+    Shallow_Micro_C
+  theories [document=false]
+    Micro_C_Interfaces
