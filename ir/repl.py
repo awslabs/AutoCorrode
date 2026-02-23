@@ -432,7 +432,6 @@ class Server:
         self.verbose = True
         self.clients = {}
         self.clients_lock = threading.Lock()
-        print(f"Explore server listening on {host}:{port}")
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
@@ -705,7 +704,7 @@ def main():
     if not args.no_bash_server:
         print(f"{BOLD}Starting Bash.Server...{RST}", flush=True)
         bash_server = BashServer(args.isabelle)
-        print(f"{GREEN}Bash.Server ready at {bash_server.address}{RST}", flush=True)
+        print(f"{GREEN}● Bash.Server ready at {bash_server.address}{RST}", flush=True)
     else:
         print(f"{DIM}Bash.Server skipped (sledgehammer unavailable){RST}", flush=True)
 
@@ -720,7 +719,7 @@ def main():
     poly = PolyMLProcess(args.isabelle, args.session, args.dir,
                          bash_server=bash_server, verbose=args.verbose,
                          no_build=not args.check_heap)
-    print(f"{GREEN}Isabelle console ready.{RST}", flush=True)
+    print(f"{GREEN}● Isabelle console ready.{RST}", flush=True)
 
     print(f"Loading {BOLD}{ml_path}{RST}...", flush=True)
     ml_code = open(ml_path).read().replace('\n', ' ')
@@ -737,14 +736,17 @@ def main():
         print(f"{DIM}Probe output:{RST}\n{probe}", file=sys.stderr)
         poly.close()
         sys.exit(1)
-    print(f"{GREEN}Explore loaded.{RST}", flush=True)
 
     server = Server(poly, args.port, host=args.host)
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
 
+    print(f"{GREEN}● REPL ready.{RST} Waiting for connections on "
+          f"{BOLD}{args.host}:{args.port}{RST}", flush=True)
+
     mcp_proc = None
     if args.mcp:
+        print(f"{BOLD}Starting MCP server...{RST}", flush=True)
         mcp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore_mcp.py")
         mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options)
         mcp_proc = subprocess.Popen(mcp_cmd, stdin=subprocess.DEVNULL,
@@ -752,14 +754,34 @@ def main():
                                     stderr=subprocess.STDOUT, start_new_session=True)
 
         def _mcp_log_reader():
+            started = False
             for raw in mcp_proc.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 if line:
-                    print(f"{DIM}[MCP]{RST} {line}")
+                    if "No module named" in line:
+                        req_path = os.path.join(os.path.dirname(mcp_path), "requirements.txt")
+                        print(f"{RED}[MCP] {line}{RST}")
+                        print(f"{YELLOW}⚠️  MCP server failed to start. "
+                              f"Install dependencies: "
+                              f"pip install -r {req_path}{RST}")
+                        print(f"{DIM}   REPL is still available on "
+                              f"{args.host}:{args.port}{RST}")
+                    elif not started and "running on" in line.lower():
+                        started = True
+                        print(f"{DIM}[MCP]{RST} {line}")
+                        print(f"{GREEN}● MCP server started{RST}")
+                    else:
+                        if line.startswith("ERROR:"):
+                            print(f"{RED}[MCP] {line}{RST}")
+                        else:
+                            print(f"{DIM}[MCP]{RST} {line}")
+            rc = mcp_proc.wait()
+            if rc != 0:
+                print(f"{RED}⚠️  MCP server exited (rc={rc}){RST}")
+                print(f"{DIM}   REPL is still available on "
+                      f"{args.host}:{args.port}{RST}")
 
         threading.Thread(target=_mcp_log_reader, daemon=True).start()
-        print(f"{GREEN}MCP server started{RST} {DIM}(pid={mcp_proc.pid}, "
-              f"args={' '.join(mcp_cmd[1:])}){RST}", flush=True)
 
     if args.server_only:
         print(f"{DIM}Running in server-only mode (no stdin REPL). "
@@ -768,11 +790,15 @@ def main():
             accept_thread.join()
         except KeyboardInterrupt:
             pass
-    elif not _HAVE_PROMPT_TOOLKIT:
-        print(f"{YELLOW}Note: prompt_toolkit is not installed. "
-              f"Install it for a nicer interactive experience "
-              f"(pip install prompt_toolkit). "
-              f"Running in server-only mode.{RST}", flush=True)
+    elif not _HAVE_PROMPT_TOOLKIT or not sys.stdin.isatty():
+        if not _HAVE_PROMPT_TOOLKIT:
+            req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+            print(f"{YELLOW}⚠️  prompt_toolkit is not installed. "
+                  f"Install dependencies for the full experience: "
+                  f"pip install -r {req_path}{RST}", flush=True)
+        print(f"{DIM}Running in server-only mode. "
+              f"Connect on {args.host}:{args.port}, "
+              f"e.g. nc {args.host} {args.port}{RST}", flush=True)
         try:
             accept_thread.join()
         except KeyboardInterrupt:
