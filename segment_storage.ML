@@ -3,7 +3,11 @@
 
 (* Build hook that optionally stores all document segments in a global
    table, keyed by theory name. Controlled by the system option
-   "store_segments". When enabled, segments survive into the heap image. *)
+   "store_segments". When enabled, segments survive into the heap image.
+
+   Note: We look up "store_segments" as a plain string rather than using
+   the system_option antiquotation, so that this file can be
+   loaded even when the option is not registered. *)
 
 val stored_segments : (string * Document_Output.segment list) list Synchronized.var
   = Synchronized.var "stored_segments" [];

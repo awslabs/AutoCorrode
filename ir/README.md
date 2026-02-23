@@ -104,3 +104,78 @@ When an MCP client connects successfully, you should see:
 [MCP] INFO:     127.0.0.1:64677 - "POST /mcp HTTP/1.1" 200 OK
 [MCP] Processing request of type ListPromptsRequest
 ```
+
+## Stored Segments: Forking REPLs at Arbitrary Theory Points
+
+By default, `Explore.init` creates a REPL at the end of a theory.
+To fork REPLs at intermediate points (e.g. after a specific lemma,
+or within a proof), you need to store the intermediate proof states in the heap using
+`segment_storage.ML`.
+
+### Setup
+
+1. **Register the option.**
+   Add to `$ISABELLE_HOME_USER/etc/options`:
+
+   ```
+   option store_segments : bool = false for build
+   ```
+
+   See `ir/Segment_Storage_Example/` for a complete working example.
+
+2. **Load `segment_storage.ML` in your session's root theory.**
+   It must be loaded with `ML_write_global` enabled:
+
+   ```isabelle
+   theory My_Session
+   imports Main
+   begin
+   declare [[ML_write_global = true]]
+   ML_file \<open>segment_storage.ML\<close>
+   declare [[ML_write_global = false]]
+   (* ... rest of your theory ... *)
+   end
+   ```
+
+3. **Build the heap with `store_segments=true`:**
+
+   ```bash
+   isabelle build -b -o store_segments=true -d /path/to/session My_Session
+   ```
+
+   You should see lines like:
+
+   ```
+   Segment_Storage: My_Session.My_Theory (24 segments) [STORING]
+   ```
+
+### Usage
+
+Load the session into the REPL:
+
+```bash
+python3 ./ir/repl.py \
+  --isabelle /path/to/Isabelle/bin/isabelle \
+  --session My_Session --dir /path/to/session
+```
+
+On startup, you should see `source commands available` instead of
+`source commands not available`.
+
+Browse and fork from stored segments:
+
+```
+%> Explore.source "My_Session.My_Theory" 0 ~1;
+   0  theory My_Theory imports Main begin
+   2  lemma foo: "True"
+   4    by simp
+   6  lemma bar: "1 + 1 = (2::nat)"
+   8    by simp
+  10  end
+
+%> Explore.init "R" ["My_Session.My_Theory:6"];
+Created REPL "R", set as current
+```
+
+The REPL is now rooted at segment 6 (after `lemma bar`), with all
+prior definitions and lemmas available.

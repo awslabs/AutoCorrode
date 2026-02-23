@@ -1,0 +1,3 @@
+session Segment_Storage_Example = HOL +
+  theories [document = false]
+    "Example"
