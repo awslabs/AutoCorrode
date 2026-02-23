@@ -5,6 +5,7 @@ ARG TARGETARCH
 ARG ISABELLE_VERSION=Isabelle2025-2
 ARG ISABELLE_BASE_URL=https://isabelle.in.tum.de/website-Isabelle2025-2/dist
 ARG AUTOCORRODE_BRANCH=main
+ARG AUTOCORRODE_REPO=https://github.com/awslabs/autocorrode.git
 
 RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
@@ -28,7 +29,7 @@ ENV ISABELLE=/usr/local/${ISABELLE_VERSION}/bin/isabelle
 # Clone only the ir/ subdirectory
 RUN git clone --depth 1 --filter=blob:none --sparse \
       -b ${AUTOCORRODE_BRANCH} \
-      https://github.com/awslabs/autocorrode.git /opt/AutoCorrode \
+      ${AUTOCORRODE_REPO} /opt/AutoCorrode \
  && cd /opt/AutoCorrode \
  && git sparse-checkout set ir
 

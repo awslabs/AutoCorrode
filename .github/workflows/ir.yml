@@ -139,7 +139,7 @@ jobs:
           - name: standalone
             dockerfile: ir/docker/Dockerfile.standalone
             tag: explore-repl:standalone
-            build_args: "--build-arg AUTOCORRODE_BRANCH=${{ github.head_ref || github.ref_name }}"
+            build_args: "--build-arg AUTOCORRODE_BRANCH=${{ github.head_ref || github.ref_name }} --build-arg AUTOCORRODE_REPO=${{ github.event.pull_request.head.repo.clone_url || format('https://github.com/{0}.git', github.repository) }}"
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t ${{ matrix.config.tag }} -f ${{ matrix.config.dockerfile }} ${{ matrix.config.build_args }} .
