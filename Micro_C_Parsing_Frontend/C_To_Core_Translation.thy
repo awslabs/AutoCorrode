@@ -150,6 +150,8 @@ structure C_Term_Build : sig
   val mk_funcall : term -> term list -> term
   val mk_raw_for_loop : term -> term -> term
   val mk_upt_int_range : term -> term -> term
+  val mk_deref : term -> term
+  val mk_ptr_write : term -> term -> term
   val mk_while_stub : term
   val mk_goto_stub : term
   val mk_unsupported_stub : term
@@ -249,6 +251,25 @@ struct
       $ Const (\<^const_name>\<open>of_nat\<close>, dummyT)
       $ (Const (\<^const_name>\<open>upt\<close>, dummyT --> dummyT --> dummyT) $ start_nat $ bound_nat)
 
+  (* Dereference a pointer expression: bind ptr_expr (deep_compose1 call store_dereference_const)
+     This generalizes mk_var_read from literal variables to arbitrary expressions. *)
+  fun mk_deref ptr_expr =
+    Const (\<^const_name>\<open>bind\<close>, dummyT --> dummyT --> dummyT)
+      $ ptr_expr
+      $ (Const (\<^const_name>\<open>deep_compose1\<close>, dummyT --> dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>call\<close>, dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>store_dereference_const\<close>, dummyT))
+
+  (* Write through a pointer expression: bind2 (deep_compose2 call store_update_const) ptr_expr val_expr
+     This generalizes mk_var_write from literal variables to arbitrary expressions. *)
+  fun mk_ptr_write ptr_expr val_expr =
+    Const (\<^const_name>\<open>bind2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ (Const (\<^const_name>\<open>deep_compose2\<close>, dummyT --> dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>call\<close>, dummyT --> dummyT)
+           $ Const (\<^const_name>\<open>store_update_const\<close>, dummyT))
+      $ ptr_expr
+      $ val_expr
+
   (* Stub constants for unsupported C constructs *)
   val mk_while_stub = Const (\<^const_name>\<open>c_while_stub\<close>, dummyT)
   val mk_goto_stub = Const (\<^const_name>\<open>c_goto_stub\<close>, dummyT)
@@ -324,6 +345,9 @@ struct
                error ("micro_c_translate: assignment to parameter: " ^ name)
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
+    | translate_expr tctx (CAssign0 (CAssignOp0, CUnary0 (CIndOp0, lhs, _), rhs, _)) =
+        (* *p = v : write through pointer *)
+        C_Term_Build.mk_ptr_write (translate_expr tctx lhs) (translate_expr tctx rhs)
     | translate_expr _ (CAssign0 _) =
         unsupported "compound assignment or non-variable lhs"
     | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
@@ -338,6 +362,9 @@ struct
         in C_Term_Build.mk_funcall func_ref arg_terms end
     | translate_expr _ (CCall0 _) =
         unsupported "indirect function call (function pointers)"
+    | translate_expr tctx (CUnary0 (CIndOp0, expr, _)) =
+        (* *p : dereference pointer *)
+        C_Term_Build.mk_deref (translate_expr tctx expr)
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
     | translate_expr _ (CIndex0 _) =
@@ -642,5 +669,16 @@ void while_test(int n) {
 \<close>
 
 thm c_while_test_def
+
+text \<open>Smoke test: pointer dereference and assignment (swap function).\<close>
+micro_c_translate \<open>
+void swap(int *a, int *b) {
+  int t = *a;
+  *a = *b;
+  *b = t;
+}
+\<close>
+
+thm c_swap_def
 
 end
