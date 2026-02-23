@@ -35,6 +35,15 @@ text \<open>Helper functions for extracting information from Isabelle/C's AST no
 
 ML \<open>
 structure C_Ast_Utils : sig
+  datatype c_numeric_type = CInt | CUInt | CChar | CSChar
+                          | CShort | CUShort | CLong | CULong
+  val is_signed : c_numeric_type -> bool
+  val hol_type_of : c_numeric_type -> typ
+  val type_name_of : c_numeric_type -> string
+  val resolve_c_type : C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list -> c_numeric_type option
+  val decl_type : C_Ast.nodeInfo C_Ast.cDeclaration -> c_numeric_type option
+  val param_type : C_Ast.nodeInfo C_Ast.cDeclaration -> c_numeric_type option
+  val is_pointer_param : C_Ast.nodeInfo C_Ast.cDeclaration -> bool
   val abr_string_to_string : C_Ast.abr_string -> string
   val ident_name : C_Ast.ident -> string
   val declr_name : C_Ast.nodeInfo C_Ast.cDeclarator -> string
@@ -50,6 +59,87 @@ structure C_Ast_Utils : sig
 end =
 struct
   open C_Ast
+
+  (* ----- Resolved C numeric type representation ----- *)
+
+  datatype c_numeric_type = CInt | CUInt | CChar | CSChar
+                          | CShort | CUShort | CLong | CULong
+
+  fun is_signed CInt   = true
+    | is_signed CSChar  = true
+    | is_signed CShort  = true
+    | is_signed CLong   = true
+    | is_signed _       = false
+
+  fun hol_type_of CInt    = \<^typ>\<open>c_int\<close>
+    | hol_type_of CUInt   = \<^typ>\<open>c_uint\<close>
+    | hol_type_of CChar   = \<^typ>\<open>c_char\<close>
+    | hol_type_of CSChar   = \<^typ>\<open>c_schar\<close>
+    | hol_type_of CShort  = \<^typ>\<open>c_short\<close>
+    | hol_type_of CUShort = \<^typ>\<open>c_ushort\<close>
+    | hol_type_of CLong   = \<^typ>\<open>c_long\<close>
+    | hol_type_of CULong  = \<^typ>\<open>c_ulong\<close>
+
+  fun type_name_of CInt    = "int"
+    | type_name_of CUInt   = "unsigned int"
+    | type_name_of CChar   = "char"
+    | type_name_of CSChar   = "signed char"
+    | type_name_of CShort  = "short"
+    | type_name_of CUShort = "unsigned short"
+    | type_name_of CLong   = "long"
+    | type_name_of CULong  = "unsigned long"
+
+  (* Parse a list of C declaration specifiers into a resolved numeric type.
+     Returns NONE for void, struct types, and other non-numeric specifiers. *)
+  fun resolve_c_type specs =
+    let
+      fun accumulate (CTypeSpec0 (CSignedType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (true, us, ch, sh, it, lg, vd, st)
+        | accumulate (CTypeSpec0 (CUnsigType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, true, ch, sh, it, lg, vd, st)
+        | accumulate (CTypeSpec0 (CCharType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, us, true, sh, it, lg, vd, st)
+        | accumulate (CTypeSpec0 (CShortType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, us, ch, true, it, lg, vd, st)
+        | accumulate (CTypeSpec0 (CIntType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, us, ch, sh, true, lg, vd, st)
+        | accumulate (CTypeSpec0 (CLongType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, us, ch, sh, it, true, vd, st)
+        | accumulate (CTypeSpec0 (CVoidType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, us, ch, sh, it, lg, true, st)
+        | accumulate (CTypeSpec0 (CSUType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+            (sg, us, ch, sh, it, lg, vd, true)
+        | accumulate _ flags = flags
+      val (has_signed, has_unsigned, has_char, has_short, has_int, has_long, has_void, has_struct) =
+        List.foldl (fn (spec, flags) => accumulate spec flags)
+          (false, false, false, false, false, false, false, false) specs
+    in
+      if has_void orelse has_struct then NONE
+      else if has_char then
+        if has_unsigned then SOME CChar  (* unsigned char = c_char = 8 word *)
+        else if has_signed then SOME CSChar
+        else SOME CChar  (* plain char treated as unsigned, matching c_char = 8 word *)
+      else if has_short then
+        if has_unsigned then SOME CUShort
+        else SOME CShort
+      else if has_long then
+        if has_unsigned then SOME CULong
+        else SOME CLong
+      else if has_unsigned then SOME CUInt
+      else SOME CInt  (* int, signed, signed int, or bare specifiers *)
+    end
+
+  (* Extract numeric type from a declaration *)
+  fun decl_type (CDecl0 (specs, _, _)) = resolve_c_type specs
+    | decl_type _ = NONE
+
+  (* Extract numeric type from a parameter declaration *)
+  val param_type = decl_type
+
+  (* Check if a parameter declaration has a pointer declarator (e.g. int *a, struct point *p) *)
+  fun is_pointer_param (CDecl0 (_, [((Some (CDeclr0 (_, derived, _, _, _)), _), _)], _)) =
+        List.exists (fn CPtrDeclr0 _ => true | _ => false) derived
+    | is_pointer_param _ = false
 
   fun abr_string_to_string (SS_base (ST s)) = s
     | abr_string_to_string (SS_base (STa codes)) =
@@ -136,8 +226,8 @@ structure C_Trans_Ctxt : sig
   type t
   val make : Proof.context -> string list Symtab.table -> t
   val get_ctxt : t -> Proof.context
-  val add_var : string -> var_kind -> term -> t -> t
-  val lookup_var : t -> string -> (var_kind * term) option
+  val add_var : string -> var_kind -> term -> C_Ast_Utils.c_numeric_type -> t -> t
+  val lookup_var : t -> string -> (var_kind * term * C_Ast_Utils.c_numeric_type) option
   val set_struct_type : string -> string -> t -> t
   val get_struct_type : t -> string -> string option
   val get_struct_fields : t -> string -> string list option
@@ -146,7 +236,7 @@ struct
   datatype var_kind = Param | Local
   type t = {
     ctxt : Proof.context,
-    vars : (var_kind * term) Symtab.table,
+    vars : (var_kind * term * C_Ast_Utils.c_numeric_type) Symtab.table,
     struct_types : string Symtab.table,         (* var_name -> c_struct_name *)
     struct_fields : string list Symtab.table     (* c_struct_name -> [field_name] *)
   }
@@ -157,8 +247,8 @@ struct
 
   fun get_ctxt ({ ctxt, ... } : t) = ctxt
 
-  fun add_var name kind tm ({ ctxt, vars, struct_types, struct_fields } : t) : t =
-    { ctxt = ctxt, vars = Symtab.update (name, (kind, tm)) vars,
+  fun add_var name kind tm cty ({ ctxt, vars, struct_types, struct_fields } : t) : t =
+    { ctxt = ctxt, vars = Symtab.update (name, (kind, tm, cty)) vars,
       struct_types = struct_types, struct_fields = struct_fields }
 
   fun lookup_var ({ vars, ... } : t) name =
@@ -215,6 +305,7 @@ structure C_Term_Build : sig
   val mk_literal : term -> term
   val mk_function_body : term -> term
   val mk_sequence : term -> term -> term
+  val mk_literal_num : C_Ast_Utils.c_numeric_type -> int -> term
   val mk_literal_int : int -> term
   val mk_return_func : term -> term
   val mk_bind : term -> term -> term
@@ -255,10 +346,13 @@ struct
   fun mk_sequence e1 e2 =
     Const (\<^const_name>\<open>sequence\<close>, dummyT --> dummyT --> dummyT) $ e1 $ e2
 
+  (* literal n, typed according to the given c_numeric_type *)
+  fun mk_literal_num cty n =
+    let val T = C_Ast_Utils.hol_type_of cty
+    in Const (\<^const_name>\<open>literal\<close>, T --> dummyT) $ HOLogic.mk_number T n end
+
   (* literal n, where n is a C integer constant typed as c_int (= 32 sword) *)
-  fun mk_literal_int n =
-    Const (\<^const_name>\<open>literal\<close>, \<^typ>\<open>c_int\<close> --> dummyT)
-      $ HOLogic.mk_number \<^typ>\<open>c_int\<close> n
+  fun mk_literal_int n = mk_literal_num C_Ast_Utils.CInt n
 
   (* return_func e : for C return statements *)
   fun mk_return_func body =
@@ -425,24 +519,55 @@ struct
   fun unsupported construct =
     error ("micro_c_translate: unsupported C construct: " ^ construct)
 
-  (* Translate a C binary operator to a HOL function constant.
+  (* Translate a C binary operator to a HOL function constant, dispatching
+     signed vs unsigned based on the operand type.
      Arithmetic and comparison operations use the overflow-checked C operations
      from C_Numeric_Types which are monadic (they can abort).
-     Logical operators remain pure. *)
-  fun translate_binop CAddOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT))
-    | translate_binop CSubOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT))
-    | translate_binop CMulOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_mul\<close>, isa_dummyT))
-    | translate_binop CDivOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_div\<close>, isa_dummyT))
-    | translate_binop CRmdOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_mod\<close>, isa_dummyT))
-    | translate_binop CLeOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
-    | translate_binop CLeqOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT))
-    | translate_binop CGrOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT)) (* reversed operands *)
-    | translate_binop CGeqOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT)) (* reversed operands *)
-    | translate_binop CEqOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT))
-    | translate_binop CNeqOp0 = unsupported "!= operator"
-    | translate_binop CLndOp0 = Pure (Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT))
-    | translate_binop CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
-    | translate_binop _ = unsupported "binary operator"
+     Logical operators remain pure and type-independent. *)
+  fun translate_binop cty CAddOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_add\<close>, isa_dummyT))
+    | translate_binop cty CSubOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT))
+    | translate_binop cty CMulOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_mul\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_mul\<close>, isa_dummyT))
+    | translate_binop cty CDivOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_div\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_div\<close>, isa_dummyT))
+    | translate_binop cty CRmdOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_mod\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_mod\<close>, isa_dummyT))
+    | translate_binop cty CLeOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_less\<close>, isa_dummyT))
+    | translate_binop cty CLeqOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_le\<close>, isa_dummyT))
+    | translate_binop cty CGrOp0 =  (* reversed operands *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_less\<close>, isa_dummyT))
+    | translate_binop cty CGeqOp0 =  (* reversed operands *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_le\<close>, isa_dummyT))
+    | translate_binop cty CEqOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_eq\<close>, isa_dummyT))
+    | translate_binop _ CNeqOp0 = unsupported "!= operator"
+    | translate_binop _ CLndOp0 = Pure (Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT))
+    | translate_binop _ CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
+    | translate_binop _ _ = unsupported "binary operator"
 
   (* Determine the C struct type of a variable expression.
      Only handles simple variable references for now. *)
@@ -462,25 +587,36 @@ struct
           (Proof_Context.read_const {proper = true, strict = false} ctxt name)
     in Isa_Const (full_name, isa_dummyT) end
 
+  (* translate_expr returns (term * c_numeric_type).
+     The type tracks the C type of the expression for binary operator dispatch.
+     CInt is used as default when the actual type is unknown/irrelevant. *)
   fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
-        C_Term_Build.mk_literal_int (IntInf.toInt n)
+        (C_Term_Build.mk_literal_int (IntInf.toInt n), C_Ast_Utils.CInt)
     | translate_expr tctx (CVar0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
         in case C_Trans_Ctxt.lookup_var tctx name of
-             SOME (C_Trans_Ctxt.Param, var) => C_Term_Build.mk_literal var
-           | SOME (C_Trans_Ctxt.Local, var) => C_Term_Build.mk_var_read var
+             SOME (C_Trans_Ctxt.Param, var, cty) => (C_Term_Build.mk_literal var, cty)
+           | SOME (C_Trans_Ctxt.Local, var, cty) => (C_Term_Build.mk_var_read var, cty)
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
-        let val lhs' = translate_expr tctx lhs
-            val rhs' = translate_expr tctx rhs
+        let val (lhs', lhs_cty) = translate_expr tctx lhs
+            val (rhs', _) = translate_expr tctx rhs
+            (* Use left operand type for dispatch (C requires same type for binops) *)
+            val cty = lhs_cty
             (* For > and >=, swap operands to use < and <= *)
             val (l, r) = case binop of CGrOp0 => (rhs', lhs')
                                      | CGeqOp0 => (rhs', lhs')
                                      | _ => (lhs', rhs')
-        in case translate_binop binop of
-             Monadic f => C_Term_Build.mk_bind2 f l r
-           | Pure f => C_Term_Build.mk_bindlift2 f l r
+            (* Comparisons return bool, not the operand type *)
+            val result_cty = case binop of
+                CLeOp0 => C_Ast_Utils.CInt | CLeqOp0 => C_Ast_Utils.CInt
+              | CGrOp0 => C_Ast_Utils.CInt | CGeqOp0 => C_Ast_Utils.CInt
+              | CEqOp0 => C_Ast_Utils.CInt | CNeqOp0 => C_Ast_Utils.CInt
+              | _ => cty
+        in case translate_binop cty binop of
+             Monadic f => (C_Term_Build.mk_bind2 f l r, result_cty)
+           | Pure f => (C_Term_Build.mk_bindlift2 f l r, result_cty)
         end
     (* p->field = rhs : struct field write through pointer *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, true, _), rhs, _)) =
@@ -489,54 +625,58 @@ struct
             val updater_name = "update_c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val updater_const = resolve_const ctxt updater_name
-            val ptr_expr = translate_expr tctx expr
-            val rhs' = translate_expr tctx rhs
-        in C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs' end
+            val (ptr_expr, _) = translate_expr tctx expr
+            val (rhs', _) = translate_expr tctx rhs
+        in (C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs', C_Ast_Utils.CInt) end
     (* arr[idx] = rhs : array element write via focus *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
-        let val arr_term = translate_expr tctx arr_expr
-            val idx_term = translate_expr tctx idx_expr
-            val rhs_term = translate_expr tctx rhs
+        let val (arr_term, _) = translate_expr tctx arr_expr
+            val (idx_term, _) = translate_expr tctx idx_expr
+            val (rhs_term, _) = translate_expr tctx rhs
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val v_var = Isa_Free ("v__rhs", isa_dummyT)
             val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
-        in C_Term_Build.mk_bind rhs_term (Term.lambda v_var
+        in (C_Term_Build.mk_bind rhs_term (Term.lambda v_var
              (C_Term_Build.mk_bind arr_term (Term.lambda a_var
                (C_Term_Build.mk_bind idx_term (Term.lambda i_var
                  (C_Term_Build.mk_ptr_write
                    (C_Term_Build.mk_literal focused)
-                   (C_Term_Build.mk_literal v_var)))))))
+                   (C_Term_Build.mk_literal v_var))))))), C_Ast_Utils.CInt)
         end
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
-            val rhs' = translate_expr tctx rhs
+            val (rhs', _) = translate_expr tctx rhs
         in case C_Trans_Ctxt.lookup_var tctx name of
-             SOME (C_Trans_Ctxt.Local, var) => C_Term_Build.mk_var_write var rhs'
-           | SOME (C_Trans_Ctxt.Param, _) =>
+             SOME (C_Trans_Ctxt.Local, var, cty) =>
+               (C_Term_Build.mk_var_write var rhs', cty)
+           | SOME (C_Trans_Ctxt.Param, _, _) =>
                error ("micro_c_translate: assignment to parameter: " ^ name)
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
     | translate_expr tctx (CAssign0 (CAssignOp0, CUnary0 (CIndOp0, lhs, _), rhs, _)) =
         (* *p = v : write through pointer *)
-        C_Term_Build.mk_ptr_write (translate_expr tctx lhs) (translate_expr tctx rhs)
+        let val (lhs', _) = translate_expr tctx lhs
+            val (rhs', _) = translate_expr tctx rhs
+        in (C_Term_Build.mk_ptr_write lhs' rhs', C_Ast_Utils.CInt) end
     | translate_expr _ (CAssign0 _) =
         unsupported "compound assignment or non-variable lhs"
     | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
         let val fname = C_Ast_Utils.ident_name ident
-            val arg_terms = List.map (translate_expr tctx) args
+            val arg_terms = List.map (fn a => #1 (translate_expr tctx a)) args
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             (* Look up the fully qualified constant name, then use dummyT
                so Syntax.check_term can infer the type. *)
             val (full_name, _) = Term.dest_Const
               (Proof_Context.read_const {proper = true, strict = false} ctxt ("c_" ^ fname))
             val func_ref = Isa_Const (full_name, isa_dummyT)
-        in C_Term_Build.mk_funcall func_ref arg_terms end
+        in (C_Term_Build.mk_funcall func_ref arg_terms, C_Ast_Utils.CInt) end
     | translate_expr _ (CCall0 _) =
         unsupported "indirect function call (function pointers)"
     | translate_expr tctx (CUnary0 (CIndOp0, expr, _)) =
         (* *p : dereference pointer *)
-        C_Term_Build.mk_deref (translate_expr tctx expr)
+        let val (expr', _) = translate_expr tctx expr
+        in (C_Term_Build.mk_deref expr', C_Ast_Utils.CInt) end
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
     (* arr[idx] : deref whole list, then index with nth.
@@ -544,8 +684,8 @@ struct
        store_dereference_const, which has ambiguous adhoc overloading
        (dereference_fun vs ro_dereference_fun) for read-only references. *)
     | translate_expr tctx (CIndex0 (arr_expr, idx_expr, _)) =
-        let val arr_term = translate_expr tctx arr_expr
-            val idx_term = translate_expr tctx idx_expr
+        let val (arr_term, _) = translate_expr tctx arr_expr
+            val (idx_term, _) = translate_expr tctx idx_expr
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             (* Resolve dereference_fun from locale context to avoid adhoc
                overloading ambiguity; fall back to store_dereference_const
@@ -567,11 +707,11 @@ struct
                 $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                      $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
                      $ deref_const)
-        in C_Term_Build.mk_bind arr_term (Term.lambda a_var
+        in (C_Term_Build.mk_bind arr_term (Term.lambda a_var
              (C_Term_Build.mk_bind idx_term (Term.lambda i_var
                (C_Term_Build.mk_bind deref_expr
                  (Term.lambda list_var
-                   (C_Term_Build.mk_literal nth_term))))))
+                   (C_Term_Build.mk_literal nth_term)))))), C_Ast_Utils.CInt)
         end
     (* p->field : struct field read through pointer *)
     | translate_expr tctx (CMember0 (expr, field_ident, true, _)) =
@@ -580,22 +720,27 @@ struct
             val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val accessor_const = resolve_const ctxt accessor_name
-            val ptr_expr = translate_expr tctx expr
-        in C_Term_Build.mk_struct_field_read accessor_const ptr_expr end
+            val (ptr_expr, _) = translate_expr tctx expr
+        in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, C_Ast_Utils.CInt) end
     | translate_expr _ (CMember0 (_, _, false, _)) =
         unsupported "direct struct member access (s.field) - use pointer access (p->field)"
     | translate_expr _ _ =
         unsupported "expression"
 
-  (* Extract variable name and initializer from a C declaration *)
-  fun translate_decl tctx (CDecl0 (_, [(( Some declr, Some (CInitExpr0 (init, _))), _)], _)) =
+  (* Convenience: extract just the term from translate_expr *)
+  and expr_term tctx e = #1 (translate_expr tctx e)
+
+  (* Extract variable name, initializer, and type from a C declaration *)
+  fun translate_decl tctx (decl as CDecl0 (specs, [((Some declr, Some (CInitExpr0 (init, _))), _)], _)) =
         let val name = C_Ast_Utils.declr_name declr
-            val init' = translate_expr tctx init
-        in (name, init') end
-    | translate_decl _ (CDecl0 (_, [((Some declr, None), _)], _)) =
-        (* Uninitialized variable: default to literal 0 *)
+            val cty = (case C_Ast_Utils.resolve_c_type specs of SOME t => t | NONE => C_Ast_Utils.CInt)
+            val (init', _) = translate_expr tctx init
+        in (name, init', cty) end
+    | translate_decl _ (CDecl0 (specs, [((Some declr, None), _)], _)) =
+        (* Uninitialized variable: default to typed literal 0 *)
         let val name = C_Ast_Utils.declr_name declr
-        in (name, C_Term_Build.mk_literal_int 0) end
+            val cty = (case C_Ast_Utils.resolve_c_type specs of SOME t => t | NONE => C_Ast_Utils.CInt)
+        in (name, C_Term_Build.mk_literal_num cty 0, cty) end
     | translate_decl _ _ = unsupported "complex declaration"
 
   (* Translate a compound block, right-folding declarations into nested binds *)
@@ -603,16 +748,16 @@ struct
     | translate_compound_items tctx [CBlockStmt0 stmt] = translate_stmt tctx stmt
     | translate_compound_items tctx [CBlockDecl0 decl] =
         (* Declaration at end of block with no following statements *)
-        let val (name, init_term) = translate_decl tctx decl
+        let val (name, init_term, _) = translate_decl tctx decl
             val var = Isa_Free (name, isa_dummyT)
         in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
              (Term.lambda var C_Term_Build.mk_literal_unit) end
     | translate_compound_items _ [CNestedFunDef0 _] =
         unsupported "nested function definition"
     | translate_compound_items tctx (CBlockDecl0 decl :: rest) =
-        let val (name, init_term) = translate_decl tctx decl
+        let val (name, init_term, cty) = translate_decl tctx decl
             val var = Isa_Free (name, isa_dummyT)
-            val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var tctx
+            val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx
             val rest_term = translate_compound_items tctx' rest
         in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
              (Term.lambda var rest_term) end
@@ -629,9 +774,9 @@ struct
     | translate_pure_nat_expr tctx (CVar0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
         in case C_Trans_Ctxt.lookup_var tctx name of
-             SOME (C_Trans_Ctxt.Param, v) =>
-               (* Convert parameter (int) to nat for range *)
-               Isa_Const (\<^const_name>\<open>nat\<close>, isa_dummyT) $ v
+             SOME (C_Trans_Ctxt.Param, v, _) =>
+               (* Convert parameter (word) to nat for range *)
+               C_Term_Build.mk_unat v
            | _ => error ("micro_c_translate: loop bound must be a parameter or literal: " ^ name)
         end
     | translate_pure_nat_expr _ _ =
@@ -660,24 +805,25 @@ struct
     | translate_stmt _ (CReturn0 (None, _)) =
         C_Term_Build.mk_return_func C_Term_Build.mk_literal_unit
     | translate_stmt tctx (CReturn0 (Some expr, _)) =
-        C_Term_Build.mk_return_func (translate_expr tctx expr)
+        C_Term_Build.mk_return_func (expr_term tctx expr)
     | translate_stmt tctx (CExpr0 (Some expr, _)) =
-        translate_expr tctx expr
+        expr_term tctx expr
     | translate_stmt _ (CExpr0 (None, _)) =
         C_Term_Build.mk_literal_unit
     | translate_stmt tctx (CIf0 (cond, then_br, Some else_br, _)) =
         C_Term_Build.mk_two_armed_cond
-          (translate_expr tctx cond) (translate_stmt tctx then_br) (translate_stmt tctx else_br)
+          (expr_term tctx cond) (translate_stmt tctx then_br) (translate_stmt tctx else_br)
     | translate_stmt tctx (CIf0 (cond, then_br, None, _)) =
         C_Term_Build.mk_two_armed_cond
-          (translate_expr tctx cond) (translate_stmt tctx then_br) C_Term_Build.mk_literal_unit
+          (expr_term tctx cond) (translate_stmt tctx then_br) C_Term_Build.mk_literal_unit
     | translate_stmt tctx (stmt as CFor0 _) =
         (case try_bounded_for stmt of
            SOME (var_name, init_c_expr, bound_c_expr, body) =>
              let val start_nat = translate_pure_nat_expr tctx init_c_expr
                  val bound_nat = translate_pure_nat_expr tctx bound_c_expr
                  val loop_var = Isa_Free (var_name, isa_dummyT)
-                 val tctx' = C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param loop_var tctx
+                 val tctx' = C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param
+                               loop_var C_Ast_Utils.CInt tctx
                  val body_term = translate_stmt tctx' body
                  val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
              in C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term) end
@@ -698,16 +844,30 @@ struct
     | translate_stmt _ _ =
         (warning "micro_c_translate: unknown statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
 
-  fun translate_fundef struct_tab ctxt (CFunDef0 (_, declr, _, body, _)) =
+  fun translate_fundef struct_tab ctxt (CFunDef0 (specs, declr, _, body, _)) =
     let
       val name = C_Ast_Utils.declr_name declr
       val param_names = C_Ast_Utils.extract_params declr
       val param_decls = C_Ast_Utils.extract_param_decls declr
-      (* Create free variables for each parameter *)
-      val param_vars = List.map (fn n => (n, Isa_Free (n, isa_dummyT))) param_names
+      (* Extract parameter types and pointer-ness from declarations *)
+      val param_info = List.map (fn pdecl =>
+        let val cty = case C_Ast_Utils.param_type pdecl of
+                        SOME t => t | NONE => C_Ast_Utils.CInt
+            val is_ptr = C_Ast_Utils.is_pointer_param pdecl
+        in (cty, is_ptr) end) param_decls
+      (* Pair names with type info; fall back to (CInt, false) if lengths differ *)
+      val param_name_info = ListPair.zipEq (param_names, param_info)
+        handle ListPair.UnequalLengths =>
+          List.map (fn n => (n, (C_Ast_Utils.CInt, false))) param_names
+      (* Create free variables for each parameter.
+         Pointer params use dummyT (Isabelle infers reference types).
+         Non-pointer params get explicit types for signed/unsigned dispatch. *)
+      val param_vars = List.map (fn (n, (cty, is_ptr)) =>
+        let val hol_ty = if is_ptr then isa_dummyT else C_Ast_Utils.hol_type_of cty
+        in (n, Isa_Free (n, hol_ty), cty) end) param_name_info
       (* Add parameters to the translation context as Param (by-value) *)
       val tctx = List.foldl
-        (fn ((n, v), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v ctx)
+        (fn ((n, v, cty), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v cty ctx)
         (C_Trans_Ctxt.make ctxt struct_tab) param_vars
       (* Annotate struct pointer parameters with their struct type *)
       val tctx = List.foldl (fn (pdecl, ctx) =>
@@ -719,7 +879,7 @@ struct
       val fn_term = C_Term_Build.mk_function_body body_term
       (* Wrap in lambdas for each parameter *)
       val fn_term = List.foldr
-        (fn ((_, v), t) => Term.lambda v t)
+        (fn ((_, v, _), t) => Term.lambda v t)
         fn_term param_vars
       val fn_term' = Syntax.check_term ctxt fn_term
     in
@@ -942,5 +1102,42 @@ void write_at(int *arr, int idx, int val) {
 \<close>
 
 thm c_write_at_def
+
+text \<open>Smoke test: unsigned int arithmetic uses @{const c_unsigned_add}.\<close>
+micro_c_translate \<open>
+unsigned int u_add(unsigned int a, unsigned int b) {
+  return a + b;
+}
+\<close>
+
+thm c_u_add_def
+
+text \<open>Smoke test: long (64-bit signed) arithmetic uses @{const c_signed_add} at 64-bit type.\<close>
+micro_c_translate \<open>
+long l_add(long a, long b) {
+  return a + b;
+}
+\<close>
+
+thm c_l_add_def
+
+text \<open>Smoke test: char identity function.\<close>
+micro_c_translate \<open>
+char identity_char(char c) {
+  return c;
+}
+\<close>
+
+thm c_identity_char_def
+
+text \<open>Smoke test: unsigned comparison uses @{const c_unsigned_less}.\<close>
+micro_c_translate \<open>
+unsigned int u_max(unsigned int a, unsigned int b) {
+  if (a > b) return a;
+  else return b;
+}
+\<close>
+
+thm c_u_max_def
 
 end
