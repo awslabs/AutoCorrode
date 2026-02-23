@@ -74,6 +74,57 @@ lemma c_swap_spec:
   apply crush_base
   done
 
+subsection \<open>C Max Function\<close>
+
+text \<open>A simple function exercising conditionals and return.\<close>
+micro_c_translate \<open>
+int max(int a, int b) {
+  if (a > b) return a;
+  else return b;
+}
+\<close>
+
+thm c_max_def
+
+definition c_max_contract ::
+    \<open>int \<Rightarrow> int \<Rightarrow> ('s::{sepalg}, int, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_max_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = Orderings.max a b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_max_contract
+
+lemma c_max_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_max a b \<Turnstile>\<^sub>F c_max_contract a b\<close>
+  apply (crush_boot f: c_max_def contract: c_max_contract_def)
+  apply (crush_base simp add: max_def)
+  done
+
+subsection \<open>C Abs Function\<close>
+
+micro_c_translate \<open>
+int abs_val(int x) {
+  if (x > 0) return x;
+  else return 0 - x;
+}
+\<close>
+
+thm c_abs_val_def
+
+definition c_abs_val_contract ::
+    \<open>int \<Rightarrow> ('s::{sepalg}, int, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_abs_val_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = abs x\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_abs_val_contract
+
+lemma c_abs_val_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_abs_val x \<Turnstile>\<^sub>F c_abs_val_contract x\<close>
+  apply (crush_boot f: c_abs_val_def contract: c_abs_val_contract_def)
+  apply (crush_base simp add: abs_if)
+  done
+
 end
 
 end
