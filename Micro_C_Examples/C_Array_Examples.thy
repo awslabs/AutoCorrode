@@ -42,6 +42,32 @@ proof -
     by (simp add: list_fill_prefix_def)
 qed
 
+definition list_copy_prefix :: \<open>nat \<Rightarrow> 'a list \<Rightarrow> 'a list \<Rightarrow> 'a list\<close> where
+  \<open>list_copy_prefix k src dst \<equiv> take k src @ drop k dst\<close>
+
+lemma list_copy_prefix_length [simp]:
+  assumes \<open>k \<le> length src\<close> \<open>k \<le> length dst\<close>
+  shows \<open>length (list_copy_prefix k src dst) = length dst\<close>
+  using assms by (simp add: list_copy_prefix_def)
+
+lemma list_copy_prefix_zero [simp]:
+  \<open>list_copy_prefix 0 src dst = dst\<close>
+  by (simp add: list_copy_prefix_def)
+
+lemma list_copy_prefix_step:
+  assumes \<open>k < length src\<close> \<open>k < length dst\<close>
+  shows \<open>(list_copy_prefix k src dst)[k := src ! k] = list_copy_prefix (Suc k) src dst\<close>
+proof -
+  have drop_eq: \<open>drop k dst = dst ! k # drop (Suc k) dst\<close>
+    using assms by (simp add: Cons_nth_drop_Suc)
+  have \<open>(list_copy_prefix k src dst)[k := src ! k] = take k src @ src ! k # drop (Suc k) dst\<close>
+    using assms by (simp add: list_copy_prefix_def list_update_append drop_eq)
+  also have \<open>\<dots> = take (Suc k) src @ drop (Suc k) dst\<close>
+    using assms by (simp add: take_Suc_conv_app_nth)
+  finally show ?thesis
+    by (simp add: list_copy_prefix_def)
+qed
+
 context c_verification_ctx begin
 
 subsection \<open>C Array Functions\<close>
@@ -128,6 +154,55 @@ lemma c_array_fill_spec:
   apply (auto simp add: list_fill_prefix_step unat_of_nat_eq)
   apply crush_base
   apply (simp add: list_fill_prefix_step)
+  done
+
+subsection \<open>Array Copy (memcpy-style)\<close>
+
+text \<open>
+  A loop-based function that copies the first @{text n} elements from
+  @{text src} to @{text dst}. The source array is read-only.
+\<close>
+
+micro_c_translate \<open>
+void array_copy(int *dst, int *src, int n) {
+  for (int i = 0; i < n; i++) {
+    dst[i] = src[i];
+  }
+}
+\<close>
+
+thm c_array_copy_def
+
+definition c_array_copy_contract ::
+    \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow>
+     ('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow>
+     'gv \<Rightarrow> c_int list \<Rightarrow> 'gv \<Rightarrow> c_int list \<Rightarrow>
+     ('s, 'a, 'b) function_contract\<close> where
+  \<open>c_array_copy_contract dst src n gd vd gs vs \<equiv>
+    let pre  = dst \<mapsto>\<langle>\<top>\<rangle> gd\<down>vd \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
+               \<langle>c_idx_to_nat n \<le> length vd\<rangle> \<star>
+               \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
+               can_alloc_reference;
+        post = \<lambda>_. (\<Squnion> g'. dst \<mapsto>\<langle>\<top>\<rangle> g'\<down>(list_copy_prefix (c_idx_to_nat n) vs vd)) \<star>
+               src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
+               can_alloc_reference
+     in make_function_contract pre post\<close>
+ucincl_auto c_array_copy_contract
+
+lemma c_array_copy_spec:
+  shows \<open>\<Gamma>; c_array_copy TYPE(32 signed) dst src n \<Turnstile>\<^sub>F c_array_copy_contract dst src n gd vd gs vs\<close>
+  apply (crush_boot f: c_array_copy_def contract: c_array_copy_contract_def)
+  apply crush_base
+  apply (ucincl_discharge\<open>
+      rule_tac
+        INV=\<open>\<lambda>_ i. (\<Squnion> g. dst \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_copy_prefix i vs vd)) \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs\<close>
+        and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+        and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+      in wp_raw_for_loop_framedI'\<close>)
+  using unat_lt2p[of n]
+  apply (auto simp add: list_copy_prefix_step unat_of_nat_eq)
+  apply crush_base
+  apply (simp add: list_copy_prefix_step)
   done
 
 end
