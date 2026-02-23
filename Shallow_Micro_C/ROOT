@@ -9,5 +9,6 @@ session Shallow_Micro_C = HOL +
   theories
     C_Abort
     C_Numeric_Types
+    C_Sizeof
   theories [document=false]
     Shallow_Micro_C
