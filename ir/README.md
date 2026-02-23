@@ -8,15 +8,15 @@ REPLs can be rooted in theories, locations within theories (assuming a suitably 
 Segments](#stored-segments-forking-repls-at-arbitrary-theory-points)), or at points within other REPLs (for sub-proof
 exploration).
 
-An MCP wrapper ([mcp.py](mcp.py)) is provided exposing I/R to AI agents. See [Agent Integration](#agent-integration).
+An MCP wrapper ([mcp_server.py](mcp_server.py)) is provided exposing I/R to AI agents. See [Agent Integration](#agent-integration).
 
 ## Quick Start
 
 ### Option A: Docker (no prerequisites)
 
 ```bash
-docker build -t explore-repl:standalone -f ir/docker/Dockerfile.standalone .
-docker run --rm -it -p 9148:9148 explore-repl:standalone
+docker build -t isabelle-repl:standalone -f ir/docker/Dockerfile.standalone .
+docker run --rm -it -p 9148:9148 isabelle-repl:standalone
 ```
 
 ### Option B: Local
@@ -36,7 +36,7 @@ Starting Bash.Server...
 ● Bash.Server ready at 127.0.0.1:64595
 Starting Isabelle console (session=HOL)...
 ● Isabelle console ready.
-Loading .../explore.ML...
+Loading .../ir.ML...
 ● REPL ready. Waiting for connections on 127.0.0.1:9147
 Starting MCP server...
 [MCP] INFO:     Started server process [4002]
@@ -50,25 +50,25 @@ Starting MCP server...
 ## Try It
 
 ```
-%> Explore.theories ();
+%> Ir.theories ();
   ... list of theories in HOL ...
 
-%> Explore.init "R" ["Main"];
+%> Ir.init "R" ["Main"];
 Created REPL "R", set as current
 
-%> Explore.step "lemma dummy: True";
+%> Ir.step "lemma dummy: True";
 proof (prove)
 goal (1 subgoal):
  1. True
 
-%> Explore.sledgehammer 5;
+%> Ir.sledgehammer 5;
 simp: Try this: by simp (0.1 ms)
 ...
 
-%> Explore.step "by simp";
+%> Ir.step "by simp";
 theorem dummy: True
 
-%> Explore.find_theorems 5 "name: conjI";
+%> Ir.find_theorems 5 "name: conjI";
 displaying 4 theorem(s):
 HOL.conjI: [| ?P; ?Q |] ==> ?P & ?Q
 ...
@@ -106,7 +106,7 @@ When an MCP client connects successfully, you should see:
 
 ## Stored Segments: Forking REPLs at Arbitrary Theory Points
 
-By default, `Explore.init` creates a REPL at the end of a theory.
+By default, `Ir.init` creates a REPL at the end of a theory.
 To fork REPLs at intermediate points (e.g. after a specific lemma,
 or within a proof), you need to store the intermediate proof states in the heap using
 `segment_storage.ML`.
@@ -164,7 +164,7 @@ On startup, you should see `source commands available` instead of
 Browse and fork from stored segments:
 
 ```
-%> Explore.source "My_Session.My_Theory" 0 ~1;
+%> Ir.source "My_Session.My_Theory" 0 ~1;
    0  theory My_Theory imports Main begin
    2  lemma foo: "True"
    4    by simp
@@ -172,7 +172,7 @@ Browse and fork from stored segments:
    8    by simp
   10  end
 
-%> Explore.init "R" ["My_Session.My_Theory:6"];
+%> Ir.init "R" ["My_Session.My_Theory:6"];
 Created REPL "R", set as current
 ```
 

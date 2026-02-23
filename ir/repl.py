@@ -3,16 +3,16 @@
 # SPDX-License-Identifier: MIT
 
 """
-TCP server wrapping an Isabelle/Poly/ML console with the Explore REPL.
+TCP server wrapping an Isabelle/Poly/ML console with the I/R REPL.
 
-Starts an Isabelle console process, loads explore.ML, then listens for
+Starts an Isabelle console process, loads ir.ML, then listens for
 TCP connections on localhost. Clients send commands as single lines
 (terminated by newline). The server responds with the output followed
 by a sentinel line "<<DONE>>\\n". Multiple commands can be sent on the
 same connection. Commands are serialized across all clients.
 
-Note: The Explore REPL operates at the Isar level. A session (created
-via Explore.init) starts in the context of a named theory — there is
+Note: The I/R REPL operates at the Isar level. A session (created
+via Ir.init) starts in the context of a named theory — there is
 no need to issue 'theory' commands. Steps are Isar commands such as
 lemma, definition, fun, apply, by, etc.
 
@@ -54,28 +54,28 @@ try:
 except ImportError:
     _HAVE_PROMPT_TOOLKIT = False
 
-EXPLORE_CMDS = {
-    'Explore.init':           'id thy  — create REPL "id" at "Theory" or "Theory:idx"',
-    'Explore.fork':           'id state_idx  — fork new REPL from current at given state (0=base, ~1=latest)',
-    'Explore.focus':          'id  — switch to REPL "id"',
-    'Explore.step':           '"isar text"  — execute Isar text as next step in current REPL',
-    'Explore.step_file':      'path  — execute Isar text from file as next step',
-    'Explore.show':           '()  — show current REPL: origin, steps, staleness',
-    'Explore.state':          'idx  — show proof state at step idx in current REPL (0=base, ~1=latest)',
-    'Explore.text':           '()  — print concatenated Isar text of current REPL',
-    'Explore.edit':           'idx "text"  — replace step idx in current REPL, mark later steps stale',
-    'Explore.replay':         '()  — re-execute all stale steps in current REPL',
-    'Explore.truncate':       'idx  — keep steps 0..idx in current REPL, discard the rest',
-    'Explore.merge':          '()  — inline current sub-REPL back into its parent',
-    'Explore.remove':         'id  — delete REPL "id" and all its sub-REPLs',
-    'Explore.repls':           '()  — list all REPLs with step counts and origins',
-    'Explore.theories':  '()  — list all theories loaded in the session',
-    'Explore.source':       'thy start stop  — list theory commands (start/stop are 0-based, ~N from end)',
-    'Explore.sledgehammer':   'secs  — run sledgehammer on current proof goal with timeout',
-    'Explore.timeout':        'secs  — set step timeout (0=unlimited, default 5s)',
-    'Explore.explode':        'idx  — split multi-command step idx into individual steps',
-    'Explore.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
-    'Explore.help':           '()  — show full help text',
+IR_CMDS = {
+    'Ir.init':           'id thy  — create REPL "id" at "Theory" or "Theory:idx"',
+    'Ir.fork':           'id state_idx  — fork new REPL from current at given state (0=base, ~1=latest)',
+    'Ir.focus':          'id  — switch to REPL "id"',
+    'Ir.step':           '"isar text"  — execute Isar text as next step in current REPL',
+    'Ir.step_file':      'path  — execute Isar text from file as next step',
+    'Ir.show':           '()  — show current REPL: origin, steps, staleness',
+    'Ir.state':          'idx  — show proof state at step idx in current REPL (0=base, ~1=latest)',
+    'Ir.text':           '()  — print concatenated Isar text of current REPL',
+    'Ir.edit':           'idx "text"  — replace step idx in current REPL, mark later steps stale',
+    'Ir.replay':         '()  — re-execute all stale steps in current REPL',
+    'Ir.truncate':       'idx  — keep steps 0..idx in current REPL, discard the rest',
+    'Ir.merge':          '()  — inline current sub-REPL back into its parent',
+    'Ir.remove':         'id  — delete REPL "id" and all its sub-REPLs',
+    'Ir.repls':           '()  — list all REPLs with step counts and origins',
+    'Ir.theories':  '()  — list all theories loaded in the session',
+    'Ir.source':       'thy start stop  — list theory commands (start/stop are 0-based, ~N from end)',
+    'Ir.sledgehammer':   'secs  — run sledgehammer on current proof goal with timeout',
+    'Ir.timeout':        'secs  — set step timeout (0=unlimited, default 5s)',
+    'Ir.explode':        'idx  — split multi-command step idx into individual steps',
+    'Ir.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
+    'Ir.help':           '()  — show full help text',
     '/connections':           'show open client connections',
     '/log':                   'toggle verbose logging',
     '/quit':                  'shut down the server',
@@ -83,42 +83,42 @@ EXPLORE_CMDS = {
 }
 
 # Structured signatures: (params_list, description)
-EXPLORE_SIGS = {
-    'Explore.init':          (['id', 'thy'], 'create REPL "id" at "Theory" or "Theory:idx"'),
-    'Explore.fork':          (['id', 'state_idx'], 'fork new REPL from current at given state (0=base, ~1=latest)'),
-    'Explore.focus':         (['id'], 'switch to REPL "id"'),
-    'Explore.step':          (['"isar text"'], 'execute Isar text as next step in current REPL'),
-    'Explore.step_file':     (['path'], 'execute Isar text from file as next step'),
-    'Explore.show':          ([], 'show current REPL: origin, steps, staleness'),
-    'Explore.state':         (['idx'], 'show proof state at step idx in current REPL (0=base, ~1=latest)'),
-    'Explore.text':          ([], 'print concatenated Isar text of current REPL'),
-    'Explore.edit':          (['idx', '"text"'], 'replace step idx in current REPL, mark later steps stale'),
-    'Explore.replay':        ([], 're-execute all stale steps in current REPL'),
-    'Explore.truncate':      (['idx'], 'keep steps 0..idx in current REPL, discard the rest'),
-    'Explore.merge':         ([], 'inline current sub-REPL back into its parent'),
-    'Explore.remove':        (['id'], 'delete REPL "id" and all its sub-REPLs'),
-    'Explore.repls':          ([], 'list all REPLs with step counts and origins'),
-    'Explore.theories': ([], 'list all theories loaded in the session'),
-    'Explore.source':      (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
-    'Explore.sledgehammer':  (['secs'], 'run sledgehammer on current proof goal with timeout'),
-    'Explore.timeout':       (['secs'], 'set step timeout (0=unlimited, default 5s)'),
-    'Explore.explode':       (['idx'], 'split multi-command step idx into individual steps'),
-    'Explore.config':        (['f'], 'update config (color, show_ignored, full_spans, auto_replay)'),
-    'Explore.help':          ([], 'show full help text'),
+IR_SIGS = {
+    'Ir.init':          (['id', 'thy'], 'create REPL "id" at "Theory" or "Theory:idx"'),
+    'Ir.fork':          (['id', 'state_idx'], 'fork new REPL from current at given state (0=base, ~1=latest)'),
+    'Ir.focus':         (['id'], 'switch to REPL "id"'),
+    'Ir.step':          (['"isar text"'], 'execute Isar text as next step in current REPL'),
+    'Ir.step_file':     (['path'], 'execute Isar text from file as next step'),
+    'Ir.show':          ([], 'show current REPL: origin, steps, staleness'),
+    'Ir.state':         (['idx'], 'show proof state at step idx in current REPL (0=base, ~1=latest)'),
+    'Ir.text':          ([], 'print concatenated Isar text of current REPL'),
+    'Ir.edit':          (['idx', '"text"'], 'replace step idx in current REPL, mark later steps stale'),
+    'Ir.replay':        ([], 're-execute all stale steps in current REPL'),
+    'Ir.truncate':      (['idx'], 'keep steps 0..idx in current REPL, discard the rest'),
+    'Ir.merge':         ([], 'inline current sub-REPL back into its parent'),
+    'Ir.remove':        (['id'], 'delete REPL "id" and all its sub-REPLs'),
+    'Ir.repls':          ([], 'list all REPLs with step counts and origins'),
+    'Ir.theories': ([], 'list all theories loaded in the session'),
+    'Ir.source':      (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
+    'Ir.sledgehammer':  (['secs'], 'run sledgehammer on current proof goal with timeout'),
+    'Ir.timeout':       (['secs'], 'set step timeout (0=unlimited, default 5s)'),
+    'Ir.explode':       (['idx'], 'split multi-command step idx into individual steps'),
+    'Ir.config':        (['f'], 'update config (color, show_ignored, full_spans, auto_replay)'),
+    'Ir.help':          ([], 'show full help text'),
 }
 
 # Maps (command, argument_index) to completion type
 _ARG_COMPLETIONS = {
-    ('Explore.init', 1): 'theory',      # 2nd arg is theory
-    ('Explore.source', 0): 'theory',   # 1st arg is theory
-    ('Explore.focus', 0): 'repl',
-    ('Explore.remove', 0): 'repl',
-    ('Explore.fork', 0): 'repl',
+    ('Ir.init', 1): 'theory',      # 2nd arg is theory
+    ('Ir.source', 0): 'theory',   # 1st arg is theory
+    ('Ir.focus', 0): 'repl',
+    ('Ir.remove', 0): 'repl',
+    ('Ir.fork', 0): 'repl',
 }
 
 
-class ExploreCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
-    """Context-aware completer for the Explore REPL."""
+class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
+    """Context-aware completer for the I/R REPL."""
 
     def __init__(self):
         self.theories = []
@@ -129,7 +129,7 @@ class ExploreCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
         self.theories = [l.strip() for l in output.splitlines() if l.strip()]
 
     def learn_source(self, theory, output):
-        """Parse output of Explore.source and cache per theory."""
+        """Parse output of Ir.source and cache per theory."""
         entries = []
         for line in output.splitlines():
             m = re.match(r'\s*(\d+)\s+(.*)', line)
@@ -240,7 +240,7 @@ class ExploreCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
 
         # Command completion — only while typing the first token
         word = document.get_word_before_cursor(WORD=True)
-        for c, sig in EXPLORE_CMDS.items():
+        for c, sig in IR_CMDS.items():
             if c.startswith(word):
                 yield Completion(c, start_position=-len(word), display_meta=sig)
 
@@ -571,7 +571,7 @@ def make_toolbar(completer):
                 if lines:
                     return HTML('\n'.join(lines))
 
-        sig = EXPLORE_SIGS.get(cmd)
+        sig = IR_SIGS.get(cmd)
         if not sig:
             return ""
         params, desc = sig
@@ -664,16 +664,16 @@ def console_loop(server, session):
             # Update completer from command output
             if "theories" in command:
                 session.completer.learn_theories(output)
-            elif command.startswith("Explore.repls"):
+            elif command.startswith("Ir.repls"):
                 session.completer.learn_repls(output)
-            elif command.startswith("Explore.source"):
-                m = re.match(r'Explore\.source\s+"([^"]+)"', command)
+            elif command.startswith("Ir.source"):
+                m = re.match(r'Ir\.source\s+"([^"]+)"', command)
                 if m:
                     session.completer.learn_source(m.group(1), output)
 
 
 def main():
-    p = argparse.ArgumentParser(description="Explore REPL TCP server")
+    p = argparse.ArgumentParser(description="I/R REPL TCP server")
     p.add_argument("--port", type=int, default=9147)
     p.add_argument("--isabelle", default=os.path.expanduser(
         "~/Isabelle2025-2-experimental.app/bin/isabelle"))
@@ -690,12 +690,12 @@ def main():
     p.add_argument("--host", default="127.0.0.1",
                    help="Host address to bind the TCP server on (default: 127.0.0.1)")
     p.add_argument("--mcp", action="store_true",
-                   help="Start explore_mcp.py in the background (streamable-http by default)")
+                   help="Start mcp_server.py in the background (streamable-http by default)")
     p.add_argument("--mcp-options", default="--transport streamable-http",
-                   help="Options for explore_mcp.py (default: '--transport streamable-http')")
+                   help="Options for mcp_server.py (default: '--transport streamable-http')")
     args = p.parse_args()
 
-    ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore.ML")
+    ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ir.ML")
 
     global UNICODE_TO_ASCII
     UNICODE_TO_ASCII = _load_symbols(args.isabelle)
@@ -729,9 +729,9 @@ def main():
         poly.close()
         sys.exit(1)
     # Verify the structure is actually available
-    probe = poly.send('Explore.help ();')
-    if "Explore.init" not in probe:
-        print(f"{RED}Explore structure not available after load.{RST}", file=sys.stderr)
+    probe = poly.send('Ir.help ();')
+    if "Ir.init" not in probe:
+        print(f"{RED}Ir structure not available after load.{RST}", file=sys.stderr)
         print(f"{DIM}Load output:{RST}\n{out}", file=sys.stderr)
         print(f"{DIM}Probe output:{RST}\n{probe}", file=sys.stderr)
         poly.close()
@@ -747,7 +747,7 @@ def main():
     mcp_proc = None
     if args.mcp:
         print(f"{BOLD}Starting MCP server...{RST}", flush=True)
-        mcp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "explore_mcp.py")
+        mcp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")
         mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options)
         mcp_proc = subprocess.Popen(mcp_cmd, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE,
@@ -804,8 +804,8 @@ def main():
         except KeyboardInterrupt:
             pass
     else:
-        histfile = os.path.expanduser("~/.explore_repl_history")
-        completer = ExploreCompleter()
+        histfile = os.path.expanduser("~/.ir_repl_history")
+        completer = IrCompleter()
         session = PromptSession(history=FileHistory(histfile), completer=completer,
                                 complete_while_typing=Always())
         try:

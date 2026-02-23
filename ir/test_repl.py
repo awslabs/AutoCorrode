@@ -155,76 +155,76 @@ def main():
         tests = []
 
         def test_help():
-            out = send_recv(sock, 'Explore.help ();')
-            assert "Explore.init" in out, f"Expected help text, got:\n{out}"
+            out = send_recv(sock, 'Ir.help ();')
+            assert "Ir.init" in out, f"Expected help text, got:\n{out}"
 
         tests.append(test_help)
 
         def test_theories():
-            out = send_recv(sock, 'Explore.theories ();')
+            out = send_recv(sock, 'Ir.theories ();')
             assert "Main" in out, f"Expected Main theory, got:\n{out}"
 
         tests.append(test_theories)
 
         def test_init_show():
-            send_recv(sock, 'Explore.init "t1" ["Main"];')
-            out = send_recv(sock, 'Explore.show ();')
+            send_recv(sock, 'Ir.init "t1" ["Main"];')
+            out = send_recv(sock, 'Ir.show ();')
             assert "t1" in out, f"Expected REPL t1, got:\n{out}"
 
         tests.append(test_init_show)
 
         def test_step():
-            out = send_recv(sock, 'Explore.step "lemma dummy: True by simp";')
+            out = send_recv(sock, 'Ir.step "lemma dummy: True by simp";')
             assert "theorem dummy: True" in out, f"Unexpected output: \n{out}"
 
         tests.append(test_step)
 
         def test_state():
-            send_recv(sock, 'Explore.step "lemma foo: True";')
-            out = send_recv(sock, 'Explore.state ~1;')
+            send_recv(sock, 'Ir.step "lemma foo: True";')
+            out = send_recv(sock, 'Ir.state ~1;')
             assert "goal (1 subgoal):", f"Unexpected state:\n{out}"
 
         tests.append(test_state)
 
         def test_text():
-            out = send_recv(sock, 'Explore.text ();')
+            out = send_recv(sock, 'Ir.text ();')
             assert "lemma" in out, f"Expected lemma text, got:\n{out}"
 
         tests.append(test_text)
 
         def test_edit_replay():
-            send_recv(sock, 'Explore.edit 0 "lemma True by auto";')
-            send_recv(sock, 'Explore.replay ();')
+            send_recv(sock, 'Ir.edit 0 "lemma True by auto";')
+            send_recv(sock, 'Ir.replay ();')
 
         tests.append(test_edit_replay)
 
         def test_fork_focus_merge():
-            send_recv(sock, 'Explore.fork "t2" 0;')
-            send_recv(sock, 'Explore.focus "t2";')
-            send_recv(sock, 'Explore.step "lemma True by auto";')
-            send_recv(sock, 'Explore.merge ();')
+            send_recv(sock, 'Ir.fork "t2" 0;')
+            send_recv(sock, 'Ir.focus "t2";')
+            send_recv(sock, 'Ir.step "lemma True by auto";')
+            send_recv(sock, 'Ir.merge ();')
 
         tests.append(test_fork_focus_merge)
 
         def test_repls():
-            out = send_recv(sock, 'Explore.repls ();')
+            out = send_recv(sock, 'Ir.repls ();')
             assert "t1" in out, f"Expected t1 in repls, got:\n{out}"
 
         tests.append(test_repls)
 
         def test_source():
-            send_recv(sock, 'Explore.source "Main" 0 3 handle ERROR _ => ();')
+            send_recv(sock, 'Ir.source "Main" 0 3 handle ERROR _ => ();')
 
         tests.append(test_source)
 
         def test_remove():
-            send_recv(sock, 'Explore.init "tmp" ["Main"];')
-            send_recv(sock, 'Explore.remove "tmp";')
+            send_recv(sock, 'Ir.init "tmp" ["Main"];')
+            send_recv(sock, 'Ir.remove "tmp";')
 
         tests.append(test_remove)
 
         def test_config():
-            send_recv(sock, 'Explore.config (fn c => '
+            send_recv(sock, 'Ir.config (fn c => '
                       '{color = false, show_ignored = #show_ignored c, '
                       'full_spans = #full_spans c, '
                       'show_theory_in_source = #show_theory_in_source c, '
@@ -234,65 +234,65 @@ def main():
 
         def test_multiline_step():
             """Multi-line Isar text sent as escaped ML string (via MCP path)."""
-            send_recv(sock, 'Explore.init "ml1" ["Main"];')
+            send_recv(sock, 'Ir.init "ml1" ["Main"];')
             # Multi-line: lemma + proof on separate lines, escaped as ML string
-            out = send_recv(sock, 'Explore.step "lemma ml_test: True\\nby simp";')
+            out = send_recv(sock, 'Ir.step "lemma ml_test: True\\nby simp";')
             assert "ml_test" in out, f"Expected ml_test theorem, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ml1";')
+            send_recv(sock, 'Ir.remove "ml1";')
 
         tests.append(test_multiline_step)
 
         def test_multiline_step_raw_newline():
             """Multi-line Isar text with raw newline (TCP multi-line accumulation)."""
-            send_recv(sock, 'Explore.init "ml2" ["Main"];')
+            send_recv(sock, 'Ir.init "ml2" ["Main"];')
             # Raw newline: TCP handler accumulates lines until ;
-            out = send_recv(sock, 'Explore.step "lemma ml_raw: True\nby simp";')
+            out = send_recv(sock, 'Ir.step "lemma ml_raw: True\nby simp";')
             assert "ml_raw" in out, f"Expected ml_raw theorem, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ml2";')
+            send_recv(sock, 'Ir.remove "ml2";')
 
         tests.append(test_multiline_step_raw_newline)
 
         # -- find_theorems tests --
         def test_ft_single_theory_immediate_library():
-            send_recv(sock, 'Explore.init "ft1" ["Main"];')
-            out = send_recv(sock, 'Explore.find_theorems 3 "name: conjI";')
+            send_recv(sock, 'Ir.init "ft1" ["Main"];')
+            out = send_recv(sock, 'Ir.find_theorems 3 "name: conjI";')
             assert "conjI" in out, f"Expected conjI, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ft1";')
+            send_recv(sock, 'Ir.remove "ft1";')
 
         tests.append(test_ft_single_theory_immediate_library)
 
         def test_ft_single_theory_after_lemma_library():
-            send_recv(sock, 'Explore.init "ft2" ["Main"];')
-            send_recv(sock, 'Explore.step "lemma ft2_lem: True by simp";')
-            out = send_recv(sock, 'Explore.find_theorems 3 "name: conjI";')
+            send_recv(sock, 'Ir.init "ft2" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma ft2_lem: True by simp";')
+            out = send_recv(sock, 'Ir.find_theorems 3 "name: conjI";')
             assert "conjI" in out, f"Expected conjI, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ft2";')
+            send_recv(sock, 'Ir.remove "ft2";')
 
         tests.append(test_ft_single_theory_after_lemma_library)
 
         def test_ft_single_theory_after_lemma_repl_fact():
-            send_recv(sock, 'Explore.init "ft3" ["Main"];')
-            send_recv(sock, 'Explore.step "lemma ft3_lem: True by simp";')
-            out = send_recv(sock, 'Explore.find_theorems 3 "name: ft3_lem";')
+            send_recv(sock, 'Ir.init "ft3" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma ft3_lem: True by simp";')
+            out = send_recv(sock, 'Ir.find_theorems 3 "name: ft3_lem";')
             assert "ft3_lem" in out, f"Expected ft3_lem, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ft3";')
+            send_recv(sock, 'Ir.remove "ft3";')
 
         tests.append(test_ft_single_theory_after_lemma_repl_fact)
 
         def test_ft_multi_theory_immediate_library():
-            send_recv(sock, 'Explore.init "ft4" ["Main", "Complex_Main"];')
-            out = send_recv(sock, 'Explore.find_theorems 3 "name: conjI";')
+            send_recv(sock, 'Ir.init "ft4" ["Main", "Complex_Main"];')
+            out = send_recv(sock, 'Ir.find_theorems 3 "name: conjI";')
             assert "conjI" in out, f"Expected conjI, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ft4";')
+            send_recv(sock, 'Ir.remove "ft4";')
 
         tests.append(test_ft_multi_theory_immediate_library)
 
         def test_ft_multi_theory_after_lemma_repl_fact():
-            send_recv(sock, 'Explore.init "ft5" ["Main", "Complex_Main"];')
-            send_recv(sock, 'Explore.step "lemma ft5_lem: True by simp";')
-            out = send_recv(sock, 'Explore.find_theorems 3 "name: ft5_lem";')
+            send_recv(sock, 'Ir.init "ft5" ["Main", "Complex_Main"];')
+            send_recv(sock, 'Ir.step "lemma ft5_lem: True by simp";')
+            out = send_recv(sock, 'Ir.find_theorems 3 "name: ft5_lem";')
             assert "ft5_lem" in out, f"Expected ft5_lem, got:\n{out}"
-            send_recv(sock, 'Explore.remove "ft5";')
+            send_recv(sock, 'Ir.remove "ft5";')
 
         tests.append(test_ft_multi_theory_after_lemma_repl_fact)
 
@@ -303,7 +303,7 @@ def main():
 
         # Cleanup from single-client tests
         cleanup_sock = connect(port)
-        send_recv(cleanup_sock, 'Explore.remove "t1";')
+        send_recv(cleanup_sock, 'Ir.remove "t1";')
         cleanup_sock.close()
 
         # -- Multi-client tests --
@@ -322,13 +322,13 @@ def main():
                 except Exception as e:
                     errors[idx] = e
 
-            send_recv(s1, 'Explore.init "mc1" ["Main"];')
-            send_recv(s1, 'Explore.init "mc2" ["Main"];')
+            send_recv(s1, 'Ir.init "mc1" ["Main"];')
+            send_recv(s1, 'Ir.init "mc2" ["Main"];')
 
             t1 = threading.Thread(target=client,
-                                  args=(0, s1, 'Explore.focus "mc1"; Explore.theories ();'))
+                                  args=(0, s1, 'Ir.focus "mc1"; Ir.theories ();'))
             t2 = threading.Thread(target=client,
-                                  args=(1, s2, 'Explore.focus "mc2"; Explore.theories ();'))
+                                  args=(1, s2, 'Ir.focus "mc2"; Ir.theories ();'))
             t1.start()
             t2.start()
             t1.join(timeout=60)
@@ -339,20 +339,20 @@ def main():
                     raise errors[i]
                 assert results[i] is not None, f"Client {i} got no result"
 
-            send_recv(s1, 'Explore.remove "mc1";')
-            send_recv(s1, 'Explore.remove "mc2";')
+            send_recv(s1, 'Ir.remove "mc1";')
+            send_recv(s1, 'Ir.remove "mc2";')
             s1.close()
             s2.close()
 
         def test_client_disconnect():
             """A client disconnects; server stays alive for new clients."""
             s1 = connect(port)
-            send_recv(s1, 'Explore.help ();')
+            send_recv(s1, 'Ir.help ();')
             s1.close()
             time.sleep(0.5)
             s2 = connect(port)
-            out = send_recv(s2, 'Explore.help ();')
-            assert "Explore.init" in out
+            out = send_recv(s2, 'Ir.help ();')
+            assert "Ir.init" in out
             s2.close()
 
         for t in [test_concurrent_clients, test_client_disconnect]:

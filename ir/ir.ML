@@ -4,7 +4,7 @@
 (* REPL for exploring Isabelle theories via Isar text.
    Designed for use from the Poly/ML console after loading a heap. *)
 
-signature EXPLORE =
+signature IR =
 sig
   type config = {color: bool, show_ignored: bool, full_spans: bool,
                  show_theory_in_source: bool, auto_replay: bool}
@@ -46,7 +46,7 @@ val _ = Exn.capture (fn () =>
   ML_Compiler.eval ML_Compiler.flags Position.none
     (ML_Lex.tokenize "stored_segments_probe := SOME stored_segments")) ();
 
-structure Explore : EXPLORE =
+structure Ir : IR =
 struct
 
 (** Configuration **)
@@ -54,14 +54,14 @@ struct
 type config = {color: bool, show_ignored: bool, full_spans: bool,
                show_theory_in_source: bool, auto_replay: bool};
 val cfg : config Synchronized.var =
-  Synchronized.var "Explore.cfg" {color = true, show_ignored = false, full_spans = false,
+  Synchronized.var "Ir.cfg" {color = true, show_ignored = false, full_spans = false,
                                    show_theory_in_source = false, auto_replay = true};
 fun config f = Synchronized.change cfg f;
 fun get_cfg () = Synchronized.value cfg;
 
 (** Step timeout (seconds, 0 = no limit) **)
 
-val step_timeout : int Synchronized.var = Synchronized.var "Explore.timeout" 5;
+val step_timeout : int Synchronized.var = Synchronized.var "Ir.timeout" 5;
 fun timeout secs =
   (Synchronized.change step_timeout (K secs);
    TextIO.print ("Timeout set to " ^ (if secs = 0 then "unlimited" else string_of_int secs ^ "s") ^ "\n"));
@@ -251,10 +251,10 @@ type repl = {
 };
 
 val repl_tab : repl Symtab.table Synchronized.var
-  = Synchronized.var "Explore.repls" Symtab.empty;
+  = Synchronized.var "Ir.repls" Symtab.empty;
 
 val current_repl : string Synchronized.var
-  = Synchronized.var "Explore.current_repl" "";
+  = Synchronized.var "Ir.current_repl" "";
 
 fun the_repl id =
   case Symtab.lookup (Synchronized.value repl_tab) id of
@@ -504,7 +504,7 @@ fun remove id =
         Synchronized.change repl_tab (Symtab.delete_safe rid)) to_remove
       val _ = if member (op =) to_remove (Synchronized.value current_repl)
               then (Synchronized.change current_repl (K "");
-                    out "Current REPL was removed. Use Explore.focus or Explore.init to select another.")
+                    out "Current REPL was removed. Use Ir.focus or Ir.init to select another.")
               else ()
   in out ("Removed " ^ commas (map quote to_remove)) end;
 
@@ -586,7 +586,7 @@ fun sledgehammer timeout_secs =
   end;
 
 fun help () = out
-  "=== Explore API ===\n\
+  "=== I/R API ===\n\
   \\n\
   \  Sessions start in the context of a named theory -- do NOT issue\n\
   \  'theory' commands. Steps are Isar: lemma, definition, fun, by, etc.\n\
@@ -617,37 +617,37 @@ fun help () = out
   \\n\
   \=== Quick start ===\n\
   \\n\
-  \  Explore.init \"R\" [\"MySession.MyTheory\"];\n\
-  \  Explore.step \"lemma \\\"True\\\"\";\n\
-  \  Explore.step \"by simp\";\n\
-  \  Explore.show ();\n\
-  \  Explore.state ~1;\n\
+  \  Ir.init \"R\" [\"MySession.MyTheory\"];\n\
+  \  Ir.step \"lemma \\\"True\\\"\";\n\
+  \  Ir.step \"by simp\";\n\
+  \  Ir.show ();\n\
+  \  Ir.state ~1;\n\
   \\n\
   \=== Forking and merging ===\n\
   \\n\
-  \  Explore.step \"lemma \\\"P\\\"\";\n\
-  \  Explore.step \"sorry\";\n\
-  \  Explore.fork \"S\" 1;          (* fork from state before sorry *)\n\
-  \  Explore.step \"by auto\";\n\
-  \  Explore.merge ();             (* replace sorry with proof *)\n\
+  \  Ir.step \"lemma \\\"P\\\"\";\n\
+  \  Ir.step \"sorry\";\n\
+  \  Ir.fork \"S\" 1;          (* fork from state before sorry *)\n\
+  \  Ir.step \"by auto\";\n\
+  \  Ir.merge ();             (* replace sorry with proof *)\n\
   \\n\
   \=== Editing ===\n\
   \\n\
-  \  Explore.edit 0 \"lemma \\\"Q\\\"\";  (* edit first step, replays rest *)\n\
-  \  Explore.truncate 1;             (* keep only steps 0 and 1 *)\n\
+  \  Ir.edit 0 \"lemma \\\"Q\\\"\";  (* edit first step, replays rest *)\n\
+  \  Ir.truncate 1;             (* keep only steps 0 and 1 *)\n\
   \\n\
   \=== Segments (stored theories) ===\n\
   \\n\
-  \  Explore.source \"MySession.MyTheory\" 0 ~1;  (* all *)\n\
-  \  Explore.source \"MySession.MyTheory\" 0 10;  (* first 11 *)\n\
-  \  Explore.init \"R\" [\"MySession.MyTheory:42\"];    (* from source 42 *)";
+  \  Ir.source \"MySession.MyTheory\" 0 ~1;  (* all *)\n\
+  \  Ir.source \"MySession.MyTheory\" 0 10;  (* first 11 *)\n\
+  \  Ir.init \"R\" [\"MySession.MyTheory:42\"];    (* from source 42 *)";
 
 end;
 
 val _ = writeln (case ! stored_segments_probe of
-    NONE => "Explore: source commands not available (heap has no stored segments)"
+    NONE => "Ir: source commands not available (heap has no stored segments)"
   | SOME sv =>
       let val n = length (Synchronized.value sv)
-      in if n = 0 then "Explore: source commands not available (no theories stored)"
-         else "Explore: source commands available (" ^ string_of_int n ^ " theories)"
+      in if n = 0 then "Ir: source commands not available (no theories stored)"
+         else "Ir: source commands available (" ^ string_of_int n ^ " theories)"
       end);

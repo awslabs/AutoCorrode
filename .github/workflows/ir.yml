@@ -36,7 +36,7 @@ jobs:
     - name: Build HOL heap
       run: $ISABELLE build -b HOL
 
-    - name: Test explore.ML via console
+    - name: Test ir.ML via console
       run: python3 ir/test_console.py --isabelle $ISABELLE --session HOL
 
     - name: Test repl.py TCP server
@@ -97,7 +97,7 @@ jobs:
     - name: "A: Build without option registered -- expect no source"
       run: |
         $ISABELLE build -d ir/Segment_Storage_Example -b Segment_Storage_Example
-        output=$(printf 'use "%s";' "$PWD/ir/explore.ML" \
+        output=$(printf 'use "%s";' "$PWD/ir/ir.ML" \
           | $ISABELLE console -d ir/Segment_Storage_Example -l Segment_Storage_Example -n 2>&1)
         echo "$output"
         echo "$output" | grep -q "source commands not available"
@@ -111,7 +111,7 @@ jobs:
     - name: "B: Build without store_segments -- expect no source"
       run: |
         $ISABELLE build -d ir/Segment_Storage_Example -c -b Segment_Storage_Example
-        output=$(printf 'use "%s";' "$PWD/ir/explore.ML" \
+        output=$(printf 'use "%s";' "$PWD/ir/ir.ML" \
           | $ISABELLE console -d ir/Segment_Storage_Example -l Segment_Storage_Example -n 2>&1)
         echo "$output"
         echo "$output" | grep -q "source commands not available"
@@ -119,7 +119,7 @@ jobs:
     - name: "C: Build with store_segments=true -- expect source"
       run: |
         $ISABELLE build -d ir/Segment_Storage_Example -c -b -o store_segments=true Segment_Storage_Example
-        output=$(printf 'use "%s";' "$PWD/ir/explore.ML" \
+        output=$(printf 'use "%s";' "$PWD/ir/ir.ML" \
           | $ISABELLE console -d ir/Segment_Storage_Example -l Segment_Storage_Example -n 2>&1)
         echo "$output"
         echo "$output" | grep -q "source commands available"
@@ -134,11 +134,11 @@ jobs:
         config:
           - name: local
             dockerfile: ir/docker/Dockerfile
-            tag: explore-repl:local
+            tag: isabelle-repl:local
             build_args: ""
           - name: standalone
             dockerfile: ir/docker/Dockerfile.standalone
-            tag: explore-repl:standalone
+            tag: isabelle-repl:standalone
             build_args: "--build-arg AUTOCORRODE_BRANCH=${{ github.head_ref || github.ref_name }} --build-arg AUTOCORRODE_REPO=${{ github.event.pull_request.head.repo.clone_url || format('https://github.com/{0}.git', github.repository) }}"
     steps:
       - uses: actions/checkout@v4
@@ -164,14 +164,14 @@ jobs:
             if python3 -c "
           import socket
           s = socket.create_connection(('127.0.0.1', 9147), timeout=2)
-          s.sendall(b'Explore.help ();\n')
+          s.sendall(b'Ir.help ();\n')
           buf = b''
           while b'<<DONE>>' not in buf:
               chunk = s.recv(4096)
               if not chunk: break
               buf += chunk
           s.close()
-          assert b'Explore.init' in buf
+          assert b'Ir.init' in buf
           " 2>/dev/null; then echo "REPL ready at attempt $i"; break; fi
             sleep 2
           done
@@ -180,7 +180,7 @@ jobs:
           python3 -c "
           import socket
           s = socket.create_connection(('127.0.0.1', 9147), timeout=30)
-          s.sendall(b'Explore.theories ();\n')
+          s.sendall(b'Ir.theories ();\n')
           buf = b''
           while b'<<DONE>>' not in buf:
               buf += s.recv(4096)
@@ -201,7 +201,7 @@ jobs:
                                'Accept':'application/json, text/event-stream'})
                   resp = urllib.request.urlopen(req, timeout=10)
                   body = resp.read().decode()
-                  assert 'Explore REPL' in body, f'Unexpected MCP response: {body[:200]}'
+                  assert 'I/R REPL' in body, f'Unexpected MCP response: {body[:200]}'
                   print(f'MCP OK (attempt {attempt+1})')
                   break
               except Exception:

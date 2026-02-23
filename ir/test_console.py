@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test explore.ML via isabelle console.
+"""Test ir.ML via isabelle console.
 
 Assumes the session heap is already built.
 
@@ -14,7 +14,7 @@ import sys
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-EXPLORE_ML = os.path.join(SCRIPT_DIR, "explore.ML")
+IR_ML = os.path.join(SCRIPT_DIR, "ir.ML")
 
 # ANSI
 _RED = "\033[31m"
@@ -68,11 +68,11 @@ def run_test(name, isabelle, session, directory, ml_commands):
 
 
 def use(ml):
-    return f'use "{EXPLORE_ML}"; {ml}'
+    return f'use "{IR_ML}"; {ml}'
 
 
 def main():
-    p = argparse.ArgumentParser(description="Test explore.ML via isabelle console")
+    p = argparse.ArgumentParser(description="Test ir.ML via isabelle console")
     p.add_argument("--isabelle", default=os.environ.get("ISABELLE", "isabelle"))
     p.add_argument("--session", default="HOL")
     p.add_argument("--dir", default=None)
@@ -84,8 +84,8 @@ def main():
     if not shutil.which(args.isabelle):
         print(f"{_SYM_FAIL} isabelle not found: {args.isabelle}", file=sys.stderr)
         sys.exit(1)
-    if not os.path.isfile(EXPLORE_ML):
-        print(f"{_SYM_FAIL} explore.ML not found: {EXPLORE_ML}", file=sys.stderr)
+    if not os.path.isfile(IR_ML):
+        print(f"{_SYM_FAIL} ir.ML not found: {IR_ML}", file=sys.stderr)
         sys.exit(1)
 
     # Probe source availability up front
@@ -94,7 +94,7 @@ def main():
     print(f"  {_SYM_BUSY} loading heap", end="", flush=True)
     t0 = time.time()
     _, probe_output = run_console(
-        args.isabelle, args.session, args.dir, f'use "{EXPLORE_ML}";')
+        args.isabelle, args.session, args.dir, f'use "{IR_ML}";')
     has_source = "source commands available" in probe_output and "not available" not in probe_output
     avail_thy = None
 
@@ -103,7 +103,7 @@ def main():
         n_theories = m.group(1) if m else "?"
         _, seg_output = run_console(
             args.isabelle, args.session, args.dir,
-            use('(Explore.source "Main" 0 0 handle ERROR msg => writeln msg);'))
+            use('(Ir.source "Main" 0 0 handle ERROR msg => writeln msg);'))
         m = re.search(r'Available: (\S+)', seg_output)
         if m:
             avail_thy = m.group(1).rstrip(',')
@@ -120,64 +120,64 @@ def main():
             sys.exit(1)
 
     # Run tests
-    print(f"\n{_BOLD}Running{_RESET} explore.ML console tests "
+    print(f"\n{_BOLD}Running{_RESET} ir.ML console tests "
           f"{_DIM}(session={args.session}){_RESET}")
 
     run = lambda name, ml: run_test(name, args.isabelle, args.session, args.dir, ml)
 
-    run("load explore.ML",
-        f'use "{EXPLORE_ML}";')
+    run("load ir.ML",
+        f'use "{IR_ML}";')
 
     run("help",
-        use('Explore.help ();'))
+        use('Ir.help ();'))
 
     run("theories",
-        use('Explore.theories ();'))
+        use('Ir.theories ();'))
 
     run("init + show",
-        use('Explore.init "t1" "Main"; Explore.show ();'))
+        use('Ir.init "t1" "Main"; Ir.show ();'))
 
     run("step + state",
-        use('Explore.init "t1" "Main"; Explore.step "lemma True by simp"; Explore.state ~1;'))
+        use('Ir.init "t1" "Main"; Ir.step "lemma True by simp"; Ir.state ~1;'))
 
     run("text",
-        use('Explore.init "t1" "Main"; Explore.step "lemma True by simp"; Explore.text ();'))
+        use('Ir.init "t1" "Main"; Ir.step "lemma True by simp"; Ir.text ();'))
 
     run("edit + replay",
-        use('Explore.init "t1" "Main"; Explore.step "lemma True by simp"; '
-            'Explore.edit 0 "lemma True by auto"; Explore.replay ();'))
+        use('Ir.init "t1" "Main"; Ir.step "lemma True by simp"; '
+            'Ir.edit 0 "lemma True by auto"; Ir.replay ();'))
 
     run("truncate",
-        use('Explore.init "t1" "Main"; Explore.step "lemma True by simp"; '
-            'Explore.step "lemma True by auto"; Explore.truncate 0;'))
+        use('Ir.init "t1" "Main"; Ir.step "lemma True by simp"; '
+            'Ir.step "lemma True by auto"; Ir.truncate 0;'))
 
     run("fork + focus + merge",
-        use('Explore.init "t1" "Main"; Explore.step "lemma True by simp"; '
-            'Explore.fork "t2" 0; Explore.focus "t2"; '
-            'Explore.step "lemma True by auto"; Explore.merge ();'))
+        use('Ir.init "t1" "Main"; Ir.step "lemma True by simp"; '
+            'Ir.fork "t2" 0; Ir.focus "t2"; '
+            'Ir.step "lemma True by auto"; Ir.merge ();'))
 
     run("repls + remove",
-        use('Explore.init "t1" "Main"; Explore.init "t2" "Main"; '
-            'Explore.repls (); Explore.remove "t2";'))
+        use('Ir.init "t1" "Main"; Ir.init "t2" "Main"; '
+            'Ir.repls (); Ir.remove "t2";'))
 
     if has_source:
         run_test("source (missing theory)", args.isabelle, args.session, args.dir,
-                 use('(Explore.source "Main" 0 0 handle ERROR msg => '
+                 use('(Ir.source "Main" 0 0 handle ERROR msg => '
                      'if String.isSubstring "No stored segments" msg '
                      'then writeln "OK: expected error" '
                      'else raise (ERROR msg));'))
         if avail_thy:
             run_test("source", args.isabelle, args.session, args.dir,
-                     use(f'Explore.source "{avail_thy}" 0 3;'))
+                     use(f'Ir.source "{avail_thy}" 0 3;'))
         else:
             print(f"  {_SYM_SKIP} source listing {_DIM}(no stored theories){_RESET}")
     else:
         run_test("source (graceful error without segments)",
                  args.isabelle, args.session, args.dir,
-                 use('(Explore.source "Main" 0 3 handle ERROR _ => ());'))
+                 use('(Ir.source "Main" 0 3 handle ERROR _ => ());'))
 
     run("config",
-        use('Explore.config (fn c => {color = false, show_ignored = #show_ignored c, '
+        use('Ir.config (fn c => {color = false, show_ignored = #show_ignored c, '
             'full_spans = #full_spans c, show_theory_in_source = #show_theory_in_source c, '
             'auto_replay = #auto_replay c});'))
 
