@@ -29,11 +29,11 @@ MCP configuration for communication via streaming-http
 
 ```json
   "mcpServers": {
-    ...
-    "ir": {
+    "i/r": {
+      "type": "http",
       "url": "http://localhost:9148/mcp",
+      "description": "Isabelle Isar REPL"
     }
-    ...
   }
 ```
 
