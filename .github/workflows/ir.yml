@@ -188,19 +188,26 @@ jobs:
           assert b'Main' in buf, f'Expected Main in output: {buf[:200]}'
           print('REPL OK')
           "
-          # Test MCP via HTTP
+          # Test MCP via HTTP (retry until ready)
           python3 -c "
-          import urllib.request, json
-          req = urllib.request.Request('http://127.0.0.1:9148/mcp',
-              data=json.dumps({'jsonrpc':'2.0','id':1,'method':'initialize',
-                  'params':{'protocolVersion':'2024-11-05','capabilities':{},
-                  'clientInfo':{'name':'ci','version':'1'}}}).encode(),
-              headers={'Content-Type':'application/json',
-                       'Accept':'application/json, text/event-stream'})
-          resp = urllib.request.urlopen(req, timeout=10)
-          body = resp.read().decode()
-          assert 'Explore REPL' in body, f'Unexpected MCP response: {body[:200]}'
-          print('MCP OK')
+          import urllib.request, json, time
+          for attempt in range(30):
+              try:
+                  req = urllib.request.Request('http://127.0.0.1:9148/mcp',
+                      data=json.dumps({'jsonrpc':'2.0','id':1,'method':'initialize',
+                          'params':{'protocolVersion':'2024-11-05','capabilities':{},
+                          'clientInfo':{'name':'ci','version':'1'}}}).encode(),
+                      headers={'Content-Type':'application/json',
+                               'Accept':'application/json, text/event-stream'})
+                  resp = urllib.request.urlopen(req, timeout=10)
+                  body = resp.read().decode()
+                  assert 'Explore REPL' in body, f'Unexpected MCP response: {body[:200]}'
+                  print(f'MCP OK (attempt {attempt+1})')
+                  break
+              except Exception:
+                  time.sleep(2)
+          else:
+              raise RuntimeError('MCP server not ready after 60s')
           "
           docker stop test-${{ matrix.config.name }}-default
           docker rm test-${{ matrix.config.name }}-default
