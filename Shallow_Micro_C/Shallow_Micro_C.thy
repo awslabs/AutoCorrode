@@ -6,5 +6,6 @@ theory Shallow_Micro_C
     C_Abort
     C_Numeric_Types
     C_Sizeof
+    C_Pointer_Types
 begin
 end

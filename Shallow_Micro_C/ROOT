@@ -10,5 +10,6 @@ session Shallow_Micro_C = HOL +
     C_Abort
     C_Numeric_Types
     C_Sizeof
+    C_Pointer_Types
   theories [document=false]
     Shallow_Micro_C
