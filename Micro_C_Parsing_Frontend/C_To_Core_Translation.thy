@@ -836,4 +836,23 @@ void swap(int *a, int *b) {
 
 thm c_swap_def
 
+text \<open>Smoke test: struct field access and assignment.\<close>
+datatype_record c_point =
+  c_point_x :: c_int
+  c_point_y :: c_int
+
+micro_c_translate \<open>
+struct point {
+  int x;
+  int y;
+};
+void swap_fields(struct point *p) {
+  int t = p->x;
+  p->x = p->y;
+  p->y = t;
+}
+\<close>
+
+thm c_swap_fields_def
+
 end
