@@ -12,5 +12,6 @@ session Shallow_Micro_C = HOL +
     C_Sizeof
     C_Pointer_Types
     C_Memory_Operations
+    C_Arithmetic_Rules
   theories [document=false]
     Shallow_Micro_C

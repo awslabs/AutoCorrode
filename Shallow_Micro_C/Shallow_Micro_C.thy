@@ -8,5 +8,6 @@ theory Shallow_Micro_C
     C_Sizeof
     C_Pointer_Types
     C_Memory_Operations
+    C_Arithmetic_Rules
 begin
 end
