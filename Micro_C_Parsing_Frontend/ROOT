@@ -5,6 +5,7 @@ session Micro_C_Parsing_Frontend = HOL +
     "HOL-Library"
     Isabelle_C
     Shallow_Micro_Rust
+    Shallow_Micro_C
   theories
     Micro_C_Syntax
     C_To_Core_Translation

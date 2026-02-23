@@ -10,6 +10,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_Rust.Core_Syntax"
     "Shallow_Micro_Rust.Bool_Type"
     "Shallow_Micro_Rust.Rust_Iterator"
+    "Shallow_Micro_C.C_Numeric_Types"
   keywords "micro_c_translate" :: thy_decl
 begin
 
@@ -145,6 +146,7 @@ structure C_Term_Build : sig
   val mk_var_read : term -> term
   val mk_var_write : term -> term -> term
   val mk_bindlift2 : term -> term -> term -> term
+  val mk_bind2 : term -> term -> term -> term
   val mk_two_armed_cond : term -> term -> term -> term
   val mk_one_armed_cond : term -> term -> term
   val mk_funcall : term -> term list -> term
@@ -173,10 +175,10 @@ struct
   fun mk_sequence e1 e2 =
     Const (\<^const_name>\<open>sequence\<close>, dummyT --> dummyT --> dummyT) $ e1 $ e2
 
-  (* literal n, where n is an integer constant (typed as int to avoid phantom TYPE params) *)
+  (* literal n, where n is a C integer constant typed as c_int (= 32 sword) *)
   fun mk_literal_int n =
-    Const (\<^const_name>\<open>literal\<close>, \<^typ>\<open>int\<close> --> dummyT)
-      $ HOLogic.mk_number \<^typ>\<open>int\<close> n
+    Const (\<^const_name>\<open>literal\<close>, \<^typ>\<open>c_int\<close> --> dummyT)
+      $ HOLogic.mk_number \<^typ>\<open>c_int\<close> n
 
   (* return_func e : for C return statements *)
   fun mk_return_func body =
@@ -210,6 +212,11 @@ struct
       $ val_expr
   fun mk_bindlift2 f e1 e2 =
     Const (\<^const_name>\<open>bindlift2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ f $ e1 $ e2
+
+  (* bind2 f e1 e2 : evaluate e1 and e2, then apply monadic f *)
+  fun mk_bind2 f e1 e2 =
+    Const (\<^const_name>\<open>bind2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
       $ f $ e1 $ e2
 
   (* two_armed_conditional test then_br else_br *)
@@ -296,25 +303,34 @@ struct
   val Isa_Free = Free
   val isa_dummyT = dummyT
 
+  (* Binary operator classification: monadic operators (arithmetic/comparison)
+     return expressions and need bind2; pure operators (logical) return plain
+     values and use bindlift2.
+     NB: Must be defined before 'open C_Ast' which shadows the term type. *)
+  datatype binop_kind = Monadic of term | Pure of term
+
   open C_Ast
 
   fun unsupported construct =
     error ("micro_c_translate: unsupported C construct: " ^ construct)
 
-  (* Translate a C binary operator to a HOL function constant *)
-  fun translate_binop CAddOp0 = Isa_Const (\<^const_name>\<open>plus\<close>, isa_dummyT)
-    | translate_binop CSubOp0 = Isa_Const (\<^const_name>\<open>minus\<close>, isa_dummyT)
-    | translate_binop CMulOp0 = Isa_Const (\<^const_name>\<open>times\<close>, isa_dummyT)
-    | translate_binop CDivOp0 = Isa_Const (\<^const_name>\<open>divide\<close>, isa_dummyT)
-    | translate_binop CRmdOp0 = Isa_Const (\<^const_name>\<open>modulo\<close>, isa_dummyT)
-    | translate_binop CLeOp0 = Isa_Const (\<^const_name>\<open>less\<close>, isa_dummyT)
-    | translate_binop CLeqOp0 = Isa_Const (\<^const_name>\<open>less_eq\<close>, isa_dummyT)
-    | translate_binop CGrOp0 = Isa_Const (\<^const_name>\<open>less\<close>, isa_dummyT) (* reversed operands *)
-    | translate_binop CGeqOp0 = Isa_Const (\<^const_name>\<open>less_eq\<close>, isa_dummyT) (* reversed operands *)
-    | translate_binop CEqOp0 = Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+  (* Translate a C binary operator to a HOL function constant.
+     Arithmetic and comparison operations use the overflow-checked C operations
+     from C_Numeric_Types which are monadic (they can abort).
+     Logical operators remain pure. *)
+  fun translate_binop CAddOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT))
+    | translate_binop CSubOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT))
+    | translate_binop CMulOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_mul\<close>, isa_dummyT))
+    | translate_binop CDivOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_div\<close>, isa_dummyT))
+    | translate_binop CRmdOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_mod\<close>, isa_dummyT))
+    | translate_binop CLeOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+    | translate_binop CLeqOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT))
+    | translate_binop CGrOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT)) (* reversed operands *)
+    | translate_binop CGeqOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT)) (* reversed operands *)
+    | translate_binop CEqOp0 = Monadic (Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT))
     | translate_binop CNeqOp0 = unsupported "!= operator"
-    | translate_binop CLndOp0 = Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT)
-    | translate_binop CLorOp0 = Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT)
+    | translate_binop CLndOp0 = Pure (Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT))
+    | translate_binop CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
     | translate_binop _ = unsupported "binary operator"
 
   fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
@@ -329,12 +345,13 @@ struct
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
         let val lhs' = translate_expr tctx lhs
             val rhs' = translate_expr tctx rhs
-        in
-          (* For > and >=, swap operands to use < and <= *)
-          case binop of
-            CGrOp0 => C_Term_Build.mk_bindlift2 (translate_binop binop) rhs' lhs'
-          | CGeqOp0 => C_Term_Build.mk_bindlift2 (translate_binop binop) rhs' lhs'
-          | _ => C_Term_Build.mk_bindlift2 (translate_binop binop) lhs' rhs'
+            (* For > and >=, swap operands to use < and <= *)
+            val (l, r) = case binop of CGrOp0 => (rhs', lhs')
+                                     | CGeqOp0 => (rhs', lhs')
+                                     | _ => (lhs', rhs')
+        in case translate_binop binop of
+             Monadic f => C_Term_Build.mk_bind2 f l r
+           | Pure f => C_Term_Build.mk_bindlift2 f l r
         end
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
