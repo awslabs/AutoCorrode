@@ -177,7 +177,7 @@ syntax
     ("_" [0]1000)
   "_urust_lhs_parens" :: "urust_lhs \<Rightarrow> urust_lhs"
     ("'(_')" [0]999)
-  "_urust_lhs_deref" :: \<open>urust_lhs \<Rightarrow> urust_lhs\<close>
+  "_urust_lhs_deref" :: \<open>urust \<Rightarrow> urust_lhs\<close>
     ("*_" [200]100)
   "_urust_lhs_field_access" :: \<open>urust_lhs \<Rightarrow> urust_identifier \<Rightarrow> urust_lhs\<close>
     ("_._" [99,1000]100)
@@ -575,7 +575,7 @@ syntax
 translations
   "_urust_lhs_as_urust (_urust_lhs_identifier id)" => "_urust_identifier id"
   "_urust_lhs_as_urust (_urust_lhs_parens lhs)" => "_urust_parens (_urust_lhs_as_urust lhs)"
-  "_urust_lhs_as_urust (_urust_lhs_deref lhs)" => "_urust_deref (_urust_lhs_as_urust lhs)"
+  "_urust_lhs_as_urust (_urust_lhs_deref ex)" => "ex" (* Deref is basically a no-op on a LHS *)
   "_urust_lhs_as_urust (_urust_lhs_field_access lhs fld)" =>
     "_urust_field_access (_urust_lhs_as_urust lhs) fld"
   "_urust_lhs_as_urust (_urust_lhs_index lhs idx)" =>
