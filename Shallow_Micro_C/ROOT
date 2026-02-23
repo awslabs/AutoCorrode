@@ -1,0 +1,10 @@
+session Shallow_Micro_C = HOL +
+  options [document = pdf, document_output = "output"]
+  sessions
+    "HOL-Eisbach"
+    "HOL-Library"
+    Shallow_Micro_Rust
+    Shallow_Separation_Logic
+    Byte_Level_Encoding
+  theories [document=false]
+    Shallow_Micro_C
