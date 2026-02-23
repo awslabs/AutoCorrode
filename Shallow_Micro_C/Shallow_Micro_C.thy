@@ -7,5 +7,6 @@ theory Shallow_Micro_C
     C_Numeric_Types
     C_Sizeof
     C_Pointer_Types
+    C_Memory_Operations
 begin
 end
