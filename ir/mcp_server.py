@@ -200,9 +200,27 @@ def merge() -> str:
 def sledgehammer(timeout_secs: int) -> str:
     return repl.send(f"Ir.sledgehammer {ml_int(timeout_secs)};")
 
-@mcp.tool(description="Search for theorems matching a query. Uses Isabelle's find_theorems syntax: name patterns (name:\"foo\"), intro/elim/dest/simp rules, or term patterns (e.g. \"_ + _ = _ + _\"). Prefix a criterion with - to negate.")
+@mcp.tool(description='Search for theorems. Criteria: '
+    'name:foo (name pattern, unquoted), intro/elim/dest/solves (goal-based), '
+    'simp:"term" (simplification rules for term), or "pattern" (term pattern). '
+    'Terms and patterns MUST be in quotes: "_ + _", "_ @ _". '
+    'Name patterns are NOT quoted: name:append. '
+    'Prefix with - to negate. '
+    'Examples: name:conjI, "_ + _ = _", simp:"True", -name:foo, -"_ + _"')
 def find_theorems(query: str, max_results: int = 40) -> str:
-    return repl.send(f"Ir.find_theorems {ml_int(max_results)} {ml_str(query)};")
+    q = query.strip()
+    # Auto-quote bare term patterns that aren't already quoted or a keyword
+    keywords = ("name:", "simp:", "intro", "elim", "dest", "solves")
+    parts = []
+    for criterion in q.split(" - ") if " - " in q else [q]:
+        c = criterion.strip().lstrip("- ").strip()
+        neg = criterion.strip().startswith("-")
+        prefix = "- " if neg else ""
+        if c and not any(c.startswith(k) for k in keywords) and not c.startswith('"'):
+            parts.append(prefix + '"' + c + '"')
+        else:
+            parts.append(criterion.strip())
+    return repl.send(f"Ir.find_theorems {ml_int(max_results)} {ml_str(' '.join(parts))};")
 
 @mcp.tool(description="Set step timeout in seconds (0=unlimited, default 5s).")
 def timeout(secs: int) -> str:
