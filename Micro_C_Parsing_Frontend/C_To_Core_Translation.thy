@@ -85,20 +85,24 @@ ML \<open>
 structure C_Trans_Ctxt : sig
   datatype var_kind = Param | Local  (* Param = by-value, Local = mutable reference *)
   type t
-  val empty : t
+  val make : Proof.context -> t
+  val get_ctxt : t -> Proof.context
   val add_var : string -> var_kind -> term -> t -> t
   val lookup_var : t -> string -> (var_kind * term) option
 end =
 struct
   datatype var_kind = Param | Local
   type t = {
+    ctxt : Proof.context,
     vars : (var_kind * term) Symtab.table
   }
 
-  val empty : t = { vars = Symtab.empty }
+  fun make ctxt : t = { ctxt = ctxt, vars = Symtab.empty }
 
-  fun add_var name kind tm ({ vars } : t) : t =
-    { vars = Symtab.update (name, (kind, tm)) vars }
+  fun get_ctxt ({ ctxt, ... } : t) = ctxt
+
+  fun add_var name kind tm ({ ctxt, vars } : t) : t =
+    { ctxt = ctxt, vars = Symtab.update (name, (kind, tm)) vars }
 
   fun lookup_var ({ vars, ... } : t) name =
     Symtab.lookup vars name
@@ -127,6 +131,7 @@ structure C_Term_Build : sig
   val mk_bindlift2 : term -> term -> term -> term
   val mk_two_armed_cond : term -> term -> term -> term
   val mk_one_armed_cond : term -> term -> term
+  val mk_funcall : term -> term list -> term
 end =
 struct
   (* literal v *)
@@ -180,7 +185,6 @@ struct
            $ Const (\<^const_name>\<open>store_update_const\<close>, dummyT))
       $ mk_literal ref_var
       $ val_expr
-
   fun mk_bindlift2 f e1 e2 =
     Const (\<^const_name>\<open>bindlift2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
       $ f $ e1 $ e2
@@ -194,6 +198,24 @@ struct
   fun mk_one_armed_cond test then_br =
     Const (\<^const_name>\<open>two_armed_conditional\<close>, dummyT --> dummyT --> dummyT --> dummyT)
       $ test $ then_br $ mk_literal_unit
+
+  (* funcallN f arg0 ... argN : call a function with N arguments *)
+  local
+    val funcall_names = Vector.fromList [
+      \<^const_name>\<open>funcall0\<close>, \<^const_name>\<open>funcall1\<close>, \<^const_name>\<open>funcall2\<close>,
+      \<^const_name>\<open>funcall3\<close>, \<^const_name>\<open>funcall4\<close>, \<^const_name>\<open>funcall5\<close>,
+      \<^const_name>\<open>funcall6\<close>, \<^const_name>\<open>funcall7\<close>, \<^const_name>\<open>funcall8\<close>,
+      \<^const_name>\<open>funcall9\<close>, \<^const_name>\<open>funcall10\<close>
+    ]
+  in
+  fun mk_funcall f args =
+    let val n = length args
+    in if n > 10 then error "mk_funcall: more than 10 arguments not supported"
+       else let val cname = Vector.sub (funcall_names, n)
+                val ty = Library.foldr (fn (_, t) => dummyT --> t) (args, dummyT)
+            in Library.foldl (op $) (Const (cname, dummyT --> ty), f :: args) end
+    end
+  end
 end
 \<close>
 
@@ -267,8 +289,18 @@ struct
         end
     | translate_expr _ (CAssign0 _) =
         unsupported "compound assignment or non-variable lhs"
+    | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
+        let val fname = C_Ast_Utils.ident_name ident
+            val arg_terms = List.map (translate_expr tctx) args
+            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            (* Look up the fully qualified constant name, then use dummyT
+               so Syntax.check_term can infer the type. *)
+            val (full_name, _) = Term.dest_Const
+              (Proof_Context.read_const {proper = true, strict = false} ctxt ("c_" ^ fname))
+            val func_ref = Isa_Const (full_name, isa_dummyT)
+        in C_Term_Build.mk_funcall func_ref arg_terms end
     | translate_expr _ (CCall0 _) =
-        unsupported "function call (Task 1.8)"
+        unsupported "indirect function call (function pointers)"
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
     | translate_expr _ (CIndex0 _) =
@@ -355,7 +387,7 @@ struct
       (* Add parameters to the translation context as Param (by-value) *)
       val tctx = List.foldl
         (fn ((n, v), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v ctx)
-        C_Trans_Ctxt.empty param_vars
+        (C_Trans_Ctxt.make ctxt) param_vars
       val body_term = translate_stmt tctx body
       val fn_term = C_Term_Build.mk_function_body body_term
       (* Wrap in lambdas for each parameter *)
@@ -392,10 +424,12 @@ struct
   fun process_translation_unit tu lthy =
     let
       val fundefs = C_Ast_Utils.extract_fundefs tu
-      val translated = List.map (C_Translate.translate_fundef lthy) fundefs
     in
-      List.foldl (fn ((name, term), lthy) =>
-        define_c_function name term lthy) lthy translated
+      (* Translate and define each function one at a time, so that later
+         functions can reference earlier ones via Syntax.check_term. *)
+      List.foldl (fn (fundef, lthy) =>
+        let val (name, term) = C_Translate.translate_fundef lthy fundef
+        in define_c_function name term lthy end) lthy fundefs
     end
 end
 \<close>
@@ -476,5 +510,20 @@ int max_c(int a, int b) {
 \<close>
 
 thm c_max_c_def
+text \<open>Test function calls: a function that calls another.\<close>
+
+micro_c_translate \<open>
+int add(int a, int b) {
+  return a + b;
+}
+\<close>
+
+micro_c_translate \<open>
+int add_three(int x, int y, int z) {
+  return add(add(x, y), z);
+}
+\<close>
+
+thm c_add_def c_add_three_def
 
 end
