@@ -14,6 +14,34 @@ text \<open>
   Array indexing uses @{const focus_nth} (focus-based access).
 \<close>
 
+subsection \<open>Helper Definitions for Array Loop Proofs\<close>
+
+definition list_fill_prefix :: \<open>nat \<Rightarrow> 'a \<Rightarrow> 'a list \<Rightarrow> 'a list\<close> where
+  \<open>list_fill_prefix k v xs \<equiv> replicate k v @ drop k xs\<close>
+
+lemma list_fill_prefix_length [simp]:
+  assumes \<open>k \<le> length xs\<close>
+  shows \<open>length (list_fill_prefix k v xs) = length xs\<close>
+  using assms by (simp add: list_fill_prefix_def)
+
+lemma list_fill_prefix_zero [simp]:
+  \<open>list_fill_prefix 0 v xs = xs\<close>
+  by (simp add: list_fill_prefix_def)
+
+lemma list_fill_prefix_step:
+  assumes \<open>k < length xs\<close>
+  shows \<open>(list_fill_prefix k v xs)[k := v] = list_fill_prefix (Suc k) v xs\<close>
+proof -
+  have \<open>drop k xs = xs ! k # drop (Suc k) xs\<close>
+    using assms by (simp add: Cons_nth_drop_Suc)
+  then have \<open>(list_fill_prefix k v xs)[k := v] = replicate k v @ v # drop (Suc k) xs\<close>
+    by (simp add: list_fill_prefix_def list_update_append)
+  also have \<open>\<dots> = replicate (Suc k) v @ drop (Suc k) xs\<close>
+    by (simp add: replicate_app_Cons_same)
+  finally show ?thesis
+    by (simp add: list_fill_prefix_def)
+qed
+
 context c_verification_ctx begin
 
 subsection \<open>C Array Functions\<close>
@@ -55,6 +83,51 @@ lemma c_read_at_spec:
   shows \<open>\<Gamma>; c_read_at arr idx \<Turnstile>\<^sub>F c_read_at_contract arr idx g vs\<close>
   apply (crush_boot f: c_read_at_def contract: c_read_at_contract_def)
   apply crush_base
+  done
+
+subsection \<open>Array Fill (memset-style)\<close>
+
+text \<open>
+  A loop-based function that fills the first @{text n} elements of an array
+  with a given value. This is the first C loop verification example.
+\<close>
+
+micro_c_translate \<open>
+void array_fill(int *arr, int val, int n) {
+  for (int i = 0; i < n; i++) {
+    arr[i] = val;
+  }
+}
+\<close>
+
+thm c_array_fill_def
+
+definition c_array_fill_contract ::
+    \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow> c_int \<Rightarrow>
+     'gv \<Rightarrow> c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
+  \<open>c_array_fill_contract arr val n g vs \<equiv>
+    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star>
+               \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
+               can_alloc_reference;
+        post = \<lambda>_. (\<Squnion> g'. arr \<mapsto>\<langle>\<top>\<rangle> g'\<down>(list_fill_prefix (c_idx_to_nat n) val vs)) \<star>
+               can_alloc_reference
+     in make_function_contract pre post\<close>
+ucincl_auto c_array_fill_contract
+
+lemma c_array_fill_spec:
+  shows \<open>\<Gamma>; c_array_fill TYPE(32 signed) arr val n \<Turnstile>\<^sub>F c_array_fill_contract arr val n g vs\<close>
+  apply (crush_boot f: c_array_fill_def contract: c_array_fill_contract_def)
+  apply crush_base
+  apply (ucincl_discharge\<open>
+      rule_tac
+        INV=\<open>\<lambda>_ i. \<Squnion> g. arr \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_fill_prefix i val vs)\<close>
+        and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+        and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+      in wp_raw_for_loop_framedI'\<close>)
+  using unat_lt2p[of n]
+  apply (auto simp add: list_fill_prefix_step unat_of_nat_eq)
+  apply crush_base
+  apply (simp add: list_fill_prefix_step)
   done
 
 end
