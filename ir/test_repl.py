@@ -349,6 +349,77 @@ def main():
 
         tests.append(test_ft_multi_theory_after_lemma_repl_fact)
 
+        def test_ft_pattern():
+            send_recv(sock, 'Ir.init "ftp" ["Main"];')
+            out = send_recv(sock, 'Ir.find_theorems 3 "\\\"(_ + _) + _ = _ + (_ + _)\\\"";')
+            assert "add_ac" in out, f"Expected add_ac, got:\n{out}"
+            send_recv(sock, 'Ir.remove "ftp";')
+        tests.append(test_ft_pattern)
+
+        def test_ft_simp():
+            """Test simp: search for simplification rules."""
+            send_recv(sock, 'Ir.init "fts" ["Main"];')
+            out = send_recv(sock, 'Ir.find_theorems 5 "simp:\\\"_ + _\\\"";')
+            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+            send_recv(sock, 'Ir.remove "fts";')
+        tests.append(test_ft_simp)
+
+
+
+        def test_ft_solves():
+            """Test solves: search for rules that solve goals."""
+            send_recv(sock, 'Ir.init "ftso" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma test_goal: True";')
+            out = send_recv(sock, 'Ir.find_theorems 5 "solves";')
+            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+            send_recv(sock, 'Ir.step "by simp";')
+            send_recv(sock, 'Ir.remove "ftso";')
+        tests.append(test_ft_solves)
+
+        def test_ft_negation():
+            """Test negation with - prefix."""
+            send_recv(sock, 'Ir.init "ftn" ["Main"];')
+            out = send_recv(sock, 'Ir.find_theorems 5 "-name:conjI";')
+            assert "conjI" not in out, f"Expected no conjI, got:\n{out}"
+            send_recv(sock, 'Ir.remove "ftn";')
+        tests.append(test_ft_negation)
+
+        def test_ft_combined_modes():
+            """Test combining multiple search criteria."""
+            send_recv(sock, 'Ir.init "ftc" ["Main"];')
+            # Try combining name and pattern
+            out = send_recv(sock, 'Ir.find_theorems 5 "name:add \\\"_ + _\\\"";')
+            # Should find theorems with 'add' in name and containing + pattern
+            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+            send_recv(sock, 'Ir.remove "ftc";')
+        tests.append(test_ft_combined_modes)
+
+        def test_ft_combined_with_negation():
+            """Test combining positive and negative criteria."""
+            send_recv(sock, 'Ir.init "ftcn" ["Main"];')
+            # Find theorems with + but not containing 'mult'
+            out = send_recv(sock, 'Ir.find_theorems 5 "\\\"_ + _\\\" -name:mult";')
+            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+            send_recv(sock, 'Ir.remove "ftcn";')
+        tests.append(test_ft_combined_with_negation)
+
+        def test_ft_simp_with_term():
+            """Test simp with specific term."""
+            send_recv(sock, 'Ir.init "ftst" ["Main"];')
+            out = send_recv(sock, 'Ir.find_theorems 5 "simp:\\\"True\\\"";')
+            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+            send_recv(sock, 'Ir.remove "ftst";')
+        tests.append(test_ft_simp_with_term)
+
+        def test_ft_multiple_patterns():
+            """Test multiple pattern criteria."""
+            send_recv(sock, 'Ir.init "ftmp" ["Main"];')
+            # Look for theorems containing both + and =
+            out = send_recv(sock, 'Ir.find_theorems 5 "\\\"_ + _\\\" \\\"_ = _\\\"";')
+            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+            send_recv(sock, 'Ir.remove "ftmp";')
+        tests.append(test_ft_multiple_patterns)
+
         def test_load_theory():
             """load_theory loads a theory not in the heap, making it available for init."""
             out = send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";', timeout=300)
