@@ -2,7 +2,11 @@ session Micro_C_Examples = HOL +
   options [document = pdf, document_output = "output"]
   sessions
     "HOL-Library"
+    Micro_C_Parsing_Frontend
     Micro_C_Interfaces
+    Micro_Rust_Std_Lib
     Crush
+  theories
+    Simple_C_Functions
   theories [document=false]
     Micro_C_Examples
