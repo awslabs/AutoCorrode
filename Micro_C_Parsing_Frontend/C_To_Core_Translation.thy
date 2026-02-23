@@ -567,6 +567,26 @@ struct
     | translate_binop _ CNeqOp0 = unsupported "!= operator"
     | translate_binop _ CLndOp0 = Pure (Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT))
     | translate_binop _ CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
+    | translate_binop cty CAndOp0 = (* bitwise AND *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_and\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_and\<close>, isa_dummyT))
+    | translate_binop cty CXorOp0 = (* bitwise XOR *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_xor\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_xor\<close>, isa_dummyT))
+    | translate_binop cty COrOp0 = (* bitwise OR *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_or\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_or\<close>, isa_dummyT))
+    | translate_binop cty CShlOp0 = (* left shift *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_shl\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shl\<close>, isa_dummyT))
+    | translate_binop cty CShrOp0 = (* right shift *)
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shr\<close>, isa_dummyT))
     | translate_binop _ _ = unsupported "binary operator"
 
   (* Determine the C struct type of a variable expression.
@@ -677,6 +697,24 @@ struct
         (* *p : dereference pointer *)
         let val (expr', _) = translate_expr tctx expr
         in (C_Term_Build.mk_deref expr', C_Ast_Utils.CInt) end
+    | translate_expr tctx (CUnary0 (CCompOp0, expr, _)) =
+        (* ~x : bitwise complement *)
+        let val (expr', cty) = translate_expr tctx expr
+            val not_const =
+              if C_Ast_Utils.is_signed cty
+              then Isa_Const (\<^const_name>\<open>c_signed_not\<close>, isa_dummyT)
+              else Isa_Const (\<^const_name>\<open>c_unsigned_not\<close>, isa_dummyT)
+            val v = Isa_Free ("v__comp", isa_dummyT)
+        in (C_Term_Build.mk_bind expr' (Term.lambda v (not_const $ v)), cty) end
+    | translate_expr tctx (CUnary0 (CMinOp0, expr, _)) =
+        (* -x : unary minus, translate as 0 - x *)
+        let val (expr', cty) = translate_expr tctx expr
+            val zero = C_Term_Build.mk_literal_num cty 0
+            val sub_const =
+              if C_Ast_Utils.is_signed cty
+              then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
+              else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT)
+        in (C_Term_Build.mk_bind2 sub_const zero expr', cty) end
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
     (* arr[idx] : deref whole list, then index with nth.
