@@ -39,6 +39,12 @@ structure C_Ast_Utils : sig
   val ident_name : C_Ast.ident -> string
   val declr_name : C_Ast.nodeInfo C_Ast.cDeclarator -> string
   val extract_params : C_Ast.nodeInfo C_Ast.cDeclarator -> string list
+  val extract_param_decls : C_Ast.nodeInfo C_Ast.cDeclarator
+                            -> C_Ast.nodeInfo C_Ast.cDeclaration list
+  val param_name : C_Ast.nodeInfo C_Ast.cDeclaration -> string option
+  val extract_struct_type_from_decl : C_Ast.nodeInfo C_Ast.cDeclaration -> string option
+  val extract_struct_defs : C_Ast.nodeInfo C_Ast.cTranslationUnit
+                            -> (string * string list) list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
 end =
@@ -70,6 +76,45 @@ struct
          List.mapPartial param_name params
      | _ => [])
 
+  (* Extract the full parameter declarations (not just names) from a function declarator *)
+  fun extract_param_decls (CDeclr0 (_, derived, _, _, _)) =
+    (case List.find (fn CFunDeclr0 _ => true | _ => false) derived of
+       SOME (CFunDeclr0 (Right (params, _), _, _)) => params
+     | _ => [])
+
+  (* Check if a declaration has a struct type specifier and return the struct name.
+     E.g. for "struct point *p", returns SOME "point". *)
+  fun extract_struct_type_from_decl (CDecl0 (specs, _, _)) =
+        let fun find_struct [] = NONE
+              | find_struct (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    Some ident, _, _, _), _)) :: _) = SOME (ident_name ident)
+              | find_struct (_ :: rest) = find_struct rest
+        in find_struct specs end
+    | extract_struct_type_from_decl _ = NONE
+
+  (* Extract struct definitions (with member lists) from a top-level declaration.
+     Returns SOME (struct_name, [field_name, ...]) for struct definitions. *)
+  fun extract_struct_def_from_decl (CDecl0 (specs, _, _)) =
+        let fun find_struct_def [] = NONE
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    Some ident, Some members, _, _), _)) :: _) =
+                  let val sname = ident_name ident
+                      val field_names = List.mapPartial
+                        (fn CDecl0 (_, [((Some declr, _), _)], _) =>
+                              SOME (declr_name declr)
+                          | _ => NONE)
+                        members
+                  in SOME (sname, field_names) end
+              | find_struct_def (_ :: rest) = find_struct_def rest
+        in find_struct_def specs end
+    | extract_struct_def_from_decl _ = NONE
+
+  (* Extract all struct definitions from a translation unit *)
+  fun extract_struct_defs (CTranslUnit0 (ext_decls, _)) =
+    List.mapPartial
+      (fn CDeclExt0 decl => extract_struct_def_from_decl decl | _ => NONE)
+      ext_decls
+
   fun extract_fundefs (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
       (fn CFDefExt0 fundef => SOME fundef | _ => NONE)
@@ -89,27 +134,47 @@ ML \<open>
 structure C_Trans_Ctxt : sig
   datatype var_kind = Param | Local  (* Param = by-value, Local = mutable reference *)
   type t
-  val make : Proof.context -> t
+  val make : Proof.context -> string list Symtab.table -> t
   val get_ctxt : t -> Proof.context
   val add_var : string -> var_kind -> term -> t -> t
   val lookup_var : t -> string -> (var_kind * term) option
+  val set_struct_type : string -> string -> t -> t
+  val get_struct_type : t -> string -> string option
+  val get_struct_fields : t -> string -> string list option
 end =
 struct
   datatype var_kind = Param | Local
   type t = {
     ctxt : Proof.context,
-    vars : (var_kind * term) Symtab.table
+    vars : (var_kind * term) Symtab.table,
+    struct_types : string Symtab.table,         (* var_name -> c_struct_name *)
+    struct_fields : string list Symtab.table     (* c_struct_name -> [field_name] *)
   }
 
-  fun make ctxt : t = { ctxt = ctxt, vars = Symtab.empty }
+  fun make ctxt struct_fields : t =
+    { ctxt = ctxt, vars = Symtab.empty, struct_types = Symtab.empty,
+      struct_fields = struct_fields }
 
   fun get_ctxt ({ ctxt, ... } : t) = ctxt
 
-  fun add_var name kind tm ({ ctxt, vars } : t) : t =
-    { ctxt = ctxt, vars = Symtab.update (name, (kind, tm)) vars }
+  fun add_var name kind tm ({ ctxt, vars, struct_types, struct_fields } : t) : t =
+    { ctxt = ctxt, vars = Symtab.update (name, (kind, tm)) vars,
+      struct_types = struct_types, struct_fields = struct_fields }
 
   fun lookup_var ({ vars, ... } : t) name =
     Symtab.lookup vars name
+
+  fun set_struct_type var_name struct_name
+      ({ ctxt, vars, struct_types, struct_fields } : t) : t =
+    { ctxt = ctxt, vars = vars,
+      struct_types = Symtab.update (var_name, struct_name) struct_types,
+      struct_fields = struct_fields }
+
+  fun get_struct_type ({ struct_types, ... } : t) name =
+    Symtab.lookup struct_types name
+
+  fun get_struct_fields ({ struct_fields, ... } : t) name =
+    Symtab.lookup struct_fields name
 end
 \<close>
 
@@ -154,6 +219,8 @@ structure C_Term_Build : sig
   val mk_upt_int_range : term -> term -> term
   val mk_deref : term -> term
   val mk_ptr_write : term -> term -> term
+  val mk_struct_field_read : term -> term -> term
+  val mk_struct_field_write : term -> term -> term -> term
   val mk_while_stub : term
   val mk_goto_stub : term
   val mk_unsupported_stub : term
@@ -277,6 +344,26 @@ struct
       $ ptr_expr
       $ val_expr
 
+  (* Struct field read: dereference pointer, then extract field via accessor.
+     Generates: bind (deref ptr_expr) (\<lambda>v. literal (accessor v)) *)
+  fun mk_struct_field_read accessor_const ptr_expr =
+    let val v = Free ("v__struct", dummyT)
+    in mk_bind (mk_deref ptr_expr)
+         (Term.lambda v (mk_literal (accessor_const $ v)))
+    end
+
+  (* Struct field write: evaluate rhs, dereference pointer, update field, write back.
+     Generates: bind val_expr (\<lambda>rhs. bind (deref ptr) (\<lambda>v. ptr_write ptr (updater (\<lambda>_. rhs) v))) *)
+  fun mk_struct_field_write updater_const ptr_expr val_expr =
+    let val rhs_var = Free ("v__rhs", dummyT)
+        val struct_var = Free ("v__struct", dummyT)
+        val dummy_var = Free ("_uu__", dummyT)
+        val updated = updater_const $ (Term.lambda dummy_var rhs_var) $ struct_var
+    in mk_bind val_expr (Term.lambda rhs_var
+         (mk_bind (mk_deref ptr_expr) (Term.lambda struct_var
+           (mk_ptr_write ptr_expr (mk_literal updated)))))
+    end
+
   (* Stub constants for unsupported C constructs *)
   val mk_while_stub = Const (\<^const_name>\<open>c_while_stub\<close>, dummyT)
   val mk_goto_stub = Const (\<^const_name>\<open>c_goto_stub\<close>, dummyT)
@@ -295,7 +382,8 @@ text \<open>
 ML \<open>
 structure C_Translate : sig
   val translate_stmt : C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cStatement -> term
-  val translate_fundef : Proof.context -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
+  val translate_fundef : string list Symtab.table -> Proof.context
+                         -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
 end =
 struct
   (* Save Isabelle term constructors before C_Ast shadows them *)
@@ -333,6 +421,24 @@ struct
     | translate_binop CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
     | translate_binop _ = unsupported "binary operator"
 
+  (* Determine the C struct type of a variable expression.
+     Only handles simple variable references for now. *)
+  fun determine_struct_type tctx (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in case C_Trans_Ctxt.get_struct_type tctx name of
+             SOME sname => sname
+           | NONE => error ("micro_c_translate: cannot determine struct type for: " ^ name)
+        end
+    | determine_struct_type _ _ =
+        error "micro_c_translate: struct member access on complex expression not yet supported"
+
+  (* Resolve a struct field accessor/updater constant by name convention.
+     Convention: struct "point" field "x" -> accessor "c_point_x", updater "update_c_point_x" *)
+  fun resolve_const ctxt name =
+    let val (full_name, _) = Term.dest_Const
+          (Proof_Context.read_const {proper = true, strict = false} ctxt name)
+    in Isa_Const (full_name, isa_dummyT) end
+
   fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
         C_Term_Build.mk_literal_int (IntInf.toInt n)
     | translate_expr tctx (CVar0 (ident, _)) =
@@ -353,6 +459,16 @@ struct
              Monadic f => C_Term_Build.mk_bind2 f l r
            | Pure f => C_Term_Build.mk_bindlift2 f l r
         end
+    (* p->field = rhs : struct field write through pointer *)
+    | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, true, _), rhs, _)) =
+        let val field_name = C_Ast_Utils.ident_name field_ident
+            val struct_name = determine_struct_type tctx expr
+            val updater_name = "update_c_" ^ struct_name ^ "_" ^ field_name
+            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            val updater_const = resolve_const ctxt updater_name
+            val ptr_expr = translate_expr tctx expr
+            val rhs' = translate_expr tctx rhs
+        in C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs' end
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
             val rhs' = translate_expr tctx rhs
@@ -386,8 +502,17 @@ struct
         unsupported "unary expression"
     | translate_expr _ (CIndex0 _) =
         unsupported "array indexing (Task 1.14)"
-    | translate_expr _ (CMember0 _) =
-        unsupported "struct member access (Task 2.2)"
+    (* p->field : struct field read through pointer *)
+    | translate_expr tctx (CMember0 (expr, field_ident, true, _)) =
+        let val field_name = C_Ast_Utils.ident_name field_ident
+            val struct_name = determine_struct_type tctx expr
+            val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
+            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            val accessor_const = resolve_const ctxt accessor_name
+            val ptr_expr = translate_expr tctx expr
+        in C_Term_Build.mk_struct_field_read accessor_const ptr_expr end
+    | translate_expr _ (CMember0 (_, _, false, _)) =
+        unsupported "direct struct member access (s.field) - use pointer access (p->field)"
     | translate_expr _ _ =
         unsupported "expression"
 
@@ -502,16 +627,23 @@ struct
     | translate_stmt _ _ =
         (warning "micro_c_translate: unknown statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
 
-  fun translate_fundef ctxt (CFunDef0 (_, declr, _, body, _)) =
+  fun translate_fundef struct_tab ctxt (CFunDef0 (_, declr, _, body, _)) =
     let
       val name = C_Ast_Utils.declr_name declr
       val param_names = C_Ast_Utils.extract_params declr
+      val param_decls = C_Ast_Utils.extract_param_decls declr
       (* Create free variables for each parameter *)
       val param_vars = List.map (fn n => (n, Isa_Free (n, isa_dummyT))) param_names
       (* Add parameters to the translation context as Param (by-value) *)
       val tctx = List.foldl
         (fn ((n, v), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v ctx)
-        (C_Trans_Ctxt.make ctxt) param_vars
+        (C_Trans_Ctxt.make ctxt struct_tab) param_vars
+      (* Annotate struct pointer parameters with their struct type *)
+      val tctx = List.foldl (fn (pdecl, ctx) =>
+        case (C_Ast_Utils.param_name pdecl,
+              C_Ast_Utils.extract_struct_type_from_decl pdecl) of
+          (SOME n, SOME sn) => C_Trans_Ctxt.set_struct_type n sn ctx
+        | _ => ctx) tctx param_decls
       val body_term = translate_stmt tctx body
       val fn_term = C_Term_Build.mk_function_body body_term
       (* Wrap in lambdas for each parameter *)
@@ -547,12 +679,18 @@ struct
 
   fun process_translation_unit tu lthy =
     let
+      (* Extract struct definitions to build the struct field registry *)
+      val struct_defs = C_Ast_Utils.extract_struct_defs tu
+      val struct_tab = Symtab.make struct_defs
+      val _ = List.app (fn (sname, fields) =>
+        writeln ("Registered struct: " ^ sname ^ " with fields: " ^
+                 String.concatWith ", " fields)) struct_defs
       val fundefs = C_Ast_Utils.extract_fundefs tu
     in
       (* Translate and define each function one at a time, so that later
          functions can reference earlier ones via Syntax.check_term. *)
       List.foldl (fn (fundef, lthy) =>
-        let val (name, term) = C_Translate.translate_fundef lthy fundef
+        let val (name, term) = C_Translate.translate_fundef struct_tab lthy fundef
         in define_c_function name term lthy end) lthy fundefs
     end
 end
