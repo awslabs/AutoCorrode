@@ -11,7 +11,7 @@ sig
   val config : (config -> config) -> unit
   val get_cfg : unit -> config
 
-  val init : string -> string -> unit
+  val init : string -> string list -> unit
   val fork : string -> int -> unit
   val focus : string -> unit
   val step : string -> unit
@@ -29,6 +29,7 @@ sig
   val theories : unit -> unit
   val source : string -> int -> int -> unit
   val sledgehammer : int -> unit
+  val find_theorems : int -> string -> unit
   val timeout : int -> unit
   val help : unit -> unit
 end;
@@ -306,23 +307,29 @@ fun parse_spec spec =
   | [thy] => (thy, NONE)
   | _ => error ("Bad spec: " ^ quote spec);
 
-fun init id spec =
+fun init id specs =
   let val _ = if Symtab.defined (Synchronized.value repl_tab) id
               then error ("REPL " ^ quote id ^ " already exists")
               else ()
-      val (thy_name, opt_idx) = parse_spec spec
+      val _ = if null specs then error "init requires at least one spec" else ()
+      val parsed = map parse_spec specs
       val (origin, st) =
-        case opt_idx of
-          NONE =>
-            (From_Theory thy_name,
-             Toplevel.make_state (SOME (Thy_Info.get_theory thy_name
-               |> Config.put_global Goal.quick_and_dirty true)))
-        | SOME idx =>
+        case parsed of
+          [(thy_name, SOME idx)] =>
             let val segs = find_source thy_name
                 val seg = nth segs idx
                   handle General.Subscript =>
                     error ("Index " ^ string_of_int idx ^ " out of range")
             in (From_Segment (thy_name, idx), #state (seg : Document_Output.segment)) end
+        | _ =>
+            let val _ = if exists (fn (_, opt) => is_some opt) parsed
+                        then error "Cannot mix theory and segment specs in multi-theory init"
+                        else ()
+                val thy_names = map #1 parsed
+                val thys = map Thy_Info.get_theory thy_names
+                val thy = Theory.begin_theory (id, Position.none) thys
+            in (From_Theory (String.concatWith "+" thy_names),
+                Toplevel.make_state (SOME thy)) end
       val r : repl = {origin = origin, base_state = st, steps = []}
   in update_repl id r;
      Synchronized.change current_repl (K id);
@@ -523,6 +530,25 @@ fun theories () =
 
 (* Sledgehammer via compiler bridge *)
 
+fun find_theorems max_results query =
+  let val st = last_state (snd (the_current ()))
+      val ctxt = Toplevel.context_of st
+      val opt_goal = try (fn () => #goal (Proof.simple_goal (Toplevel.proof_of st))) ()
+      val criteria = Find_Theorems.read_query Position.none query
+      val limit = if max_results > 0 then SOME max_results else NONE
+      val (opt_found, theorems) =
+        Find_Theorems.find_theorems_cmd ctxt opt_goal limit false criteria
+      val returned = length theorems
+      val tally =
+        (case opt_found of
+           NONE => "displaying " ^ string_of_int returned ^ " theorem(s)"
+         | SOME found =>
+             "found " ^ string_of_int found ^ " theorem(s)" ^
+             (if returned < found
+              then " (" ^ string_of_int returned ^ " displayed)" else ""))
+      val lines = map (fn t => Pretty.string_of (Find_Theorems.pretty_thm ctxt t)) theorems
+  in out (tally ^ ":\n" ^ String.concatWith "\n" (rev lines)) end;
+
 fun sledgehammer timeout_secs =
   let val st = last_state (snd (the_current ()))
       val _ = Toplevel.proof_of st
@@ -565,7 +591,8 @@ fun help () = out
   \  Sessions start in the context of a named theory -- do NOT issue\n\
   \  'theory' commands. Steps are Isar: lemma, definition, fun, by, etc.\n\
   \\n\
-  \  init id spec       create REPL from \"Theory\" or \"Theory:idx\"\n\
+  \  init id [specs]    create REPL from [\"Theory\"], [\"Theory:idx\"],\n\
+  \                     or [\"T1\",\"T2\",...] (merges theories)\n\
   \  fork id state_idx  fork sub-REPL from current at state (~1=latest)\n\
   \  focus id           switch current REPL\n\
   \  step \"isar text\"   append step to current REPL\n\
@@ -578,6 +605,7 @@ fun help () = out
   \  truncate idx       discard steps after idx\n\
   \  merge ()           inline current sub-REPL into parent\n\
   \  sledgehammer secs  run sledgehammer on current proof state\n\
+  \  find_theorems n q  search theorems (n=max results, 0=unlimited)\n\
   \  timeout secs       set step timeout (0=unlimited, default 5s)\n\
   \  remove id          remove REPL and its sub-REPLs\n\
   \  repls ()           list all REPLs\n\
@@ -589,7 +617,7 @@ fun help () = out
   \\n\
   \=== Quick start ===\n\
   \\n\
-  \  Explore.init \"R\" \"MySession.MyTheory\";\n\
+  \  Explore.init \"R\" [\"MySession.MyTheory\"];\n\
   \  Explore.step \"lemma \\\"True\\\"\";\n\
   \  Explore.step \"by simp\";\n\
   \  Explore.show ();\n\
@@ -612,7 +640,7 @@ fun help () = out
   \\n\
   \  Explore.source \"MySession.MyTheory\" 0 ~1;  (* all *)\n\
   \  Explore.source \"MySession.MyTheory\" 0 10;  (* first 11 *)\n\
-  \  Explore.init \"R\" \"MySession.MyTheory:42\";    (* from source 42 *)";
+  \  Explore.init \"R\" [\"MySession.MyTheory:42\"];    (* from source 42 *)";
 
 end;
 

@@ -131,9 +131,10 @@ def disconnect() -> str:
     repl.disconnect()
     return "Disconnected"
 
-@mcp.tool(description="Create a new REPL session. `thy` is \"TheoryName\" or \"TheoryName:source_idx\". The session starts in the context of that theory — do NOT send a 'theory' command via step.")
-def init(id: str, thy: str) -> str:
-    return repl.send(f"Explore.init {ml_str(id)} {ml_str(thy)};")
+@mcp.tool(description="Create a new REPL session. `theories` is a list of theory specs: [\"TheoryName\"], [\"TheoryName:source_idx\"], or [\"T1\",\"T2\",...] to merge multiple theories. The session starts in the context of those theories — do NOT send a 'theory' command via step.")
+def init(id: str, theories: list[str]) -> str:
+    ml_list = "[" + ", ".join(ml_str(t) for t in theories) + "]"
+    return repl.send(f"Explore.init {ml_str(id)} {ml_list};")
 
 @mcp.tool(description="Fork a sub-REPL from the current REPL at the given state index (0=base, -1=latest).")
 def fork(id: str, state_idx: int) -> str:
@@ -182,6 +183,10 @@ def merge() -> str:
 @mcp.tool(description="Run Sledgehammer on the current proof state with the given timeout in seconds.")
 def sledgehammer(timeout_secs: int) -> str:
     return repl.send(f"Explore.sledgehammer {ml_int(timeout_secs)};")
+
+@mcp.tool(description="Search for theorems matching a query. Uses Isabelle's find_theorems syntax: name patterns (name:\"foo\"), intro/elim/dest/simp rules, or term patterns (e.g. \"_ + _ = _ + _\"). Prefix a criterion with - to negate.")
+def find_theorems(query: str, max_results: int = 40) -> str:
+    return repl.send(f"Explore.find_theorems {ml_int(max_results)} {ml_str(query)};")
 
 @mcp.tool(description="Set step timeout in seconds (0=unlimited, default 5s).")
 def timeout(secs: int) -> str:

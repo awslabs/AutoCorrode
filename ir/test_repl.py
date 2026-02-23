@@ -152,35 +152,51 @@ def main():
         # -- Single-client tests --
         print(f"\n{_BOLD}Running{_RESET} single-client tests")
 
+        tests = []
+
         def test_help():
             out = send_recv(sock, 'Explore.help ();')
             assert "Explore.init" in out, f"Expected help text, got:\n{out}"
+
+        tests.append(test_help)
 
         def test_theories():
             out = send_recv(sock, 'Explore.theories ();')
             assert "Main" in out, f"Expected Main theory, got:\n{out}"
 
+        tests.append(test_theories)
+
         def test_init_show():
-            send_recv(sock, 'Explore.init "t1" "Main";')
+            send_recv(sock, 'Explore.init "t1" ["Main"];')
             out = send_recv(sock, 'Explore.show ();')
             assert "t1" in out, f"Expected REPL t1, got:\n{out}"
+
+        tests.append(test_init_show)
 
         def test_step():
             out = send_recv(sock, 'Explore.step "lemma dummy: True by simp";')
             assert "theorem dummy: True" in out, f"Unexpected output: \n{out}"
+
+        tests.append(test_step)
 
         def test_state():
             send_recv(sock, 'Explore.step "lemma foo: True";')
             out = send_recv(sock, 'Explore.state ~1;')
             assert "goal (1 subgoal):", f"Unexpected state:\n{out}"
 
+        tests.append(test_state)
+
         def test_text():
             out = send_recv(sock, 'Explore.text ();')
             assert "lemma" in out, f"Expected lemma text, got:\n{out}"
 
+        tests.append(test_text)
+
         def test_edit_replay():
             send_recv(sock, 'Explore.edit 0 "lemma True by auto";')
             send_recv(sock, 'Explore.replay ();')
+
+        tests.append(test_edit_replay)
 
         def test_fork_focus_merge():
             send_recv(sock, 'Explore.fork "t2" 0;')
@@ -188,16 +204,24 @@ def main():
             send_recv(sock, 'Explore.step "lemma True by auto";')
             send_recv(sock, 'Explore.merge ();')
 
+        tests.append(test_fork_focus_merge)
+
         def test_repls():
             out = send_recv(sock, 'Explore.repls ();')
             assert "t1" in out, f"Expected t1 in repls, got:\n{out}"
 
+        tests.append(test_repls)
+
         def test_source():
             send_recv(sock, 'Explore.source "Main" 0 3 handle ERROR _ => ();')
 
+        tests.append(test_source)
+
         def test_remove():
-            send_recv(sock, 'Explore.init "tmp" "Main";')
+            send_recv(sock, 'Explore.init "tmp" ["Main"];')
             send_recv(sock, 'Explore.remove "tmp";')
+
+        tests.append(test_remove)
 
         def test_config():
             send_recv(sock, 'Explore.config (fn c => '
@@ -206,26 +230,73 @@ def main():
                       'show_theory_in_source = #show_theory_in_source c, '
                       'auto_replay = #auto_replay c});')
 
+        tests.append(test_config)
+
         def test_multiline_step():
             """Multi-line Isar text sent as escaped ML string (via MCP path)."""
-            send_recv(sock, 'Explore.init "ml1" "Main";')
+            send_recv(sock, 'Explore.init "ml1" ["Main"];')
             # Multi-line: lemma + proof on separate lines, escaped as ML string
             out = send_recv(sock, 'Explore.step "lemma ml_test: True\\nby simp";')
             assert "ml_test" in out, f"Expected ml_test theorem, got:\n{out}"
             send_recv(sock, 'Explore.remove "ml1";')
 
+        tests.append(test_multiline_step)
+
         def test_multiline_step_raw_newline():
             """Multi-line Isar text with raw newline (TCP multi-line accumulation)."""
-            send_recv(sock, 'Explore.init "ml2" "Main";')
+            send_recv(sock, 'Explore.init "ml2" ["Main"];')
             # Raw newline: TCP handler accumulates lines until ;
             out = send_recv(sock, 'Explore.step "lemma ml_raw: True\nby simp";')
             assert "ml_raw" in out, f"Expected ml_raw theorem, got:\n{out}"
             send_recv(sock, 'Explore.remove "ml2";')
 
-        for t in [test_help, test_theories, test_init_show, test_step,
-                  test_state, test_text, test_edit_replay, test_fork_focus_merge,
-                  test_repls, test_source, test_remove, test_config,
-                  test_multiline_step, test_multiline_step_raw_newline]:
+        tests.append(test_multiline_step_raw_newline)
+
+        # -- find_theorems tests --
+        def test_ft_single_theory_immediate_library():
+            send_recv(sock, 'Explore.init "ft1" ["Main"];')
+            out = send_recv(sock, 'Explore.find_theorems 3 "name: conjI";')
+            assert "conjI" in out, f"Expected conjI, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ft1";')
+
+        tests.append(test_ft_single_theory_immediate_library)
+
+        def test_ft_single_theory_after_lemma_library():
+            send_recv(sock, 'Explore.init "ft2" ["Main"];')
+            send_recv(sock, 'Explore.step "lemma ft2_lem: True by simp";')
+            out = send_recv(sock, 'Explore.find_theorems 3 "name: conjI";')
+            assert "conjI" in out, f"Expected conjI, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ft2";')
+
+        tests.append(test_ft_single_theory_after_lemma_library)
+
+        def test_ft_single_theory_after_lemma_repl_fact():
+            send_recv(sock, 'Explore.init "ft3" ["Main"];')
+            send_recv(sock, 'Explore.step "lemma ft3_lem: True by simp";')
+            out = send_recv(sock, 'Explore.find_theorems 3 "name: ft3_lem";')
+            assert "ft3_lem" in out, f"Expected ft3_lem, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ft3";')
+
+        tests.append(test_ft_single_theory_after_lemma_repl_fact)
+
+        def test_ft_multi_theory_immediate_library():
+            send_recv(sock, 'Explore.init "ft4" ["Main", "Complex_Main"];')
+            out = send_recv(sock, 'Explore.find_theorems 3 "name: conjI";')
+            assert "conjI" in out, f"Expected conjI, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ft4";')
+
+        tests.append(test_ft_multi_theory_immediate_library)
+
+        def test_ft_multi_theory_after_lemma_repl_fact():
+            send_recv(sock, 'Explore.init "ft5" ["Main", "Complex_Main"];')
+            send_recv(sock, 'Explore.step "lemma ft5_lem: True by simp";')
+            out = send_recv(sock, 'Explore.find_theorems 3 "name: ft5_lem";')
+            assert "ft5_lem" in out, f"Expected ft5_lem, got:\n{out}"
+            send_recv(sock, 'Explore.remove "ft5";')
+
+        tests.append(test_ft_multi_theory_after_lemma_repl_fact)
+
+        for t in tests:
             run_test(t.__name__, t)
 
         sock.close()
@@ -251,8 +322,8 @@ def main():
                 except Exception as e:
                     errors[idx] = e
 
-            send_recv(s1, 'Explore.init "mc1" "Main";')
-            send_recv(s1, 'Explore.init "mc2" "Main";')
+            send_recv(s1, 'Explore.init "mc1" ["Main"];')
+            send_recv(s1, 'Explore.init "mc2" ["Main"];')
 
             t1 = threading.Thread(target=client,
                                   args=(0, s1, 'Explore.focus "mc1"; Explore.theories ();'))
