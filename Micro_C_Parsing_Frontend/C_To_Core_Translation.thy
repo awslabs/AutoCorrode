@@ -112,6 +112,19 @@ struct
 end
 \<close>
 
+subsection \<open>Stub Constants for Unsupported C Constructs\<close>
+
+text \<open>
+  Opaque constants for C constructs that cannot be translated.
+  They have no WP rules, so symbolic execution silently gets stuck
+  when encountering these. The translation succeeds, and the user
+  can see from the constant names which constructs need attention.
+\<close>
+
+consts c_while_stub :: "('s, 'v, 'r, 'abort, 'i, 'o) expression"
+consts c_goto_stub :: "('s, 'v, 'r, 'abort, 'i, 'o) expression"
+consts c_unsupported :: "('s, 'v, 'r, 'abort, 'i, 'o) expression"
+
 subsection \<open>Term Construction\<close>
 
 text \<open>
@@ -137,6 +150,9 @@ structure C_Term_Build : sig
   val mk_funcall : term -> term list -> term
   val mk_raw_for_loop : term -> term -> term
   val mk_upt_int_range : term -> term -> term
+  val mk_while_stub : term
+  val mk_goto_stub : term
+  val mk_unsupported_stub : term
 end =
 struct
   (* literal v *)
@@ -232,6 +248,11 @@ struct
     Const (\<^const_name>\<open>List.map\<close>, dummyT --> dummyT --> dummyT)
       $ Const (\<^const_name>\<open>of_nat\<close>, dummyT)
       $ (Const (\<^const_name>\<open>upt\<close>, dummyT --> dummyT --> dummyT) $ start_nat $ bound_nat)
+
+  (* Stub constants for unsupported C constructs *)
+  val mk_while_stub = Const (\<^const_name>\<open>c_while_stub\<close>, dummyT)
+  val mk_goto_stub = Const (\<^const_name>\<open>c_goto_stub\<close>, dummyT)
+  val mk_unsupported_stub = Const (\<^const_name>\<open>c_unsupported\<close>, dummyT)
 end
 \<close>
 
@@ -422,19 +443,20 @@ struct
              in C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term) end
          | NONE => unsupported "non-standard for loop")
     | translate_stmt _ (CWhile0 _) =
-        unsupported "while loop (Task 1.10)"
+        (warning "micro_c_translate: while loop replaced with stub"; C_Term_Build.mk_while_stub)
     | translate_stmt _ (CSwitch0 _) =
-        unsupported "switch statement (Task 1.10)"
+        (warning "micro_c_translate: switch statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
     | translate_stmt _ (CGoto0 _) =
-        unsupported "goto (Task 1.10)"
-    | translate_stmt _ (CLabel0 _) =
-        unsupported "label"
+        (warning "micro_c_translate: goto replaced with stub"; C_Term_Build.mk_goto_stub)
+    | translate_stmt tctx (CLabel0 (_, stmt, _, _)) =
+        (warning "micro_c_translate: label ignored, translating labeled statement";
+         translate_stmt tctx stmt)
     | translate_stmt _ (CCont0 _) =
-        unsupported "continue"
+        (warning "micro_c_translate: continue replaced with stub"; C_Term_Build.mk_unsupported_stub)
     | translate_stmt _ (CBreak0 _) =
-        unsupported "break"
+        (warning "micro_c_translate: break replaced with stub"; C_Term_Build.mk_unsupported_stub)
     | translate_stmt _ _ =
-        unsupported "statement"
+        (warning "micro_c_translate: unknown statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
 
   fun translate_fundef ctxt (CFunDef0 (_, declr, _, body, _)) =
     let
@@ -608,5 +630,17 @@ void loop_literal(void) {
 \<close>
 
 thm c_loop_literal_def
+
+text \<open>Smoke test: while loop should produce a stub constant (no error, just gets stuck).\<close>
+micro_c_translate \<open>
+void while_test(int n) {
+  int x = 0;
+  while (x < n) {
+    x = x + 1;
+  }
+}
+\<close>
+
+thm c_while_test_def
 
 end
