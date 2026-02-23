@@ -115,6 +115,83 @@ definition c_unsigned_mod :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
      if b = 0 then c_abort DivisionByZero
      else literal (a mod b)\<close>
 
+section \<open>C Bitwise Operations\<close>
+
+text \<open>
+  Bitwise AND, OR, XOR, and NOT have no undefined behavior in C —
+  they operate on the bit representation for both signed and unsigned types.
+\<close>
+
+definition c_signed_and :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_and a b \<equiv> literal (a AND b)\<close>
+
+definition c_signed_or :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_or a b \<equiv> literal (a OR b)\<close>
+
+definition c_signed_xor :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_xor a b \<equiv> literal (a XOR b)\<close>
+
+definition c_signed_not :: \<open>'l::{len} sword \<Rightarrow>
+    ('s, 'l sword, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_not a \<equiv> literal (NOT a)\<close>
+
+definition c_unsigned_and :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_and a b \<equiv> literal (a AND b)\<close>
+
+definition c_unsigned_or :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_or a b \<equiv> literal (a OR b)\<close>
+
+definition c_unsigned_xor :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_xor a b \<equiv> literal (a XOR b)\<close>
+
+definition c_unsigned_not :: \<open>'l::{len} word \<Rightarrow>
+    ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_not a \<equiv> literal (NOT a)\<close>
+
+section \<open>C Shift Operations\<close>
+
+text \<open>
+  Shift operations have undefined behavior when the shift amount is
+  greater than or equal to the bit width. Signed left shift additionally
+  has UB for negative operands or when the result overflows.
+  Signed right shift of a negative operand is implementation-defined
+  in C11/C17; we conservatively abort.
+\<close>
+
+definition c_unsigned_shl :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_shl a b \<equiv>
+     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
+     else literal (push_bit (unat b) a)\<close>
+
+definition c_unsigned_shr :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_shr a b \<equiv>
+     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
+     else literal (drop_bit (unat b) a)\<close>
+
+definition c_signed_shl :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_shl a b \<equiv>
+     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
+     else let result_int = sint a * 2 ^ unat b in
+       if sint a < 0 \<or> result_int < -(2^(LENGTH('l) - 1)) \<or> result_int \<ge> 2^(LENGTH('l) - 1) then
+         c_signed_overflow
+       else literal (word_of_int result_int)\<close>
+
+definition c_signed_shr :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_shr a b \<equiv>
+     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
+     else if sint a < 0 then c_signed_overflow
+     else literal (word_of_int (sint a div 2 ^ unat b))\<close>
+
 section \<open>C Unsigned Comparison Operations\<close>
 
 definition c_unsigned_less :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>

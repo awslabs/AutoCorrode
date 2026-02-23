@@ -21,6 +21,7 @@ datatype c_abort =
   | SignedOverflow
   | DivisionByZero
   | UseAfterFree
+  | ShiftOutOfRange
 
 text \<open>
   Convenience abbreviations for aborting with specific C undefined behaviors.
@@ -44,5 +45,8 @@ definition c_division_by_zero :: \<open>('s, 'v, 'r, c_abort, 'i, 'o) expression
 
 definition c_use_after_free :: \<open>('s, 'v, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_use_after_free \<equiv> c_abort UseAfterFree\<close>
+
+definition c_shift_out_of_range :: \<open>('s, 'v, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_shift_out_of_range \<equiv> c_abort ShiftOutOfRange\<close>
 
 end
