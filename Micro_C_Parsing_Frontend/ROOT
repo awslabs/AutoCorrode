@@ -7,5 +7,6 @@ session Micro_C_Parsing_Frontend = HOL +
     Shallow_Micro_Rust
   theories
     Micro_C_Syntax
+    C_To_Core_Translation
   theories [document=false]
     Micro_C_Parsing_Frontend

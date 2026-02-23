@@ -3,6 +3,6 @@
 
 theory Micro_C_Parsing_Frontend
   imports
-    Micro_C_Syntax
+    C_To_Core_Translation
 begin
 end
