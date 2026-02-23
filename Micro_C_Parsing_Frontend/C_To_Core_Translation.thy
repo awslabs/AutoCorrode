@@ -178,6 +178,17 @@ struct
 end
 \<close>
 
+subsection \<open>Array Indexing Helper\<close>
+
+text \<open>
+  The @{text unat} function from the Word library is an abbreviation, not a logical
+  constant, so it cannot be referenced via @{text "\<^const_name>"} in ML.
+  We define a proper constant that wraps it.
+\<close>
+
+definition c_idx_to_nat :: \<open>'a::len word \<Rightarrow> nat\<close> where
+  [simp]: \<open>c_idx_to_nat w = unat w\<close>
+
 subsection \<open>Stub Constants for Unsupported C Constructs\<close>
 
 text \<open>
@@ -221,6 +232,8 @@ structure C_Term_Build : sig
   val mk_ptr_write : term -> term -> term
   val mk_struct_field_read : term -> term -> term
   val mk_struct_field_write : term -> term -> term -> term
+  val mk_unat : term -> term
+  val mk_focus_nth : term -> term -> term
   val mk_while_stub : term
   val mk_goto_stub : term
   val mk_unsupported_stub : term
@@ -364,6 +377,16 @@ struct
            (mk_ptr_write ptr_expr (mk_literal updated)))))
     end
 
+  (* c_idx_to_nat idx : convert word to nat for array indexing (wraps unat) *)
+  fun mk_unat idx_term =
+    Const (\<^const_name>\<open>c_idx_to_nat\<close>, dummyT --> dummyT) $ idx_term
+
+  (* focus_focused (nth_focus idx_nat) ref_term : focus reference to nth element *)
+  fun mk_focus_nth idx_nat ref_term =
+    Const (\<^const_name>\<open>focus_focused\<close>, dummyT --> dummyT --> dummyT)
+      $ (Const (\<^const_name>\<open>nth_focus\<close>, dummyT --> dummyT) $ idx_nat)
+      $ ref_term
+
   (* Stub constants for unsupported C constructs *)
   val mk_while_stub = Const (\<^const_name>\<open>c_while_stub\<close>, dummyT)
   val mk_goto_stub = Const (\<^const_name>\<open>c_goto_stub\<close>, dummyT)
@@ -469,6 +492,22 @@ struct
             val ptr_expr = translate_expr tctx expr
             val rhs' = translate_expr tctx rhs
         in C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs' end
+    (* arr[idx] = rhs : array element write via focus *)
+    | translate_expr tctx (CAssign0 (CAssignOp0, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
+        let val arr_term = translate_expr tctx arr_expr
+            val idx_term = translate_expr tctx idx_expr
+            val rhs_term = translate_expr tctx rhs
+            val a_var = Isa_Free ("v__arr", isa_dummyT)
+            val i_var = Isa_Free ("v__idx", isa_dummyT)
+            val v_var = Isa_Free ("v__rhs", isa_dummyT)
+            val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
+        in C_Term_Build.mk_bind rhs_term (Term.lambda v_var
+             (C_Term_Build.mk_bind arr_term (Term.lambda a_var
+               (C_Term_Build.mk_bind idx_term (Term.lambda i_var
+                 (C_Term_Build.mk_ptr_write
+                   (C_Term_Build.mk_literal focused)
+                   (C_Term_Build.mk_literal v_var)))))))
+        end
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
             val rhs' = translate_expr tctx rhs
@@ -500,8 +539,40 @@ struct
         C_Term_Build.mk_deref (translate_expr tctx expr)
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
-    | translate_expr _ (CIndex0 _) =
-        unsupported "array indexing (Task 1.14)"
+    (* arr[idx] : deref whole list, then index with nth.
+       We resolve dereference_fun from the locale context instead of using
+       store_dereference_const, which has ambiguous adhoc overloading
+       (dereference_fun vs ro_dereference_fun) for read-only references. *)
+    | translate_expr tctx (CIndex0 (arr_expr, idx_expr, _)) =
+        let val arr_term = translate_expr tctx arr_expr
+            val idx_term = translate_expr tctx idx_expr
+            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            (* Resolve dereference_fun from locale context to avoid adhoc
+               overloading ambiguity; fall back to store_dereference_const
+               when outside a reference locale (e.g. smoke tests). *)
+            val deref_const =
+              resolve_const ctxt "dereference_fun"
+              handle ERROR _ =>
+                Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+            val a_var = Isa_Free ("v__arr", isa_dummyT)
+            val i_var = Isa_Free ("v__idx", isa_dummyT)
+            val list_var = Isa_Free ("v__list", isa_dummyT)
+            val nth_term = Isa_Const (\<^const_name>\<open>nth\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                             $ list_var $ (C_Term_Build.mk_unat i_var)
+            (* bind (literal a) (deep_compose1 call dereference_fun) — same structure
+               as mk_deref but with the resolved constant *)
+            val deref_expr =
+              Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
+                $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                     $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                     $ deref_const)
+        in C_Term_Build.mk_bind arr_term (Term.lambda a_var
+             (C_Term_Build.mk_bind idx_term (Term.lambda i_var
+               (C_Term_Build.mk_bind deref_expr
+                 (Term.lambda list_var
+                   (C_Term_Build.mk_literal nth_term))))))
+        end
     (* p->field : struct field read through pointer *)
     | translate_expr tctx (CMember0 (expr, field_ident, true, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
@@ -854,5 +925,22 @@ void swap_fields(struct point *p) {
 \<close>
 
 thm c_swap_fields_def
+
+text \<open>Smoke test: array indexing read and write via focus.\<close>
+micro_c_translate \<open>
+int read_at(int *arr, int idx) {
+  return arr[idx];
+}
+\<close>
+
+thm c_read_at_def
+
+micro_c_translate \<open>
+void write_at(int *arr, int idx, int val) {
+  arr[idx] = val;
+}
+\<close>
+
+thm c_write_at_def
 
 end
