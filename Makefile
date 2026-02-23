@@ -44,6 +44,7 @@ jedit: register-afp-components
 
 register-afp-components:
 	$(ISABELLE_HOME)/isabelle components -u $(AFP_COMPONENT_BASE)/Word_Lib
+	$(ISABELLE_HOME)/isabelle components -u $(AFP_COMPONENT_BASE)/Isabelle_C
 
 build: register-afp-components
 	$(ISABELLE_HOME)/isabelle build $(ISABELLE_FLAGS) -d . AutoCorrode
