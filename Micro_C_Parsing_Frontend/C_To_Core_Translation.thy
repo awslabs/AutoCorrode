@@ -1,12 +1,15 @@
 (* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT *)
 
+
+
 theory C_To_Core_Translation
   imports
     Micro_C_Syntax
     "Shallow_Micro_Rust.Core_Expression"
     "Shallow_Micro_Rust.Core_Syntax"
     "Shallow_Micro_Rust.Bool_Type"
+    "Shallow_Micro_Rust.Rust_Iterator"
   keywords "micro_c_translate" :: thy_decl
 begin
 
@@ -132,6 +135,8 @@ structure C_Term_Build : sig
   val mk_two_armed_cond : term -> term -> term -> term
   val mk_one_armed_cond : term -> term -> term
   val mk_funcall : term -> term list -> term
+  val mk_raw_for_loop : term -> term -> term
+  val mk_upt_int_range : term -> term -> term
 end =
 struct
   (* literal v *)
@@ -216,6 +221,17 @@ struct
             in Library.foldl (op $) (Const (cname, dummyT --> ty), f :: args) end
     end
   end
+
+  (* raw_for_loop range_list body_fn *)
+  fun mk_raw_for_loop range body =
+    Const (\<^const_name>\<open>raw_for_loop\<close>, dummyT --> dummyT --> dummyT) $ range $ body
+
+  (* Build [start..<bound] mapped through of_nat to produce an int list:
+     List.map of_nat [start..<bound] *)
+  fun mk_upt_int_range start_nat bound_nat =
+    Const (\<^const_name>\<open>List.map\<close>, dummyT --> dummyT --> dummyT)
+      $ Const (\<^const_name>\<open>of_nat\<close>, dummyT)
+      $ (Const (\<^const_name>\<open>upt\<close>, dummyT --> dummyT --> dummyT) $ start_nat $ bound_nat)
 end
 \<close>
 
@@ -345,6 +361,39 @@ struct
         in C_Term_Build.mk_sequence stmt_term rest_term end
     | translate_compound_items _ _ = unsupported "block item"
 
+  (* Translate a C expression to a pure nat term (for loop bounds).
+     Only integer literals and parameter variables are supported. *)
+  and translate_pure_nat_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
+        HOLogic.mk_nat (IntInf.toInt n)
+    | translate_pure_nat_expr tctx (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in case C_Trans_Ctxt.lookup_var tctx name of
+             SOME (C_Trans_Ctxt.Param, v) =>
+               (* Convert parameter (int) to nat for range *)
+               Isa_Const (\<^const_name>\<open>nat\<close>, isa_dummyT) $ v
+           | _ => error ("micro_c_translate: loop bound must be a parameter or literal: " ^ name)
+        end
+    | translate_pure_nat_expr _ _ =
+        error "micro_c_translate: unsupported loop bound expression"
+
+  (* Try to recognize: for (int i = start; i < bound; i++) body
+     Returns SOME (var_name, start_nat, bound_nat, body) or NONE *)
+  and try_bounded_for (CFor0 (Right init_decl, Some cond, Some step, body, _)) =
+        (case (init_decl, cond, step) of
+           (CDecl0 (_, [((Some declr, Some (CInitExpr0 (init_expr, _))), _)], _),
+            CBinary0 (CLeOp0, CVar0 (cond_var, _), bound_expr, _),
+            CUnary0 (CPostIncOp0, CVar0 (step_var, _), _)) =>
+             let val var_name = C_Ast_Utils.declr_name declr
+                 val cond_name = C_Ast_Utils.ident_name cond_var
+                 val step_name = C_Ast_Utils.ident_name step_var
+             in
+               if var_name = cond_name andalso var_name = step_name
+               then SOME (var_name, init_expr, bound_expr, body)
+               else NONE
+             end
+         | _ => NONE)
+    | try_bounded_for _ = NONE
+
   and translate_stmt tctx (CCompound0 (_, items, _)) =
         translate_compound_items tctx items
     | translate_stmt _ (CReturn0 (None, _)) =
@@ -361,8 +410,17 @@ struct
     | translate_stmt tctx (CIf0 (cond, then_br, None, _)) =
         C_Term_Build.mk_two_armed_cond
           (translate_expr tctx cond) (translate_stmt tctx then_br) C_Term_Build.mk_literal_unit
-    | translate_stmt _ (CFor0 _) =
-        unsupported "for loop (Task 1.9)"
+    | translate_stmt tctx (stmt as CFor0 _) =
+        (case try_bounded_for stmt of
+           SOME (var_name, init_c_expr, bound_c_expr, body) =>
+             let val start_nat = translate_pure_nat_expr tctx init_c_expr
+                 val bound_nat = translate_pure_nat_expr tctx bound_c_expr
+                 val loop_var = Isa_Free (var_name, isa_dummyT)
+                 val tctx' = C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param loop_var tctx
+                 val body_term = translate_stmt tctx' body
+                 val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
+             in C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term) end
+         | NONE => unsupported "non-standard for loop")
     | translate_stmt _ (CWhile0 _) =
         unsupported "while loop (Task 1.10)"
     | translate_stmt _ (CSwitch0 _) =
@@ -497,6 +555,7 @@ void h(void) {
 
 thm c_h_def
 
+
 text \<open>Test if/else translation.\<close>
 
 micro_c_translate \<open>
@@ -525,5 +584,29 @@ int add_three(int x, int y, int z) {
 \<close>
 
 thm c_add_def c_add_three_def
+
+text \<open>Test bounded for-loop translation.\<close>
+
+micro_c_translate \<open>
+void loop_test(int n) {
+  int s = 0;
+  for (int i = 0; i < n; i++) {
+    s = s + i;
+  }
+}
+\<close>
+
+thm c_loop_test_def
+
+micro_c_translate \<open>
+void loop_literal(void) {
+  int s = 0;
+  for (int i = 0; i < 5; i++) {
+    s = s + i;
+  }
+}
+\<close>
+
+thm c_loop_literal_def
 
 end
