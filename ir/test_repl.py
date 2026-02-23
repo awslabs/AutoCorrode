@@ -36,18 +36,23 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-def send_recv(sock, cmd):
+def send_recv(sock, cmd, timeout=5):
     """Send a command and read until sentinel."""
-    sock.sendall((cmd.strip() + "\n").encode())
-    buf = b""
-    while True:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise EOFError("Connection closed")
-        buf += chunk
-        text = buf.decode("utf-8", errors="replace")
-        if SENTINEL in text:
-            return text[:text.index(SENTINEL)].strip()
+    old = sock.gettimeout()
+    sock.settimeout(timeout)
+    try:
+        sock.sendall((cmd.strip() + "\n").encode())
+        buf = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise EOFError("Connection closed")
+            buf += chunk
+            text = buf.decode("utf-8", errors="replace")
+            if SENTINEL in text:
+                return text[:text.index(SENTINEL)].strip()
+    finally:
+        sock.settimeout(old)
 
 
 def connect(port, retries=120, delay=2.0):
@@ -120,9 +125,9 @@ def main():
 
     proc = subprocess.Popen(
         cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
 
@@ -133,16 +138,12 @@ def main():
             elapsed = time.time() - t0
             print(f"{_CLEAR_LINE}  {_SYM_FAIL} server failed to start "
                   f"{_DIM}({elapsed:.1f}s){_RESET}")
-            # Kill the process so we can drain its output
+            # Kill the process
             os.killpg(proc.pid, signal.SIGTERM)
             try:
-                out, _ = proc.communicate(timeout=10)
-                if out:
-                    print(f"  Server output (last 3000 chars):")
-                    for line in out.decode("utf-8", errors="replace")[-3000:].splitlines():
-                        print(f"    {_DIM}{line}{_RESET}")
+                proc.wait(timeout=10)
             except Exception as e:
-                print(f"    {_DIM}(could not read output: {e}){_RESET}")
+                print(f"    {_DIM}(could not stop server: {e}){_RESET}")
             sys.exit(1)
 
         elapsed = time.time() - t0
@@ -323,7 +324,7 @@ def main():
 
         def test_load_theory():
             """load_theory loads a theory not in the heap, making it available for init."""
-            out = send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";')
+            out = send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";', timeout=300)
             assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
             # It should now appear in theories listing
             out = send_recv(sock, 'Ir.theories ();')
@@ -338,7 +339,7 @@ def main():
 
         def test_load_theory_already_loaded():
             """load_theory on an already-loaded theory is a no-op."""
-            out = send_recv(sock, 'Ir.load_theory "Main";')
+            out = send_recv(sock, 'Ir.load_theory "Main";', timeout=20)
             assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
 
         tests.append(test_load_theory_already_loaded)
