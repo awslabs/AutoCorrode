@@ -1,63 +1,106 @@
-# I/R — Isabelle/REPL
+# I/R: Interactive/Remote Isabelle REPL
 
-I/R provides interactive Isabelle theory exploration outside of jEdit,
-from the command line or programmatically via TCP and MCP.
+I/R is a TCP server wrapping an Isabelle/Poly/ML console with the
+Explore REPL, plus an MCP server for AI agent integration.
 
-## Overview
+It loads a pre-built Isabelle heap and lets you spawn REPLs rooted at
+theories. You then push/pop Isar commands to explore proofs interactively
+or via an agent.
 
-I/R consists of three components:
-
-- **`explore.ML`** — Isabelle/ML library providing named, forkable REPL
-  sessions rooted at arbitrary theory positions. Supports stepping through
-  Isar text, editing and replaying steps, viewing proof state, inspecting
-  theory source, and invoking sledgehammer.
-- **`repl.py`** — TCP server wrapping a Poly/ML console. Starts an Isabelle
-  console process, loads `explore.ML`, and multiplexes client connections
-  over a single serialized ML session. Includes an interactive management
-  console with tab completion and Unicode-to-Isabelle symbol translation.
-- **`explore_mcp.py`** — MCP server exposing each Explore function as an
-  MCP tool, allowing LLM agents to drive proof exploration over a
-  structured tool interface. Connects to `repl.py` over TCP.
+If you add a build hook (see `segment_storage.ML`) to store intermediate
+proof states in the heap, you can also fork REPLs at arbitrary points
+in a theory.
 
 ## Quick Start
 
+### Option A: Docker (no prerequisites)
+
 ```bash
-# Install Python dependencies
-pip install -r ir/requirements.txt
-
-# Start the REPL server (loads HOL + AutoCorrode session)
-python3 ir/repl.py --session AutoCorrode --dir .
-
-# In another terminal, connect via netcat or the MCP server
-nc localhost 9147
-Explore.init "test" "MyTheory";
-Explore.step "lemma foo: True";
-Explore.step "by simp";
-Explore.state ~1;
+docker build -t explore-repl:standalone -f ir/docker/Dockerfile.standalone .
+docker run --rm -it -p 9148:9148 explore-repl:standalone
 ```
 
-## MCP Integration
+### Option B: Local
+
+Requires: Isabelle, Python 3, and `pip install -r ir/requirements.txt`.
 
 ```bash
-# Start the MCP server (connects to a running repl.py)
-python3 ir/explore_mcp.py
+python3 ./ir/repl.py \
+  --isabelle /path/to/Isabelle/bin/isabelle \
+  --session HOL --mcp
 ```
 
-The MCP server exposes tools for `init`, `fork`, `focus`, `step`, `show`,
-`state`, `edit`, `replay`, `sledgehammer`, and more.
+Either way, you should see:
 
-## Dependencies
+```
+Starting Bash.Server...
+● Bash.Server ready at 127.0.0.1:64595
+Starting Isabelle console (session=HOL)...
+● Isabelle console ready.
+Loading .../explore.ML...
+● REPL ready. Waiting for connections on 127.0.0.1:9147
+Starting MCP server...
+[MCP] INFO:     Started server process [4002]
+[MCP] INFO:     Waiting for application startup.
+[MCP] StreamableHTTP session manager started
+[MCP] INFO:     Application startup complete.
+[MCP] INFO:     Uvicorn running on http://0.0.0.0:9148 (Press CTRL+C to quit)
+● MCP server started
+```
 
-- **Isabelle2025-2** with a built session heap (e.g. HOL or AutoCorrode)
-- **Python 3.10+**
-- **prompt_toolkit** — interactive console with tab completion and history (`repl.py`)
-- **mcp** — Model Context Protocol server framework (`explore_mcp.py`)
+## Try It
 
-Install via `pip install -r requirements.txt`, or in a virtual environment:
+```
+%> Explore.theories ();
+  ... list of theories in HOL ...
 
-```bash
-cd ir
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+%> Explore.init "R" ["Main"];
+Created REPL "R", set as current
+
+%> Explore.step "lemma dummy: True";
+proof (prove)
+goal (1 subgoal):
+ 1. True
+
+%> Explore.sledgehammer 5;
+simp: Try this: by simp (0.1 ms)
+...
+
+%> Explore.step "by simp";
+theorem dummy: True
+
+%> Explore.find_theorems 5 "name: conjI";
+displaying 4 theorem(s):
+HOL.conjI: [| ?P; ?Q |] ==> ?P & ?Q
+...
+```
+
+## Agent Integration
+
+Point your MCP client at `http://localhost:9148/mcp`. For example,
+in a Kiro CLI agent config:
+
+```json
+{
+  "mcpServers": {
+    "i/r": {
+      "url": "http://localhost:9148/mcp"
+    }
+  }
+}
+```
+
+The agent must call `connect` before using any other tool.
+
+When an MCP client connects successfully, you should see:
+
+```
+[MCP] Created new transport with session ID: 8794bd96a57a434daabd19c95591782b
+[MCP] INFO:     127.0.0.1:64675 - "POST /mcp HTTP/1.1" 200 OK
+[MCP] INFO:     127.0.0.1:64676 - "POST /mcp HTTP/1.1" 202 Accepted
+[MCP] INFO:     127.0.0.1:64676 - "GET /mcp HTTP/1.1" 200 OK
+[MCP] INFO:     127.0.0.1:64677 - "POST /mcp HTTP/1.1" 200 OK
+[MCP] Processing request of type ListToolsRequest
+[MCP] INFO:     127.0.0.1:64677 - "POST /mcp HTTP/1.1" 200 OK
+[MCP] Processing request of type ListPromptsRequest
 ```
