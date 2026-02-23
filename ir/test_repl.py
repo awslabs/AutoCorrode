@@ -221,6 +221,23 @@ def main():
             send_recv(sock, 'Ir.remove "trn";')
         tests.append(test_truncate_negative)
 
+        def test_truncate_negative_multi():
+            send_recv(sock, 'Ir.init "trn2" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma a: True by simp";')
+            send_recv(sock, 'Ir.step "lemma b: True by simp";')
+            send_recv(sock, 'Ir.step "lemma c: True by simp";')
+            out = send_recv(sock, 'Ir.truncate ~2;')
+            assert "dropped 2" in out, f"Expected dropped 2, got:\n{out}"
+            out = send_recv(sock, 'Ir.show ();')
+            assert "1 step" in out, f"Expected 1 step, got:\n{out}"
+            # Now truncate ~1 to empty
+            out = send_recv(sock, 'Ir.truncate ~1;')
+            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+            out = send_recv(sock, 'Ir.show ();')
+            assert "0 step" in out, f"Expected 0 steps, got:\n{out}"
+            send_recv(sock, 'Ir.remove "trn2";')
+        tests.append(test_truncate_negative_multi)
+
         def test_back():
             send_recv(sock, 'Ir.init "bk" ["Main"];')
             send_recv(sock, 'Ir.step "lemma x: True by simp";')
@@ -231,6 +248,16 @@ def main():
             assert "1 step" in out, f"Expected 1 step, got:\n{out}"
             send_recv(sock, 'Ir.remove "bk";')
         tests.append(test_back)
+
+        def test_back_to_empty():
+            send_recv(sock, 'Ir.init "bke" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma z: True by simp";')
+            out = send_recv(sock, 'Ir.back ();')
+            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+            out = send_recv(sock, 'Ir.show ();')
+            assert "0 step" in out, f"Expected 0 steps, got:\n{out}"
+            send_recv(sock, 'Ir.remove "bke";')
+        tests.append(test_back_to_empty)
 
         def test_repls():
             out = send_recv(sock, 'Ir.repls ();')
