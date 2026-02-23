@@ -804,7 +804,7 @@ def main():
                     else:
                         if line.startswith("ERROR:"):
                             print(f"{RED}[MCP] {line}{RST}")
-                        else:
+                        elif server.verbose:
                             print(f"{DIM}[MCP]{RST} {line}")
             rc = mcp_proc.wait()
             if rc != 0:
