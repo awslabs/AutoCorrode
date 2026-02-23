@@ -6,5 +6,7 @@ session Shallow_Micro_C = HOL +
     Shallow_Micro_Rust
     Shallow_Separation_Logic
     Byte_Level_Encoding
+  theories
+    C_Abort
   theories [document=false]
     Shallow_Micro_C

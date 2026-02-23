@@ -3,6 +3,6 @@
 
 theory Shallow_Micro_C
   imports
-    "Shallow_Micro_Rust.Core_Expression"
+    C_Abort
 begin
 end
