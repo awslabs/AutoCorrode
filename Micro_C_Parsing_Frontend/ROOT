@@ -1,0 +1,11 @@
+session Micro_C_Parsing_Frontend = HOL +
+  options [document = pdf, document_output = "output"]
+  sessions
+    "HOL-Eisbach"
+    "HOL-Library"
+    Isabelle_C
+    Shallow_Micro_Rust
+  theories
+    Micro_C_Syntax
+  theories [document=false]
+    Micro_C_Parsing_Frontend
