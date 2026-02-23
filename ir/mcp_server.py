@@ -131,7 +131,19 @@ def disconnect() -> str:
     repl.disconnect()
     return "Disconnected"
 
-@mcp.tool(description="Create a new REPL session. `theories` is a list of theory specs: [\"TheoryName\"], [\"TheoryName:source_idx\"], or [\"T1\",\"T2\",...] to merge multiple theories. The session starts in the context of those theories — do NOT send a 'theory' command via step.")
+@mcp.tool(description=(
+    "Create a new REPL session that imports the given Isabelle theories. "
+    "This is equivalent to writing `theory T imports A B C begin ...` in a .thy file. "
+    "This is the ONLY way to make a theory's definitions, lemmas, and notations available. "
+    "Theories not in the initial heap must be loaded first with `load_theory`.\n\n"
+    "`theories` is a list of fully qualified theory names. Examples:\n"
+    "- [\"Main\"] — start from the standard HOL library\n"
+    "- [\"HOL-Library.Multiset\"] — import the Multiset theory\n"
+    "- [\"HOL-Library.Multiset\", \"HOL-Library.FSet\"] — import and merge multiple theories\n"
+    "- [\"MySession.MyTheory:42\"] — start from a specific source location (single spec only)\n\n"
+    "When multiple theories are listed, they are merged so the REPL has access to all of them. "
+    "Use `theories` to see what is already loaded in the session."
+))
 def init(id: str, theories: list[str]) -> str:
     ml_list = "[" + ", ".join(ml_str(t) for t in theories) + "]"
     return repl.send(f"Ir.init {ml_str(id)} {ml_list};")
@@ -204,9 +216,20 @@ def remove(id: str) -> str:
 def repls() -> str:
     return repl.send("Ir.repls ();")
 
-@mcp.tool(description="List all loaded Isabelle theories.")
+@mcp.tool(description="List all loaded Isabelle theories. This includes theories from the initial heap plus any loaded via load_theory.")
 def theories() -> str:
     return repl.send("Ir.theories ();")
+
+@mcp.tool(description=(
+    "Load a theory (and its transitive dependencies) by fully qualified name into the Isabelle session. "
+    "After loading, the theory becomes available for `init` and appears in `theories`. "
+    "Example: load_theory(\"HOL-Library.Multiset\") loads the Multiset theory from HOL-Library."
+))
+def load_theory(theory_name: str, verbose: bool = False) -> str:
+    result = repl.send(f"Ir.load_theory {ml_str(theory_name)};")
+    if verbose:
+        return result
+    return "\n".join(l for l in result.splitlines() if l.startswith("Loaded theory")) or result
 
 @mcp.tool(description="List command spans of a stored theory. Use negative indices to count from the end.")
 def source(theory_name: str, start: int, stop: int) -> str:

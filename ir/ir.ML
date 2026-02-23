@@ -28,6 +28,7 @@ sig
   val remove : string -> unit
   val repls : unit -> unit
   val theories : unit -> unit
+  val load_theory : string -> unit
   val source : string -> int -> int -> unit
   val sledgehammer : int -> unit
   val find_theorems : int -> string -> unit
@@ -308,6 +309,8 @@ fun parse_spec spec =
   | [thy] => (thy, NONE)
   | _ => error ("Bad spec: " ^ quote spec);
 
+(* Create a new REPL.  The theory must already be loaded — either present
+   in the initial heap or previously loaded via Ir.load_theory. *)
 fun init id specs =
   let val _ = if Symtab.defined (Synchronized.value repl_tab) id
               then error ("REPL " ^ quote id ^ " already exists")
@@ -530,8 +533,16 @@ fun repls () =
     end) (Synchronized.value repl_tab) ()
   end;
 
+(* Lists theories in the initial heap plus those loaded via load_theory. *)
 fun theories () =
   List.app (fn s => out ("  " ^ s)) (Thy_Info.get_names ());
+
+(* Load a theory (and its transitive dependencies) by fully qualified name,
+   e.g. "HOL-Library.Multiset".  After loading, the theory is available
+   for Ir.init and appears in Ir.theories. *)
+fun load_theory name =
+  let val _ = Thy_Info.use_theories (Options.default ()) "" [(name, Position.none)]
+  in out ("Loaded theory " ^ quote name) end;
 
 (* Sledgehammer via compiler bridge *)
 
@@ -615,7 +626,8 @@ fun help () = out
   \  timeout secs       set step timeout (0=unlimited, default 5s)\n\
   \  remove id          remove REPL and its sub-REPLs\n\
   \  repls ()           list all REPLs\n\
-  \  theories ()   list loaded theories\n\
+  \  theories ()   list loaded theories (heap + load_theory)\n\
+  \  load_theory s  load theory by name, e.g. \"HOL-Library.Multiset\"\n\
   \  source thy s e   list command spans (s e = range, ~N = from end)\n\
   \  config f           update config: color, show_ignored, full_spans,\n\
   \                     show_theory_in_source, auto_replay\n\

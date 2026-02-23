@@ -321,6 +321,28 @@ def main():
 
         tests.append(test_ft_multi_theory_after_lemma_repl_fact)
 
+        def test_load_theory():
+            """load_theory loads a theory not in the heap, making it available for init."""
+            out = send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";')
+            assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
+            # It should now appear in theories listing
+            out = send_recv(sock, 'Ir.theories ();')
+            assert "Multiset" in out, f"Expected Multiset in theories, got:\n{out}"
+            # And we should be able to init a REPL on it
+            send_recv(sock, 'Ir.init "lt1" ["HOL-Library.Multiset"];')
+            out = send_recv(sock, 'Ir.step "term \\"{#} :: nat multiset\\"";')
+            assert "multiset" in out, f"Expected multiset type, got:\n{out}"
+            send_recv(sock, 'Ir.remove "lt1";')
+
+        tests.append(test_load_theory)
+
+        def test_load_theory_already_loaded():
+            """load_theory on an already-loaded theory is a no-op."""
+            out = send_recv(sock, 'Ir.load_theory "Main";')
+            assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
+
+        tests.append(test_load_theory_already_loaded)
+
         for t in tests:
             run_test(t.__name__, t)
 
