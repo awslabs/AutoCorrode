@@ -172,9 +172,13 @@ def edit(idx: int, isar_text: str) -> str:
 def replay() -> str:
     return repl.send("Ir.replay ();")
 
-@mcp.tool(description="Discard all steps after the given index.")
+@mcp.tool(description="Discard all steps after the given index. Use negative indices to count from the end: -1 reverts the last step, -2 the last two, etc.")
 def truncate(idx: int) -> str:
     return repl.send(f"Ir.truncate {ml_int(idx)};")
+
+@mcp.tool(description="Revert the last step. Synonym for truncate(-1).")
+def back() -> str:
+    return repl.send("Ir.back ();")
 
 @mcp.tool(description="Merge the current sub-REPL back into its parent.")
 def merge() -> str:

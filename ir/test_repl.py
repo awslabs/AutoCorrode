@@ -206,6 +206,31 @@ def main():
 
         tests.append(test_fork_focus_merge)
 
+        def test_truncate_negative():
+            send_recv(sock, 'Ir.init "trn" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma a: True by simp";')
+            send_recv(sock, 'Ir.step "lemma b: True by simp";')
+            send_recv(sock, 'Ir.step "lemma c: True by simp";')
+            out = send_recv(sock, 'Ir.truncate ~1;')
+            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+            out = send_recv(sock, 'Ir.truncate ~1;')
+            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+            out = send_recv(sock, 'Ir.show ();')
+            assert "1 step" in out, f"Expected 1 step, got:\n{out}"
+            send_recv(sock, 'Ir.remove "trn";')
+        tests.append(test_truncate_negative)
+
+        def test_back():
+            send_recv(sock, 'Ir.init "bk" ["Main"];')
+            send_recv(sock, 'Ir.step "lemma x: True by simp";')
+            send_recv(sock, 'Ir.step "lemma y: True by simp";')
+            out = send_recv(sock, 'Ir.back ();')
+            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+            out = send_recv(sock, 'Ir.show ();')
+            assert "1 step" in out, f"Expected 1 step, got:\n{out}"
+            send_recv(sock, 'Ir.remove "bk";')
+        tests.append(test_back)
+
         def test_repls():
             out = send_recv(sock, 'Ir.repls ();')
             assert "t1" in out, f"Expected t1 in repls, got:\n{out}"

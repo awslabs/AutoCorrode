@@ -22,6 +22,7 @@ sig
   val edit : int -> string -> unit
   val replay : unit -> unit
   val truncate : int -> unit
+  val back : unit -> unit
   val merge : unit -> unit
 
   val remove : string -> unit
@@ -451,11 +452,13 @@ fun edit idx new_text =
      if #auto_replay (get_cfg ()) andalso not (null after_steps) then replay () else ()
   end;
 
-fun truncate idx =
+fun truncate raw_idx =
   let val (id, r) = the_current ()
       val steps = #steps r
-      val _ = if idx < 0 orelse idx >= length steps
-              then error ("Step " ^ string_of_int idx ^ " out of range") else ()
+      val n = length steps
+      val idx = if raw_idx < 0 then n + raw_idx - 1 else raw_idx
+      val _ = if idx < 0 orelse idx >= n
+              then error ("Step " ^ string_of_int raw_idx ^ " out of range") else ()
       (* Remove sub-REPLs attached to dropped steps *)
       val dropped = length steps - idx - 1
       val _ = Synchronized.change repl_tab (fn tab =>
@@ -470,6 +473,8 @@ fun truncate idx =
      out ("Truncated to step " ^ string_of_int idx ^ ", dropped " ^
           string_of_int dropped ^ " steps")
   end;
+
+fun back () = truncate ~1;
 
 fun merge () =
   let val (id, r) = the_current ()
@@ -602,7 +607,8 @@ fun help () = out
   \  text ()            print concatenated text of current REPL\n\
   \  edit idx \"text\"    edit step, replay if auto_replay=true\n\
   \  replay ()          re-execute stale steps\n\
-  \  truncate idx       discard steps after idx\n\
+  \  truncate idx       discard steps after idx (negative: ~N = revert last N steps)\n\
+  \  back ()            revert last step (synonym for truncate ~1)\n\
   \  merge ()           inline current sub-REPL into parent\n\
   \  sledgehammer secs  run sledgehammer on current proof state\n\
   \  find_theorems n q  search theorems (n=max results, 0=unlimited)\n\
