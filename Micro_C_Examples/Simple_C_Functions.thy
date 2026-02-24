@@ -437,6 +437,95 @@ lemma c_add_assign_spec [crush_specs]:
   apply (crush_base simp add: c_unsigned_add_def)
   done
 
+subsection \<open>Cast: Widen Unsigned Char to Unsigned Int\<close>
+
+micro_c_translate \<open>
+unsigned int widen_char(unsigned char x) { return (unsigned int)x; }
+\<close>
+
+thm c_widen_char_def
+
+definition c_widen_char_contract ::
+    \<open>c_char \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_widen_char_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = ucast x\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_widen_char_contract
+
+lemma c_widen_char_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_widen_char x \<Turnstile>\<^sub>F c_widen_char_contract x\<close>
+  apply (crush_boot f: c_widen_char_def contract: c_widen_char_contract_def)
+  apply (crush_base simp add: c_ucast_def)
+  done
+
+subsection \<open>Integer Literal Suffix\<close>
+
+micro_c_translate \<open>
+unsigned int suffix_add(unsigned int x) { return x + 1U; }
+\<close>
+
+thm c_suffix_add_def
+
+definition c_suffix_add_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_suffix_add_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = x + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_suffix_add_contract
+
+lemma c_suffix_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_suffix_add x \<Turnstile>\<^sub>F c_suffix_add_contract x\<close>
+  apply (crush_boot f: c_suffix_add_def contract: c_suffix_add_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+subsection \<open>Assignment to Parameter\<close>
+
+micro_c_translate \<open>
+unsigned int double_val(unsigned int x) { x = x + x; return x; }
+\<close>
+
+thm c_double_val_def
+
+definition c_double_val_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_double_val_contract x \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = x + x\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_double_val_contract
+
+lemma c_double_val_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_double_val x \<Turnstile>\<^sub>F c_double_val_contract x\<close>
+  apply (crush_boot f: c_double_val_def contract: c_double_val_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+subsection \<open>Compound Pointer Dereference\<close>
+
+micro_c_translate \<open>
+unsigned int inc_ptr(unsigned int *p) { *p += 1; return *p; }
+\<close>
+
+thm c_inc_ptr_def
+
+definition c_inc_ptr_contract ::
+    \<open>('addr, 'gv, c_uint) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_inc_ptr_contract p pg val \<equiv>
+    let pre  = p \<mapsto>\<langle>\<top>\<rangle> pg\<down>val;
+        post = \<lambda>r. p \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. val + 1) \<sqdot> (pg\<down>val) \<star> \<langle>r = val + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_inc_ptr_contract
+
+lemma c_inc_ptr_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_inc_ptr p \<Turnstile>\<^sub>F c_inc_ptr_contract p pg val\<close>
+  apply (crush_boot f: c_inc_ptr_def contract: c_inc_ptr_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
 end
 
 end

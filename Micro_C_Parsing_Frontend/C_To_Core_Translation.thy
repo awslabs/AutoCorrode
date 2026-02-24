@@ -62,6 +62,8 @@ structure C_Ast_Utils : sig
   val resolve_c_type_full : c_numeric_type Symtab.table
                             -> C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list
                             -> c_numeric_type option
+  val int_literal_type : 'a C_Ast.flags -> c_numeric_type
+  val find_assigned_vars : C_Ast.nodeInfo C_Ast.cStatement -> string list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
 end =
@@ -102,6 +104,17 @@ struct
     | type_name_of CLong   = "long"
     | type_name_of CULong  = "unsigned long"
 
+  (* Determine C numeric type from integer literal suffix flags.
+     Flags0 of int is a bitfield: bit 0 = unsigned, bit 1 = long, bit 2 = long long. *)
+  fun int_literal_type (Flags0 bits) =
+    let val is_unsigned = IntInf.andb (bits, 1) <> 0
+        val is_long = IntInf.andb (bits, 2) <> 0 orelse IntInf.andb (bits, 4) <> 0
+    in if is_unsigned andalso is_long then CULong
+       else if is_long then CLong
+       else if is_unsigned then CUInt
+       else CInt
+    end
+
   (* Parse a list of C declaration specifiers into a resolved numeric type.
      Returns NONE for void, struct types, and other non-numeric specifiers. *)
   fun resolve_c_type specs =
@@ -129,6 +142,17 @@ struct
             (sg, us, ch, sh, it, lg, vd, true)
         | accumulate (CTypeSpec0 (CEnumType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
             (sg, us, ch, sh, true, lg, vd, st)  (* enum treated as int *)
+        | accumulate (CTypeSpec0 (CFloatType0 _)) _ =
+            error "micro_c_translate: float type not supported"
+        | accumulate (CTypeSpec0 (CDoubleType0 _)) _ =
+            error "micro_c_translate: double type not supported"
+        | accumulate (CTypeSpec0 (CInt128Type0 _)) _ =
+            error "micro_c_translate: __int128 type not supported"
+        | accumulate (CTypeSpec0 (CComplexType0 _)) _ =
+            error "micro_c_translate: _Complex type not supported"
+        | accumulate (CTypeSpec0 (CTypeDef0 _)) flags = flags
+        | accumulate (CTypeSpec0 _) _ =
+            error "micro_c_translate: unsupported type specifier"
         | accumulate _ flags = flags
       val (has_signed, has_unsigned, has_char, has_short, has_int, has_long, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
@@ -272,6 +296,48 @@ struct
            SOME cty => SOME cty
          | NONE => NONE)
     | _ => resolve_c_type specs
+
+  (* Walk the C AST and collect variable names that appear on the LHS of
+     assignments or as operands of pre/post increment/decrement.
+     Used to identify parameters that need promotion to local variables. *)
+  local
+    fun fae (CAssign0 (_, CVar0 (ident, _), rhs, _)) acc =
+          fae rhs (ident_name ident :: acc)
+      | fae (CAssign0 (_, lhs, rhs, _)) acc = fae rhs (fae lhs acc)
+      | fae (CUnary0 (CPreIncOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
+      | fae (CUnary0 (CPostIncOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
+      | fae (CUnary0 (CPreDecOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
+      | fae (CUnary0 (CPostDecOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
+      | fae (CBinary0 (_, l, r, _)) acc = fae r (fae l acc)
+      | fae (CUnary0 (_, e, _)) acc = fae e acc
+      | fae (CCall0 (f, args, _)) acc =
+          List.foldl (fn (a, ac) => fae a ac) (fae f acc) args
+      | fae (CIndex0 (a, i, _)) acc = fae i (fae a acc)
+      | fae (CMember0 (e, _, _, _)) acc = fae e acc
+      | fae (CCast0 (_, e, _)) acc = fae e acc
+      | fae (CComma0 (es, _)) acc = List.foldl (fn (e, ac) => fae e ac) acc es
+      | fae (CCond0 (c, t, e, _)) acc =
+          fae e ((case t of Some te => fae te | None => I) (fae c acc))
+      | fae _ acc = acc
+    and fas (CCompound0 (_, items, _)) acc =
+          List.foldl (fn (CBlockStmt0 s, ac) => fas s ac | (_, ac) => ac) acc items
+      | fas (CExpr0 (Some e, _)) acc = fae e acc
+      | fas (CIf0 (c, t, e_opt, _)) acc =
+          (case e_opt of Some e => fas e | None => I) (fas t (fae c acc))
+      | fas (CWhile0 (c, b, _, _)) acc = fas b (fae c acc)
+      | fas (CFor0 (Left (Some i), c, s, b, _)) acc =
+          fas b (opt s (opt c (fae i acc)))
+      | fas (CFor0 (_, c, s, b, _)) acc =
+          fas b (opt s (opt c acc))
+      | fas (CReturn0 (Some e, _)) acc = fae e acc
+      | fas (CLabel0 (_, s, _, _)) acc = fas s acc
+      | fas (CSwitch0 (e, s, _)) acc = fas s (fae e acc)
+      | fas _ acc = acc
+    and opt (Some e) acc = fae e acc
+      | opt None acc = acc
+  in
+    fun find_assigned_vars stmt = distinct (op =) (fas stmt [])
+  end
 
   fun extract_fundefs (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
@@ -747,11 +813,29 @@ struct
     | translate_inc_dec _ _ _ _ =
         unsupported "increment/decrement on non-variable expression"
 
+  (* Map compound assignment operators to their binary operator equivalents *)
+  fun compound_assign_to_binop CAddAssOp0 = SOME CAddOp0
+    | compound_assign_to_binop CSubAssOp0 = SOME CSubOp0
+    | compound_assign_to_binop CMulAssOp0 = SOME CMulOp0
+    | compound_assign_to_binop CDivAssOp0 = SOME CDivOp0
+    | compound_assign_to_binop CRmdAssOp0 = SOME CRmdOp0
+    | compound_assign_to_binop CShlAssOp0 = SOME CShlOp0
+    | compound_assign_to_binop CShrAssOp0 = SOME CShrOp0
+    | compound_assign_to_binop CAndAssOp0 = SOME CAndOp0
+    | compound_assign_to_binop CXorAssOp0 = SOME CXorOp0
+    | compound_assign_to_binop COrAssOp0  = SOME COrOp0
+    | compound_assign_to_binop _ = NONE
+
   (* translate_expr returns (term * c_numeric_type).
      The type tracks the C type of the expression for binary operator dispatch.
      CInt is used as default when the actual type is unknown/irrelevant. *)
-  fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
-        (C_Term_Build.mk_literal_int (IntInf.toInt n), C_Ast_Utils.CInt)
+  fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, flags), _))) =
+        let val cty = C_Ast_Utils.int_literal_type flags
+            val n_int = IntInf.toInt n
+        in if cty = C_Ast_Utils.CInt
+           then (C_Term_Build.mk_literal_int n_int, cty)
+           else (C_Term_Build.mk_literal_num cty n_int, cty)
+        end
     | translate_expr tctx (CVar0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
         in case C_Trans_Ctxt.lookup_var tctx name of
@@ -795,6 +879,45 @@ struct
             val (ptr_expr, _) = translate_expr tctx expr
             val (rhs', _) = translate_expr tctx rhs
         in (C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs', C_Ast_Utils.CInt) end
+    (* p->field op= rhs : compound struct field write through pointer *)
+    | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, true, _), rhs, _)) =
+        (case compound_assign_to_binop asgn_op of
+           SOME binop =>
+             let val field_name = C_Ast_Utils.ident_name field_ident
+                 val struct_name = determine_struct_type tctx expr
+                 val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
+                 val updater_name = "update_c_" ^ struct_name ^ "_" ^ field_name
+                 val ctxt = C_Trans_Ctxt.get_ctxt tctx
+                 val accessor_const = resolve_const ctxt accessor_name
+                 val updater_const = resolve_const ctxt updater_name
+                 val (ptr_term, _) = translate_expr tctx expr
+                 val (rhs_term, _) = translate_expr tctx rhs
+                 val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
+                 val struct_var = Isa_Free ("v__struct", isa_dummyT)
+                 val new_var = Isa_Free ("v__new", isa_dummyT)
+                 val old_val = accessor_const $ struct_var
+                 val updated_struct = updater_const
+                       $ Term.lambda (Isa_Free ("_uu", isa_dummyT)) new_var
+                       $ struct_var
+             in case translate_binop C_Ast_Utils.CInt binop of
+                  Monadic f =>
+                    (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
+                      (C_Term_Build.mk_bind
+                        (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
+                        (Term.lambda struct_var
+                          (C_Term_Build.mk_bind
+                            (C_Term_Build.mk_bind2 f
+                              (C_Term_Build.mk_literal old_val)
+                              rhs_term)
+                            (Term.lambda new_var
+                              (C_Term_Build.mk_sequence
+                                (C_Term_Build.mk_ptr_write
+                                  (C_Term_Build.mk_literal ptr_var)
+                                  (C_Term_Build.mk_literal updated_struct))
+                                (C_Term_Build.mk_literal new_var))))))), C_Ast_Utils.CInt)
+                | _ => unsupported "pure compound assignment on struct field"
+             end
+         | NONE => unsupported "unsupported compound operator on struct field")
     (* arr[idx] = rhs : array element write via focus *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
         let val (arr_term, _) = translate_expr tctx arr_expr
@@ -811,6 +934,56 @@ struct
                    (C_Term_Build.mk_literal focused)
                    (C_Term_Build.mk_literal v_var))))))), C_Ast_Utils.CInt)
         end
+    (* arr[idx] op= rhs : compound array element write *)
+    | translate_expr tctx (CAssign0 (asgn_op, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
+        (case compound_assign_to_binop asgn_op of
+           SOME binop =>
+             let val (arr_term, _) = translate_expr tctx arr_expr
+                 val (idx_term, _) = translate_expr tctx idx_expr
+                 val (rhs_term, _) = translate_expr tctx rhs
+                 val ctxt = C_Trans_Ctxt.get_ctxt tctx
+                 val deref_const =
+                   resolve_const ctxt "dereference_fun"
+                   handle ERROR _ =>
+                     Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+                 val a_var = Isa_Free ("v__arr", isa_dummyT)
+                 val i_var = Isa_Free ("v__idx", isa_dummyT)
+                 val list_var = Isa_Free ("v__list", isa_dummyT)
+                 val new_var = Isa_Free ("v__new", isa_dummyT)
+                 val nth_term = Isa_Const (\<^const_name>\<open>nth\<close>,
+                                  isa_dummyT --> isa_dummyT --> isa_dummyT)
+                                  $ list_var $ (C_Term_Build.mk_unat i_var)
+                 val deref_expr =
+                   Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>,
+                     isa_dummyT --> isa_dummyT --> isa_dummyT)
+                     $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>,
+                          isa_dummyT --> isa_dummyT) $ a_var)
+                     $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>,
+                          isa_dummyT --> isa_dummyT --> isa_dummyT)
+                          $ Isa_Const (\<^const_name>\<open>call\<close>,
+                              isa_dummyT --> isa_dummyT)
+                          $ deref_const)
+                 val focused = C_Term_Build.mk_focus_nth
+                                 (C_Term_Build.mk_unat i_var) a_var
+             in case translate_binop C_Ast_Utils.CInt binop of
+                  Monadic f =>
+                    (C_Term_Build.mk_bind arr_term (Term.lambda a_var
+                      (C_Term_Build.mk_bind idx_term (Term.lambda i_var
+                        (C_Term_Build.mk_bind deref_expr (Term.lambda list_var
+                          (C_Term_Build.mk_bind
+                            (C_Term_Build.mk_bind2 f
+                              (C_Term_Build.mk_literal nth_term)
+                              rhs_term)
+                            (Term.lambda new_var
+                              (C_Term_Build.mk_sequence
+                                (C_Term_Build.mk_ptr_write
+                                  (C_Term_Build.mk_literal focused)
+                                  (C_Term_Build.mk_literal new_var))
+                                (C_Term_Build.mk_literal new_var))))))))),
+                     C_Ast_Utils.CInt)
+                | _ => unsupported "pure compound assignment on array element"
+             end
+         | NONE => unsupported "unsupported compound operator on array element")
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
             val (rhs', _) = translate_expr tctx rhs
@@ -826,20 +999,36 @@ struct
         let val (lhs', _) = translate_expr tctx lhs
             val (rhs', _) = translate_expr tctx rhs
         in (C_Term_Build.mk_ptr_write lhs' rhs', C_Ast_Utils.CInt) end
+    (* *p op= rhs : compound assignment through pointer dereference *)
+    | translate_expr tctx (CAssign0 (asgn_op, CUnary0 (CIndOp0, ptr_expr, _), rhs, _)) =
+        (case compound_assign_to_binop asgn_op of
+           SOME binop =>
+             let val (ptr_term, cty) = translate_expr tctx ptr_expr
+                 val (rhs_term, _) = translate_expr tctx rhs
+                 val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
+                 val old_var = Isa_Free ("v__old", isa_dummyT)
+                 val new_var = Isa_Free ("v__new", isa_dummyT)
+             in case translate_binop cty binop of
+                  Monadic f =>
+                    (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
+                      (C_Term_Build.mk_bind
+                        (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
+                        (Term.lambda old_var
+                          (C_Term_Build.mk_bind
+                            (C_Term_Build.mk_bind2 f
+                              (C_Term_Build.mk_literal old_var) rhs_term)
+                            (Term.lambda new_var
+                              (C_Term_Build.mk_sequence
+                                (C_Term_Build.mk_ptr_write
+                                  (C_Term_Build.mk_literal ptr_var)
+                                  (C_Term_Build.mk_literal new_var))
+                                (C_Term_Build.mk_literal new_var))))))), cty)
+                | _ => unsupported "pure compound assignment on dereferenced pointer"
+             end
+         | NONE => unsupported "unsupported operator on dereferenced pointer")
     | translate_expr tctx (CAssign0 (asgn_op, CVar0 (ident, _), rhs, _)) =
         (* Compound assignment: x op= rhs -> read x, compute (x op rhs), write x, return new *)
-        let fun compound_assign_to_binop CAddAssOp0 = SOME CAddOp0
-              | compound_assign_to_binop CSubAssOp0 = SOME CSubOp0
-              | compound_assign_to_binop CMulAssOp0 = SOME CMulOp0
-              | compound_assign_to_binop CDivAssOp0 = SOME CDivOp0
-              | compound_assign_to_binop CRmdAssOp0 = SOME CRmdOp0
-              | compound_assign_to_binop CShlAssOp0 = SOME CShlOp0
-              | compound_assign_to_binop CShrAssOp0 = SOME CShrOp0
-              | compound_assign_to_binop CAndAssOp0 = SOME CAndOp0
-              | compound_assign_to_binop CXorAssOp0 = SOME CXorOp0
-              | compound_assign_to_binop COrAssOp0  = SOME COrOp0
-              | compound_assign_to_binop _ = NONE
-        in case compound_assign_to_binop asgn_op of
+        (case compound_assign_to_binop asgn_op of
              SOME binop =>
                let val name = C_Ast_Utils.ident_name ident
                    val (rhs', _) = translate_expr tctx rhs
@@ -863,8 +1052,7 @@ struct
                       end
                   | _ => unsupported "compound assignment to non-local variable"
                end
-           | NONE => unsupported "compound assignment or non-variable lhs"
-        end
+           | NONE => unsupported "compound assignment or non-variable lhs")
     | translate_expr _ (CAssign0 _) =
         unsupported "non-variable lhs in assignment"
     | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
@@ -1254,7 +1442,29 @@ struct
               C_Ast_Utils.extract_struct_type_from_decl pdecl) of
           (SOME n, SOME sn) => C_Trans_Ctxt.set_struct_type n sn ctx
         | _ => ctx) tctx param_decls
+      (* Promote parameters that are assigned in the body to local variables.
+         For each promoted parameter, wrap the body with Ref::new(literal param)
+         and register the ref as a Local in the context (shadowing the Param). *)
+      val assigned_names = C_Ast_Utils.find_assigned_vars body
+      val promoted_params = List.filter (fn (n, _, _) =>
+        List.exists (fn a => a = n) assigned_names
+        andalso (case List.find (fn (m, _) => m = n) param_name_info of
+                   SOME (_, (_, true)) => false  (* skip pointer params *)
+                 | _ => true)) param_vars
+      val (tctx, promoted_bindings) = List.foldl
+        (fn ((n, orig_var, cty), (ctx, binds)) =>
+          let val ref_var = Isa_Free (n ^ "_ref", isa_dummyT)
+              val ctx' = C_Trans_Ctxt.add_var n C_Trans_Ctxt.Local ref_var cty ctx
+          in (ctx', binds @ [(ref_var, orig_var)]) end)
+        (tctx, []) promoted_params
       val body_term = translate_stmt tctx body
+      (* Wrap body with Ref::new for each promoted parameter *)
+      val body_term = List.foldr
+        (fn ((ref_var, orig_var), b) =>
+          C_Term_Build.mk_bind
+            (C_Term_Build.mk_var_alloc (C_Term_Build.mk_literal orig_var))
+            (Term.lambda ref_var b))
+        body_term promoted_bindings
       val fn_term = C_Term_Build.mk_function_body body_term
       (* Wrap in lambdas for each parameter *)
       val fn_term = List.foldr

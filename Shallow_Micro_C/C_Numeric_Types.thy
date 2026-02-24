@@ -228,4 +228,12 @@ definition c_signed_neq :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_signed_neq a b \<equiv> literal (a \<noteq> b)\<close>
 
+section \<open>C Type Cast Operations\<close>
+
+definition c_ucast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_ucast w \<equiv> literal (ucast w)\<close>
+
+definition c_scast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_scast w \<equiv> literal (scast w)\<close>
+
 end

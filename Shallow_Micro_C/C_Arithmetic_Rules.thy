@@ -499,6 +499,28 @@ proof -
   show ?thesis unfolding eq using assms(3) by (rule wp_literalI)
 qed
 
+subsection \<open>Type Cast Operations\<close>
+
+lemma wp_c_ucast [micro_rust_wp_simps]:
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_ucast w) \<psi> \<rho> \<theta> = \<psi> (ucast w)\<close>
+  using assms by (simp add: c_ucast_def micro_rust_wp_simps)
+
+lemma wp_c_ucastI [micro_rust_wp_intros]:
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (ucast w) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_ucast w) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_ucast_def wp_literalI)
+
+lemma wp_c_scast [micro_rust_wp_simps]:
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_scast w) \<psi> \<rho> \<theta> = \<psi> (scast w)\<close>
+  using assms by (simp add: c_scast_def micro_rust_wp_simps)
+
+lemma wp_c_scastI [micro_rust_wp_intros]:
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (scast w) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_scast w) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_scast_def wp_literalI)
+
 subsection \<open>Unsigned Division and Modulo\<close>
 
 lemma wp_c_unsigned_div [micro_rust_wp_simps]:
