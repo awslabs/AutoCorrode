@@ -103,6 +103,8 @@ def main():
     p.add_argument("--dir", default=None)
     p.add_argument("--server-only", action="store_true",
                    help="Pass --server-only to repl.py")
+    p.add_argument("--require-source", action="store_true",
+                   help="Fail if source commands are not available")
     args = p.parse_args()
 
     port = find_free_port()
@@ -266,7 +268,11 @@ def main():
         tests.append(test_repls)
 
         def test_source():
-            send_recv(sock, 'Ir.source "Main" 0 3 handle ERROR _ => ();')
+            if args.require_source:
+                out = send_recv(sock, 'Ir.source "Main" 0 3;')
+                assert "Main" in out, f"Expected source output, got:\n{out}"
+            else:
+                send_recv(sock, 'Ir.source "Main" 0 3 handle ERROR _ => ();')
 
         tests.append(test_source)
 
@@ -434,6 +440,19 @@ def main():
             send_recv(sock, 'Ir.remove "lt1";')
 
         tests.append(test_load_theory)
+
+        def test_load_theory_source():
+            """load_theory with record_theories records segments for source/init."""
+            send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";', timeout=300)
+            out = send_recv(sock, 'Ir.source "HOL-Library.Multiset" 0 5;')
+            assert "Multiset" in out, f"Expected Multiset in source, got:\n{out}"
+            # Init from a segment in the dynamically loaded theory
+            send_recv(sock, 'Ir.init "lts1" ["HOL-Library.Multiset:4"];')
+            out = send_recv(sock, 'Ir.show ();')
+            assert "Multiset:4" in out, f"Expected origin Multiset:4, got:\n{out}"
+            send_recv(sock, 'Ir.remove "lts1";')
+
+        tests.append(test_load_theory_source)
 
         def test_load_theory_already_loaded():
             """load_theory on an already-loaded theory is a no-op."""

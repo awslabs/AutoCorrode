@@ -72,8 +72,8 @@ jobs:
     - name: Test repl.py TCP server (explicit --server-only)
       run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --server-only
 
-  segment_storage:
-    name: Build heap with intermediate states
+  record_theories:
+    name: Build with record_theories
     runs-on: ubuntu-latest
     container:
       image: makarius/isabelle:Isabelle2025-2
@@ -82,6 +82,9 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - name: Setup Isabelle
+      uses: ./.github/actions/setup-isabelle-action
+
     - name: Install dependencies
       run: |
         apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv > /dev/null
@@ -89,41 +92,17 @@ jobs:
 
     - name: Set Isabelle environment
       run: |
-        ISABELLE=/home/isabelle/Isabelle/bin/isabelle
-        ISABELLE_HOME_USER=$($ISABELLE getenv -b ISABELLE_HOME_USER)
-        echo "ISABELLE=$ISABELLE" >> $GITHUB_ENV
-        echo "ISABELLE_HOME_USER=$ISABELLE_HOME_USER" >> $GITHUB_ENV
+        ISABELLE_BIN=/home/isabelle/Isabelle/bin/isabelle
+        echo "ISABELLE=$ISABELLE_BIN" >> $GITHUB_ENV
 
-    - name: "A: Build without option registered -- expect no source"
-      run: |
-        $ISABELLE build -d ir/Segment_Storage_Example -b Segment_Storage_Example
-        output=$(printf 'use "%s";' "$PWD/ir/ir.ML" \
-          | $ISABELLE console -d ir/Segment_Storage_Example -l Segment_Storage_Example -n 2>&1)
-        echo "$output"
-        echo "$output" | grep -q "source commands not available"
+    - name: Build HOL heap with record_theories
+      run: $ISABELLE build -f -b -o record_theories=true HOL
 
-    - name: Register store_segments option
-      run: |
-        mkdir -p "$ISABELLE_HOME_USER/etc"
-        echo 'option store_segments : bool = false for build' \
-          >> "$ISABELLE_HOME_USER/etc/options"
+    - name: Test source commands are available
+      run: python3 ir/test_console.py --isabelle $ISABELLE --session HOL --require-source
 
-    - name: "B: Build without store_segments -- expect no source"
-      run: |
-        $ISABELLE build -d ir/Segment_Storage_Example -c -b Segment_Storage_Example
-        output=$(printf 'use "%s";' "$PWD/ir/ir.ML" \
-          | $ISABELLE console -d ir/Segment_Storage_Example -l Segment_Storage_Example -n 2>&1)
-        echo "$output"
-        echo "$output" | grep -q "source commands not available"
-
-    - name: "C: Build with store_segments=true -- expect source"
-      run: |
-        $ISABELLE build -d ir/Segment_Storage_Example -c -b -o store_segments=true Segment_Storage_Example
-        output=$(printf 'use "%s";' "$PWD/ir/ir.ML" \
-          | $ISABELLE console -d ir/Segment_Storage_Example -l Segment_Storage_Example -n 2>&1)
-        echo "$output"
-        echo "$output" | grep -q "source commands available"
-        echo "$output" | grep -qv "not available"
+    - name: Test repl.py with recorded segments
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --require-source
 
   docker:
     name: Docker (${{ matrix.config.name }}, ${{ matrix.runner }})

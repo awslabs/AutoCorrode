@@ -533,7 +533,8 @@ fun theories () =
    e.g. "HOL-Library.Multiset".  After loading, the theory is available
    for Ir.init and appears in Ir.theories. *)
 fun load_theory name =
-  let val _ = Thy_Info.use_theories (Options.default ()) "" [(name, Position.none)]
+  let val opts = Options.update "record_theories" "true" (Options.default ())
+      val _ = Thy_Info.use_theories opts "" [(name, Position.none)]
   in out ("Loaded theory " ^ quote name) end;
 
 (* Sledgehammer via compiler bridge *)

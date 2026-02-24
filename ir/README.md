@@ -120,7 +120,7 @@ Build the heap with `record_theories=true`:
 isabelle build -b -o record_theories=true -d /path/to/session My_Session
 ```
 
-Note: this increases heap size by approximately 5x.
+Note: this increases heap size by approximately 5x (according to Isabelle2025-2 NEWS).
 
 ### Usage
 
