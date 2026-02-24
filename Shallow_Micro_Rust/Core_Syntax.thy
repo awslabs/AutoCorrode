@@ -243,6 +243,12 @@ syntax
               ('s, 'a, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
               ('s, 'a, 'r, 'abort, 'i, 'o) expression\<close>
     ("let _ = (_) else \<lbrace> (_) \<rbrace> ; (_)" [100,20,0,10]10)
+  "_urust_shallow_while_let"
+    :: \<open>nat \<Rightarrow> urust_shallow_match_pattern \<Rightarrow>
+              ('s, 'w, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+              ('s, 'b, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+              ('s, unit, 'r, 'abort, 'i, 'o) expression\<close>
+    ("#'[fuel'(_') '] while let _ = (_) \<lbrace> (_) \<rbrace>" [0,100,20,0]11)
 
 subsection \<open>Error propagation\<close>
 syntax
@@ -389,6 +395,17 @@ translations
     \<rightleftharpoons> "CONST bounded_while n cond body"
   "_urust_shallow_loop n body"
     \<rightharpoonup> "CONST bounded_while n (CONST Core_Expression.literal (CONST HOL.True)) body"
+
+  \<comment>\<open>While let\<close>
+  "_urust_shallow_while_let n ptrn expr body"
+    \<rightharpoonup> "CONST bounded_while n
+          (_urust_shallow_match expr
+            (_urust_shallow_match2
+              (_urust_shallow_match1 ptrn
+                (CONST Core_Expression.sequence body (CONST Core_Expression.literal (CONST HOL.True))))
+              (_urust_shallow_match1 _urust_shallow_match_pattern_other
+                (CONST Core_Expression.literal (CONST HOL.False)))))
+          (CONST skip)"
 
   \<comment> \<open>Ranges\<close>
   "_urust_shallow_range lower upper"

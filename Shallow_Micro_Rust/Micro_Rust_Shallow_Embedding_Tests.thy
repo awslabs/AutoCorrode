@@ -1249,6 +1249,50 @@ term\<open>\<lbrakk>
   *x
 \<rbrakk>\<close>
 
+
+subsubsection\<open>While Let\<close>
+
+context
+  fixes n :: nat
+begin
+
+\<comment>\<open>Some pattern with semicolon\<close>
+term \<open>\<lbrakk>
+  #[fuel(\<epsilon>\<open>n\<close>)]
+  while let Some(v) = Some(g) {
+    ()
+  };
+  ()
+\<rbrakk>\<close>
+
+\<comment>\<open>Some pattern as sequence (no semicolon)\<close>
+term \<open>\<lbrakk>
+  #[fuel(\<epsilon>\<open>n :: nat\<close>)]
+  while let Some(v) = Some(g) {
+    ()
+  }
+  ()
+\<rbrakk>\<close>
+
+\<comment>\<open>Ok pattern\<close>
+term \<open>\<lbrakk>
+  #[fuel(\<epsilon>\<open>n\<close>)]
+  while let Ok(v) = Ok(g) {
+    ()
+  };
+  ()
+\<rbrakk>\<close>
+
+\<comment>\<open>Tuple pattern\<close>
+term \<open>\<lbrakk>
+  #[fuel(\<epsilon>\<open>n\<close>)]
+  while let (a, b) = (\<llangle>1 :: nat\<rrangle>, \<llangle>2 :: nat\<rrangle>) {
+    ()
+  };
+  ()
+\<rbrakk>\<close>
+
+end
 subsection\<open>Control Flow - Return\<close>
 
 subsubsection\<open>Return Without Value\<close>

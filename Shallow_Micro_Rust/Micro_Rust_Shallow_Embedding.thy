@@ -803,6 +803,18 @@ translations
   "_shallow (_urust_loop (_urust_antiquotation fuel) body)"
     \<rightharpoonup> "_urust_shallow_loop fuel (_shallow body)"
 
+  \<comment>\<open>While let — tuple pattern special case (irrefutable)\<close>
+  "_shallow (_urust_while_let (_urust_antiquotation fuel) (_urust_let_pattern_tuple args) expr body)"
+    \<rightharpoonup> "CONST bounded_while fuel
+          (CONST Core_Expression.bind (_shallow expr)
+            (_abs (_shallow_let_pattern (_urust_let_pattern_tuple args))
+              (CONST Core_Expression.sequence (_shallow body) (CONST Core_Expression.literal (CONST HOL.True)))))
+          (CONST skip)"
+
+  \<comment>\<open>While let — general pattern case\<close>
+  "_shallow (_urust_while_let (_urust_antiquotation fuel) ptrn expr body)"
+    \<rightharpoonup> "_urust_shallow_while_let fuel (_shallow_match_pattern ptrn) (_shallow expr) (_shallow body)"
+
 
 abbreviation urust_constructor_some :: \<open>'a \<Rightarrow> ('s, 'a option, 'abort, 'i, 'o) function_body\<close> where
    \<open>urust_constructor_some \<equiv> lift_fun1 Some\<close>
