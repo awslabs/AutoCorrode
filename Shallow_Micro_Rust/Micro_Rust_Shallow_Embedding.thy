@@ -798,6 +798,11 @@ translations
   "_shallow (_urust_for_loop x iter body)"
     \<rightharpoonup> "_urust_shallow_for_loop (_shallow_let_pattern x) (_shallow iter) (_shallow body)"
 
+  "_shallow (_urust_while_loop (_urust_antiquotation fuel) cond body)"
+    \<rightharpoonup> "_urust_shallow_while_loop fuel (_shallow cond) (_shallow body)"
+  "_shallow (_urust_loop (_urust_antiquotation fuel) body)"
+    \<rightharpoonup> "_urust_shallow_loop fuel (_shallow body)"
+
 
 abbreviation urust_constructor_some :: \<open>'a \<Rightarrow> ('s, 'a option, 'abort, 'i, 'o) function_body\<close> where
    \<open>urust_constructor_some \<equiv> lift_fun1 Some\<close>

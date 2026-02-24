@@ -334,6 +334,14 @@ syntax
     :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("for _ in (_) {/ _/ }" [100,20,0]11)
 
+  "_urust_while_loop"
+    :: \<open>urust_antiquotation \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("#'[fuel'(_') '] while (_) {/ _/ }" [0,20,0]11)
+
+  "_urust_loop"
+    :: \<open>urust_antiquotation \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("#'[fuel'(_') '] loop {/ _/ }" [0,0]11)
+
   "_urust_let_else" :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("let _ = (_) else { (_) } ; (_)" [100,20,0,10]10)
 
@@ -359,6 +367,12 @@ syntax
   "_urust_sequence_for_loop"
     :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("for _ in (_) {/ _/ }/ _" [100,20,0,10]10)
+  "_urust_sequence_while_loop"
+    :: \<open>urust_antiquotation \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("#'[fuel'(_') '] while (_) {/ _/ }/ _" [0,20,0,10]10)
+  "_urust_sequence_loop"
+    :: \<open>urust_antiquotation \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
+    ("#'[fuel'(_') '] loop {/ _/ }/ _" [0,0,10]10)
   "_urust_sequence_if_let"
     :: \<open>urust_pattern \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("if let _ = (_) { (_) }/ _" [100,20,0,10]10)
@@ -595,6 +609,8 @@ translations
     "_urust_sequence (_urust_if_then_else_if_else c t c' t' e) next"
   "_urust_sequence_if_then c t next" => "_urust_sequence (_urust_if_then c t) next"
   "_urust_sequence_for_loop x iter body next" => "_urust_sequence (_urust_for_loop x iter body) next"
+  "_urust_sequence_while_loop fuel cond body next" => "_urust_sequence (_urust_while_loop fuel cond body) next"
+  "_urust_sequence_loop fuel body next" => "_urust_sequence (_urust_loop fuel body) next"
   "_urust_sequence_if_let ptrn exp this next" => "_urust_sequence (_urust_if_let ptrn exp this) next"
   "_urust_sequence_if_let_else ptrn exp this that next" =>
     "_urust_sequence (_urust_if_let_else ptrn exp this that) next"

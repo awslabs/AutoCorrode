@@ -1205,6 +1205,50 @@ begin
 term \<open>\<lbrakk> for i in x .. y { () } \<rbrakk>\<close>
 end
 
+subsubsection\<open>While Loop\<close>
+
+context
+  fixes n :: nat
+begin
+term \<open>\<lbrakk>
+  let mut x = \<llangle>0 :: 32 word\<rrangle>;
+  #[fuel(\<epsilon>\<open>n\<close>) ] while (*x < 10_u32) {
+    x += 1_u32;
+  };
+  *x
+\<rbrakk>\<close>
+end
+
+term\<open>\<lbrakk>
+  let mut x = \<llangle>0 :: 32 word\<rrangle>;
+  #[fuel(\<epsilon>\<open>n :: nat\<close>) ] while (*x < 10_u32) {
+    x += 1_u32;
+  }
+  *x
+\<rbrakk>\<close>
+
+subsubsection\<open>Loop\<close>
+
+context
+  fixes n :: nat
+begin
+term \<open>\<lbrakk>
+  let mut x = \<llangle>0 :: 32 word\<rrangle>;
+  #[fuel(\<epsilon>\<open>n\<close>) ] loop {
+    x += 1_u32;
+  };
+  *x
+\<rbrakk>\<close>
+end
+
+term\<open>\<lbrakk>
+  let mut x = \<llangle>0 :: 32 word\<rrangle>;
+  #[fuel(\<epsilon>\<open>n :: nat\<close>) ] loop {
+    x += 1_u32;
+  }
+  *x
+\<rbrakk>\<close>
+
 subsection\<open>Control Flow - Return\<close>
 
 subsubsection\<open>Return Without Value\<close>

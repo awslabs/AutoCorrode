@@ -53,6 +53,17 @@ syntax
     :: \<open>'a \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression \<Rightarrow> ('s, unit, 'r, 'abort, 'i, 'o) expression \<Rightarrow> ('s, unit, 'r, 'abort, 'i, 'o) expression\<close>
     ("for (_) in (_) \<lbrace> (_) \<rbrace>" [20,100,0]11)
 
+  "_urust_shallow_while_loop"
+    :: \<open>nat \<Rightarrow> ('s, bool, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+        ('s, unit, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+        ('s, unit, 'r, 'abort, 'i, 'o) expression\<close>
+    ("#'[fuel'(_') '] while (_) \<lbrace> (_) \<rbrace>" [0,20,0]11)
+
+  "_urust_shallow_loop"
+    :: \<open>nat \<Rightarrow> ('s, unit, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+        ('s, unit, 'r, 'abort, 'i, 'o) expression\<close>
+    ("#'[fuel'(_') '] loop \<lbrace> (_) \<rbrace>" [0,0]11)
+
   "_urust_shallow_range"
     :: \<open>'a \<Rightarrow> 'b \<Rightarrow> 'c range\<close>
     ("\<langle>_\<dots>_\<rangle>" [166,166]166)
@@ -372,6 +383,12 @@ translations
   \<comment>\<open>Loops\<close>
   "_urust_shallow_for_loop i xs body"
     \<rightleftharpoons> "CONST for_loop (CONST funcall1 (CONST into_iter) xs) (\<lambda>i. body)"
+
+  \<comment>\<open>While loops\<close>
+  "_urust_shallow_while_loop n cond body"
+    \<rightleftharpoons> "CONST bounded_while n cond body"
+  "_urust_shallow_loop n body"
+    \<rightharpoonup> "CONST bounded_while n (CONST Core_Expression.literal (CONST HOL.True)) body"
 
   \<comment> \<open>Ranges\<close>
   "_urust_shallow_range lower upper"
