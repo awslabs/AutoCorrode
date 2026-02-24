@@ -4,8 +4,8 @@ Isabelle/REPL (I/R) provides a REPL as an interactive and programmatic interface
 to enable autonomous agentic proof development without Isabelle/Scala in the loop.
 
 I/R manages a set of REPLs, each basically a list of Isar texts; you push/pop Isar to/from a REPL to explore proofs.
-REPLs can be rooted in theories, locations within theories (assuming a suitably augmented heap build, see [Stored
-Segments](#stored-segments-forking-repls-at-arbitrary-theory-points)), or at points within other REPLs (for sub-proof
+REPLs can be rooted in theories, locations within theories (assuming a suitably augmented heap build, see [Recorded
+Segments](#recorded-segments-forking-repls-at-arbitrary-theory-points)), or at points within other REPLs (for sub-proof
 exploration).
 
 An MCP wrapper ([mcp_server.py](mcp_server.py)) is provided exposing I/R to AI agents. See [Agent Integration](#agent-integration).
