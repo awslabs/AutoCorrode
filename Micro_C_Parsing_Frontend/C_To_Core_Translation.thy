@@ -615,6 +615,42 @@ struct
           (Proof_Context.read_const {proper = true, strict = false} ctxt name)
     in Isa_Const (full_name, isa_dummyT) end
 
+  (* Helper for pre/post increment/decrement on local variables.
+     is_inc: true for increment, false for decrement
+     is_pre: true for pre (return new), false for post (return old) *)
+  fun translate_inc_dec tctx is_inc is_pre (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in case C_Trans_Ctxt.lookup_var tctx name of
+             SOME (C_Trans_Ctxt.Local, ref_var, cty) =>
+               let val old_var = Isa_Free ("v__old", isa_dummyT)
+                   val new_var = Isa_Free ("v__new", isa_dummyT)
+                   val one = C_Term_Build.mk_literal_num cty 1
+                   val arith_const =
+                     if is_inc then
+                       (if C_Ast_Utils.is_signed cty
+                        then Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT)
+                        else Isa_Const (\<^const_name>\<open>c_unsigned_add\<close>, isa_dummyT))
+                     else
+                       (if C_Ast_Utils.is_signed cty
+                        then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
+                        else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT))
+                   val read = C_Term_Build.mk_var_read ref_var
+                   val add = C_Term_Build.mk_bind2 arith_const
+                               (C_Term_Build.mk_literal old_var) one
+                   val write = C_Term_Build.mk_var_write ref_var
+                                 (C_Term_Build.mk_literal new_var)
+                   val return_var = if is_pre then new_var else old_var
+               in (C_Term_Build.mk_bind read (Term.lambda old_var
+                    (C_Term_Build.mk_bind add (Term.lambda new_var
+                      (C_Term_Build.mk_sequence write
+                        (C_Term_Build.mk_literal return_var))))), cty) end
+           | SOME (C_Trans_Ctxt.Param, _, _) =>
+               error ("micro_c_translate: cannot increment/decrement parameter: " ^ name)
+           | NONE => error ("micro_c_translate: undefined variable: " ^ name)
+        end
+    | translate_inc_dec _ _ _ _ =
+        unsupported "increment/decrement on non-variable expression"
+
   (* translate_expr returns (term * c_numeric_type).
      The type tracks the C type of the expression for binary operator dispatch.
      CInt is used as default when the actual type is unknown/irrelevant. *)
@@ -727,6 +763,14 @@ struct
               then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
               else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT)
         in (C_Term_Build.mk_bind2 sub_const zero expr', cty) end
+    | translate_expr tctx (CUnary0 (CPreIncOp0, expr, _)) =
+        translate_inc_dec tctx true true expr
+    | translate_expr tctx (CUnary0 (CPostIncOp0, expr, _)) =
+        translate_inc_dec tctx true false expr
+    | translate_expr tctx (CUnary0 (CPreDecOp0, expr, _)) =
+        translate_inc_dec tctx false true expr
+    | translate_expr tctx (CUnary0 (CPostDecOp0, expr, _)) =
+        translate_inc_dec tctx false false expr
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
     (* arr[idx] : deref whole list, then index with nth.
@@ -774,43 +818,52 @@ struct
         in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, C_Ast_Utils.CInt) end
     | translate_expr _ (CMember0 (_, _, false, _)) =
         unsupported "direct struct member access (s.field) - use pointer access (p->field)"
+    | translate_expr tctx (CComma0 ([], _)) =
+        (C_Term_Build.mk_literal_unit, C_Ast_Utils.CInt)
+    | translate_expr tctx (CComma0 (exprs, _)) =
+        let val translated = List.map (translate_expr tctx) exprs
+            fun fold_comma [] = error "micro_c_translate: empty comma expression"
+              | fold_comma [(e, ty)] = (e, ty)
+              | fold_comma ((e, _) :: rest) =
+                  let val (rest_e, rest_ty) = fold_comma rest
+                  in (C_Term_Build.mk_sequence e rest_e, rest_ty) end
+        in fold_comma translated end
     | translate_expr _ _ =
         unsupported "expression"
 
   (* Convenience: extract just the term from translate_expr *)
   and expr_term tctx e = #1 (translate_expr tctx e)
 
-  (* Extract variable name, initializer, and type from a C declaration *)
-  fun translate_decl tctx (decl as CDecl0 (specs, [((Some declr, Some (CInitExpr0 (init, _))), _)], _)) =
-        let val name = C_Ast_Utils.declr_name declr
-            val cty = (case C_Ast_Utils.resolve_c_type specs of SOME t => t | NONE => C_Ast_Utils.CInt)
-            val (init', _) = translate_expr tctx init
-        in (name, init', cty) end
-    | translate_decl _ (CDecl0 (specs, [((Some declr, None), _)], _)) =
-        (* Uninitialized variable: default to typed literal 0 *)
-        let val name = C_Ast_Utils.declr_name declr
-            val cty = (case C_Ast_Utils.resolve_c_type specs of SOME t => t | NONE => C_Ast_Utils.CInt)
-        in (name, C_Term_Build.mk_literal_num cty 0, cty) end
+  (* Extract variable declarations as a list of (name, init_term, cty) triples.
+     Handles multiple declarators in a single CDecl0. *)
+  fun translate_decl tctx (CDecl0 (specs, declarators, _)) =
+        let val cty = (case C_Ast_Utils.resolve_c_type specs of
+                         SOME t => t | NONE => C_Ast_Utils.CInt)
+            fun process_one ((Some declr, Some (CInitExpr0 (init, _))), _) =
+                  let val name = C_Ast_Utils.declr_name declr
+                      val (init', _) = translate_expr tctx init
+                  in (name, init', cty) end
+              | process_one ((Some declr, None), _) =
+                  let val name = C_Ast_Utils.declr_name declr
+                  in (name, C_Term_Build.mk_literal_num cty 0, cty) end
+              | process_one _ = unsupported "complex declarator"
+        in List.map process_one declarators end
     | translate_decl _ _ = unsupported "complex declaration"
 
   (* Translate a compound block, right-folding declarations into nested binds *)
   fun translate_compound_items _ [] = C_Term_Build.mk_literal_unit
     | translate_compound_items tctx [CBlockStmt0 stmt] = translate_stmt tctx stmt
-    | translate_compound_items tctx [CBlockDecl0 decl] =
-        (* Declaration at end of block with no following statements *)
-        let val (name, init_term, _) = translate_decl tctx decl
-            val var = Isa_Free (name, isa_dummyT)
-        in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
-             (Term.lambda var C_Term_Build.mk_literal_unit) end
     | translate_compound_items _ [CNestedFunDef0 _] =
         unsupported "nested function definition"
     | translate_compound_items tctx (CBlockDecl0 decl :: rest) =
-        let val (name, init_term, cty) = translate_decl tctx decl
-            val var = Isa_Free (name, isa_dummyT)
-            val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx
-            val rest_term = translate_compound_items tctx' rest
-        in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
-             (Term.lambda var rest_term) end
+        let val decls = translate_decl tctx decl
+            fun fold_decls [] tctx' = translate_compound_items tctx' rest
+              | fold_decls ((name, init_term, cty) :: ds) tctx' =
+                  let val var = Isa_Free (name, isa_dummyT)
+                      val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
+                  in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
+                       (Term.lambda var (fold_decls ds tctx'')) end
+        in fold_decls decls tctx end
     | translate_compound_items tctx (CBlockStmt0 stmt :: rest) =
         let val stmt_term = translate_stmt tctx stmt
             val rest_term = translate_compound_items tctx rest
@@ -835,19 +888,24 @@ struct
   (* Try to recognize: for (int i = start; i < bound; i++) body
      Returns SOME (var_name, start_nat, bound_nat, body) or NONE *)
   and try_bounded_for (CFor0 (Right init_decl, Some cond, Some step, body, _)) =
-        (case (init_decl, cond, step) of
-           (CDecl0 (_, [((Some declr, Some (CInitExpr0 (init_expr, _))), _)], _),
-            CBinary0 (CLeOp0, CVar0 (cond_var, _), bound_expr, _),
-            CUnary0 (CPostIncOp0, CVar0 (step_var, _), _)) =>
-             let val var_name = C_Ast_Utils.declr_name declr
-                 val cond_name = C_Ast_Utils.ident_name cond_var
-                 val step_name = C_Ast_Utils.ident_name step_var
-             in
-               if var_name = cond_name andalso var_name = step_name
-               then SOME (var_name, init_expr, bound_expr, body)
-               else NONE
-             end
-         | _ => NONE)
+        let fun step_var_name (CUnary0 (CPostIncOp0, CVar0 (v, _), _)) =
+                  SOME (C_Ast_Utils.ident_name v)
+              | step_var_name (CUnary0 (CPreIncOp0, CVar0 (v, _), _)) =
+                  SOME (C_Ast_Utils.ident_name v)
+              | step_var_name _ = NONE
+        in case (init_decl, cond, step_var_name step) of
+             (CDecl0 (_, [((Some declr, Some (CInitExpr0 (init_expr, _))), _)], _),
+              CBinary0 (CLeOp0, CVar0 (cond_var, _), bound_expr, _),
+              SOME step_name) =>
+               let val var_name = C_Ast_Utils.declr_name declr
+                   val cond_name = C_Ast_Utils.ident_name cond_var
+               in
+                 if var_name = cond_name andalso var_name = step_name
+                 then SOME (var_name, init_expr, bound_expr, body)
+                 else NONE
+               end
+           | _ => NONE
+        end
     | try_bounded_for _ = NONE
 
   and translate_stmt tctx (CCompound0 (_, items, _)) =
@@ -1201,5 +1259,67 @@ unsigned int u_max(unsigned int a, unsigned int b) {
 \<close>
 
 thm c_u_max_def
+
+text \<open>Smoke test: comma operator.\<close>
+micro_c_translate \<open>
+unsigned int comma_smoke(unsigned int a, unsigned int b) {
+    unsigned int x = (a, b);
+    return x;
+}
+\<close>
+
+thm c_comma_smoke_def
+
+text \<open>Smoke test: multiple declarations per statement.\<close>
+micro_c_translate \<open>
+unsigned int multi_decl_smoke(unsigned int a, unsigned int b) {
+    unsigned int x = a, y = b;
+    return x;
+}
+\<close>
+
+thm c_multi_decl_smoke_def
+
+text \<open>Smoke test: pre-increment.\<close>
+micro_c_translate \<open>
+void pre_inc_smoke(void) {
+    unsigned int x = 0;
+    unsigned int r = ++x;
+}
+\<close>
+
+thm c_pre_inc_smoke_def
+
+text \<open>Smoke test: post-increment.\<close>
+micro_c_translate \<open>
+void post_inc_smoke(void) {
+    unsigned int x = 0;
+    unsigned int r = x++;
+}
+\<close>
+
+thm c_post_inc_smoke_def
+
+text \<open>Smoke test: post-decrement.\<close>
+micro_c_translate \<open>
+void post_dec_smoke(void) {
+    unsigned int x = 5;
+    unsigned int r = x--;
+}
+\<close>
+
+thm c_post_dec_smoke_def
+
+text \<open>Smoke test: for loop with pre-increment (++i).\<close>
+micro_c_translate \<open>
+void loop_pre_inc(int n) {
+  int s = 0;
+  for (int i = 0; i < n; ++i) {
+    s = s + i;
+  }
+}
+\<close>
+
+thm c_loop_pre_inc_def
 
 end

@@ -207,6 +207,124 @@ lemma c_u_max_spec [crush_specs]:
   apply (crush_base simp add: c_unsigned_less_def)
   done
 
+subsection \<open>Comma Operator\<close>
+
+micro_c_translate \<open>
+unsigned int comma_test(unsigned int a, unsigned int b) {
+    unsigned int x = (a, b);
+    return x;
+}
+\<close>
+
+definition c_comma_test_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_comma_test_contract a b \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_comma_test_contract
+
+lemma c_comma_test_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_comma_test a b \<Turnstile>\<^sub>F c_comma_test_contract a b\<close>
+  apply (crush_boot f: c_comma_test_def contract: c_comma_test_contract_def)
+  apply crush_base
+  done
+
+subsection \<open>Multiple Declarations\<close>
+
+micro_c_translate \<open>
+unsigned int multi_decl_add(unsigned int a, unsigned int b) {
+    unsigned int x = a, y = b;
+    return x + y;
+}
+\<close>
+
+definition c_multi_decl_add_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_multi_decl_add_contract a b \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_multi_decl_add_contract
+
+lemma c_multi_decl_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_multi_decl_add a b \<Turnstile>\<^sub>F c_multi_decl_add_contract a b\<close>
+  apply (crush_boot f: c_multi_decl_add_def contract: c_multi_decl_add_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+subsection \<open>Pre-Increment\<close>
+
+micro_c_translate \<open>
+unsigned int pre_inc_test(unsigned int init) {
+    unsigned int x = init;
+    unsigned int r = ++x;
+    return r;
+}
+\<close>
+
+definition c_pre_inc_test_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_pre_inc_test_contract init \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = init + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_pre_inc_test_contract
+
+lemma c_pre_inc_test_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_pre_inc_test init \<Turnstile>\<^sub>F c_pre_inc_test_contract init\<close>
+  apply (crush_boot f: c_pre_inc_test_def contract: c_pre_inc_test_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+subsection \<open>Post-Increment\<close>
+
+micro_c_translate \<open>
+unsigned int post_inc_test(unsigned int init) {
+    unsigned int x = init;
+    unsigned int r = x++;
+    return r;
+}
+\<close>
+
+definition c_post_inc_test_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_post_inc_test_contract init \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = init\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_post_inc_test_contract
+
+lemma c_post_inc_test_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_post_inc_test init \<Turnstile>\<^sub>F c_post_inc_test_contract init\<close>
+  apply (crush_boot f: c_post_inc_test_def contract: c_post_inc_test_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+subsection \<open>Post-Decrement\<close>
+
+micro_c_translate \<open>
+unsigned int post_dec_test(unsigned int init) {
+    unsigned int x = init;
+    unsigned int r = x--;
+    return r;
+}
+\<close>
+
+definition c_post_dec_test_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_post_dec_test_contract init \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = init\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_post_dec_test_contract
+
+lemma c_post_dec_test_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_post_dec_test init \<Turnstile>\<^sub>F c_post_dec_test_contract init\<close>
+  apply (crush_boot f: c_post_dec_test_def contract: c_post_dec_test_contract_def)
+  apply (crush_base simp add: c_unsigned_sub_def)
+  done
+
 end
 
 end
