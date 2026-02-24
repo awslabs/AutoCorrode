@@ -192,6 +192,19 @@ lemma wp_c_signed_eqI [micro_rust_wp_intros]:
   shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_eq a b) \<psi> \<rho> \<theta>\<close>
   using assms by (simp add: c_signed_eq_def wp_literalI)
 
+lemma wp_c_signed_neq [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} sword\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_signed_neq a b) \<psi> \<rho> \<theta> = \<psi> (a \<noteq> b)\<close>
+  using assms
+  by (simp add: c_signed_neq_def micro_rust_wp_simps)
+
+lemma wp_c_signed_neqI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} sword\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a \<noteq> b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_neq a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_signed_neq_def wp_literalI)
+
 subsection \<open>Unsigned Addition\<close>
 
 lemma wp_c_unsigned_add [micro_rust_wp_simps]:
@@ -277,6 +290,19 @@ lemma wp_c_unsigned_eqI [micro_rust_wp_intros]:
   assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a = b) \<star> \<top>\<close>
   shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_eq a b) \<psi> \<rho> \<theta>\<close>
   using assms by (simp add: c_unsigned_eq_def wp_literalI)
+
+lemma wp_c_unsigned_neq [micro_rust_wp_simps]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+  shows \<open>\<W>\<P> \<Gamma> (c_unsigned_neq a b) \<psi> \<rho> \<theta> = \<psi> (a \<noteq> b)\<close>
+  using assms
+  by (simp add: c_unsigned_neq_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_neqI [micro_rust_wp_intros]:
+  fixes a b :: \<open>'l::{len} word\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi> (a \<noteq> b) \<star> \<top>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_neq a b) \<psi> \<rho> \<theta>\<close>
+  using assms by (simp add: c_unsigned_neq_def wp_literalI)
 
 subsection \<open>Signed Bitwise Operations\<close>
 

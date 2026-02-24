@@ -572,7 +572,10 @@ struct
         if C_Ast_Utils.is_signed cty
         then Monadic (Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT))
         else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_eq\<close>, isa_dummyT))
-    | translate_binop _ CNeqOp0 = unsupported "!= operator"
+    | translate_binop cty CNeqOp0 =
+        if C_Ast_Utils.is_signed cty
+        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_neq\<close>, isa_dummyT))
+        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_neq\<close>, isa_dummyT))
     | translate_binop _ CLndOp0 = Pure (Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT))
     | translate_binop _ CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
     | translate_binop cty CAndOp0 = (* bitwise AND *)
@@ -726,8 +729,47 @@ struct
         let val (lhs', _) = translate_expr tctx lhs
             val (rhs', _) = translate_expr tctx rhs
         in (C_Term_Build.mk_ptr_write lhs' rhs', C_Ast_Utils.CInt) end
+    | translate_expr tctx (CAssign0 (asgn_op, CVar0 (ident, _), rhs, _)) =
+        (* Compound assignment: x op= rhs -> read x, compute (x op rhs), write x, return new *)
+        let fun compound_assign_to_binop CAddAssOp0 = SOME CAddOp0
+              | compound_assign_to_binop CSubAssOp0 = SOME CSubOp0
+              | compound_assign_to_binop CMulAssOp0 = SOME CMulOp0
+              | compound_assign_to_binop CDivAssOp0 = SOME CDivOp0
+              | compound_assign_to_binop CRmdAssOp0 = SOME CRmdOp0
+              | compound_assign_to_binop CShlAssOp0 = SOME CShlOp0
+              | compound_assign_to_binop CShrAssOp0 = SOME CShrOp0
+              | compound_assign_to_binop CAndAssOp0 = SOME CAndOp0
+              | compound_assign_to_binop CXorAssOp0 = SOME CXorOp0
+              | compound_assign_to_binop COrAssOp0  = SOME COrOp0
+              | compound_assign_to_binop _ = NONE
+        in case compound_assign_to_binop asgn_op of
+             SOME binop =>
+               let val name = C_Ast_Utils.ident_name ident
+                   val (rhs', _) = translate_expr tctx rhs
+               in case C_Trans_Ctxt.lookup_var tctx name of
+                    SOME (C_Trans_Ctxt.Local, var, cty) =>
+                      let val old_var = Isa_Free ("v__old", isa_dummyT)
+                          val new_var = Isa_Free ("v__new", isa_dummyT)
+                      in case translate_binop cty binop of
+                           Monadic f =>
+                             (C_Term_Build.mk_bind (C_Term_Build.mk_var_read var)
+                               (Term.lambda old_var
+                                 (C_Term_Build.mk_bind
+                                   (C_Term_Build.mk_bind2 f
+                                     (C_Term_Build.mk_literal old_var) rhs')
+                                   (Term.lambda new_var
+                                     (C_Term_Build.mk_sequence
+                                       (C_Term_Build.mk_var_write var
+                                         (C_Term_Build.mk_literal new_var))
+                                       (C_Term_Build.mk_literal new_var))))), cty)
+                         | _ => unsupported "pure compound assignment"
+                      end
+                  | _ => unsupported "compound assignment to non-local variable"
+               end
+           | NONE => unsupported "compound assignment or non-variable lhs"
+        end
     | translate_expr _ (CAssign0 _) =
-        unsupported "compound assignment or non-variable lhs"
+        unsupported "non-variable lhs in assignment"
     | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
         let val fname = C_Ast_Utils.ident_name ident
             val arg_terms = List.map (fn a => #1 (translate_expr tctx a)) args
@@ -771,6 +813,18 @@ struct
         translate_inc_dec tctx false true expr
     | translate_expr tctx (CUnary0 (CPostDecOp0, expr, _)) =
         translate_inc_dec tctx false false expr
+    | translate_expr tctx (CUnary0 (CPlusOp0, expr, _)) =
+        (* +x : unary plus is identity in C *)
+        translate_expr tctx expr
+    | translate_expr tctx (CUnary0 (CNegOp0, expr, _)) =
+        (* !x : logical NOT, translate as x == 0 *)
+        let val (expr', cty) = translate_expr tctx expr
+            val zero = C_Term_Build.mk_literal_num cty 0
+            val eq_const =
+              if C_Ast_Utils.is_signed cty
+              then Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT)
+              else Isa_Const (\<^const_name>\<open>c_unsigned_eq\<close>, isa_dummyT)
+        in (C_Term_Build.mk_bind2 eq_const expr' zero, C_Ast_Utils.CInt) end
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
     (* arr[idx] : deref whole list, then index with nth.
@@ -818,6 +872,20 @@ struct
         in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, C_Ast_Utils.CInt) end
     | translate_expr _ (CMember0 (_, _, false, _)) =
         unsupported "direct struct member access (s.field) - use pointer access (p->field)"
+    | translate_expr tctx (CCond0 (cond, Some then_expr, else_expr, _)) =
+        (* x ? y : z — ternary conditional *)
+        let val (then', then_cty) = translate_expr tctx then_expr
+            val (else', _) = translate_expr tctx else_expr
+        in (C_Term_Build.mk_two_armed_cond (expr_term tctx cond) then' else', then_cty) end
+    | translate_expr tctx (CCond0 (cond, None, else_expr, _)) =
+        (* GNU extension: x ?: y means x ? x : y *)
+        let val (cond', cond_cty) = translate_expr tctx cond
+            val (else', _) = translate_expr tctx else_expr
+        in (C_Term_Build.mk_two_armed_cond cond' cond' else', cond_cty) end
+    | translate_expr _ (CConst0 (CCharConst0 (CChar0 (c, _), _))) =
+        (* Character literal — convert to ASCII ordinal *)
+        (C_Term_Build.mk_literal_num C_Ast_Utils.CChar (IntInf.toInt (integer_of_char c)),
+         C_Ast_Utils.CChar)
     | translate_expr tctx (CComma0 ([], _)) =
         (C_Term_Build.mk_literal_unit, C_Ast_Utils.CInt)
     | translate_expr tctx (CComma0 (exprs, _)) =
@@ -1321,5 +1389,83 @@ void loop_pre_inc(int n) {
 \<close>
 
 thm c_loop_pre_inc_def
+
+text \<open>Smoke test: not-equal operator.\<close>
+micro_c_translate \<open>
+unsigned int neq_test(unsigned int a, unsigned int b) {
+  return a != b;
+}
+\<close>
+
+thm c_neq_test_def
+
+text \<open>Smoke test: logical NOT.\<close>
+micro_c_translate \<open>
+unsigned int not_test(unsigned int x) {
+  if (!x) return 1; else return 0;
+}
+\<close>
+
+thm c_not_test_def
+
+text \<open>Smoke test: unary plus.\<close>
+micro_c_translate \<open>
+unsigned int uplus_test(unsigned int x) {
+  return +x;
+}
+\<close>
+
+thm c_uplus_test_def
+
+text \<open>Smoke test: ternary conditional.\<close>
+micro_c_translate \<open>
+unsigned int ternary_test(unsigned int a, unsigned int b) {
+  return (a > b) ? a : b;
+}
+\<close>
+
+thm c_ternary_test_def
+
+text \<open>Smoke test: character literal.\<close>
+micro_c_translate \<open>
+char char_test(char c) {
+  return 'A';
+}
+\<close>
+
+thm c_char_test_def
+
+text \<open>Smoke test: compound add-assign.\<close>
+micro_c_translate \<open>
+unsigned int add_assign_test(unsigned int a, unsigned int b) {
+  unsigned int x = a;
+  x += b;
+  return x;
+}
+\<close>
+
+thm c_add_assign_test_def
+
+text \<open>Smoke test: compound sub-assign.\<close>
+micro_c_translate \<open>
+unsigned int sub_assign_test(unsigned int a, unsigned int b) {
+  unsigned int x = a;
+  x -= b;
+  return x;
+}
+\<close>
+
+thm c_sub_assign_test_def
+
+text \<open>Smoke test: compound mul-assign.\<close>
+micro_c_translate \<open>
+unsigned int mul_assign_test(unsigned int a) {
+  unsigned int x = a;
+  x *= 2;
+  return x;
+}
+\<close>
+
+thm c_mul_assign_test_def
 
 end

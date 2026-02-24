@@ -206,6 +206,10 @@ definition c_unsigned_eq :: \<open>'l::{len} word \<Rightarrow> 'l word \<Righta
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_eq a b \<equiv> literal (a = b)\<close>
 
+definition c_unsigned_neq :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_neq a b \<equiv> literal (a \<noteq> b)\<close>
+
 section \<open>C Comparison Operations\<close>
 
 definition c_signed_less :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
@@ -219,5 +223,9 @@ definition c_signed_le :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Righta
 definition c_signed_eq :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_signed_eq a b \<equiv> literal (a = b)\<close>
+
+definition c_signed_neq :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_neq a b \<equiv> literal (a \<noteq> b)\<close>
 
 end

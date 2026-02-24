@@ -325,6 +325,118 @@ lemma c_post_dec_test_spec [crush_specs]:
   apply (crush_base simp add: c_unsigned_sub_def)
   done
 
+subsection \<open>Not-Equal Operator\<close>
+
+micro_c_translate \<open>
+unsigned int neq_test(unsigned int a, unsigned int b) {
+  if (a != b) return 1;
+  else return 0;
+}
+\<close>
+
+definition c_neq_test_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_neq_test_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = (if a \<noteq> b then 1 else 0)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_neq_test_contract
+
+lemma c_neq_test_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_neq_test a b \<Turnstile>\<^sub>F c_neq_test_contract a b\<close>
+  apply (crush_boot f: c_neq_test_def contract: c_neq_test_contract_def)
+  apply (crush_base simp add: c_unsigned_neq_def)
+  done
+
+subsection \<open>Logical NOT\<close>
+
+micro_c_translate \<open>
+unsigned int is_zero(unsigned int x) {
+  if (!x) return 1;
+  else return 0;
+}
+\<close>
+
+definition c_is_zero_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_is_zero_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = (if x = 0 then 1 else 0)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_is_zero_contract
+
+lemma c_is_zero_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_is_zero x \<Turnstile>\<^sub>F c_is_zero_contract x\<close>
+  apply (crush_boot f: c_is_zero_def contract: c_is_zero_contract_def)
+  apply (crush_base simp add: c_unsigned_eq_def)
+  done
+
+subsection \<open>Unary Plus\<close>
+
+micro_c_translate \<open>
+unsigned int uplus(unsigned int x) { return +x; }
+\<close>
+
+definition c_uplus_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_uplus_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = x\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_uplus_contract
+
+lemma c_uplus_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_uplus x \<Turnstile>\<^sub>F c_uplus_contract x\<close>
+  apply (crush_boot f: c_uplus_def contract: c_uplus_contract_def)
+  apply crush_base
+  done
+
+subsection \<open>Ternary Operator\<close>
+
+micro_c_translate \<open>
+unsigned int ternary_max(unsigned int a, unsigned int b) {
+  return (a > b) ? a : b;
+}
+\<close>
+
+definition c_ternary_max_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_ternary_max_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = (if b < a then a else b)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_ternary_max_contract
+
+lemma c_ternary_max_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_ternary_max a b \<Turnstile>\<^sub>F c_ternary_max_contract a b\<close>
+  apply (crush_boot f: c_ternary_max_def contract: c_ternary_max_contract_def)
+  apply (crush_base simp add: c_unsigned_less_def)
+  done
+
+subsection \<open>Compound Assignment\<close>
+
+micro_c_translate \<open>
+unsigned int add_assign(unsigned int a, unsigned int b) {
+  unsigned int x = a;
+  x += b;
+  return x;
+}
+\<close>
+
+definition c_add_assign_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_add_assign_contract a b \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_add_assign_contract
+
+lemma c_add_assign_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_add_assign a b \<Turnstile>\<^sub>F c_add_assign_contract a b\<close>
+  apply (crush_boot f: c_add_assign_def contract: c_add_assign_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
 end
 
 end
