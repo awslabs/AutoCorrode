@@ -115,6 +115,20 @@ definition iterator_filter :: \<open>('s, 'a, 'abort, 'i, 'o) iterator \<Rightar
 definition raw_for_loop :: \<open>'a list \<Rightarrow> ('a \<Rightarrow> ('s,'v,'r, 'abort, 'i, 'o) expression) \<Rightarrow> ('s, unit, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>raw_for_loop ls body \<equiv> sequence' (List.map body ls)\<close>
 
+subsection\<open>Bounded while loops\<close>
+
+text\<open>A fuel-based while-loop combinator. Terminates by structural recursion on the fuel @{typ nat}.
+When fuel reaches 0 the loop returns @{term skip} (unit). The WP invariant rules force the user to
+prove fuel sufficiency, so the fuel=0 case is unreachable in verified code.\<close>
+fun bounded_while :: \<open>nat \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+    ('s, unit, 'r, 'abort, 'i, 'o) expression \<Rightarrow>
+    ('s, unit, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>bounded_while 0 cond body = skip\<close>
+| \<open>bounded_while (Suc n) cond body =
+     bind cond (\<lambda>c. if c then sequence body (bounded_while n cond body)
+                     else skip)\<close>
+
 definition for_loop_core :: \<open>('s, 'a, 'abort, 'i, 'o) iterator \<Rightarrow> ('a \<Rightarrow> ('s,'v,'r, 'abort, 'i, 'o) expression) \<Rightarrow>
     ('s, unit, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>for_loop_core iter body \<equiv>

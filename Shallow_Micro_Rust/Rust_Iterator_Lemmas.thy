@@ -33,6 +33,15 @@ lemma raw_for_loop_cons [micro_rust_simps]:
   shows \<open>raw_for_loop (x#xs) body = (body x; raw_for_loop xs body)\<close>
   by (auto simp add: raw_for_loop_def micro_rust_simps)
 
+lemma bounded_while_zero [micro_rust_simps]:
+  shows \<open>bounded_while 0 cond body = skip\<close>
+  by simp
+
+lemma bounded_while_Suc [micro_rust_simps]:
+  shows \<open>bounded_while (Suc n) cond body =
+     bind cond (\<lambda>c. if c then sequence body (bounded_while n cond body) else skip)\<close>
+  by simp
+
 \<comment>\<open>Use this to unroll one loop iteration at a time when dealing with a loop with a large
    number of iterations.\<close>
 lemma raw_for_loop_standard_unroll_once_simp:

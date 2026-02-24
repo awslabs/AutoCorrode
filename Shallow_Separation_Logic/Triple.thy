@@ -652,6 +652,119 @@ proof -
     using aentails_refl local.asepconj_comm local.awand_mp local.sstriple_consequence by fastforce
 qed
 
+subsection\<open>Bounded while-loop triples\<close>
+
+text\<open>Basic bounded while-loop triple. The invariant @{term INV} is indexed by remaining fuel.
+Each iteration step must establish the invariant for one less fuel via a triple on the
+condition followed by the body (when the condition is true).\<close>
+lemma sstriple_bounded_while:
+    fixes INV :: \<open>nat \<Rightarrow> 'a assert\<close>
+      and INV' :: \<open>nat \<Rightarrow> 'a assert\<close>
+  assumes step: \<open>\<And>k. k < n \<Longrightarrow>
+    \<Gamma> ; INV (Suc k) \<turnstile> cond \<stileturn>
+      (\<lambda>c. if c then INV' k else \<psi> ()) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+      and body_step: \<open>\<And>k. k < n \<Longrightarrow>
+    \<Gamma> ; INV' k \<turnstile> body \<stileturn> (\<lambda>_. INV k) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+      and base: \<open>INV 0 \<longlongrightarrow> \<psi> ()\<close>
+    shows \<open>\<Gamma> ; INV n \<turnstile> bounded_while n cond body \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  using step body_step
+proof (induction n)
+  case 0
+  have \<open>\<Gamma> ; INV 0 \<turnstile> skip \<stileturn> (\<lambda>_. INV 0) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    by (rule sstriple_skipI)
+  then have \<open>\<Gamma> ; INV 0 \<turnstile> skip \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    using base by (auto intro: sstriple_consequence aentails_refl)
+  then show ?case by (simp add: bounded_while_zero)
+next
+  case (Suc n)
+  have cond_triple:
+    \<open>\<Gamma> ; INV (Suc n) \<turnstile> cond \<stileturn>
+      (\<lambda>c. if c then INV' n else \<psi> ()) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    using Suc.prems by simp
+  have body_triple: \<open>\<Gamma> ; INV' n \<turnstile> body \<stileturn> (\<lambda>_. INV n) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    using Suc.prems by simp
+  have ih: \<open>\<Gamma> ; INV n \<turnstile> bounded_while n cond body \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    using Suc.IH Suc.prems by simp
+  have true_branch: \<open>\<Gamma> ; INV' n \<turnstile> sequence body (bounded_while n cond body) \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    unfolding sequence_def using body_triple ih sstriple_bindI by fastforce
+  have false_branch: \<open>\<Gamma> ; \<psi> () \<turnstile> skip \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  proof -
+    have \<open>\<Gamma> ; \<psi> () \<turnstile> skip \<stileturn> (\<lambda>_. \<psi> ()) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+      by (rule sstriple_skipI)
+    then show ?thesis
+      by (auto intro: sstriple_consequence aentails_refl)
+  qed
+  have \<open>\<Gamma> ; INV (Suc n) \<turnstile> bind cond (\<lambda>c. if c then sequence body (bounded_while n cond body) else skip) \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  proof (rule sstriple_bindI[OF cond_triple])
+    fix c :: bool
+    show \<open>\<Gamma> ; (if c then INV' n else \<psi> ()) \<turnstile>
+              (if c then sequence body (bounded_while n cond body) else skip) \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+      using true_branch false_branch by (cases c) simp_all
+  qed
+  then show ?case by (simp add: bounded_while_Suc)
+qed
+
+text\<open>Framed version: carries a frame through all iterations.\<close>
+lemma sstriple_bounded_while_framed:
+    notes aentails_intro [intro]
+    fixes INV :: \<open>nat \<Rightarrow> 'a assert\<close>
+      and INV' :: \<open>nat \<Rightarrow> 'a assert\<close>
+  assumes ucincl_INV: \<open>\<And>k. ucincl (INV k)\<close>
+      and ucincl_INV': \<open>\<And>k. ucincl (INV' k)\<close>
+      and cond_step: \<open>\<And>k. k < n \<Longrightarrow>
+            \<Gamma> ; INV (Suc k) \<turnstile> cond \<stileturn>
+              (\<lambda>c. if c then INV' k else INV 0) \<bowtie> \<tau> \<bowtie> \<theta>\<close>
+      and body_step: \<open>\<And>k. k < n \<Longrightarrow>
+            \<Gamma> ; INV' k \<turnstile> body \<stileturn> (\<lambda>_. INV k) \<bowtie> \<tau> \<bowtie> \<theta>\<close>
+    shows \<open>\<Gamma> ; INV n \<star> ((INV 0 \<Zsurj> \<psi> ()) \<sqinter> (\<Sqinter>r. \<tau> r \<Zsurj> \<rho> r) \<sqinter> (\<Sqinter>r. \<theta> r \<Zsurj> \<chi> r))
+              \<turnstile> bounded_while n cond body \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<chi>\<close>
+proof -
+  let ?pc = \<open>(INV 0 \<Zsurj> \<psi> ()) \<sqinter> (\<Sqinter>r. \<tau> r \<Zsurj> \<rho> r) \<sqinter> (\<Sqinter>r. \<theta> r \<Zsurj> \<chi> r)\<close>
+  have tau_rho: \<open>\<And>r. \<tau> r \<star> ?pc \<longlongrightarrow> \<rho> r\<close>
+  proof -
+    have \<open>\<And>r. \<tau> r \<star> (\<Sqinter>r. \<tau> r \<Zsurj> \<rho> r) \<longlongrightarrow> \<rho> r\<close>
+      by (meson aentails_refl aentails_trans aforall_entailsL asepconj_mono3 awand_counit)
+    from this show \<open>\<And>r. \<tau> r \<star> ?pc \<longlongrightarrow> \<rho> r\<close>
+      by (meson aentails_fold_def aentails_inter_weaken aentails_inter_weaken2 asepconj_mono awand_adjointI)
+  qed
+  have theta_chi: \<open>\<And>a. \<theta> a \<star> ?pc \<longlongrightarrow> \<chi> a\<close>
+    by (meson aentails_refl aentails_trans' aentails_inter_weaken aforall_entailsL asepconj_mono awand_counit)
+  have inv0_psi: \<open>INV 0 \<star> ?pc \<longlongrightarrow> \<psi> ()\<close>
+    by (metis (no_types, lifting) aentails_refl local.asepconj_comm local.aentails_int local.awand_adjoint)
+  \<comment>\<open>Frame each condition step\<close>
+  {
+    fix k
+    assume kn: \<open>k < n\<close>
+    have \<open>\<Gamma> ; INV (Suc k) \<star> ?pc \<turnstile> cond \<stileturn>
+        (\<lambda>c. (if c then INV' k else INV 0) \<star> ?pc)
+          \<bowtie> (\<lambda>r. \<tau> r \<star> ?pc) \<bowtie> (\<lambda>a. \<theta> a \<star> ?pc)\<close>
+      using cond_step[OF kn] ucincl_INV by (intro sstriple_frame_rule; clarsimp)
+    moreover have \<open>\<And>c. (if c then INV' k else INV 0) \<star> ?pc \<longlongrightarrow>
+        (if c then INV' k \<star> ?pc else \<psi> ())\<close>
+      using inv0_psi by (auto simp add: aentails_refl)
+    ultimately have \<open>\<Gamma> ; INV (Suc k) \<star> ?pc \<turnstile> cond \<stileturn>
+        (\<lambda>c. if c then INV' k \<star> ?pc else \<psi> ())
+          \<bowtie> \<rho> \<bowtie> \<chi>\<close>
+      using tau_rho theta_chi
+      by (meson aentails_refl aentails_trans sstriple_consequence)
+  }
+  moreover {
+    fix k
+    assume kn: \<open>k < n\<close>
+    have \<open>\<Gamma> ; INV' k \<star> ?pc \<turnstile> body \<stileturn>
+        (\<lambda>_. INV k \<star> ?pc) \<bowtie> (\<lambda>r. \<tau> r \<star> ?pc) \<bowtie> (\<lambda>a. \<theta> a \<star> ?pc)\<close>
+      using body_step[OF kn] ucincl_INV' by (intro sstriple_frame_rule; clarsimp)
+    from this have \<open>\<Gamma> ; INV' k \<star> ?pc \<turnstile> body \<stileturn>
+        (\<lambda>_. INV k \<star> ?pc) \<bowtie> \<rho> \<bowtie> \<chi>\<close>
+      using tau_rho theta_chi
+      by (meson aentails_refl sstriple_consequence)
+  }
+  ultimately have \<open>\<Gamma> ; INV n \<star> ?pc \<turnstile> bounded_while n cond body \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<chi>\<close>
+    using sstriple_bounded_while[where INV=\<open>\<lambda>k. INV k \<star> ?pc\<close> and INV'=\<open>\<lambda>k. INV' k \<star> ?pc\<close>]
+      inv0_psi by blast
+  then show ?thesis by simp
+qed
+
 lemma sstriple_gather_spec':
     notes asepconj_simp [simp]
       and aentails_intro [intro]

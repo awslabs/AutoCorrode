@@ -325,7 +325,7 @@ structure C_Term_Build : sig
   val mk_struct_field_write : term -> term -> term -> term
   val mk_unat : term -> term
   val mk_focus_nth : term -> term -> term
-  val mk_while_stub : term
+  val mk_bounded_while : term -> term -> term -> term
   val mk_goto_stub : term
   val mk_unsupported_stub : term
 end =
@@ -484,8 +484,12 @@ struct
       $ (Const (\<^const_name>\<open>nth_focus\<close>, dummyT --> dummyT) $ idx_nat)
       $ ref_term
 
+  (* bounded_while fuel cond body *)
+  fun mk_bounded_while fuel cond body =
+    Const (\<^const_name>\<open>bounded_while\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ fuel $ cond $ body
+
   (* Stub constants for unsupported C constructs *)
-  val mk_while_stub = Const (\<^const_name>\<open>c_while_stub\<close>, dummyT)
   val mk_goto_stub = Const (\<^const_name>\<open>c_goto_stub\<close>, dummyT)
   val mk_unsupported_stub = Const (\<^const_name>\<open>c_unsupported\<close>, dummyT)
 end
@@ -510,6 +514,7 @@ struct
   val Isa_Const = Const
   val Isa_Free = Free
   val isa_dummyT = dummyT
+  val Isa_add_frees = Term.add_frees
 
   (* Binary operator classification: monadic operators (arithmetic/comparison)
      return expressions and need bind2; pure operators (logical) return plain
@@ -700,9 +705,10 @@ struct
     | translate_expr _ (CCall0 _) =
         unsupported "indirect function call (function pointers)"
     | translate_expr tctx (CUnary0 (CIndOp0, expr, _)) =
-        (* *p : dereference pointer *)
-        let val (expr', _) = translate_expr tctx expr
-        in (C_Term_Build.mk_deref expr', C_Ast_Utils.CInt) end
+        (* *p : dereference pointer. Propagate the underlying type so that
+           e.g. dereffing an unsigned int* yields CUInt for operator dispatch. *)
+        let val (expr', cty) = translate_expr tctx expr
+        in (C_Term_Build.mk_deref expr', cty) end
     | translate_expr tctx (CUnary0 (CCompOp0, expr, _)) =
         (* ~x : bitwise complement *)
         let val (expr', cty) = translate_expr tctx expr
@@ -872,8 +878,15 @@ struct
                  val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
              in C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term) end
          | NONE => unsupported "non-standard for loop")
-    | translate_stmt _ (CWhile0 _) =
-        (warning "micro_c_translate: while loop replaced with stub"; C_Term_Build.mk_while_stub)
+    | translate_stmt tctx (CWhile0 (cond, body, is_do_while, _)) =
+        if is_do_while then
+          (warning "micro_c_translate: do-while loop not yet supported";
+           C_Term_Build.mk_unsupported_stub)
+        else
+          let val cond_term = expr_term tctx cond
+              val body_term = translate_stmt tctx body
+              val fuel_var = Isa_Free ("while_fuel", @{typ nat})
+          in C_Term_Build.mk_bounded_while fuel_var cond_term body_term end
     | translate_stmt _ (CSwitch0 _) =
         (warning "micro_c_translate: switch statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
     | translate_stmt _ (CGoto0 _) =
@@ -925,6 +938,11 @@ struct
       val fn_term = List.foldr
         (fn ((_, v, _), t) => Term.lambda v t)
         fn_term param_vars
+      (* Abstract while-loop fuel variables as additional parameters *)
+      val fuel_frees = Isa_add_frees fn_term []
+        |> List.filter (fn (n, _) => String.isPrefix "while_fuel" n)
+        |> List.map (fn (n, ty) => Isa_Free (n, ty))
+      val fn_term = List.foldr (fn (v, t) => Term.lambda v t) fn_term fuel_frees
       val fn_term' = Syntax.check_term ctxt fn_term
     in
       (name, fn_term')

@@ -996,6 +996,37 @@ proof -
     by (meson assms ucincl_asepconj ucincl_awand aentails_trans')
 qed
 
+subsection\<open>Bounded while loops\<close>
+
+lemma wp_bounded_while_framedI:
+    fixes INV :: \<open>nat \<Rightarrow> 'a assert\<close>
+      and INV' :: \<open>nat \<Rightarrow> 'a assert\<close>
+  assumes \<open>\<And>k. ucincl (INV k)\<close>
+      and \<open>\<And>k. ucincl (INV' k)\<close>
+      and \<open>\<And>r. ucincl (\<rho> r)\<close>
+      and \<open>ucincl (\<psi> ())\<close>
+      and \<open>\<And>r. ucincl (\<tau> r)\<close>
+      and \<open>\<phi> \<longlongrightarrow> INV n \<star> ((INV 0 \<Zsurj> \<psi> ()) \<sqinter> (\<Sqinter>r. \<tau> r \<Zsurj> \<rho> r) \<sqinter> (\<Sqinter>r. \<theta> r \<Zsurj> \<chi> r))\<close>
+      and \<open>\<And>k. k < n \<Longrightarrow>
+            INV (Suc k) \<longlongrightarrow> \<W>\<P> \<Gamma> cond (\<lambda>c.
+              if c then INV' k else INV 0) \<tau> \<theta>\<close>
+      and \<open>\<And>k. k < n \<Longrightarrow>
+            INV' k \<longlongrightarrow> \<W>\<P> \<Gamma> body (\<lambda>_. INV k) \<tau> \<theta>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (bounded_while n cond body) \<psi> \<rho> \<chi>\<close>
+proof -
+  let ?pc = \<open>((INV 0 \<Zsurj> \<psi> ()) \<sqinter> (\<Sqinter>r. \<tau> r \<Zsurj> \<rho> r) \<sqinter> (\<Sqinter>r. \<theta> r \<Zsurj> \<chi> r))\<close>
+  from assms have \<open>\<Gamma> ; INV n \<star> ?pc \<turnstile> bounded_while n cond body \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<chi>\<close>
+    by (intro sstriple_bounded_while_framed[where INV'=INV'])
+       (auto simp add: local.wp_to_sstriple ucincl_intros)
+  from this and assms have \<open>INV n \<star> ?pc \<longlongrightarrow> \<W>\<P> \<Gamma> (bounded_while n cond body) \<psi> \<rho> \<chi>\<close>
+    by (intro wp_is_weakest_precondition) (auto intro!: ucincl_Int ucincl_awand ucincl_inter
+      ucincl_asepconj)
+  from this and assms show ?thesis
+    by (meson assms ucincl_asepconj ucincl_awand aentails_trans')
+qed
+
+subsection\<open>Gather\<close>
+
 lemma wp_gather_framedI:
     fixes INV :: \<open>nat \<Rightarrow> 'v list \<Rightarrow> 'a assert\<close>
       and \<xi> :: \<open>nat \<Rightarrow> 'v \<Rightarrow> bool\<close>
