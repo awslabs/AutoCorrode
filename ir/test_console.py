@@ -104,9 +104,12 @@ def main():
         _, seg_output = run_console(
             args.isabelle, args.session, args.dir,
             use('(Ir.source "Main" 0 0 handle ERROR msg => writeln msg);'))
-        m = re.search(r'Available: (\S+)', seg_output)
-        if m:
-            avail_thy = m.group(1).rstrip(',')
+        if "No recorded segments" not in seg_output:
+            avail_thy = "Main"
+        else:
+            m = re.search(r'Available: (\S+)', seg_output)
+            if m:
+                avail_thy = m.group(1).rstrip(',')
         elapsed = time.time() - t0
         print(f"{_CLEAR_LINE}  {_SYM_OK} source commands available "
               f"({n_theories} theories, sample: {avail_thy or 'none'}) "
@@ -162,8 +165,9 @@ def main():
 
     if has_source:
         run_test("source (missing theory)", args.isabelle, args.session, args.dir,
-                 use('(Ir.source "Main" 0 0 handle ERROR msg => '
-                     'if String.isSubstring "No stored segments" msg '
+                 use('(Ir.source "NonExistent.Theory" 0 0 handle ERROR msg => '
+                     'if String.isSubstring "No recorded segments" msg '
+                     'orelse String.isSubstring "undefined entry" msg '
                      'then writeln "OK: expected error" '
                      'else raise (ERROR msg));'))
         if avail_thy:

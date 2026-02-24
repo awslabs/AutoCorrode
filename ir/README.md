@@ -104,49 +104,23 @@ When an MCP client connects successfully, you should see:
 [MCP] Processing request of type ListPromptsRequest
 ```
 
-## Stored Segments: Forking REPLs at Arbitrary Theory Points
+## Recorded Segments: Forking REPLs at Arbitrary Theory Points
 
 By default, `Ir.init` creates a REPL at the end of a theory.
 To fork REPLs at intermediate points (e.g. after a specific lemma,
-or within a proof), you need to store the intermediate proof states in the heap using
-`segment_storage.ML`.
+or within a proof), you need the intermediate proof states recorded
+in the heap. This uses the `record_theories` option available in
+Isabelle2025-2 or later.
 
 ### Setup
 
-1. **Register the option.**
-   Add to `$ISABELLE_HOME_USER/etc/options`:
+Build the heap with `record_theories=true`:
 
-   ```
-   option store_segments : bool = false for build
-   ```
+```bash
+isabelle build -b -o record_theories=true -d /path/to/session My_Session
+```
 
-   See `ir/Segment_Storage_Example/` for a complete working example.
-
-2. **Load `segment_storage.ML` in your session's root theory.**
-   It must be loaded with `ML_write_global` enabled:
-
-   ```isabelle
-   theory My_Session
-   imports Main
-   begin
-   declare [[ML_write_global = true]]
-   ML_file \<open>segment_storage.ML\<close>
-   declare [[ML_write_global = false]]
-   (* ... rest of your theory ... *)
-   end
-   ```
-
-3. **Build the heap with `store_segments=true`:**
-
-   ```bash
-   isabelle build -b -o store_segments=true -d /path/to/session My_Session
-   ```
-
-   You should see lines like:
-
-   ```
-   Segment_Storage: My_Session.My_Theory (24 segments) [STORING]
-   ```
+Note: this increases heap size by approximately 5x.
 
 ### Usage
 
@@ -161,7 +135,7 @@ python3 ./ir/repl.py \
 On startup, you should see `source commands available` instead of
 `source commands not available`.
 
-Browse and fork from stored segments:
+Browse and fork from recorded segments:
 
 ```
 %> Ir.source "My_Session.My_Theory" 0 ~1;

@@ -41,12 +41,7 @@ val sh_state_ref = Unsynchronized.ref (Toplevel.make_state NONE);
 val sh_timeout_ref = Unsynchronized.ref 30;
 val sh_result_ref = Unsynchronized.ref "";
 
-(* Probe for stored_segments -- may or may not exist in the loaded heap *)
-val stored_segments_probe =
-  Unsynchronized.ref (NONE : (string * Document_Output.segment list) list Synchronized.var option);
-val _ = Exn.capture (fn () =>
-  ML_Compiler.eval ML_Compiler.flags Position.none
-    (ML_Lex.tokenize "stored_segments_probe := SOME stored_segments")) ();
+(* Segment access via Thy_Info.get_theory_segments (requires record_theories=true) *)
 
 structure Ir : IR =
 struct
@@ -201,14 +196,10 @@ fun fmt_text text =
 (** Segments **)
 
 fun find_source thy_name =
-  case ! stored_segments_probe of
-    NONE => error ("No stored segments available in this heap. " ^
-                   "The 'source' command requires a heap built with segment storage.")
-  | SOME sv =>
-      (case List.find (fn (n, _) => n = thy_name) (Synchronized.value sv) of
-         SOME (_, segs) => segs
-       | NONE => error ("No stored segments for " ^ quote thy_name ^
-                        ". Available: " ^ commas (map #1 (Synchronized.value sv))));
+  Thy_Info.get_theory_segments thy_name
+  handle ERROR msg =>
+    error ("No recorded segments for " ^ quote thy_name ^
+           ". Build the session with record_theories=true.");
 
 fun source thy_name start stop =
   let val segs = find_source thy_name
@@ -655,7 +646,7 @@ fun help () = out
   \  Ir.edit 0 \"lemma \\\"Q\\\"\";  (* edit first step, replays rest *)\n\
   \  Ir.truncate 1;             (* keep only steps 0 and 1 *)\n\
   \\n\
-  \=== Segments (stored theories) ===\n\
+  \=== Segments (record_theories) ===\n\
   \\n\
   \  Ir.source \"MySession.MyTheory\" 0 ~1;  (* all *)\n\
   \  Ir.source \"MySession.MyTheory\" 0 10;  (* first 11 *)\n\
@@ -663,10 +654,15 @@ fun help () = out
 
 end;
 
-val _ = writeln (case ! stored_segments_probe of
-    NONE => "Ir: source commands not available (heap has no stored segments)"
-  | SOME sv =>
-      let val n = length (Synchronized.value sv)
-      in if n = 0 then "Ir: source commands not available (no theories stored)"
-         else "Ir: source commands available (" ^ string_of_int n ^ " theories)"
-      end);
+val _ =
+  let val names = Thy_Info.get_names ()
+      val n = length names
+      (* Quick check: try one theory to see if segments are available *)
+      val has_segments = exists (fn n =>
+        (ignore (Thy_Info.get_theory_segments n); true)
+        handle ERROR _ => false) (List.take (names, Int.min (1, n)))
+  in if has_segments
+     then writeln ("Ir: source commands available (" ^
+                   string_of_int n ^ " theories)")
+     else writeln "Ir: source commands not available (no theories with recorded segments; build with record_theories=true)"
+  end;
