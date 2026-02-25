@@ -564,6 +564,102 @@ lemma c_classify_spec [crush_specs]:
   apply (crush_base)
   done
 
+subsection \<open>Address-Of\<close>
+
+text \<open>
+  Test address-of: @{text "&x"} on a local variable returns the ref itself.
+  The parameter @{text x} is auto-promoted to a local ref because @{text "&x"} appears.
+\<close>
+
+micro_c_translate \<open>
+unsigned int inc_via_addr(void) {
+  unsigned int x = 5;
+  unsigned int *p = &x;
+  *p = *p + 1;
+  return x;
+}
+\<close>
+
+thm c_inc_via_addr_def
+
+definition c_inc_via_addr_contract ::
+    \<open>('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_inc_via_addr_contract \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = 6\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_inc_via_addr_contract
+
+lemma c_inc_via_addr_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_inc_via_addr \<Turnstile>\<^sub>F c_inc_via_addr_contract\<close>
+  apply (crush_boot f: c_inc_via_addr_def contract: c_inc_via_addr_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+subsection \<open>Pointer Arithmetic\<close>
+
+text \<open>
+  Test pointer arithmetic: @{text "*(arr + idx)"} reads the element at offset @{text idx}
+  via @{const focus_focused} and @{const nth_focus}.
+\<close>
+
+micro_c_translate \<open>
+unsigned int ptr_add_read(unsigned int *arr, unsigned int idx) {
+  return *(arr + idx);
+}
+\<close>
+
+thm c_ptr_add_read_def
+
+definition c_ptr_add_read_contract ::
+    \<open>('addr, 'gv, c_uint list) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> c_uint list \<Rightarrow> c_uint \<Rightarrow>
+     ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_ptr_add_read_contract arr ag vs idx \<equiv>
+    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
+        post = \<lambda>r. arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>r = vs ! c_idx_to_nat idx\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_ptr_add_read_contract
+
+lemma c_ptr_add_read_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_ptr_add_read arr idx \<Turnstile>\<^sub>F c_ptr_add_read_contract arr ag vs idx\<close>
+  apply (crush_boot f: c_ptr_add_read_def contract: c_ptr_add_read_contract_def)
+  apply crush_base
+  done
+
+subsection \<open>Forward-Only Goto\<close>
+
+text \<open>
+  Test forward-only goto: @{text "goto done"} skips @{text "result = a + b"}
+  when @{text "b == 0"}, using a per-label flag mechanism.
+\<close>
+
+micro_c_translate \<open>
+unsigned int skip_add(unsigned int a, unsigned int b) {
+  unsigned int result = a;
+  if (b == 0) goto done;
+  result = a + b;
+done:
+  return result;
+}
+\<close>
+
+thm c_skip_add_def
+
+definition c_skip_add_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_skip_add_contract a b \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = (if b = 0 then a else a + b)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_skip_add_contract
+
+lemma c_skip_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_skip_add a b \<Turnstile>\<^sub>F c_skip_add_contract a b\<close>
+  apply (crush_boot f: c_skip_add_def contract: c_skip_add_contract_def)
+  apply (crush_base simp add: c_unsigned_eq_def c_unsigned_add_def)
+  done
+
 end
 
 end
