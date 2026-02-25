@@ -526,6 +526,44 @@ lemma c_inc_ptr_spec [crush_specs]:
   apply (crush_base simp add: c_unsigned_add_def)
   done
 
+subsection \<open>Sizeof\<close>
+
+micro_c_translate \<open>
+unsigned int size_of_int(void) { return sizeof(int); }
+\<close>
+
+thm c_size_of_int_def
+
+subsection \<open>Switch Statement\<close>
+
+micro_c_translate \<open>
+unsigned int classify(unsigned int x) {
+  unsigned int result;
+  switch (x) {
+    case 0: result = 10; break;
+    case 1: result = 20; break;
+    default: result = 30; break;
+  }
+  return result;
+}
+\<close>
+
+thm c_classify_def
+
+definition c_classify_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_classify_contract x \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = (if x = 0 then 10 else if x = 1 then 20 else 30)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_classify_contract
+
+lemma c_classify_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_classify x \<Turnstile>\<^sub>F c_classify_contract x\<close>
+  apply (crush_boot f: c_classify_def contract: c_classify_contract_def)
+  apply (crush_base)
+  done
+
 end
 
 end

@@ -11,6 +11,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_Rust.Bool_Type"
     "Shallow_Micro_Rust.Rust_Iterator"
     "Shallow_Micro_C.C_Numeric_Types"
+    "Shallow_Micro_C.C_Sizeof"
   keywords "micro_c_translate" :: thy_decl
 begin
 
@@ -64,6 +65,9 @@ structure C_Ast_Utils : sig
                             -> c_numeric_type option
   val int_literal_type : 'a C_Ast.flags -> c_numeric_type
   val find_assigned_vars : C_Ast.nodeInfo C_Ast.cStatement -> string list
+  val extract_struct_defs_with_types : c_numeric_type Symtab.table
+                                       -> C_Ast.nodeInfo C_Ast.cTranslationUnit
+                                       -> (string * (string * c_numeric_type) list) list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
 end =
@@ -339,6 +343,33 @@ struct
     fun find_assigned_vars stmt = distinct (op =) (fas stmt [])
   end
 
+  (* Extract struct definitions with field types from a top-level declaration.
+     Returns SOME (struct_name, [(field_name, field_type)]) for struct definitions.
+     Falls back to CInt for fields whose type cannot be resolved. *)
+  fun extract_struct_def_with_types_from_decl typedef_tab (CDecl0 (specs, _, _)) =
+        let fun find_struct_def [] = NONE
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    Some ident, Some members, _, _), _)) :: _) =
+                  let val sname = ident_name ident
+                      val field_info = List.mapPartial
+                        (fn CDecl0 (field_specs, [((Some declr, _), _)], _) =>
+                              let val fname = declr_name declr
+                                  val fty = case resolve_c_type_full typedef_tab field_specs of
+                                              SOME ct => ct | NONE => CInt
+                              in SOME (fname, fty) end
+                          | _ => NONE)
+                        members
+                  in SOME (sname, field_info) end
+              | find_struct_def (_ :: rest) = find_struct_def rest
+        in find_struct_def specs end
+    | extract_struct_def_with_types_from_decl _ _ = NONE
+
+  fun extract_struct_defs_with_types typedef_tab (CTranslUnit0 (ext_decls, _)) =
+    List.mapPartial
+      (fn CDeclExt0 decl => extract_struct_def_with_types_from_decl typedef_tab decl
+        | _ => NONE)
+      ext_decls
+
   fun extract_fundefs (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
       (fn CFDefExt0 fundef => SOME fundef | _ => NONE)
@@ -358,17 +389,23 @@ ML \<open>
 structure C_Trans_Ctxt : sig
   datatype var_kind = Param | Local  (* Param = by-value, Local = mutable reference *)
   type t
-  val make : Proof.context -> string list Symtab.table
+  val make : Proof.context -> (string * C_Ast_Utils.c_numeric_type) list Symtab.table
              -> int Symtab.table -> C_Ast_Utils.c_numeric_type Symtab.table -> t
   val get_ctxt : t -> Proof.context
   val add_var : string -> var_kind -> term -> C_Ast_Utils.c_numeric_type -> t -> t
   val lookup_var : t -> string -> (var_kind * term * C_Ast_Utils.c_numeric_type) option
   val set_struct_type : string -> string -> t -> t
   val get_struct_type : t -> string -> string option
-  val get_struct_fields : t -> string -> string list option
+  val get_struct_fields : t -> string -> (string * C_Ast_Utils.c_numeric_type) list option
+  val lookup_struct_field_type : t -> string -> string -> C_Ast_Utils.c_numeric_type option
   val lookup_enum_const : t -> string -> int option
   val add_enum_consts : (string * int) list -> t -> t
   val get_typedef_tab : t -> C_Ast_Utils.c_numeric_type Symtab.table
+  val get_break_ref : t -> term option
+  val get_continue_ref : t -> term option
+  val set_break_ref : term -> t -> t
+  val set_continue_ref : term -> t -> t
+  val clear_break_ref : t -> t
 end =
 struct
   datatype var_kind = Param | Local
@@ -376,33 +413,38 @@ struct
     ctxt : Proof.context,
     vars : (var_kind * term * C_Ast_Utils.c_numeric_type) Symtab.table,
     struct_types : string Symtab.table,         (* var_name -> c_struct_name *)
-    struct_fields : string list Symtab.table,   (* c_struct_name -> [field_name] *)
+    struct_fields : (string * C_Ast_Utils.c_numeric_type) list Symtab.table,
     enum_consts : int Symtab.table,             (* enum_name -> int_value *)
-    typedef_tab : C_Ast_Utils.c_numeric_type Symtab.table  (* typedef_name -> c_numeric_type *)
+    typedef_tab : C_Ast_Utils.c_numeric_type Symtab.table,
+    break_ref : term option,
+    continue_ref : term option
   }
 
   fun make ctxt struct_fields enum_consts typedef_tab : t =
     { ctxt = ctxt, vars = Symtab.empty, struct_types = Symtab.empty,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab }
+      typedef_tab = typedef_tab, break_ref = NONE, continue_ref = NONE }
 
   fun get_ctxt ({ ctxt, ... } : t) = ctxt
 
   fun add_var name kind tm cty ({ ctxt, vars, struct_types, struct_fields,
-                                   enum_consts, typedef_tab } : t) : t =
+                                   enum_consts, typedef_tab,
+                                   break_ref, continue_ref } : t) : t =
     { ctxt = ctxt, vars = Symtab.update (name, (kind, tm, cty)) vars,
       struct_types = struct_types, struct_fields = struct_fields,
-      enum_consts = enum_consts, typedef_tab = typedef_tab }
+      enum_consts = enum_consts, typedef_tab = typedef_tab,
+      break_ref = break_ref, continue_ref = continue_ref }
 
   fun lookup_var ({ vars, ... } : t) name =
     Symtab.lookup vars name
 
   fun set_struct_type var_name struct_name
-      ({ ctxt, vars, struct_types, struct_fields, enum_consts, typedef_tab } : t) : t =
+      ({ ctxt, vars, struct_types, struct_fields, enum_consts, typedef_tab,
+         break_ref, continue_ref } : t) : t =
     { ctxt = ctxt, vars = vars,
       struct_types = Symtab.update (var_name, struct_name) struct_types,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab }
+      typedef_tab = typedef_tab, break_ref = break_ref, continue_ref = continue_ref }
 
   fun get_struct_type ({ struct_types, ... } : t) name =
     Symtab.lookup struct_types name
@@ -410,18 +452,51 @@ struct
   fun get_struct_fields ({ struct_fields, ... } : t) name =
     Symtab.lookup struct_fields name
 
+  fun lookup_struct_field_type tctx struct_name field_name =
+    case get_struct_fields tctx struct_name of
+      SOME fields => (case List.find (fn (n, _) => n = field_name) fields of
+                        SOME (_, cty) => SOME cty | NONE => NONE)
+    | NONE => NONE
+
   fun lookup_enum_const ({ enum_consts, ... } : t) name =
     Symtab.lookup enum_consts name
 
   fun add_enum_consts entries ({ ctxt, vars, struct_types, struct_fields,
-                                 enum_consts, typedef_tab } : t) : t =
+                                 enum_consts, typedef_tab,
+                                 break_ref, continue_ref } : t) : t =
     { ctxt = ctxt, vars = vars, struct_types = struct_types,
       struct_fields = struct_fields,
       enum_consts = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                       enum_consts entries,
-      typedef_tab = typedef_tab }
+      typedef_tab = typedef_tab, break_ref = break_ref, continue_ref = continue_ref }
 
   fun get_typedef_tab ({ typedef_tab, ... } : t) = typedef_tab
+
+  fun get_break_ref ({ break_ref, ... } : t) = break_ref
+  fun get_continue_ref ({ continue_ref, ... } : t) = continue_ref
+
+  fun set_break_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
+                                 enum_consts, typedef_tab,
+                                 break_ref = _, continue_ref } : t) : t =
+    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+      struct_fields = struct_fields, enum_consts = enum_consts,
+      typedef_tab = typedef_tab, break_ref = SOME ref_term,
+      continue_ref = continue_ref }
+
+  fun set_continue_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
+                                    enum_consts, typedef_tab,
+                                    break_ref, continue_ref = _ } : t) : t =
+    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+      struct_fields = struct_fields, enum_consts = enum_consts,
+      typedef_tab = typedef_tab, break_ref = break_ref,
+      continue_ref = SOME ref_term }
+
+  fun clear_break_ref ({ ctxt, vars, struct_types, struct_fields,
+                          enum_consts, typedef_tab,
+                          break_ref = _, continue_ref } : t) : t =
+    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+      struct_fields = struct_fields, enum_consts = enum_consts,
+      typedef_tab = typedef_tab, break_ref = NONE, continue_ref = continue_ref }
 end
 \<close>
 
@@ -663,7 +738,8 @@ text \<open>
 ML \<open>
 structure C_Translate : sig
   val translate_stmt : C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cStatement -> term
-  val translate_fundef : string list Symtab.table -> int Symtab.table
+  val translate_fundef : (string * C_Ast_Utils.c_numeric_type) list Symtab.table
+                         -> int Symtab.table
                          -> C_Ast_Utils.c_numeric_type Symtab.table
                          -> Proof.context
                          -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
@@ -674,6 +750,14 @@ struct
   val Isa_Free = Free
   val isa_dummyT = dummyT
   val Isa_add_frees = Term.add_frees
+  val Isa_Type = Type
+
+  (* Generate a fresh variable name not occurring free in the given terms *)
+  fun fresh_var terms stem typ =
+    let val used = List.foldl (fn (t, acc) => Isa_add_frees t acc) [] terms
+                   |> List.map fst
+        val (name, _) = Name.variant stem (Name.make_context used)
+    in Isa_Free (name, typ) end
 
   (* Binary operator classification: monadic operators (arithmetic/comparison)
      return expressions and need bind2; pure operators (logical) return plain
@@ -826,6 +910,88 @@ struct
     | compound_assign_to_binop COrAssOp0  = SOME COrOp0
     | compound_assign_to_binop _ = NONE
 
+  (* --- Switch statement helpers --- *)
+
+  (* Unwrap nested case/default labels from the C AST.
+     CCase0(1, CCase0(2, stmt)) becomes labels=[SOME 1, SOME 2], stmt *)
+  fun unwrap_case_labels (CCase0 (expr, inner, _)) labels =
+        unwrap_case_labels inner (SOME expr :: labels)
+    | unwrap_case_labels (CDefault0 (inner, _)) labels =
+        unwrap_case_labels inner (NONE :: labels)
+    | unwrap_case_labels stmt labels = (rev labels, stmt)
+
+  (* Extract case groups from flat switch body items.
+     Returns list of {labels, body, has_break}. *)
+  fun extract_switch_groups items =
+    let
+      fun close_group labels body has_break acc =
+        if null labels then acc
+        else {labels = rev labels, body = rev body, has_break = has_break} :: acc
+      fun walk [] labels body acc = rev (close_group labels body false acc)
+        | walk (CBlockStmt0 (stmt as CCase0 _) :: rest) labels body acc =
+            let val acc' = close_group labels body false acc
+                val (new_labels, first_stmt) = unwrap_case_labels stmt []
+            in walk rest new_labels [CBlockStmt0 first_stmt] acc' end
+        | walk (CBlockStmt0 (stmt as CDefault0 _) :: rest) labels body acc =
+            let val acc' = close_group labels body false acc
+                val (new_labels, first_stmt) = unwrap_case_labels stmt []
+            in walk rest new_labels [CBlockStmt0 first_stmt] acc' end
+        | walk (CBlockStmt0 (CBreak0 _) :: rest) labels body acc =
+            let val acc' = close_group labels body true acc
+            in walk rest [] [] acc' end
+        | walk (item :: rest) labels body acc =
+            walk rest labels (item :: body) acc
+    in walk items [] [] [] end
+
+  (* Translate a case label expression to a pure HOL value *)
+  fun case_label_value switch_cty tctx (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
+        HOLogic.mk_number (C_Ast_Utils.hol_type_of switch_cty) (IntInf.toInt n)
+    | case_label_value switch_cty tctx (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in case C_Trans_Ctxt.lookup_enum_const tctx name of
+             SOME v => HOLogic.mk_number (C_Ast_Utils.hol_type_of switch_cty) v
+           | NONE => error ("micro_c_translate: unsupported case label: " ^ name)
+        end
+    | case_label_value _ _ _ = error "micro_c_translate: unsupported case label expression"
+
+  (* Build condition for a case group: switch_var = label1 OR ... OR labelN *)
+  fun make_switch_cond switch_var switch_cty tctx labels =
+    let fun one_label (SOME e) =
+              HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e)
+          | one_label NONE =
+              Isa_Const (\<^const_name>\<open>HOL.True\<close>, @{typ bool})
+        fun combine [] = Isa_Const (\<^const_name>\<open>HOL.True\<close>, @{typ bool})
+          | combine [c] = c
+          | combine (c :: cs) =
+              Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
+                @{typ bool} --> @{typ bool} --> @{typ bool}) $ c $ (combine cs)
+    in combine (List.map one_label labels) end
+
+  (* --- Break/continue AST scanners --- *)
+
+  fun contains_break (CBreak0 _) = true
+    | contains_break (CCompound0 (_, items, _)) = List.exists block_has_break items
+    | contains_break (CIf0 (_, t_br, e_opt, _)) =
+        contains_break t_br orelse
+        (case e_opt of Some e => contains_break e | None => false)
+    | contains_break (CSwitch0 _) = false  (* break in switch exits switch, not loop *)
+    | contains_break (CFor0 _) = false     (* break in nested loop is local *)
+    | contains_break (CWhile0 _) = false
+    | contains_break _ = false
+  and block_has_break (CBlockStmt0 s) = contains_break s
+    | block_has_break _ = false
+
+  fun contains_continue (CCont0 _) = true
+    | contains_continue (CCompound0 (_, items, _)) = List.exists block_has_continue items
+    | contains_continue (CIf0 (_, t_br, e_opt, _)) =
+        contains_continue t_br orelse
+        (case e_opt of Some e => contains_continue e | None => false)
+    | contains_continue (CFor0 _) = false
+    | contains_continue (CWhile0 _) = false
+    | contains_continue _ = false
+  and block_has_continue (CBlockStmt0 s) = contains_continue s
+    | block_has_continue _ = false
+
   (* translate_expr returns (term * c_numeric_type).
      The type tracks the C type of the expression for binary operator dispatch.
      CInt is used as default when the actual type is unknown/irrelevant. *)
@@ -878,7 +1044,9 @@ struct
             val updater_const = resolve_const ctxt updater_name
             val (ptr_expr, _) = translate_expr tctx expr
             val (rhs', _) = translate_expr tctx rhs
-        in (C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs', C_Ast_Utils.CInt) end
+            val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                              SOME cty => cty | NONE => C_Ast_Utils.CInt
+        in (C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs', field_cty) end
     (* p->field op= rhs : compound struct field write through pointer *)
     | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, true, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
@@ -899,7 +1067,9 @@ struct
                  val updated_struct = updater_const
                        $ Term.lambda (Isa_Free ("_uu", isa_dummyT)) new_var
                        $ struct_var
-             in case translate_binop C_Ast_Utils.CInt binop of
+                 val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                                   SOME cty => cty | NONE => C_Ast_Utils.CInt
+             in case translate_binop field_cty binop of
                   Monadic f =>
                     (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
                       (C_Term_Build.mk_bind
@@ -914,7 +1084,7 @@ struct
                                 (C_Term_Build.mk_ptr_write
                                   (C_Term_Build.mk_literal ptr_var)
                                   (C_Term_Build.mk_literal updated_struct))
-                                (C_Term_Build.mk_literal new_var))))))), C_Ast_Utils.CInt)
+                                (C_Term_Build.mk_literal new_var))))))), field_cty)
                 | _ => unsupported "pure compound assignment on struct field"
              end
          | NONE => unsupported "unsupported compound operator on struct field")
@@ -938,7 +1108,7 @@ struct
     | translate_expr tctx (CAssign0 (asgn_op, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
            SOME binop =>
-             let val (arr_term, _) = translate_expr tctx arr_expr
+             let val (arr_term, arr_cty) = translate_expr tctx arr_expr
                  val (idx_term, _) = translate_expr tctx idx_expr
                  val (rhs_term, _) = translate_expr tctx rhs
                  val ctxt = C_Trans_Ctxt.get_ctxt tctx
@@ -965,7 +1135,7 @@ struct
                           $ deref_const)
                  val focused = C_Term_Build.mk_focus_nth
                                  (C_Term_Build.mk_unat i_var) a_var
-             in case translate_binop C_Ast_Utils.CInt binop of
+             in case translate_binop arr_cty binop of
                   Monadic f =>
                     (C_Term_Build.mk_bind arr_term (Term.lambda a_var
                       (C_Term_Build.mk_bind idx_term (Term.lambda i_var
@@ -980,7 +1150,7 @@ struct
                                   (C_Term_Build.mk_literal focused)
                                   (C_Term_Build.mk_literal new_var))
                                 (C_Term_Build.mk_literal new_var))))))))),
-                     C_Ast_Utils.CInt)
+                     arr_cty)
                 | _ => unsupported "pure compound assignment on array element"
              end
          | NONE => unsupported "unsupported compound operator on array element")
@@ -1165,7 +1335,9 @@ struct
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val accessor_const = resolve_const ctxt accessor_name
             val (ptr_expr, _) = translate_expr tctx expr
-        in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, C_Ast_Utils.CInt) end
+            val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                              SOME cty => cty | NONE => C_Ast_Utils.CInt
+        in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, field_cty) end
     (* s.field : direct struct member access via value *)
     | translate_expr tctx (CMember0 (expr, field_ident, false, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
@@ -1175,9 +1347,11 @@ struct
             val accessor_const = resolve_const ctxt accessor_name
             val (struct_expr, _) = translate_expr tctx expr
             val v = Isa_Free ("v__struct", isa_dummyT)
+            val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                              SOME cty => cty | NONE => C_Ast_Utils.CInt
         in (C_Term_Build.mk_bind struct_expr
               (Term.lambda v (C_Term_Build.mk_literal (accessor_const $ v))),
-            C_Ast_Utils.CInt) end
+            field_cty) end
     | translate_expr tctx (CCond0 (cond, Some then_expr, else_expr, _)) =
         (* x ? y : z — ternary conditional *)
         let val (then', then_cty) = translate_expr tctx then_expr
@@ -1221,6 +1395,28 @@ struct
                 in (C_Term_Build.mk_bind source_term
                       (Term.lambda v (cast_const $ v)), target_cty) end
         end
+    (* sizeof(type) *)
+    | translate_expr tctx (CSizeofType0 (decl, _)) =
+        let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
+            val cty = case C_Ast_Utils.resolve_c_type_full typedef_tab
+                            (case decl of CDecl0 (specs, _, _) => specs | _ => []) of
+                        SOME ct => ct
+                      | NONE => unsupported "sizeof non-numeric type"
+            val isa_ty = C_Ast_Utils.hol_type_of cty
+            val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
+            val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
+            val sizeof_term = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
+                                itself_ty --> @{typ nat}) $ type_term
+        in (C_Term_Build.mk_literal sizeof_term, C_Ast_Utils.CULong) end
+    (* sizeof(expr) *)
+    | translate_expr tctx (CSizeofExpr0 (expr, _)) =
+        let val (_, cty) = translate_expr tctx expr
+            val isa_ty = C_Ast_Utils.hol_type_of cty
+            val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
+            val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
+            val sizeof_term = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
+                                itself_ty --> @{typ nat}) $ type_term
+        in (C_Term_Build.mk_literal sizeof_term, C_Ast_Utils.CULong) end
     | translate_expr _ _ =
         unsupported "expression"
 
@@ -1279,7 +1475,27 @@ struct
     | translate_compound_items tctx (CBlockStmt0 stmt :: rest) =
         let val stmt_term = translate_stmt tctx stmt
             val rest_term = translate_compound_items tctx rest
-        in C_Term_Build.mk_sequence stmt_term rest_term end
+        in case (C_Trans_Ctxt.get_break_ref tctx, C_Trans_Ctxt.get_continue_ref tctx) of
+             (NONE, NONE) => C_Term_Build.mk_sequence stmt_term rest_term
+           | _ =>
+               let val guard_var = Isa_Free ("v__guard", isa_dummyT)
+                   val guard_nonzero =
+                     Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
+                     $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+                        $ guard_var
+                        $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+                   fun wrap_guard NONE inner = inner
+                     | wrap_guard (SOME ref_var) inner =
+                         C_Term_Build.mk_bind (C_Term_Build.mk_var_read ref_var)
+                           (Term.lambda guard_var
+                             (C_Term_Build.mk_two_armed_cond
+                               (C_Term_Build.mk_literal guard_nonzero)
+                               C_Term_Build.mk_literal_unit inner))
+               in C_Term_Build.mk_sequence stmt_term
+                    (wrap_guard (C_Trans_Ctxt.get_break_ref tctx)
+                      (wrap_guard (C_Trans_Ctxt.get_continue_ref tctx) rest_term))
+               end
+        end
     | translate_compound_items _ _ = unsupported "block item"
 
   (* Translate a C expression to a pure nat term (for loop bounds).
@@ -1353,7 +1569,6 @@ struct
              (* General for-loop: for(init; cond; step) body
                 \<rightarrow> init; bounded_while fuel cond (sequence body step) *)
              let val CFor0 (init_part, cond_opt, step_opt, body, _) = stmt
-                 val fuel_var = Isa_Free ("while_fuel", @{typ nat})
                  fun build_while tctx' =
                    let val cond_term = case cond_opt of
                              Some c => ensure_bool_cond tctx' c
@@ -1364,7 +1579,8 @@ struct
                            | None => C_Term_Build.mk_literal_unit
                        val body_term = C_Term_Build.mk_sequence
                              (translate_stmt tctx' body) step_term
-                   in C_Term_Build.mk_bounded_while fuel_var cond_term body_term end
+                      val fuel_var = fresh_var [cond_term, body_term] "while_fuel" @{typ nat}
+                  in C_Term_Build.mk_bounded_while fuel_var cond_term body_term end
              in case init_part of
                   Left init_expr_opt =>
                     let val init_term = case init_expr_opt of
@@ -1383,26 +1599,168 @@ struct
                                    (Term.lambda var (fold_decls ds tctx'')) end
                     in fold_decls decls tctx end
              end)
-    | translate_stmt tctx (CWhile0 (cond, body, is_do_while, _)) =
-        let val cond_term = ensure_bool_cond tctx cond
-            val body_term = translate_stmt tctx body
-            val fuel_var = Isa_Free ("while_fuel", @{typ nat})
-            val while_term = C_Term_Build.mk_bounded_while fuel_var cond_term body_term
-        in if is_do_while
-           then C_Term_Build.mk_sequence body_term while_term
-           else while_term
+    | translate_stmt tctx (CWhile0 (cond, body_stmt, is_do_while, _)) =
+        let val has_brk = contains_break body_stmt
+            val has_cont = contains_continue body_stmt
+            val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
+            val true_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1
+        in if not has_brk andalso not has_cont then
+             (* Simple case: no break/continue *)
+             let val cond_term = ensure_bool_cond tctx cond
+                 val body_term = translate_stmt tctx body_stmt
+                 val fuel_var = fresh_var [cond_term, body_term] "while_fuel" @{typ nat}
+                 val while_term = C_Term_Build.mk_bounded_while fuel_var cond_term body_term
+             in if is_do_while
+                then C_Term_Build.mk_sequence body_term while_term
+                else while_term
+             end
+           else
+             (* Allocate break/continue flag refs *)
+             let (* Pre-set dummy refs so first-pass translation doesn't warn *)
+                 val dummy_tctx = (if has_brk
+                   then C_Trans_Ctxt.set_break_ref (Isa_Free ("__dummy_brk", isa_dummyT)) tctx
+                   else tctx)
+                 val dummy_tctx = (if has_cont
+                   then C_Trans_Ctxt.set_continue_ref (Isa_Free ("__dummy_cont", isa_dummyT)) dummy_tctx
+                   else dummy_tctx)
+                 val cond_term_raw = ensure_bool_cond dummy_tctx cond
+                 val body_raw = translate_stmt dummy_tctx body_stmt
+                 val break_ref = if has_brk
+                   then SOME (fresh_var [cond_term_raw, body_raw] "v__break" isa_dummyT)
+                   else NONE
+                 val continue_ref = if has_cont
+                   then SOME (fresh_var [cond_term_raw, body_raw] "v__cont" isa_dummyT)
+                   else NONE
+                 (* Update context *)
+                 val tctx' = case break_ref of
+                     SOME b => C_Trans_Ctxt.set_break_ref b tctx | NONE => tctx
+                 val tctx' = case continue_ref of
+                     SOME c => C_Trans_Ctxt.set_continue_ref c tctx' | NONE => tctx'
+                 (* Re-translate body with updated context (guards will be inserted) *)
+                 val body_term = translate_stmt tctx' body_stmt
+                 val cond_term = ensure_bool_cond tctx' cond
+                 (* Augment condition: if break_flag then False else original_cond *)
+                 val augmented_cond = case break_ref of
+                     SOME br =>
+                       let val bf = Isa_Free ("v__bf", isa_dummyT)
+                           val bf_nonzero =
+                             Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
+                             $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+                                $ bf
+                                $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+                       in C_Term_Build.mk_bind (C_Term_Build.mk_var_read br)
+                            (Term.lambda bf
+                              (C_Term_Build.mk_two_armed_cond
+                                (C_Term_Build.mk_literal bf_nonzero)
+                                (C_Term_Build.mk_literal
+                                  (Isa_Const (\<^const_name>\<open>HOL.False\<close>, @{typ bool})))
+                                cond_term))
+                       end
+                   | NONE => cond_term
+                 (* For continue: reset flag at start of each iteration *)
+                 val body_with_resets = case continue_ref of
+                     SOME cr =>
+                       C_Term_Build.mk_sequence
+                         (C_Term_Build.mk_var_write cr false_lit) body_term
+                   | NONE => body_term
+                 val fuel_var = fresh_var [augmented_cond, body_with_resets]
+                                  "while_fuel" @{typ nat}
+                 val while_term = C_Term_Build.mk_bounded_while
+                                    fuel_var augmented_cond body_with_resets
+                 val loop_term = if is_do_while
+                   then C_Term_Build.mk_sequence body_with_resets while_term
+                   else while_term
+                 (* Wrap in Ref::new for break/continue refs *)
+                 fun wrap_ref NONE t = t
+                   | wrap_ref (SOME ref_var) t =
+                       C_Term_Build.mk_bind
+                         (C_Term_Build.mk_var_alloc false_lit)
+                         (Term.lambda ref_var t)
+             in wrap_ref break_ref (wrap_ref continue_ref loop_term) end
         end
-    | translate_stmt _ (CSwitch0 _) =
-        (warning "micro_c_translate: switch statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
+    | translate_stmt tctx (CSwitch0 (switch_expr, body, _)) =
+        let val (switch_term, switch_cty) = translate_expr tctx switch_expr
+            val switch_var = fresh_var [switch_term] "v__switch" isa_dummyT
+            val items = case body of
+                          CCompound0 (_, items, _) => items
+                        | _ => [CBlockStmt0 body]
+            val groups = extract_switch_groups items
+            (* Clear break_ref for switch context: break inside switch exits the switch,
+               not any enclosing loop. Continue_ref is preserved for loops. *)
+            val tctx_sw = C_Trans_Ctxt.clear_break_ref tctx
+            val all_have_break = List.all #has_break groups
+                                 orelse List.length groups <= 1
+            val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
+            val true_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1
+        in if all_have_break then
+             (* Simple if-else chain: no fall-through *)
+             let fun build_chain [] = C_Term_Build.mk_literal_unit
+                   | build_chain ({labels, body, ...} :: rest) =
+                       let val body_term = translate_compound_items tctx_sw body
+                           val rest_term = build_chain rest
+                           val cond = C_Term_Build.mk_literal
+                                        (make_switch_cond switch_var switch_cty tctx labels)
+                       in C_Term_Build.mk_two_armed_cond cond body_term rest_term end
+             in C_Term_Build.mk_bind switch_term
+                  (Term.lambda switch_var (build_chain groups))
+             end
+           else
+             (* Fall-through: use matched_ref *)
+             let val matched_ref = fresh_var [switch_term] "v__matched" isa_dummyT
+                 val matched_var = Isa_Free ("v__m", isa_dummyT)
+                 val matched_nonzero =
+                   Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
+                   $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+                      $ matched_var
+                      $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+                 fun build_groups [] = C_Term_Build.mk_literal_unit
+                   | build_groups ({labels, body, has_break} :: rest) =
+                       let val body_term = translate_compound_items tctx_sw body
+                           val label_cond = make_switch_cond switch_var switch_cty tctx labels
+                           val full_cond =
+                             Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
+                               @{typ bool} --> @{typ bool} --> @{typ bool})
+                             $ matched_nonzero $ label_cond
+                           val group_action =
+                             C_Term_Build.mk_sequence body_term
+                               (if has_break
+                                then C_Term_Build.mk_var_write matched_ref false_lit
+                                else C_Term_Build.mk_var_write matched_ref true_lit)
+                           val group_term =
+                             C_Term_Build.mk_bind (C_Term_Build.mk_var_read matched_ref)
+                               (Term.lambda matched_var
+                                 (C_Term_Build.mk_two_armed_cond
+                                   (C_Term_Build.mk_literal full_cond)
+                                   group_action C_Term_Build.mk_literal_unit))
+                       in C_Term_Build.mk_sequence group_term (build_groups rest) end
+             in C_Term_Build.mk_bind switch_term
+                  (Term.lambda switch_var
+                    (C_Term_Build.mk_bind
+                      (C_Term_Build.mk_var_alloc false_lit)
+                      (Term.lambda matched_ref (build_groups groups))))
+             end
+        end
     | translate_stmt _ (CGoto0 _) =
         (warning "micro_c_translate: goto replaced with stub"; C_Term_Build.mk_goto_stub)
     | translate_stmt tctx (CLabel0 (_, stmt, _, _)) =
         (warning "micro_c_translate: label ignored, translating labeled statement";
          translate_stmt tctx stmt)
-    | translate_stmt _ (CCont0 _) =
-        (warning "micro_c_translate: continue replaced with stub"; C_Term_Build.mk_unsupported_stub)
-    | translate_stmt _ (CBreak0 _) =
-        (warning "micro_c_translate: break replaced with stub"; C_Term_Build.mk_unsupported_stub)
+    | translate_stmt tctx (CCont0 _) =
+        (case C_Trans_Ctxt.get_continue_ref tctx of
+           SOME cont_ref =>
+             C_Term_Build.mk_var_write cont_ref
+               (C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1)
+         | NONE =>
+             (warning "micro_c_translate: continue outside loop";
+              C_Term_Build.mk_unsupported_stub))
+    | translate_stmt tctx (CBreak0 _) =
+        (case C_Trans_Ctxt.get_break_ref tctx of
+           SOME break_ref =>
+             C_Term_Build.mk_var_write break_ref
+               (C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1)
+         | NONE =>
+             (warning "micro_c_translate: break outside loop/switch";
+              C_Term_Build.mk_unsupported_stub))
     | translate_stmt _ _ =
         (warning "micro_c_translate: unknown statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
 
@@ -1505,11 +1863,13 @@ struct
   fun process_translation_unit tu lthy =
     let
       (* Extract struct definitions to build the struct field registry *)
-      val struct_defs = C_Ast_Utils.extract_struct_defs tu
+      val typedef_defs_early = C_Ast_Utils.extract_typedefs tu
+      val typedef_tab_early = Symtab.make typedef_defs_early
+      val struct_defs = C_Ast_Utils.extract_struct_defs_with_types typedef_tab_early tu
       val struct_tab = Symtab.make struct_defs
       val _ = List.app (fn (sname, fields) =>
         writeln ("Registered struct: " ^ sname ^ " with fields: " ^
-                 String.concatWith ", " fields)) struct_defs
+                 String.concatWith ", " (List.map #1 fields))) struct_defs
       (* Extract enum constant definitions *)
       val enum_defs = C_Ast_Utils.extract_enum_defs tu
       val enum_tab = Symtab.make enum_defs
