@@ -58,6 +58,8 @@ structure C_Ast_Utils : sig
                             -> C_Ast.nodeInfo C_Ast.cDeclaration list
   val param_name : C_Ast.nodeInfo C_Ast.cDeclaration -> string option
   val extract_struct_type_from_decl : C_Ast.nodeInfo C_Ast.cDeclaration -> string option
+  val extract_struct_type_from_decl_full : string list
+                                           -> C_Ast.nodeInfo C_Ast.cDeclaration -> string option
   val extract_struct_defs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                             -> (string * string list) list
   val extract_enum_defs : C_Ast.nodeInfo C_Ast.cTranslationUnit
@@ -76,6 +78,9 @@ structure C_Ast_Utils : sig
                                        -> (string * (string * c_numeric_type) list) list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
+  val type_rank : c_numeric_type -> int
+  val integer_promote : c_numeric_type -> c_numeric_type
+  val usual_arith_conv : c_numeric_type * c_numeric_type -> c_numeric_type
 end =
 struct
   open C_Ast
@@ -256,6 +261,21 @@ struct
         in find_struct specs end
     | extract_struct_type_from_decl _ = NONE
 
+  (* Like extract_struct_type_from_decl, but also recognizes typedef names
+     that refer to structs.  E.g. for "mlk_poly *r" where mlk_poly was
+     typedef'd from an anonymous struct, returns SOME "mlk_poly". *)
+  fun extract_struct_type_from_decl_full struct_names (CDecl0 (specs, _, _)) =
+        let fun find_struct [] = NONE
+              | find_struct (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    Some ident, _, _, _), _)) :: _) = SOME (ident_name ident)
+              | find_struct (CTypeSpec0 (CTypeDef0 (ident, _)) :: _) =
+                    let val n = ident_name ident
+                    in if List.exists (fn s => s = n) struct_names
+                       then SOME n else NONE end
+              | find_struct (_ :: rest) = find_struct rest
+        in find_struct specs end
+    | extract_struct_type_from_decl_full _ _ = NONE
+
   (* Extract struct definitions (with member lists) from a top-level declaration.
      Returns SOME (struct_name, [field_name, ...]) for struct definitions. *)
   fun extract_struct_def_from_decl (CDecl0 (specs, _, _)) =
@@ -318,14 +338,20 @@ struct
     in List.concat (List.map extract ext_decls) end
 
   (* resolve_c_type with typedef resolution: check for CTypeDef0 first,
-     then fall back to standard resolve_c_type *)
+     then fall back to standard resolve_c_type.
+     We strip type qualifiers (const, volatile) and storage specifiers
+     (static, extern) before matching, so that e.g. "const int32_t" still
+     resolves the typedef correctly. *)
   fun resolve_c_type_full typedef_tab specs =
-    case specs of
-      [CTypeSpec0 (CTypeDef0 (ident, _))] =>
-        (case Symtab.lookup typedef_tab (ident_name ident) of
-           SOME cty => SOME cty
-         | NONE => NONE)
-    | _ => resolve_c_type specs
+    let val type_specs = List.filter
+          (fn CTypeQual0 _ => false | CStorageSpec0 _ => false | _ => true) specs
+    in case type_specs of
+        [CTypeSpec0 (CTypeDef0 (ident, _))] =>
+          (case Symtab.lookup typedef_tab (ident_name ident) of
+             SOME cty => SOME cty
+           | NONE => NONE)
+      | _ => resolve_c_type specs
+    end
 
   (* Walk the C AST and collect variable names that appear on the LHS of
      assignments or as operands of pre/post increment/decrement.
@@ -398,29 +424,56 @@ struct
         SOME (ident_name ident)
     | _ => NONE
 
-  fun extract_struct_def_with_types_from_decl typedef_tab (CDecl0 (specs, _, _)) =
+  (* Like extract_struct_type_from_specs, but also recognizes typedef names
+     that refer to known structs. *)
+  fun extract_struct_type_from_specs_full struct_names specs =
+    case extract_struct_type_from_specs specs of
+      SOME sn => SOME sn
+    | NONE =>
+        let val type_specs = List.filter
+              (fn CTypeQual0 _ => false | CStorageSpec0 _ => false | _ => true) specs
+        in case type_specs of
+            [CTypeSpec0 (CTypeDef0 (ident, _))] =>
+              let val n = ident_name ident
+              in if List.exists (fn s => s = n) struct_names
+                 then SOME n else NONE end
+          | _ => NONE
+        end
+
+  fun extract_member_field_info typedef_tab members =
+        List.mapPartial
+          (fn CDecl0 (field_specs, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
+                let val fname = ident_name ident_node
+                    val base_fty = case resolve_c_type_full typedef_tab field_specs of
+                                     SOME CVoid => CInt
+                                   | SOME ct => ct
+                                   | NONE =>
+                                       (case extract_struct_type_from_specs field_specs of
+                                          SOME sn => CStruct sn
+                                        | NONE => CInt)
+                    val is_ptr_field = List.exists (fn CPtrDeclr0 _ => true | _ => false) derived
+                    val is_arr_field = List.exists (fn CArrDeclr0 _ => true | _ => false) derived
+                    val fty = if is_ptr_field orelse is_arr_field
+                              then CPtr base_fty else base_fty
+                in SOME (fname, fty) end
+            | _ => NONE)
+          members
+
+  fun extract_struct_def_with_types_from_decl typedef_tab (CDecl0 (specs, declrs, _)) =
         let fun find_struct_def [] = NONE
               | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
                     Some ident, Some members, _, _), _)) :: _) =
-                  let val sname = ident_name ident
-                      val field_info = List.mapPartial
-                        (fn CDecl0 (field_specs, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
-                              let val fname = ident_name ident_node
-                                  val base_fty = case resolve_c_type_full typedef_tab field_specs of
-                                                   SOME CVoid => CInt
-                                                 | SOME ct => ct
-                                                 | NONE =>
-                                                     (case extract_struct_type_from_specs field_specs of
-                                                        SOME sn => CStruct sn
-                                                      | NONE => CInt)
-                                  val is_ptr_field = List.exists (fn CPtrDeclr0 _ => true | _ => false) derived
-                                  val is_arr_field = List.exists (fn CArrDeclr0 _ => true | _ => false) derived
-                                  val fty = if is_ptr_field orelse is_arr_field
-                                            then CPtr base_fty else base_fty
-                              in SOME (fname, fty) end
-                          | _ => NONE)
-                        members
-                  in SOME (sname, field_info) end
+                  SOME (ident_name ident, extract_member_field_info typedef_tab members)
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    None, Some members, _, _), _)) :: _) =
+                  (* Anonymous struct in typedef: get name from declarator *)
+                  if List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
+                  then (case declrs of
+                      [((Some (CDeclr0 (Some td_ident, _, _, _, _)), _), _)] =>
+                        SOME (ident_name td_ident,
+                              extract_member_field_info typedef_tab members)
+                    | _ => NONE)
+                  else NONE
               | find_struct_def (_ :: rest) = find_struct_def rest
         in find_struct_def specs end
     | extract_struct_def_with_types_from_decl _ _ = NONE
@@ -435,6 +488,37 @@ struct
     List.mapPartial
       (fn CFDefExt0 fundef => SOME fundef | _ => NONE)
       ext_decls
+
+  (* C11 integer conversion rank (\<section>6.3.1.1) *)
+  fun type_rank CBool   = 0
+    | type_rank CChar   = 1
+    | type_rank CSChar  = 1
+    | type_rank CShort  = 2
+    | type_rank CUShort = 2
+    | type_rank CInt    = 3
+    | type_rank CUInt   = 3
+    | type_rank CLong   = 4
+    | type_rank CULong  = 4
+    | type_rank _       = 3  (* default: int rank *)
+
+  (* C11 \<section>6.3.1.1: integer promotion — sub-int types promote to int *)
+  fun integer_promote cty =
+    if type_rank cty < type_rank CInt then CInt else cty
+
+  (* C11 \<section>6.3.1.8: usual arithmetic conversions for binary ops *)
+  fun usual_arith_conv (lty, rty) =
+    let val lp = integer_promote lty
+        val rp = integer_promote rty
+    in if lp = rp then lp
+       else if is_signed lp = is_signed rp then
+         (if type_rank lp >= type_rank rp then lp else rp)
+       else
+         let val (_, u) = if is_signed lp then (lp, rp) else (rp, lp)
+         in if type_rank u >= type_rank lp andalso type_rank u >= type_rank rp
+            then u  (* unsigned wins when rank >= signed *)
+            else if is_signed lp then lp else rp  (* signed can represent all unsigned values *)
+         end
+    end
 end
 \<close>
 
@@ -645,6 +729,7 @@ structure C_Term_Build : sig
   val mk_return_func : term -> term
   val mk_bind : term -> term -> term
   val mk_var_alloc : term -> term
+  val mk_var_alloc_typed : typ -> term -> term
   val mk_var_read : term -> term
   val mk_var_write : term -> term -> term
   val mk_bindlift2 : term -> term -> term -> term
@@ -705,6 +790,15 @@ struct
     Const (\<^const_name>\<open>funcall1\<close>, dummyT --> dummyT --> dummyT)
       $ Const (\<^const_name>\<open>store_reference_const\<close>, dummyT)
       $ init_expr
+
+  (* Type-annotated variant: constrains the value type of store_reference_const
+     so adhoc overloading can resolve when multiple word-type prisms exist. *)
+  fun mk_var_alloc_typed val_hol_type init_expr =
+    if val_hol_type = dummyT then mk_var_alloc init_expr
+    else
+      Const (\<^const_name>\<open>funcall1\<close>, dummyT --> dummyT --> dummyT)
+        $ Const (\<^const_name>\<open>store_reference_const\<close>, val_hol_type --> dummyT)
+        $ init_expr
 
   (* Read a mutable variable: bind (literal ref) (deep_compose1 call store_dereference_const) *)
   fun mk_var_read ref_var =
@@ -868,6 +962,36 @@ struct
      values and use bindlift2.
      NB: Must be defined before 'open C_Ast' which shadows the term type. *)
   datatype binop_kind = Monadic of term | Pure of term
+
+  (* C11 implicit integer promotion cast.
+     Inserts c_scast or c_ucast when from_cty <> to_cty.
+     Cast direction: signed source \<rightarrow> c_scast (sign-extend), unsigned \<rightarrow> c_ucast (zero-extend).
+     Both c_scast/c_ucast are fully polymorphic: 'a word \<rightarrow> ('s, 'b word, ...) expression.
+     Must be defined before 'open C_Ast' to use Const/Free/dummyT. *)
+  fun mk_implicit_cast (tm, from_cty, to_cty) =
+    if from_cty = to_cty then tm
+    else if C_Ast_Utils.is_bool from_cty then
+      (* Bool \<rightarrow> integer: if b then 1 else 0 *)
+      let val v = Isa_Free ("v__promo", @{typ bool})
+          val one = C_Term_Build.mk_literal_num to_cty 1
+          val zero = C_Term_Build.mk_literal_num to_cty 0
+      in C_Term_Build.mk_bind tm
+           (Term.lambda v (C_Term_Build.mk_two_armed_cond
+              (C_Term_Build.mk_literal v) one zero)) end
+    else let val cast_const =
+               if C_Ast_Utils.is_signed from_cty
+               then Const (\<^const_name>\<open>c_scast\<close>, isa_dummyT)
+               else Const (\<^const_name>\<open>c_ucast\<close>, isa_dummyT)
+             (* Type-annotate the lambda variable with the source HOL type
+                so c_scast/c_ucast input type is fully determined. *)
+             val from_ty = C_Ast_Utils.hol_type_of from_cty
+             val v = Isa_Free ("v__promo", from_ty)
+         in C_Term_Build.mk_bind tm (Term.lambda v (cast_const $ v)) end
+
+  (* Current function's return type, set by translate_fundef before translating
+     the function body. Used by CReturn0 to insert narrowing casts. *)
+  val current_ret_cty : C_Ast_Utils.c_numeric_type option Unsynchronized.ref =
+    Unsynchronized.ref NONE
 
   open C_Ast
 
@@ -1174,17 +1298,28 @@ struct
             unsupported "pointer subtraction"
         | _ =>
         let
-            (* C usual arithmetic conversion: if either operand is unsigned,
-               use unsigned dispatch.  This handles integer literals (which
-               default to CInt) mixed with unsigned variables. *)
-            val cty = if C_Ast_Utils.is_unsigned_int lhs_cty orelse
-                         C_Ast_Utils.is_unsigned_int rhs_cty
-                      then (if C_Ast_Utils.is_unsigned_int lhs_cty then lhs_cty else rhs_cty)
-                      else lhs_cty
+            (* C11 integer promotion and usual arithmetic conversions.
+               Shifts: each operand independently promoted, result = promoted LHS.
+               Other ops: usual_arith_conv determines common type. *)
+            val is_shift = case binop of CShlOp0 => true | CShrOp0 => true | _ => false
+            val (cty, lhs_p, rhs_p) =
+              if is_shift then
+                let val lp_cty = C_Ast_Utils.integer_promote lhs_cty
+                    (* Shift RHS: independently promoted per C11, but our Isabelle
+                       shift ops require both operands to have the same type.
+                       Cast RHS to match the promoted LHS type. *)
+                in (lp_cty,
+                    mk_implicit_cast (lhs', lhs_cty, lp_cty),
+                    mk_implicit_cast (rhs', rhs_cty, lp_cty)) end
+              else
+                let val conv_cty = C_Ast_Utils.usual_arith_conv (lhs_cty, rhs_cty)
+                in (conv_cty,
+                    mk_implicit_cast (lhs', lhs_cty, conv_cty),
+                    mk_implicit_cast (rhs', rhs_cty, conv_cty)) end
             (* For > and >=, swap operands to use < and <= *)
-            val (l, r) = case binop of CGrOp0 => (rhs', lhs')
-                                     | CGeqOp0 => (rhs', lhs')
-                                     | _ => (lhs', rhs')
+            val (l, r) = case binop of CGrOp0 => (rhs_p, lhs_p)
+                                     | CGeqOp0 => (rhs_p, lhs_p)
+                                     | _ => (lhs_p, rhs_p)
             (* Comparisons return CBool — they produce Isabelle bool values *)
             val result_cty = case binop of
                 CLeOp0 => C_Ast_Utils.CBool | CLeqOp0 => C_Ast_Utils.CBool
@@ -1479,23 +1614,27 @@ struct
               $ expr' $ deref_fn,
             result_cty) end
     | translate_expr tctx (CUnary0 (CCompOp0, expr, _)) =
-        (* ~x : bitwise complement *)
+        (* ~x : bitwise complement — C11: operand undergoes integer promotion *)
         let val (expr', cty) = translate_expr tctx expr
+            val pcty = C_Ast_Utils.integer_promote cty
+            val promoted = mk_implicit_cast (expr', cty, pcty)
             val not_const =
-              if C_Ast_Utils.is_signed cty
+              if C_Ast_Utils.is_signed pcty
               then Isa_Const (\<^const_name>\<open>c_signed_not\<close>, isa_dummyT)
               else Isa_Const (\<^const_name>\<open>c_unsigned_not\<close>, isa_dummyT)
             val v = Isa_Free ("v__comp", isa_dummyT)
-        in (C_Term_Build.mk_bind expr' (Term.lambda v (not_const $ v)), cty) end
+        in (C_Term_Build.mk_bind promoted (Term.lambda v (not_const $ v)), pcty) end
     | translate_expr tctx (CUnary0 (CMinOp0, expr, _)) =
-        (* -x : unary minus, translate as 0 - x *)
+        (* -x : unary minus, translate as 0 - x — C11: operand undergoes integer promotion *)
         let val (expr', cty) = translate_expr tctx expr
-            val zero = C_Term_Build.mk_literal_num cty 0
+            val pcty = C_Ast_Utils.integer_promote cty
+            val promoted = mk_implicit_cast (expr', cty, pcty)
+            val zero = C_Term_Build.mk_literal_num pcty 0
             val sub_const =
-              if C_Ast_Utils.is_signed cty
+              if C_Ast_Utils.is_signed pcty
               then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
               else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT)
-        in (C_Term_Build.mk_bind2 sub_const zero expr', cty) end
+        in (C_Term_Build.mk_bind2 sub_const zero promoted, pcty) end
     | translate_expr tctx (CUnary0 (CPreIncOp0, expr, _)) =
         translate_inc_dec tctx true true expr
     | translate_expr tctx (CUnary0 (CPostIncOp0, expr, _)) =
@@ -1505,8 +1644,10 @@ struct
     | translate_expr tctx (CUnary0 (CPostDecOp0, expr, _)) =
         translate_inc_dec tctx false false expr
     | translate_expr tctx (CUnary0 (CPlusOp0, expr, _)) =
-        (* +x : unary plus is identity in C *)
-        translate_expr tctx expr
+        (* +x : unary plus — C11: operand undergoes integer promotion *)
+        let val (expr', cty) = translate_expr tctx expr
+            val pcty = C_Ast_Utils.integer_promote cty
+        in (mk_implicit_cast (expr', cty, pcty), pcty) end
     | translate_expr tctx (CUnary0 (CNegOp0, expr, _)) =
         (* !x : logical NOT *)
         let val (expr', cty) = translate_expr tctx expr
@@ -1662,7 +1803,7 @@ struct
                       if C_Ast_Utils.is_signed source_cty
                       then Isa_Const (\<^const_name>\<open>c_scast\<close>, isa_dummyT)
                       else Isa_Const (\<^const_name>\<open>c_ucast\<close>, isa_dummyT)
-                    val v = Isa_Free ("v__cast", isa_dummyT)
+                    val v = Isa_Free ("v__cast", C_Ast_Utils.hol_type_of source_cty)
                 in (C_Term_Build.mk_bind source_term
                       (Term.lambda v (cast_const $ v)), target_cty) end
         end
@@ -1676,8 +1817,12 @@ struct
             val isa_ty = C_Ast_Utils.hol_type_of cty
             val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
             val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
-            val sizeof_term = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
+            val sizeof_nat = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
                                 itself_ty --> @{typ nat}) $ type_term
+            (* Wrap in of_nat to produce a word matching CULong *)
+            val word_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CULong
+            val sizeof_term = Isa_Const (\<^const_name>\<open>of_nat\<close>,
+                                @{typ nat} --> word_ty) $ sizeof_nat
         in (C_Term_Build.mk_literal sizeof_term, C_Ast_Utils.CULong) end
     (* sizeof(expr) *)
     | translate_expr tctx (CSizeofExpr0 (expr, _)) =
@@ -1685,8 +1830,11 @@ struct
             val isa_ty = C_Ast_Utils.hol_type_of cty
             val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
             val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
-            val sizeof_term = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
+            val sizeof_nat = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
                                 itself_ty --> @{typ nat}) $ type_term
+            val word_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CULong
+            val sizeof_term = Isa_Const (\<^const_name>\<open>of_nat\<close>,
+                                @{typ nat} --> word_ty) $ sizeof_nat
         in (C_Term_Build.mk_literal sizeof_term, C_Ast_Utils.CULong) end
     | translate_expr _ _ =
         unsupported "expression"
@@ -1802,7 +1950,8 @@ struct
                             (Term.lambda var (fold_decls ds tctx'')) end
                      else
                        let val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
-                       in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc init_term)
+                           val val_type = C_Ast_Utils.hol_type_of cty
+                       in C_Term_Build.mk_bind (C_Term_Build.mk_var_alloc_typed val_type init_term)
                             (Term.lambda var (fold_decls ds tctx'')) end
                   end
         in fold_decls decls tctx end
@@ -1940,7 +2089,11 @@ struct
     | translate_stmt _ (CReturn0 (None, _)) =
         C_Term_Build.mk_return_func C_Term_Build.mk_literal_unit
     | translate_stmt tctx (CReturn0 (Some expr, _)) =
-        C_Term_Build.mk_return_func (expr_term tctx expr)
+        let val (term, expr_cty) = translate_expr tctx expr
+            val ret_term = case !current_ret_cty of
+                SOME ret_cty => mk_implicit_cast (term, expr_cty, ret_cty)
+              | NONE => term
+        in C_Term_Build.mk_return_func ret_term end
     | translate_stmt tctx (CExpr0 (Some expr, _)) =
         (* Expression statements are evaluated for side effects only.
            Discard the return value by sequencing with unit. *)
@@ -1993,8 +2146,9 @@ struct
                               let val var = Isa_Free (name, isa_dummyT)
                                   val tctx'' = C_Trans_Ctxt.add_var name
                                                  C_Trans_Ctxt.Local var cty tctx'
+                                  val val_type = C_Ast_Utils.hol_type_of cty
                               in C_Term_Build.mk_bind
-                                   (C_Term_Build.mk_var_alloc init)
+                                   (C_Term_Build.mk_var_alloc_typed val_type init)
                                    (Term.lambda var (fold_decls ds tctx'')) end
                     in fold_decls decls tctx end
              end)
@@ -2209,10 +2363,12 @@ struct
       val tctx = List.foldl
         (fn ((n, v, cty), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v cty ctx)
         (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab func_ret_types) param_vars
-      (* Annotate struct pointer parameters with their struct type *)
+      (* Annotate struct pointer parameters with their struct type.
+         Uses _full variant to also recognize typedef'd struct names. *)
+      val struct_names = Symtab.keys struct_tab
       val tctx = List.foldl (fn (pdecl, ctx) =>
         case (C_Ast_Utils.param_name pdecl,
-              C_Ast_Utils.extract_struct_type_from_decl pdecl) of
+              C_Ast_Utils.extract_struct_type_from_decl_full struct_names pdecl) of
           (SOME n, SOME sn) => C_Trans_Ctxt.set_struct_type n sn ctx
         | _ => ctx) tctx param_decls
       (* Promote parameters that are assigned in the body to local variables.
@@ -2236,6 +2392,8 @@ struct
       val goto_refs = List.map (fn label_name =>
         (label_name, Isa_Free ("v__goto_" ^ label_name, isa_dummyT))) goto_labels
       val tctx = C_Trans_Ctxt.set_goto_refs goto_refs tctx
+      (* Set current return type for implicit narrowing in CReturn0 *)
+      val _ = current_ret_cty := SOME ret_cty
       val body_term = translate_stmt tctx body
       (* Wrap body with Ref::new for each promoted parameter *)
       val body_term = List.foldr

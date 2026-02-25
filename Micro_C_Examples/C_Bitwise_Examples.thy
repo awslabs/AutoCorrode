@@ -109,7 +109,7 @@ text ‹Set bit: the bit at position n is set in the result.›
 
 micro_c_translate ‹
 unsigned int set_bit(unsigned int x, unsigned int n) {
-  return x | (1 << n);
+  return x | (1U << n);
 }
 ›
 
@@ -132,7 +132,7 @@ text ‹Clear bit: the bit at position n is cleared in the result.›
 
 micro_c_translate ‹
 unsigned int clear_bit(unsigned int x, unsigned int n) {
-  return x & ~(1 << n);
+  return x & ~(1U << n);
 }
 ›
 

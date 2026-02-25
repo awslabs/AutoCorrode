@@ -185,11 +185,14 @@ definition c_signed_shl :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
          c_signed_overflow
        else literal (word_of_int result_int)\<close>
 
+text \<open>Arithmetic right shift: implementation-defined in C11 but universally
+  implemented as sign-extending shift (floor division by 2\^n). We match
+  GCC/Clang behavior rather than aborting on negative operands.\<close>
+
 definition c_signed_shr :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_shr a b \<equiv>
      if unat b \<ge> LENGTH('l) then c_shift_out_of_range
-     else if sint a < 0 then c_signed_overflow
      else literal (word_of_int (sint a div 2 ^ unat b))\<close>
 
 section \<open>C Unsigned Comparison Operations\<close>

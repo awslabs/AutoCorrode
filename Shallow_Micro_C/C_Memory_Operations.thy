@@ -25,21 +25,23 @@ abbreviation c_ptr_add_typed :: \<open>(nat, 'b) gref \<Rightarrow> nat \<Righta
 
 subsection \<open>Basic Pointer Arithmetic Lemmas\<close>
 
-lemma c_ptr_add_zero [simp]: \<open>c_ptr_add p 0 stride = p\<close>
-  by (simp add: c_ptr_add_def)
+lemma c_ptr_add_zero [simp]:
+  shows \<open>c_ptr_add p 0 stride = p\<close>
+by (simp add: c_ptr_add_def)
 
 lemma c_ptr_add_address [simp]:
-  \<open>gref_address (c_ptr_add p n stride) = gref_address p + n * stride\<close>
-  by (simp add: c_ptr_add_def)
+  shows \<open>gref_address (c_ptr_add p n stride) = gref_address p + n * stride\<close>
+by (simp add: c_ptr_add_def)
 
 lemma c_ptr_add_add:
-  \<open>c_ptr_add (c_ptr_add p m stride) n stride = c_ptr_add p (m + n) stride\<close>
-  by (simp add: c_ptr_add_def algebra_simps)
+  shows \<open>c_ptr_add (c_ptr_add p m stride) n stride = c_ptr_add p (m + n) stride\<close>
+by (simp add: c_ptr_add_def algebra_simps)
 
 lemma c_ptr_add_null_guard:
-  assumes \<open>\<not> is_null_nat p\<close> and \<open>n * stride < gref_address p + n * stride\<close>
-  shows \<open>\<not> is_null_nat (c_ptr_add p n stride)\<close>
-  using assms by (simp add: is_null_nat_def c_ptr_add_def)
+  assumes \<open>\<not> is_null_nat p\<close>
+      and \<open>n * stride < gref_address p + n * stride\<close>
+    shows \<open>\<not> is_null_nat (c_ptr_add p n stride)\<close>
+using assms by (simp add: is_null_nat_def c_ptr_add_def)
 
 section \<open>Array Element References\<close>
 
@@ -49,16 +51,16 @@ text \<open>
   The actual dereference or update is performed by locale-provided operations
   such as @{text dereference_by_value_raw_fun} and @{text update_raw_fun}.
 \<close>
-
 definition c_ptr_at :: \<open>(nat, 'b) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> (nat, 'b) gref\<close> where
   \<open>c_ptr_at p i stride \<equiv> c_ptr_add p i stride\<close>
 
 lemma c_ptr_at_address [simp]:
-  \<open>gref_address (c_ptr_at p i stride) = gref_address p + i * stride\<close>
-  by (simp add: c_ptr_at_def)
+  shows \<open>gref_address (c_ptr_at p i stride) = gref_address p + i * stride\<close>
+by (simp add: c_ptr_at_def)
 
-lemma c_ptr_at_zero [simp]: \<open>c_ptr_at p 0 stride = p\<close>
-  by (simp add: c_ptr_at_def)
+lemma c_ptr_at_zero [simp]:
+  shows \<open>c_ptr_at p 0 stride = p\<close>
+by (simp add: c_ptr_at_def)
 
 section \<open>C Pointer Subtraction\<close>
 

@@ -481,22 +481,20 @@ lemma wp_c_signed_shr [micro_rust_wp_simps]:
   assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
   shows \<open>\<W>\<P> \<Gamma> (c_signed_shr a b) \<psi> \<rho> \<theta> =
     (if unat b \<ge> LENGTH('l) then \<theta> (CustomAbort ShiftOutOfRange) \<star> UNIV
-     else if sint a < 0 then \<theta> (CustomAbort SignedOverflow) \<star> UNIV
      else \<psi> (word_of_int (sint a div 2 ^ unat b)))\<close>
   using assms
-  by (simp add: c_signed_shr_def c_shift_out_of_range_def c_signed_overflow_def
+  by (simp add: c_signed_shr_def c_shift_out_of_range_def
                 c_abort_def micro_rust_wp_simps)
 
 lemma wp_c_signed_shrI [micro_rust_wp_intros]:
   fixes a b :: \<open>'l::{len} sword\<close>
   assumes \<open>unat b < LENGTH('l)\<close>
-      and \<open>sint a \<ge> 0\<close>
       and \<open>\<phi> \<longlongrightarrow> \<psi> (word_of_int (sint a div 2 ^ unat b)) \<star> \<top>\<close>
   shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_shr a b) \<psi> \<rho> \<theta>\<close>
 proof -
-  from assms(1,2) have eq: \<open>c_signed_shr a b = literal (word_of_int (sint a div 2 ^ unat b))\<close>
-    by (simp add: c_signed_shr_def c_shift_out_of_range_def c_signed_overflow_def)
-  show ?thesis unfolding eq using assms(3) by (rule wp_literalI)
+  from assms(1) have eq: \<open>c_signed_shr a b = literal (word_of_int (sint a div 2 ^ unat b))\<close>
+    by (simp add: c_signed_shr_def c_shift_out_of_range_def)
+  show ?thesis unfolding eq using assms(2) by (rule wp_literalI)
 qed
 
 subsection \<open>Type Cast Operations\<close>
@@ -540,6 +538,144 @@ lemma wp_c_unsigned_mod [micro_rust_wp_simps]:
      else \<psi> (a mod b))\<close>
   using assms
   by (simp add: c_unsigned_mod_def c_abort_def c_division_by_zero_def micro_rust_wp_simps)
+
+section \<open>C Integer Promotion Lemmas\<close>
+
+text \<open>
+  C11 integer promotion widens sub-int types before arithmetic. These
+  lemmas show that the widen-operate-narrow roundtrip equals direct
+  operation, and that 32-bit signed overflow cannot occur for promoted
+  16-bit operands.
+\<close>
+
+subsection \<open>Signed 16 to 32 promotion roundtrip\<close>
+
+lemma scast_scast_add_roundtrip_16_32 [simp]:
+  fixes a b :: \<open>16 sword\<close>
+  shows \<open>SCAST(32 signed \<rightarrow> 16 signed)
+         (SCAST(16 signed \<rightarrow> 32 signed) a + SCAST(16 signed \<rightarrow> 32 signed) b)
+       = a + b\<close>
+  by (simp add: scast_down_add scast_up_scast_id is_up is_down)
+
+lemma scast_scast_sub_roundtrip_16_32 [simp]:
+  fixes a b :: \<open>16 sword\<close>
+  shows \<open>SCAST(32 signed \<rightarrow> 16 signed)
+         (SCAST(16 signed \<rightarrow> 32 signed) a - SCAST(16 signed \<rightarrow> 32 signed) b)
+       = a - b\<close>
+  by (simp add: scast_down_minus scast_up_scast_id is_up is_down)
+
+subsection \<open>32-bit signed overflow bounds for promoted 16-bit signed values\<close>
+
+lemma sint_scast_16_32_add_upper [simp]:
+  fixes a b :: \<open>16 sword\<close>
+  shows \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) a)
+       + sint (SCAST(16 signed \<rightarrow> 32 signed) b) < 2147483648\<close>
+proof -
+  have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) a) = sint a\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) b) = sint b\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint a \<ge> -32768 \<and> sint a \<le> 32767\<close>
+    using sint_range_size[where w=a] by (simp add: word_size)
+  moreover have \<open>sint b \<ge> -32768 \<and> sint b \<le> 32767\<close>
+    using sint_range_size[where w=b] by (simp add: word_size)
+  ultimately show ?thesis by linarith
+qed
+
+lemma sint_scast_16_32_add_lower [simp]:
+  fixes a b :: \<open>16 sword\<close>
+  shows \<open>- 2147483648
+       \<le> sint (SCAST(16 signed \<rightarrow> 32 signed) a)
+        + sint (SCAST(16 signed \<rightarrow> 32 signed) b)\<close>
+proof -
+  have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) a) = sint a\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) b) = sint b\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint a \<ge> -32768\<close>
+    using sint_range_size[where w=a] by (simp add: word_size)
+  moreover have \<open>sint b \<ge> -32768\<close>
+    using sint_range_size[where w=b] by (simp add: word_size)
+  ultimately show ?thesis by linarith
+qed
+
+lemma sint_scast_16_32_sub_upper [simp]:
+  fixes a b :: \<open>16 sword\<close>
+  shows \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) a)
+       - sint (SCAST(16 signed \<rightarrow> 32 signed) b) < 2147483648\<close>
+proof -
+  have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) a) = sint a\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) b) = sint b\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint a \<le> 32767\<close>
+    using sint_range_size[where w=a] by (simp add: word_size)
+  moreover have \<open>sint b \<ge> -32768\<close>
+    using sint_range_size[where w=b] by (simp add: word_size)
+  ultimately show ?thesis by linarith
+qed
+
+lemma sint_scast_16_32_sub_lower [simp]:
+  fixes a b :: \<open>16 sword\<close>
+  shows \<open>- 2147483648
+       \<le> sint (SCAST(16 signed \<rightarrow> 32 signed) a)
+        - sint (SCAST(16 signed \<rightarrow> 32 signed) b)\<close>
+proof -
+  have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) a) = sint a\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint (SCAST(16 signed \<rightarrow> 32 signed) b) = sint b\<close>
+    by (simp add: sint_up_scast is_up)
+  moreover have \<open>sint a \<ge> -32768\<close>
+    using sint_range_size[where w=a] by (simp add: word_size)
+  moreover have \<open>sint b \<le> 32767\<close>
+    using sint_range_size[where w=b] by (simp add: word_size)
+  ultimately show ?thesis by linarith
+qed
+
+subsection \<open>Unsigned 16 to signed 32 promotion roundtrip\<close>
+
+lemma scast_ucast_roundtrip_16_32:
+  fixes a :: \<open>16 word\<close>
+  shows \<open>SCAST(32 signed \<rightarrow> 16) (UCAST(16 \<rightarrow> 32 signed) a) = a\<close>
+  by (simp add: scast_def sint_ucast_eq_uint is_down word_of_int_uint)
+
+lemma scast_ucast_add_roundtrip_16_32 [simp]:
+  fixes a b :: \<open>16 word\<close>
+  shows \<open>SCAST(32 signed \<rightarrow> 16)
+         (UCAST(16 \<rightarrow> 32 signed) a + UCAST(16 \<rightarrow> 32 signed) b)
+       = a + b\<close>
+  by (simp add: scast_down_add is_down scast_ucast_roundtrip_16_32)
+
+lemma sint_ucast_16_32_add_upper [simp]:
+  fixes a b :: \<open>16 word\<close>
+  shows \<open>sint (UCAST(16 \<rightarrow> 32 signed) a)
+       + sint (UCAST(16 \<rightarrow> 32 signed) b) < 2147483648\<close>
+proof -
+  have \<open>sint (UCAST(16 \<rightarrow> 32 signed) a) = uint a\<close>
+    by (simp add: sint_ucast_eq_uint is_down)
+  moreover have \<open>sint (UCAST(16 \<rightarrow> 32 signed) b) = uint b\<close>
+    by (simp add: sint_ucast_eq_uint is_down)
+  moreover have \<open>uint a < 65536\<close>
+    using uint_range_size[where w=a] by (simp add: word_size)
+  moreover have \<open>uint b < 65536\<close>
+    using uint_range_size[where w=b] by (simp add: word_size)
+  ultimately show ?thesis by linarith
+qed
+
+lemma sint_ucast_16_32_add_lower [simp]:
+  fixes a b :: \<open>16 word\<close>
+  shows \<open>- 2147483648
+       \<le> sint (UCAST(16 \<rightarrow> 32 signed) a)
+        + sint (UCAST(16 \<rightarrow> 32 signed) b)\<close>
+proof -
+  have \<open>sint (UCAST(16 \<rightarrow> 32 signed) a) = uint a\<close>
+    by (simp add: sint_ucast_eq_uint is_down)
+  moreover have \<open>sint (UCAST(16 \<rightarrow> 32 signed) b) = uint b\<close>
+    by (simp add: sint_ucast_eq_uint is_down)
+  moreover have \<open>uint a \<ge> 0\<close> by simp
+  moreover have \<open>uint b \<ge> 0\<close> by simp
+  ultimately show ?thesis by linarith
+qed
 
 end
 
