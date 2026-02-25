@@ -662,4 +662,193 @@ lemma c_skip_add_spec [crush_specs]:
 
 end
 
+section \<open>Fixed-Width Integer Type Verification (uint16_t)\<close>
+
+locale c_ushort_verification_ctx =
+    reference reference_types +
+    ref_c_ushort: reference_allocatable reference_types _ _ _ _ _ _ _ c_ushort_prism
+  for
+    reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow> 'o prompt_output \<Rightarrow> unit\<close>
+    and c_ushort_prism :: \<open>('gv, c_ushort) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_ushort.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+typedef unsigned short uint16_t;
+uint16_t u16_add(uint16_t a, uint16_t b) { return a + b; }
+\<close>
+
+thm c_u16_add_def
+
+definition c_u16_add_contract ::
+    \<open>c_ushort \<Rightarrow> c_ushort \<Rightarrow> ('s::{sepalg}, c_ushort, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u16_add_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_u16_add_contract
+
+lemma c_u16_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_u16_add a b \<Turnstile>\<^sub>F c_u16_add_contract a b\<close>
+  apply (crush_boot f: c_u16_add_def contract: c_u16_add_contract_def)
+  apply (crush_base simp add: c_unsigned_add_def)
+  done
+
+micro_c_translate \<open>
+typedef unsigned long size_t;
+size_t size_add(size_t a, size_t b) { return a + b; }
+\<close>
+
+end
+
+section \<open>Void Function Verification\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+void void_write(unsigned int *p, unsigned int v) { *p = v; }
+\<close>
+
+thm c_void_write_def
+
+definition c_void_write_contract ::
+    \<open>('addr, 'gv, c_uint) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, unit, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_void_write_contract p pg old_val v \<equiv>
+    let pre  = p \<mapsto>\<langle>\<top>\<rangle> pg\<down>old_val;
+        post = \<lambda>_. p \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. v) \<sqdot> (pg\<down>old_val)
+     in make_function_contract pre post\<close>
+ucincl_auto c_void_write_contract
+
+lemma c_void_write_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_void_write p v \<Turnstile>\<^sub>F c_void_write_contract p pg old_val v\<close>
+  apply (crush_boot f: c_void_write_def contract: c_void_write_contract_def)
+  apply crush_base
+  done
+
+end
+
+section \<open>Chained Struct-Array Access Verification\<close>
+
+datatype_record c_poly =
+  c_poly_coeffs :: \<open>c_int list\<close>
+
+locale c_poly_verification_ctx =
+    reference reference_types +
+    ref_c_poly: reference_allocatable reference_types _ _ _ _ _ _ _ c_poly_prism
+  for
+    reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow> 'o prompt_output \<Rightarrow> unit\<close>
+    and c_poly_prism :: \<open>('gv, c_poly) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_poly.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+struct poly { int coeffs[256]; };
+int read_coeff(struct poly *p, unsigned int i) { return p->coeffs[i]; }
+\<close>
+
+thm c_read_coeff_def
+
+definition c_read_coeff_contract ::
+    \<open>('addr, 'gv, c_poly) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> c_poly \<Rightarrow> c_uint \<Rightarrow>
+     ('s::{sepalg}, c_int, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_read_coeff_contract p pg pval i \<equiv>
+    let pre  = p \<mapsto>\<langle>\<top>\<rangle> pg\<down>pval \<star> \<langle>c_idx_to_nat i < length (c_poly_coeffs pval)\<rangle>;
+        post = \<lambda>r. p \<mapsto>\<langle>\<top>\<rangle> pg\<down>pval \<star>
+                   \<langle>r = c_poly_coeffs pval ! c_idx_to_nat i\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_read_coeff_contract
+
+lemma c_read_coeff_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_read_coeff p i \<Turnstile>\<^sub>F c_read_coeff_contract p pg pval i\<close>
+  apply (crush_boot f: c_read_coeff_def contract: c_read_coeff_contract_def)
+  apply crush_base
+  done
+
+micro_c_translate \<open>
+struct poly { int coeffs[256]; };
+void write_coeff(struct poly *p, unsigned int i, int v) { p->coeffs[i] = v; }
+\<close>
+
+thm c_write_coeff_def
+
+definition c_write_coeff_contract ::
+    \<open>('addr, 'gv, c_poly) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> c_poly \<Rightarrow> c_uint \<Rightarrow> c_int \<Rightarrow>
+     ('s::{sepalg}, unit, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_write_coeff_contract p pg pval i v \<equiv>
+    let pre  = p \<mapsto>\<langle>\<top>\<rangle> pg\<down>pval \<star> \<langle>c_idx_to_nat i < length (c_poly_coeffs pval)\<rangle>;
+        post = \<lambda>_. p \<mapsto>\<langle>\<top>\<rangle>
+                   (\<lambda>_. pval\<lparr>c_poly_coeffs := (c_poly_coeffs pval)[c_idx_to_nat i := v]\<rparr>)
+                   \<sqdot> (pg\<down>pval)
+     in make_function_contract pre post\<close>
+ucincl_auto c_write_coeff_contract
+
+lemma c_write_coeff_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_write_coeff p i v \<Turnstile>\<^sub>F c_write_coeff_contract p pg pval i v\<close>
+  apply (crush_boot f: c_write_coeff_def contract: c_write_coeff_contract_def)
+  apply crush_base
+  done
+
+end
+
+section \<open>Array Parameter and Local Array Verification\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+unsigned int arr_sum(unsigned int arr[], unsigned int i, unsigned int j) {
+  return arr[i] + arr[j];
+}
+\<close>
+
+thm c_arr_sum_def
+
+end
+
+section \<open>Byte Buffer Pointer Arithmetic Verification\<close>
+
+locale c_char_verification_ctx =
+    reference reference_types +
+    ref_c_char: reference_allocatable reference_types _ _ _ _ _ _ _ c_char_prism
+  for
+    reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow> 'o prompt_output \<Rightarrow> unit\<close>
+    and c_char_prism :: \<open>('gv, c_char) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_char.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+typedef unsigned char uint8_t;
+uint8_t read_byte(uint8_t *buf, unsigned int idx) { return *(buf + idx); }
+\<close>
+
+thm c_read_byte_def
+
+definition c_read_byte_contract ::
+    \<open>('addr, 'gv, c_char list) Global_Store.ref \<Rightarrow>
+     'gv \<Rightarrow> c_char list \<Rightarrow> c_uint \<Rightarrow>
+     ('s::{sepalg}, c_char, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_read_byte_contract buf bg vs idx \<equiv>
+    let pre  = buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
+        post = \<lambda>r. buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>r = vs ! c_idx_to_nat idx\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_read_byte_contract
+
+lemma c_read_byte_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_read_byte buf idx \<Turnstile>\<^sub>F c_read_byte_contract buf bg vs idx\<close>
+  apply (crush_boot f: c_read_byte_def contract: c_read_byte_contract_def)
+  apply crush_base
+  done
+
+end
+
 end
