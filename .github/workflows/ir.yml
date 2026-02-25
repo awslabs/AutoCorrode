@@ -36,9 +36,6 @@ jobs:
     - name: Build HOL heap
       run: $ISABELLE build -b HOL
 
-    - name: Test ir.ML via console
-      run: python3 ir/test_console.py --isabelle $ISABELLE --session HOL
-
     - name: Test repl.py TCP server
       run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL
 
@@ -98,18 +95,17 @@ jobs:
     - name: Build HOL heap with record_theories
       run: $ISABELLE build -f -b -o record_theories=true HOL
 
-    - name: Test source commands are available
-      run: python3 ir/test_console.py --isabelle $ISABELLE --session HOL --require-source
-
     - name: Test repl.py with recorded segments
       run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --require-source
 
   docker:
-    name: Docker (${{ matrix.config.name }}, ${{ matrix.runner }})
+    name: Docker (${{ matrix.config.name }}, ${{ matrix.test }}, ${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
     strategy:
+      fail-fast: false
       matrix:
         runner: [ubuntu-latest, ubuntu-24.04-arm]
+        test: [server-only, default-entrypoint]
         config:
           - name: local
             dockerfile: ir/docker/Dockerfile
@@ -124,6 +120,7 @@ jobs:
       - run: docker build -t ${{ matrix.config.tag }} -f ${{ matrix.config.dockerfile }} ${{ matrix.config.build_args }} .
 
       - name: Test with server-only (full test suite)
+        if: matrix.test == 'server-only'
         run: |
           docker run -d --name test-${{ matrix.config.name }}-suite ${{ matrix.config.tag }} \
             python3 /opt/AutoCorrode/ir/repl.py \
@@ -136,6 +133,7 @@ jobs:
           docker rm test-${{ matrix.config.name }}-suite
 
       - name: Test default entrypoint (REPL + MCP)
+        if: matrix.test == 'default-entrypoint'
         run: |
           docker run -d -p 9147:9147 -p 9148:9148 --name test-${{ matrix.config.name }}-default ${{ matrix.config.tag }}
           # Wait for REPL to be fully ready (retry actual command, not just TCP connect)

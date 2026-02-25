@@ -55,9 +55,11 @@ def send_recv(sock, cmd, timeout=5):
         sock.settimeout(old)
 
 
-def connect(port, retries=120, delay=2.0):
+def connect(port, retries=120, delay=2.0, proc=None):
     """Connect to the server, retrying until ready."""
     for i in range(retries):
+        if proc is not None and proc.poll() is not None:
+            raise RuntimeError(f"Server process exited (rc={proc.returncode})")
         try:
             s = socket.create_connection(("127.0.0.1", port), timeout=5)
             return s
@@ -135,17 +137,18 @@ def main():
 
     try:
         try:
-            sock = connect(port)
+            sock = connect(port, proc=proc)
         except RuntimeError:
             elapsed = time.time() - t0
             print(f"{_CLEAR_LINE}  {_SYM_FAIL} server failed to start "
                   f"{_DIM}({elapsed:.1f}s){_RESET}")
-            # Kill the process
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                proc.wait(timeout=10)
-            except Exception as e:
-                print(f"    {_DIM}(could not stop server: {e}){_RESET}")
+            # Kill the process if still alive
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGTERM)
+                try:
+                    proc.wait(timeout=10)
+                except Exception as e:
+                    print(f"    {_DIM}(could not stop server: {e}){_RESET}")
             sys.exit(1)
 
         elapsed = time.time() - t0
@@ -524,11 +527,12 @@ def main():
             run_test(t.__name__, t)
 
     finally:
-        os.killpg(proc.pid, signal.SIGTERM)
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGTERM)
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
 
     # Summary
     total = passed + failed

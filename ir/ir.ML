@@ -1,8 +1,16 @@
 (* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT *)
 
-(* REPL for exploring Isabelle theories via Isar text.
-   Designed for use from the Poly/ML console after loading a heap. *)
+(* Isabelle/REPL (I/R): interactive Isar REPL.
+
+   Manages a set of named REPLs, each a list of Isar steps rooted in a
+   theory.  Steps can be pushed, popped, edited, and replayed.  REPLs can
+   fork from each other for sub-proof exploration and merge back.
+
+   This file contains only the Isar REPL logic.  TCP serving and output
+   capture are in tcp_handler.ML and ml_repl.ML respectively.
+
+   See README.md for full documentation. *)
 
 signature IR =
 sig
@@ -63,134 +71,49 @@ fun timeout secs =
   (Synchronized.change step_timeout (K secs);
    TextIO.print ("Timeout set to " ^ (if secs = 0 then "unlimited" else string_of_int secs ^ "s") ^ "\n"));
 
-(** Symbol translation **)
+(** Markup-based token rendering **)
 
-local
-  fun parse_code s =
-    StringCvt.scanString (Int.scan StringCvt.HEX)
-      (if String.isPrefix "0x" s then String.extract (s, 2, NONE) else s);
+fun flatten s = String.translate (fn #"\n" => " " | c => str c) s;
 
-  fun utf8_of_codepoint cp =
-    if cp < 0x80 then chr cp
-    else if cp < 0x800 then
-      implode [chr (0xC0 + cp div 64), chr (0x80 + cp mod 64)]
-    else if cp < 0x10000 then
-      implode [chr (0xE0 + cp div 4096),
-               chr (0x80 + (cp div 64) mod 64),
-               chr (0x80 + cp mod 64)]
-    else
-      implode [chr (0xF0 + cp div 262144),
-               chr (0x80 + (cp div 4096) mod 64),
-               chr (0x80 + (cp div 64) mod 64),
-               chr (0x80 + cp mod 64)];
+(* Produce marked-up text for a token.  With PIDE print mode active
+   (set by ml_repl.ML in YXML mode), Markup.markups produces YXML;
+   otherwise it returns plain text. *)
+fun print_token keywords tok =
+  Markup.markups (Token.markups keywords tok) (Token.unparse tok);
 
-  val symbol_table : string Symtab.table =
-    let val path = Path.explode "$ISABELLE_HOME/etc/symbols"
-        val lines = split_lines (File.read path)
-        fun parse_line line =
-          case String.tokens Char.isSpace line of
-            (sym :: "code:" :: hex :: _) =>
-              (case parse_code hex of
-                SOME cp => SOME (sym, utf8_of_codepoint cp)
-              | NONE => NONE)
-          | _ => NONE
-    in Symtab.make (map_filter parse_line lines) end;
+fun print_span keywords (Command_Span.Span (_, toks)) =
+  flatten (implode (map (print_token keywords) toks));
 
-  val unicode_to_symbol : string Symtab.table =
-    Symtab.fold (fn (sym, utf) => Symtab.update (utf, sym)) symbol_table Symtab.empty;
-in
-  fun unicode_of_symbol sym =
-    case Symtab.lookup symbol_table sym of SOME u => u | NONE => sym;
+fun span_text_full (Command_Span.Span (_, toks)) =
+  flatten (implode (map Token.unparse toks));
 
-  fun to_unicode text =
-    Symbol.explode text |> map unicode_of_symbol |> implode;
+(* Render a command span, optionally truncated. *)
+fun render_span keywords full (Command_Span.Span (_, toks)) =
+  if full then flatten (implode (map (print_token keywords) toks))
+  else
+    let fun go _ [] = ("", false)
+          | go remaining (tok :: rest) =
+              let val w = size (flatten (Token.unparse tok))
+              in if w > remaining then ("", true)
+                 else let val (s, trunc) = go (remaining - w) rest
+                      in (flatten (print_token keywords tok) ^ s, trunc) end
+              end
+        val (text, truncated) = go 80 toks
+    in if truncated then text ^ "..." else text end;
 
-  fun from_unicode text =
-    let fun convert [] = []
-          | convert (c :: cs) =
-              if Char.ord (String.sub (c, 0)) < 128 then c :: convert cs
-              else
-                let fun try_match n =
-                      if n > 4 orelse n > length cs + 1 then NONE
-                      else let val candidate = implode (List.take (c :: cs, n))
-                           in case Symtab.lookup unicode_to_symbol candidate of
-                                SOME sym => SOME (sym, List.drop (cs, n - 1))
-                              | NONE => try_match (n + 1)
-                           end
-                in case try_match 1 of
-                     SOME (sym, rest) => sym :: convert rest
-                   | NONE => c :: convert cs
-                end
-    in implode (convert (map str (String.explode text))) end;
-end;
-
-
-(** ANSI highlighting **)
-
-(** ANSI highlighting **)
-
-local
-  val reset = "\027[0m" val bold = "\027[1m"
-  val red = "\027[31m" val green = "\027[32m"
-  val yellow = "\027[33m" val blue = "\027[34m" val gray = "\027[90m"
-
-  fun ansi_of tok =
-    if Token.is_command tok then bold ^ blue
-    else if Token.is_kind Token.Keyword tok then blue
-    else if Token.is_kind Token.String tok then green
-    else if Token.is_kind Token.Alt_String tok then green
-    else if Token.is_kind Token.Cartouche tok then green
-    else if Token.is_kind Token.Var tok then yellow
-    else if Token.is_kind Token.Type_Var tok then yellow
-    else if Token.is_kind Token.Type_Ident tok then yellow
-    else if Token.is_comment tok then gray
-    else if Token.is_error tok then red
-    else ""
-
-  fun colorize_token tok =
-    let val text = Token.unparse tok
-        val code = ansi_of tok
-    in if code = "" then text else code ^ text ^ reset end
-
-  fun flatten s = String.translate (fn #"\n" => " " | c => str c) s
-in
-  fun span_text_color (Command_Span.Span (_, toks)) =
-    flatten (implode (map colorize_token toks));
-
-  fun span_text_full (Command_Span.Span (_, toks)) =
-    flatten (implode (map Token.unparse toks));
-
-  fun fmt_span full (Command_Span.Span (_, toks)) =
-    if full then
-      let val use_color = #color (get_cfg ())
-          val render = if use_color then colorize_token else Token.unparse
-      in flatten (implode (map render toks)) end
-    else
-      let val use_color = #color (get_cfg ())
-          val render = if use_color then colorize_token else Token.unparse
-          fun go _ [] = ("", false)
-            | go remaining (tok :: rest) =
-                let val w = size (flatten (Token.unparse tok))
-                in if w > remaining then ("", true)
-                   else let val (s, trunc) = go (remaining - w) rest
-                        in (flatten (render tok) ^ s, trunc) end
-                end
-          val (text, truncated) = go 80 toks
-      in if truncated then text ^ reset ^ "..." else text end;
-end;
+(* Render raw Isar text with markup (used by show). *)
+fun render_isar_text thy text =
+  let val kws = Thy_Header.get_keywords thy
+      val toks = Token.tokenize kws {strict = false}
+                   (Symbol_Pos.explode (text, Position.none))
+  in flatten (implode (map (print_token kws) toks)) end;
 
 fun is_ignored (Command_Span.Span (Command_Span.Ignored_Span, _)) = true
   | is_ignored _ = false;
 
-fun out s = TextIO.print (to_unicode s ^ "\n");
-
-(* Format a raw text string using the same config as spans *)
-fun fmt_text text =
-  let val thy = Theory.get_pure ()
-      val kws = Thy_Header.get_keywords thy
-      val toks = Token.tokenize kws {strict = false} (Symbol_Pos.explode (text, Position.none))
-      val span = Command_Span.Span (Command_Span.Malformed_Span, toks)
-  in fmt_span (#full_spans (get_cfg ())) span end;
+(* Output function used by all Ir.* commands.  Uses writeln so that
+   ml_repl.ML's output wrappers can capture it when running over TCP. *)
+fun out s = writeln s;
 
 
 (** Segments **)
@@ -203,6 +126,8 @@ fun find_source thy_name =
 
 fun source thy_name start stop =
   let val segs = find_source thy_name
+      val thy = Thy_Info.get_theory thy_name
+      val kws = Thy_Header.get_keywords thy
       val len = length segs
       val start' = if start < 0 then Int.max (0, len + start) else start
       val stop' = if stop < 0 then len + stop else stop
@@ -214,9 +139,9 @@ fun source thy_name start stop =
             in (if i >= start' andalso i <= stop' then
                if is_ignored span then
                  (if incl then out (prefix ^ StringCvt.padLeft #" " 4 (string_of_int i) ^
-                                    "  " ^ indent ^ "\027[90m" ^ span_text_full span ^ "\027[0m") else ())
+                                    "  " ^ indent ^ span_text_full span) else ())
                else out (prefix ^ StringCvt.padLeft #" " 4 (string_of_int i) ^
-                         "  " ^ indent ^ fmt_span full_spans span)
+                         "  " ^ indent ^ render_span kws full_spans span)
              else ();
              pr (i + 1) rest)
             end
@@ -263,8 +188,7 @@ fun update_repl id r =
 
 (* Execute Isar text against a state *)
 fun exec_text text st =
-  let val text = from_unicode text
-      val thy = Toplevel.theory_of st
+  let val thy = Toplevel.theory_of st
       val transitions = Outer_Syntax.parse_text thy (fn () => thy) Position.none text
       fun run (tr, s) =
         let val old = !Multithreading.parallel_proofs
@@ -390,16 +314,17 @@ fun show () =
         | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
       val n = length (#steps r)
       val _ = out ("REPL " ^ quote id ^
-                   (if id = cur_id then " \027[1m(current)\027[0m" else "") ^
+                   (if id = cur_id then " (current)" else "") ^
                    " (" ^ string_of_int n ^ " steps, from " ^ orig ^ ")")
       val _ = out ("  base  level=" ^ string_of_int (Toplevel.level (#base_state r)))
+      val thy = Toplevel.theory_of (#base_state r)
       fun pr _ [] = ()
         | pr i (({text, stale, pre_state, ...} : repl_step) :: rest) =
-            let val stale_mark = if stale then " \027[31m[stale]\027[0m" else ""
+            let val stale_mark = if stale then " [stale]" else ""
                 val lvl = Toplevel.level pre_state
                 val indent = StringCvt.padLeft #" " (2 * lvl) ""
             in out ("  " ^ StringCvt.padLeft #" " 3 (string_of_int i) ^ "  " ^
-                    indent ^ fmt_text text ^ stale_mark);
+                    indent ^ render_isar_text thy text ^ stale_mark);
                pr (i + 1) rest
             end
   in pr 0 (#steps r) end;
@@ -521,7 +446,7 @@ fun repls () =
         val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
             (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
             ", from " ^ orig ^ ")"
-    in out (if is_cur then "  \027[1m> " ^ desc ^ "\027[0m" else "    " ^ desc)
+    in out (if is_cur then "  > " ^ desc else "    " ^ desc)
     end) (Synchronized.value repl_tab) ()
   end;
 
@@ -658,7 +583,6 @@ end;
 val _ =
   let val names = Thy_Info.get_names ()
       val n = length names
-      (* Quick check: try one theory to see if segments are available *)
       val has_segments = exists (fn n =>
         (ignore (Thy_Info.get_theory_segments n); true)
         handle ERROR _ => false) (List.take (names, Int.min (1, n)))

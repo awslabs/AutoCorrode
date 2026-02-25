@@ -22,7 +22,7 @@ The server operator gets a management console on stdin/stdout:
 
 Management commands:
   /connections   Show number of open client connections
-  /log           Toggle verbose logging
+  /verbosity N   Set verbosity 0-3 (0=off, 1=body, 2=headers, 3=hex)
   /quit          Shut down the server
   /help          Show available commands
 
@@ -80,7 +80,7 @@ IR_CMDS = {
     'Ir.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
     'Ir.help':           '()  — show full help text',
     '/connections':           'show open client connections',
-    '/log':                   'toggle verbose logging',
+    '/verbosity':             'set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)',
     '/quit':                  'shut down the server',
     '/help':                  'show available commands',
 }
@@ -247,18 +247,126 @@ def _load_symbols(isabelle_bin):
                 continue
             parts = line.split()
             if len(parts) >= 3 and parts[1] == "code:":
-                sym = parts[0].replace('\\', '\\\\')
+                sym = parts[0]
                 cp = int(parts[2], 16)
                 unicode_to_ascii[chr(cp)] = sym
     return unicode_to_ascii
 
 
 UNICODE_TO_ASCII = {}
+ASCII_TO_UNICODE = {}
 
 
 def unicode_to_isabelle(text):
     """Replace unicode characters with Isabelle ASCII encoding."""
     return "".join(UNICODE_TO_ASCII.get(c, c) for c in text)
+
+
+def isabelle_to_unicode(text):
+    """Replace Isabelle symbol encoding (\\<forall> etc.) with UTF-8."""
+    if "\\" not in text:
+        return text
+    import re
+    return re.sub(r'(?<!\\)\\<[a-zA-Z_]+>', lambda m: ASCII_TO_UNICODE.get(m.group(), m.group()), text)
+
+
+def strip_yxml(text):
+    """Parse YXML and extract plain text content, discarding all markup."""
+    result = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "\x05" and i + 1 < n and text[i + 1] == "\x06":
+            # Start of YXML tag — skip until closing \x05
+            i += 2
+            j = text.index("\x05", i)
+            i = j + 1
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
+
+
+# YXML markup name -> ANSI color mapping (matching Isabelle/jEdit defaults)
+_MARKUP_ANSI = {
+    "keyword1": "\033[1;34m",   # bold blue
+    "keyword2": "\033[34m",     # blue
+    "keyword3": "\033[34m",     # blue
+    "string": "\033[32m",       # green
+    "alt_string": "\033[32m",   # green
+    "cartouche": "\033[32m",    # green
+    "var": "\033[33m",          # yellow
+    "tfree": "\033[33m",        # yellow
+    "tvar": "\033[33m",         # yellow
+    "free": "\033[34m",         # blue
+    "bound": "\033[32m",        # green
+    "comment": "\033[90m",      # gray
+    "improper": "\033[35m",     # magenta
+    "delimiter": "",            # no color
+    "error": "\033[31m",        # red
+    "writeln": "",              # no color (content channel)
+    "state": "",                # no color (content channel)
+    "warning": "\033[33m",      # yellow
+    "legacy": "\033[33m",       # yellow
+    "information": "\033[36m",  # cyan
+    "tracing": "\033[90m",      # gray
+}
+
+
+def yxml_to_ansi(text):
+    """Parse YXML control chars and convert markup to ANSI colors.
+    YXML uses \\x05 (X) and \\x06 (Y) as delimiters:
+      \\x05\\x06name\\x06key=val\\x05  = begin element
+      \\x05\\x06\\x05                  = end element
+    """
+    RST = "\033[0m"
+    result = []
+    color_stack = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == "\x05" and i + 1 < n and text[i + 1] == "\x06":
+            # Start of YXML tag
+            i += 2  # skip X Y
+            # Find end of tag (next \x05)
+            j = text.index("\x05", i)
+            tag_content = text[i:j]
+            i = j + 1  # skip closing \x05
+            if tag_content == "":
+                # End element: \x05\x06\x05
+                if color_stack:
+                    color_stack.pop()
+                result.append(RST)
+                if color_stack:
+                    result.append(color_stack[-1])
+            else:
+                # Begin element: name\x06key=val...
+                parts = tag_content.split("\x06")
+                name = parts[0]
+                ansi = _MARKUP_ANSI.get(name, "")
+                color_stack.append(ansi)
+                if ansi:
+                    result.append(ansi)
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
+
+# ---------------------------------------------------------------------------
+# Output transformer pipelines
+# ---------------------------------------------------------------------------
+# Each channel (console, TCP, MCP) has a list of str -> str transformers
+# applied in order to every response from the ML process.
+
+def apply_transforms(transforms, text):
+    for t in transforms:
+        text = t(text)
+    return text
+
+# Default pipelines (can be reconfigured at runtime)
+console_transforms = [isabelle_to_unicode, yxml_to_ansi]
+tcp_transforms = [isabelle_to_unicode, strip_yxml]
+mcp_transforms = [isabelle_to_unicode, strip_yxml]
 
 # ANSI colors
 RST = "\033[0m"
@@ -329,75 +437,186 @@ def spinner(label, done_event):
 
 
 class PolyMLProcess:
-    """Manages a long-running Poly/ML console process."""
+    """Manages a Poly/ML process running ML_Repl via isabelle ML_process."""
 
-    def __init__(self, isabelle, session, directory, bash_server=None,
-                 verbose=False, no_build=True):
-        cmd = [isabelle, "console"]
-        if directory:
-            cmd += ["-d", directory]
-        cmd += ["-l", session]
-        remote = os.environ.get("ISABELLE_REMOTE")
-        if remote:
-            print(f"{BOLD}ISABELLE_REMOTE detected — using remote ML prover{RST}", flush=True)
-            cmd += shlex.split(remote)
-        if no_build:
-            cmd.append("-n")
-        if bash_server:
-            cmd += ["-o", f"bash_process_address={bash_server.address}",
-                    "-o", f"bash_process_password={bash_server.password}"]
-
+    def __init__(self, isabelle, session, directory, ml_dir, port,
+                 bash_server=None, no_build=False, redirect=True):
+        self.port = port
+        self.cmd = self._build_cmd(isabelle, session, directory, ml_dir, port,
+                                   bash_server=bash_server, redirect=redirect)
         self.proc = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
+            self.cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
+            start_new_session=True,
         )
-        done = threading.Event()
-        t = threading.Thread(target=spinner, args=("Loading heap...", done), daemon=True)
-        t.start()
-        startup = self._read_until_prompt()
-        done.set()
-        t.join()
-        if verbose:
-            print(startup, end="", flush=True)
-
-    def _read_until_prompt(self):
-        buf = b""
-        while True:
-            select.select([self.proc.stdout], [], [])
-            chunk = os.read(self.proc.stdout.fileno(), 4096)
-            if not chunk:
-                rc = self.proc.wait()
-                raise EOFError(
-                    f"Poly/ML process terminated (rc={rc}), output so far:\n"
-                    + buf.decode("utf-8", errors="replace"))
-            buf += chunk
-            text = buf.decode("utf-8", errors="replace")
-            if PROMPT_RE.search(text):
-                return text
-
-    def send(self, command):
-        line = unicode_to_isabelle(command.strip()) + "\n"
-        self.proc.stdin.write(line.encode("utf-8"))
-        self.proc.stdin.flush()
-        raw = self._read_until_prompt()
-        return self._clean_output(raw)
 
     @staticmethod
-    def _clean_output(raw):
-        text = PROMPT_RE.sub("", raw)
-        text = re.sub(r"\nval it = \(\): unit\n?$", "", text)
-        text = text.lstrip("\n")
-        return text
+    def _build_cmd(isabelle, session, directory, ml_dir, port,
+                   bash_server=None, redirect=False):
+        cmd = [isabelle, "ML_process"]
+        if directory:
+            cmd += ["-d", directory]
+        cmd += ["-l", session]
+        if bash_server:
+            cmd += ["-o", f"bash_process_address={bash_server.address}",
+                    "-o", f"bash_process_password={bash_server.password}"]
+        if redirect:
+            cmd.append("-r")
+        # Load order: tcp_handler, ir, ml_repl (ml_repl wires them together)
+        cmd += ["-f", os.path.join(ml_dir, "tcp_handler.ML"),
+                "-f", os.path.join(ml_dir, "ir.ML"),
+                "-f", os.path.join(ml_dir, "ml_repl.ML"),
+                "-e", f"Future.join (ML_Repl.start {port});"]
+        return cmd
 
     def alive(self):
         return self.proc.poll() is None
 
     def close(self):
-        self.proc.stdin.close()
-        self.proc.wait(timeout=5)
+        # Send ML_Repl.stop() via a fresh TCP connection to shut down cleanly
+        if self.port:
+            try:
+                s = socket.create_connection(("127.0.0.1", self.port), timeout=2)
+                s.sendall(b"ML_Repl.stop ();\n")
+                s.close()
+            except Exception:
+                pass
+            # Wait briefly for the process to exit on its own
+            try:
+                self.proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+        # If still alive, force kill
+        if self.proc.poll() is None:
+            self.proc.kill()
+            self.proc.wait(timeout=5)
+
+
+class PolyMLConnection:
+    """TCP connection to ML_Repl running inside Poly/ML.
+
+    Speaks the PIDE message framing protocol: each message is a
+    length-prefixed list of YXML-encoded chunks, matching the format
+    produced by Byte_Message.write_message_yxml on the ML side.
+
+    Messages are structured as:
+      chunk 0: kind (e.g. "writeln", "error", "done")
+      chunk 1: number of property chunks (as string)
+      chunks 2..2+n: properties (e.g. "serial=42")
+      remaining chunks: YXML-encoded body
+
+    The "done" message signals end of output for a command.
+    """
+
+    def __init__(self, host="127.0.0.1", port=9146):
+        self.host = host
+        self.port = port
+        self.sock = None
+        self._buf = b""
+
+    def connect(self):
+        self.sock = socket.create_connection((self.host, self.port))
+        self._buf = b""
+
+    def _read_exact(self, n):
+        """Read exactly n bytes from socket, using internal buffer."""
+        while len(self._buf) < n:
+            chunk = self.sock.recv(max(4096, n - len(self._buf)))
+            if not chunk:
+                self.sock = None
+                raise EOFError("ML_Repl connection closed")
+            self._buf += chunk
+        result = self._buf[:n]
+        self._buf = self._buf[n:]
+        return result
+
+    def _read_line(self):
+        """Read until newline, return bytes without newline."""
+        while b"\n" not in self._buf:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                self.sock = None
+                raise EOFError("ML_Repl connection closed")
+            self._buf += chunk
+        line, self._buf = self._buf.split(b"\n", 1)
+        return line
+
+    def read_message(self):
+        """Read one PIDE-framed message. Returns (kind, props, body_chunks).
+
+        kind: str, e.g. "writeln", "error", "done"
+        props: list of (key, value) tuples
+        body_chunks: list of bytes (raw YXML)
+        """
+        header = self._read_line().decode("ascii")
+        sizes = [int(x) for x in header.split(",")]
+        chunks = [self._read_exact(n) for n in sizes]
+        kind = chunks[0].decode("utf-8")
+        props_length = int(chunks[1].decode("utf-8")) if len(chunks) > 1 else 0
+        props = []
+        for i in range(props_length):
+            raw = chunks[2 + i].decode("utf-8")
+            if "=" in raw:
+                k, v = raw.split("=", 1)
+                props.append((k, v))
+        body_chunks = chunks[2 + props_length:]
+        return kind, props, body_chunks
+
+    def send(self, command):
+        """Send an ML command and return the output as a string.
+
+        Reads PIDE-framed messages until a "done" message, concatenates
+        the YXML body text of all non-done messages, and returns it.
+        """
+        line = unicode_to_isabelle(command.strip()) + "\n"
+        self.sock.sendall(line.encode("utf-8"))
+        parts = []
+        while True:
+            kind, props, body_chunks = self.read_message()
+            if kind == "done":
+                return "\n".join(parts).strip()
+            body = "".join(c.decode("utf-8", errors="replace")
+                           for c in body_chunks)
+            if body:
+                parts.append(body)
+
+    def send_streaming(self, command, on_message):
+        """Send an ML command, call on_message(kind, props, body) for each message.
+
+        on_message receives:
+          kind: str (e.g. "writeln", "error", "status", "done")
+          props: list of (key, value) tuples
+          body: str (decoded YXML body, may be empty)
+
+        Returns the concatenated body text (same as send()).
+        """
+        line = unicode_to_isabelle(command.strip()) + "\n"
+        self.sock.sendall(line.encode("utf-8"))
+        parts = []
+        while True:
+            kind, props, body_chunks = self.read_message()
+            body = "".join(c.decode("utf-8", errors="replace")
+                           for c in body_chunks)
+            on_message(kind, props, body)
+            if kind == "done":
+                return "\n".join(parts).strip()
+            if body:
+                parts.append(body)
+
+    def alive(self):
+        return self.sock is not None
+
+    def close(self):
+        if self.sock:
+            try:
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+        self._buf = b""
 
 
 class Server:
@@ -413,13 +632,71 @@ class Server:
         self.sock.bind((host, port))
         self.sock.listen(8)
         self.running = True
-        self.verbose = True
+        self.verbose = 0  # 0=off, 1=body, 2=body+headers, 3=body+headers+hex
         self.clients = {}
         self.clients_lock = threading.Lock()
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
         print(msg)
+
+    def log_input(self, ctx, command):
+        """Log an input command (verbose >= 1)."""
+        if self.verbose >= 1:
+            self.log(f"{CYAN}{ctx}{RST} {YELLOW}>>>{RST} {command}")
+
+    def log_output(self, ctx, kind, props, raw_body):
+        """Log a single PIDE output message.
+
+        Verbosity levels:
+          0: nothing
+          1: header + decoded body, only for messages with non-empty text content
+          2: header + decoded body for ALL messages
+          3: header + hex dump + decoded body for ALL messages
+        """
+        if self.verbose < 1:
+            return
+        props_str = " ".join(f"{k}={v}" for k, v in props) if props else ""
+        tag = f"{kind}" + (f" {props_str}" if props_str else "")
+        short_tag = kind
+        # At level 1, skip messages with empty text content
+        text_content = strip_yxml(raw_body) if raw_body else ""
+        if self.verbose == 1 and not text_content.strip():
+            return
+        # Color the tag by message kind
+        _KIND_COLOR = {
+            "writeln": GREEN,
+            "state": BLUE,
+            "warning": YELLOW,
+            "legacy": YELLOW,
+            "error": RED,
+            "status": DIM,
+            "report": DIM,
+            "tracing": DIM,
+            "information": CYAN,
+            "system": DIM,
+            "done": DIM,
+        }
+        kc = _KIND_COLOR.get(kind, "")
+        display_tag = short_tag if self.verbose == 1 else tag
+        colored_tag = f"{kc}[{display_tag}]{RST}"
+        if self.verbose >= 3 and raw_body:
+            raw = raw_body.encode("utf-8")
+            lines = []
+            for i in range(0, len(raw), 32):
+                chunk = raw[i:i+32]
+                hx = " ".join(f"{b:02x}" for b in chunk)
+                asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                lines.append(f"  {i:04x}  {hx:<96s} {asc}")
+            self.log(f"{CYAN}{ctx}{RST} \033[35m<<< {colored_tag} hex ({len(raw)}B):{RST}")
+            for hl in lines:
+                self.log(f"{CYAN}{ctx}{RST} \033[2;35m{hl}{RST}")
+        if raw_body:
+            display = apply_transforms(console_transforms, raw_body)
+            for ln in display.splitlines():
+                self.log(f"{CYAN}{ctx}{RST} {DIM}<<<{RST} {colored_tag} {ln}")
+        else:
+            self.log(f"{CYAN}{ctx}{RST} {DIM}<<<{RST} {colored_tag}")
 
     def serve_forever(self):
         self.sock.settimeout(1.0)
@@ -471,19 +748,18 @@ class Server:
                     if not logged_connect:
                         self.log(f"{GREEN}[+] {peer} connected ({self.num_clients} total){RST}")
                         logged_connect = True
-                    if self.verbose:
-                        self.log(f"{CYAN}[{peer}]{RST} {YELLOW}>>>{RST} {command}")
                     with self.lock:
                         if not self.poly.alive():
                             msg = f"ERR: Poly/ML process terminated\n{SENTINEL}\n"
                             client.sendall(msg.encode("utf-8"))
                             self.running = False
                             return
-                        output = self.poly.send(command)
-                    if self.verbose:
-                        for ln in output.splitlines():
-                            self.log(f"{CYAN}[{peer}]{RST} {DIM}<<<{RST} {ln}")
-                    response = (output + "\n" + SENTINEL + "\n").encode("utf-8")
+                        self.log_input(f"[{peer}]", command)
+                        def on_msg(kind, props, body):
+                            self.log_output(f"[{peer}]", kind, props, body)
+                        raw_output = self.poly.send_streaming(command, on_msg)
+                    response = (apply_transforms(tcp_transforms, raw_output) +
+                                "\n" + SENTINEL + "\n").encode("utf-8")
                     client.sendall(response)
                     with self.clients_lock:
                         if client in self.clients:
@@ -662,16 +938,23 @@ def console_loop(server, session):
                               f"in={c['bytes_in']}B out={c['bytes_out']}B")
             elif cmd == "/quit":
                 break
-            elif cmd == "/log":
-                server.verbose = not server.verbose
-                state = f"{GREEN}ON{RST}" if server.verbose else f"{RED}OFF{RST}"
-                print(f"Verbose logging {state}")
+            elif cmd == "/verbosity":
+                parts = stripped.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    server.verbose = min(int(parts[1]), 3)
+                else:
+                    server.verbose = (server.verbose + 1) % 4
+                labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
+                state = labels[server.verbose]
+                print(f"Verbosity {server.verbose} / {state}")
             elif cmd == "/help":
                 print(f"{BOLD}Management commands:{RST}")
-                log_state = f"{GREEN}ON{RST}" if server.verbose else f"{RED}OFF{RST}"
-                print(f"  {YELLOW}/connections{RST}   Show open client connections")
-                print(f"  {YELLOW}/log{RST}           Toggle verbose logging (currently {log_state})")
-                print(f"  {YELLOW}/quit{RST}          Shut down the server")
+                labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
+                state = labels[server.verbose]
+                print(f"  {YELLOW}/connections{RST}     Show open client connections")
+                print(f"  {YELLOW}/verbosity [N]{RST}   Set verbosity (currently {server.verbose} / {state})")
+                print(f"                      0=off  1=non-empty  2=all messages  3=all+hex")
+                print(f"  {YELLOW}/quit{RST}            Shut down the server")
                 print(f"  {YELLOW}/help{RST}          This help")
                 print("Anything else is sent to the REPL.")
             else:
@@ -686,8 +969,12 @@ def console_loop(server, session):
                 if not server.poly.alive():
                     print(f"{RED}ERR: Poly/ML process terminated{RST}")
                     break
-                output = server.poly.send(command)
-            print(output)
+                def on_msg(kind, props, body):
+                    if body and strip_yxml(body).strip():
+                        print(apply_transforms(console_transforms, body))
+                    server.log_output("[this]", kind, props, body)
+                server.log_input("[this]", command)
+                output = server.poly.send_streaming(command, on_msg)
             # Update completer from command output
             if command.startswith("Ir.theories"):
                 session.completer.learn_theories(output)
@@ -706,18 +993,24 @@ def console_loop(server, session):
 def main():
     p = argparse.ArgumentParser(description="I/R REPL TCP server")
     p.add_argument("--port", type=int, default=9147)
+    p.add_argument("--poly-ml-port", type=int, default=9146,
+                   help="Port for ML_Repl inside Poly/ML (default: 9146)")
     p.add_argument("--isabelle", default=os.path.expanduser(
         "~/Isabelle2025-2-experimental.app/bin/isabelle"))
     p.add_argument("--session", default="AutoCorrode")
     p.add_argument("--dir", default=None)
     p.add_argument("-v", "--verbose", action="store_true",
-                   help="Print the Isabelle/Poly/ML command being invoked")
-    p.add_argument("--check-heap", action="store_true",
-                   help="Check and rebuild session heap if needed (default: load as-is)")
+                   help="Print the command being invoked")
     p.add_argument("--no-bash-server", action="store_true",
                    help="Skip Bash.Server startup (disables sledgehammer)")
     p.add_argument("--server-only", action="store_true",
                    help="Expose TCP server only; do not start a REPL on stdin")
+    p.add_argument("--start-only", action="store_true",
+                   help="Exec into Poly/ML with ML_Repl (replaces this process)")
+    p.add_argument("--show-server", action="store_true",
+                   help="Show info about a running ML_Repl and exit")
+    p.add_argument("--kill-server", action="store_true",
+                   help="Show info about a running ML_Repl, stop it, and exit")
     p.add_argument("--host", default="127.0.0.1",
                    help="Host address to bind the TCP server on (default: 127.0.0.1)")
     p.add_argument("--mcp", action="store_true",
@@ -726,49 +1019,130 @@ def main():
                    help="Options for mcp_server.py (default: '--transport streamable-http')")
     args = p.parse_args()
 
-    ml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ir.ML")
+    # --show-server / --kill-server: probe a running ML_Repl and exit
+    if args.show_server or args.kill_server:
+        port = args.poly_ml_port
+        try:
+            conn = PolyMLConnection(port=port)
+            conn.connect()
+            info = conn.send('val _ = writeln (Session.welcome ());')
+            # Get PID holding the port
+            try:
+                pid = subprocess.check_output(
+                    ["lsof", "-ti", f":{port}"], text=True).strip()
+            except Exception:
+                pid = "unknown"
+            print(f"{GREEN}ML_Repl on 127.0.0.1:{port}{RST}  pid={pid}")
+            if info:
+                print(f"  {strip_yxml(isabelle_to_unicode(info))}")
+            if args.kill_server:
+                try:
+                    conn.send('ML_Repl.stop ();')
+                except (EOFError, OSError):
+                    pass
+                time.sleep(0.5)
+                print(f"{YELLOW}Server stopped{RST}")
+            conn.close()
+        except (ConnectionRefusedError, OSError):
+            print(f"{RED}No ML_Repl on 127.0.0.1:{port}{RST}")
+            sys.exit(1)
+        sys.exit(0)
 
-    global UNICODE_TO_ASCII
+    ml_dir = os.path.dirname(os.path.abspath(__file__))
+
+    global UNICODE_TO_ASCII, ASCII_TO_UNICODE
     UNICODE_TO_ASCII = _load_symbols(args.isabelle)
+    ASCII_TO_UNICODE = {v: k for k, v in UNICODE_TO_ASCII.items()}
 
+    # --start-only: exec into Poly/ML directly (replaces this process)
+    if args.start_only:
+        cmd = PolyMLProcess._build_cmd(
+            args.isabelle, args.session, args.dir, ml_dir, args.poly_ml_port,
+            redirect=False)
+        print(f"{BOLD}Exec into Isabelle ML_process "
+              f"(session={args.session}, port={args.poly_ml_port}){RST}", flush=True)
+        if args.verbose:
+            safe_cmd = [
+                (arg.split("=", 1)[0] + "=****")
+                if arg.startswith("bash_process_password=")
+                else arg
+                for arg in cmd
+            ]
+            print(f"{DIM}{' '.join(safe_cmd)}{RST}", flush=True)
+        os.execvp(cmd[0], cmd)
+
+    # Try connecting to an already-running ML_Repl
+    conn = PolyMLConnection(port=args.poly_ml_port)
+    poly = None  # PolyMLProcess, only if we need to start one
     bash_server = None
-    if not args.no_bash_server:
-        print(f"{BOLD}Starting Bash.Server...{RST}", flush=True)
-        bash_server = BashServer(args.isabelle)
-        print(f"{GREEN}● Bash.Server ready at {bash_server.address}{RST}", flush=True)
-    else:
-        print(f"{DIM}Bash.Server skipped (sledgehammer unavailable){RST}", flush=True)
+    try:
+        conn.connect()
+        # Verify it's alive
+        probe = conn.send('Ir.help ();')
+        if "Ir.init" not in probe:
+            raise ConnectionError("Connected but Ir not available")
+        print(f"{GREEN}● Connected to existing ML_Repl on "
+              f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
+    except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
+        # No running ML_Repl — start Poly/ML ourselves
+        conn.close()
+
+        if not args.no_bash_server:
+            print(f"{BOLD}Starting Bash.Server...{RST}", flush=True)
+            bash_server = BashServer(args.isabelle)
+            print(f"{GREEN}● Bash.Server ready at {bash_server.address}{RST}", flush=True)
+        else:
+            print(f"{DIM}Bash.Server skipped (sledgehammer unavailable){RST}", flush=True)
+
+        print(f"{BOLD}Starting Isabelle ML_process "
+              f"(session={args.session})...{RST}", flush=True)
+        done = threading.Event()
+        t = threading.Thread(target=spinner,
+                             args=("Loading heap + ML_Repl...", done), daemon=True)
+        t.start()
+        poly = PolyMLProcess(args.isabelle, args.session, args.dir, ml_dir,
+                             args.poly_ml_port, bash_server=bash_server)
+
+        # Wait for ML_Repl TCP port to become available
+        for attempt in range(300):  # up to 60s
+            if not poly.alive():
+                done.set(); t.join()
+                # Read any output for diagnostics
+                out = poly.proc.stdout.read().decode("utf-8", errors="replace")
+                print(f"{RED}Poly/ML process exited (rc={poly.proc.returncode}){RST}",
+                      file=sys.stderr)
+                if out.strip():
+                    print(f"{DIM}{out.strip()}{RST}", file=sys.stderr)
+                sys.exit(1)
+            try:
+                conn.connect()
+                probe = conn.send('Ir.help ();')
+                if "Ir.init" in probe:
+                    break
+                conn.close()
+            except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
+                conn.close()
+            time.sleep(0.2)
+        else:
+            done.set(); t.join()
+            print(f"{RED}ML_Repl did not become available{RST}", file=sys.stderr)
+            poly.close()
+            sys.exit(1)
+
+        done.set(); t.join()
+        print(f"{GREEN}● ML_Repl ready on "
+              f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
 
     def _signal_cleanup(signum, frame):
+        if poly:
+            poly.close()
         if bash_server:
             bash_server.close()
         sys.exit(128 + signum)
     signal.signal(signal.SIGTERM, _signal_cleanup)
     signal.signal(signal.SIGHUP, _signal_cleanup)
 
-    print(f"{BOLD}Starting Isabelle console (session={args.session})...{RST}", flush=True)
-    poly = PolyMLProcess(args.isabelle, args.session, args.dir,
-                         bash_server=bash_server, verbose=args.verbose,
-                         no_build=not args.check_heap)
-    print(f"{GREEN}● Isabelle console ready.{RST}", flush=True)
-
-    print(f"Loading {BOLD}{ml_path}{RST}...", flush=True)
-    ml_code = open(ml_path).read().replace('\n', ' ')
-    out = poly.send(ml_code)
-    if "Exception" in out or "ML error" in out:
-        print(f"{RED}Failed to load {ml_path}:{RST}\n{out}", file=sys.stderr)
-        poly.close()
-        sys.exit(1)
-    # Verify the structure is actually available
-    probe = poly.send('Ir.help ();')
-    if "Ir.init" not in probe:
-        print(f"{RED}Ir structure not available after load.{RST}", file=sys.stderr)
-        print(f"{DIM}Load output:{RST}\n{out}", file=sys.stderr)
-        print(f"{DIM}Probe output:{RST}\n{probe}", file=sys.stderr)
-        poly.close()
-        sys.exit(1)
-
-    server = Server(poly, args.port, host=args.host)
+    server = Server(conn, args.port, host=args.host)
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
 
@@ -782,7 +1156,17 @@ def main():
         mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options)
         mcp_proc = subprocess.Popen(mcp_cmd, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, start_new_session=True)
+                                    stderr=subprocess.STDOUT)
+
+        import atexit
+        def _kill_mcp():
+            if mcp_proc and mcp_proc.poll() is None:
+                mcp_proc.terminate()
+                try:
+                    mcp_proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    mcp_proc.kill()
+        atexit.register(_kill_mcp)
 
         def _mcp_log_reader():
             started = False
@@ -850,13 +1234,15 @@ def main():
 
     print("Shutting down...", flush=True)
     if mcp_proc and mcp_proc.poll() is None:
-        os.killpg(mcp_proc.pid, signal.SIGTERM)
+        mcp_proc.terminate()
         try:
             mcp_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            os.killpg(mcp_proc.pid, signal.SIGKILL)
+            mcp_proc.kill()
     server.shutdown()
-    poly.close()
+    conn.close()
+    if poly:
+        poly.close()
     if bash_server:
         bash_server.close()
 

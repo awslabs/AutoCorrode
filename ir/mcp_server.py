@@ -77,7 +77,7 @@ class ReplClient:
         return self.sock is not None
 
     def send(self, ml_command: str) -> str:
-        """Send an ML command and return the output."""
+        """Send an ML command and return the transformed output."""
         if self.sock is None:
             raise RuntimeError("Not connected — call the 'connect' tool first")
         self.sock.sendall((ml_command.strip() + "\n").encode())
@@ -90,7 +90,58 @@ class ReplClient:
             buf += chunk
             text = buf.decode("utf-8", errors="replace")
             if SENTINEL in text:
-                return text[:text.index(SENTINEL)].strip()
+                raw = text[:text.index(SENTINEL)].strip()
+                return apply_transforms(raw)
+
+# ---------------------------------------------------------------------------
+# Output transforms (applied to every response from the ML process)
+# ---------------------------------------------------------------------------
+
+import re
+
+def isabelle_to_unicode(text):
+    """Replace Isabelle symbol encoding with UTF-8."""
+    if "\\" not in text:
+        return text
+    return re.sub(r'(?<!\\)\\<[a-zA-Z_]+>', lambda m: _ASCII_TO_UNICODE.get(m.group(), m.group()), text)
+
+def strip_yxml(text):
+    """Remove YXML control sequences, keep plain text."""
+    return text.replace("\x05", "").replace("\x06", "")
+
+_ASCII_TO_UNICODE = {}  # populated by _load_symbols below
+
+def _load_mcp_symbols():
+    """Load symbol table for MCP server."""
+    import os, subprocess
+    isabelle = os.environ.get("ISABELLE",
+        os.path.expanduser("~/Isabelle2025-2-experimental.app/bin/isabelle"))
+    try:
+        isabelle_home = subprocess.check_output(
+            [isabelle, "getenv", "-b", "ISABELLE_HOME"],
+            text=True, timeout=10).strip()
+        symbols_path = os.path.join(isabelle_home, "etc", "symbols")
+        with open(symbols_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 3 and parts[1] == "code:":
+                    sym = parts[0]
+                    cp = int(parts[2], 16)
+                    _ASCII_TO_UNICODE[sym] = chr(cp)
+    except Exception:
+        pass
+
+_load_mcp_symbols()
+
+mcp_transforms = [isabelle_to_unicode, strip_yxml]
+
+def apply_transforms(text):
+    for t in mcp_transforms:
+        text = t(text)
+    return text
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -115,7 +166,11 @@ mcp = FastMCP("I/R REPL",
               "`show` to inspect, `state` to view proof state. "
               "IMPORTANT: Do NOT send 'theory' commands via `step` — the theory context "
               "is established by `init`. Steps are Isar commands like `lemma`, `apply`, "
-              "`by`, `definition`, `fun`, `declare`, etc.")
+              "`by`, `definition`, `fun`, `declare`, etc. "
+              "IMPORTANT: Use ASCII symbols in all Isar text, NOT Isabelle symbol encoding. "
+              "Use => not \\<Rightarrow>, \" not \\<open>/\\<close>, & not \\<and>, "
+              "| not \\<or>, ! not \\<forall>, ? not \\<exists>, --> not \\<longrightarrow>, "
+              ":: not \\<in>, etc.")
 
 repl = ReplClient()
 
@@ -160,7 +215,6 @@ def focus(id: str) -> str:
 def step(isar_text: str) -> str:
     return repl.send(f"Ir.step {ml_str(isar_text)};")
 
-@mcp.tool(description="Append a step by reading Isar text from a file path.")
 def step_file(path: str) -> str:
     return repl.send(f"Ir.step_file {ml_str(path)};")
 
