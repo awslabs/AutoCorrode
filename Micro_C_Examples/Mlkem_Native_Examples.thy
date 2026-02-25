@@ -16,6 +16,9 @@ type_synonym int_poly = \<open>int list\<close>
 definition poly_add_int :: \<open>int_poly \<Rightarrow> int_poly \<Rightarrow> int_poly\<close> where
   \<open>poly_add_int ps qs = map2 (+) ps qs\<close>
 
+definition poly_sub_int :: \<open>int_poly \<Rightarrow> int_poly \<Rightarrow> int_poly\<close> where
+  \<open>poly_sub_int ps qs = map2 (-) ps qs\<close>
+
 section \<open>Concrete types and refinement\<close>
 
 datatype_record c_mlk_poly =
@@ -42,6 +45,11 @@ definition no_overflow_add :: \<open>int_poly \<Rightarrow> int_poly \<Rightarro
     (\<forall>i < min (length ps) (length qs).
       ps ! i + qs ! i \<in> {-(2^15) ..< 2^15})\<close>
 
+definition no_overflow_sub :: \<open>int_poly \<Rightarrow> int_poly \<Rightarrow> bool\<close> where
+  \<open>no_overflow_sub ps qs \<longleftrightarrow>
+    (\<forall>i < min (length ps) (length qs).
+      ps ! i - qs ! i \<in> {-(2^15) ..< 2^15})\<close>
+
 text \<open>
   The concrete (word-level) result of polynomial addition — internal helper
   for proofs.
@@ -56,6 +64,12 @@ lemma sint_plus_no_overflow:
     fixes a b :: \<open>'l::{len} sword\<close>
   assumes \<open>sint a + sint b \<in> {-(2^(LENGTH('l) - 1)) ..< 2^(LENGTH('l) - 1)}\<close>
     shows \<open>sint (a + b) = sint a + sint b\<close>
+using assms by (intro signed_arith_sint) (auto simp: word_size)
+
+lemma sint_minus_no_overflow:
+    fixes a b :: \<open>'l::{len} sword\<close>
+  assumes \<open>sint a - sint b \<in> {-(2^(LENGTH('l) - 1)) ..< 2^(LENGTH('l) - 1)}\<close>
+    shows \<open>sint (a - b) = sint a - sint b\<close>
 using assms by (intro signed_arith_sint) (auto simp: word_size)
 
 text \<open>
@@ -126,8 +140,34 @@ proof -
     by auto
 qed
 
-lemma MLKEM_N_sub_step [simp]: \<open>k < MLKEM_N \<Longrightarrow> MLKEM_N - k = Suc (255 - k)\<close>
-  by simp
+lemma no_overflow_sub_bounds:
+  assumes \<open>refines_mlk_poly vr ar\<close>
+      and \<open>refines_mlk_poly vb ab\<close>
+      and \<open>no_overflow_sub ar ab\<close> \<open>i < MLKEM_N\<close>
+    shows \<open>sint (c_mlk_poly_coeffs vr ! i) - sint (c_mlk_poly_coeffs vb ! i) < 2 ^ 15\<close>
+      and \<open>- (2 ^ 15) \<le> sint (c_mlk_poly_coeffs vr ! i) - sint (c_mlk_poly_coeffs vb ! i)\<close>
+proof -
+  from assms(1) have lr: \<open>length (c_mlk_poly_coeffs vr) = MLKEM_N\<close>
+          and mr: \<open>List.map sint (c_mlk_poly_coeffs vr) = ar\<close>
+    unfolding refines_mlk_poly_def by auto
+  from assms(2) have lb: \<open>length (c_mlk_poly_coeffs vb) = MLKEM_N\<close>
+          and mb: \<open>List.map sint (c_mlk_poly_coeffs vb) = ab\<close>
+    unfolding refines_mlk_poly_def by auto
+  have \<open>ar ! i - ab ! i \<in> {-(2^15) ..< 2^15}\<close>
+    using assms(3,4) lr lb mr mb unfolding no_overflow_sub_def by auto
+  moreover have \<open>ar ! i = sint (c_mlk_poly_coeffs vr ! i)\<close>
+    using mr lr assms(4) by (simp add: nth_map[symmetric])
+  moreover have \<open>ab ! i = sint (c_mlk_poly_coeffs vb ! i)\<close>
+    using mb lb assms(4) by (simp add: nth_map[symmetric])
+  ultimately show \<open>sint (c_mlk_poly_coeffs vr ! i) - sint (c_mlk_poly_coeffs vb ! i) < 2 ^ 15\<close>
+          and \<open>- (2 ^ 15) \<le> sint (c_mlk_poly_coeffs vr ! i) - sint (c_mlk_poly_coeffs vb ! i)\<close>
+    by auto
+qed
+
+lemma MLKEM_N_sub_step [simp]:
+  assumes \<open>k < MLKEM_N\<close>
+    shows \<open> MLKEM_N - k = Suc (255 - k)\<close>
+using assms by simp
 
 section \<open>C verification\<close>
 
@@ -159,6 +199,14 @@ micro_c_translate \<open>
 
     for (i = 0; i < 256; i++) {
       r->coeffs[i] = (int16_t)((int16_t)(r->coeffs[i]) + b->coeffs[i]);
+    }
+  }
+
+  void poly_sub(struct mlk_poly *r, struct mlk_poly *b) {
+    unsigned int i;
+
+    for (i = 0; i < 256; i++) {
+      r->coeffs[i] = (int16_t)((int16_t)(r->coeffs[i]) - b->coeffs[i]);
     }
   }
 \<close>
@@ -232,6 +280,69 @@ lemma c_poly_add_spec:
     apply (auto intro: no_overflow_add_bounds[simplified])
   done
 done
+
+subsection \<open>\<^verbatim>\<open>poly\\_sub\<close> contract\<close>
+
+definition c_poly_sub_contract ::
+    \<open>('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow> int_poly \<Rightarrow>
+     ('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow> int_poly \<Rightarrow>
+     ('s, 'a, 'b) function_contract\<close> where
+  \<open>c_poly_sub_contract r gr vr ar b gb vb ab \<equiv>
+    let pre  = can_alloc_reference \<star>
+               r \<mapsto>\<langle>\<top>\<rangle> gr\<down>vr \<star> \<langle>refines_mlk_poly vr ar\<rangle> \<star>
+               b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb \<star> \<langle>refines_mlk_poly vb ab\<rangle> \<star>
+               \<langle>no_overflow_sub ar ab\<rangle>;
+        post = \<lambda>_.
+               can_alloc_reference \<star>
+               (\<Squnion>gr' vr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>vr' \<star> \<langle>refines_mlk_poly vr' (poly_sub_int ar ab)\<rangle>) \<star>
+               b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb
+     in make_function_contract pre post\<close>
+ucincl_auto c_poly_sub_contract
+
+lemma c_poly_sub_spec:
+  shows \<open>\<Gamma>; c_poly_sub MLKEM_N r b \<Turnstile>\<^sub>F c_poly_sub_contract r gr vr ar b gb vb ab\<close>
+  apply (crush_boot f: c_poly_sub_def contract: c_poly_sub_contract_def)
+  apply crush_base
+  apply (ucincl_discharge\<open>
+      rule_tac
+        INV=\<open>\<lambda>k. (\<Squnion>gr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>(update_c_mlk_poly_coeffs
+              (\<lambda>_. take (MLKEM_N - k) (map2 (-) (c_mlk_poly_coeffs vr) (c_mlk_poly_coeffs vb))
+                   @ drop (MLKEM_N - k) (c_mlk_poly_coeffs vr)) vr))
+            \<star> b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb
+            \<star> (\<Squnion>gx. x \<mapsto>\<langle>\<top>\<rangle> gx\<down>(of_nat (MLKEM_N - k) :: c_uint))
+            \<star> can_alloc_reference
+            \<star> \<langle>refines_mlk_poly vr ar\<rangle> \<star> \<langle>refines_mlk_poly vb ab\<rangle>
+            \<star> \<langle>no_overflow_sub ar ab\<rangle>\<close>
+        and INV'=\<open>\<lambda>k. (\<Squnion>gr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>(update_c_mlk_poly_coeffs
+              (\<lambda>_. take (MLKEM_N - Suc k) (map2 (-) (c_mlk_poly_coeffs vr) (c_mlk_poly_coeffs vb))
+                   @ drop (MLKEM_N - Suc k) (c_mlk_poly_coeffs vr)) vr))
+            \<star> b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb
+            \<star> (\<Squnion>gx. x \<mapsto>\<langle>\<top>\<rangle> gx\<down>(of_nat (MLKEM_N - Suc k) :: c_uint))
+            \<star> can_alloc_reference
+            \<star> \<langle>refines_mlk_poly vr ar\<rangle> \<star> \<langle>refines_mlk_poly vb ab\<rangle>
+            \<star> \<langle>no_overflow_sub ar ab\<rangle>\<close>
+        and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+        and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+      in wp_bounded_while_framedI\<close>)
+  subgoal \<comment> \<open>Initialization + frame\<close>
+    apply crush_base
+    apply (auto simp: refines_mlk_poly_def c_mlk_poly.record_simps
+                   poly_sub_int_def no_overflow_sub_def
+                   map2_map_map word_size
+             intro!: nth_equalityI sint_minus_no_overflow)
+    done
+  subgoal \<comment> \<open>Condition\<close>
+    apply crush_base
+    apply (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat)
+    done
+  subgoal \<comment> \<open>Loop body\<close>
+    apply crush_base
+    apply (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat
+                         c_mlk_poly.record_simps nth_append
+                         refines_mlk_poly_def inv_list_step)
+    apply (fold refines_mlk_poly_def)
+    by (auto intro: no_overflow_sub_bounds[simplified])
+  done
 
 end
 
