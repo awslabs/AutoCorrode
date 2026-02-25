@@ -8,6 +8,7 @@ theory Micro_C_Examples
     C_Array_Examples
     C_Bitwise_Examples
     C_While_Examples
+    Mlkem_Native_Examples
     "Micro_C_Interfaces.Micro_C_Interfaces"
 begin
 end

@@ -451,7 +451,8 @@ structure C_Trans_Ctxt : sig
   datatype var_kind = Param | Local  (* Param = by-value, Local = mutable reference *)
   type t
   val make : Proof.context -> (string * C_Ast_Utils.c_numeric_type) list Symtab.table
-             -> int Symtab.table -> C_Ast_Utils.c_numeric_type Symtab.table -> t
+             -> int Symtab.table -> C_Ast_Utils.c_numeric_type Symtab.table
+             -> C_Ast_Utils.c_numeric_type Symtab.table Unsynchronized.ref -> t
   val get_ctxt : t -> Proof.context
   val add_var : string -> var_kind -> term -> C_Ast_Utils.c_numeric_type -> t -> t
   val lookup_var : t -> string -> (var_kind * term * C_Ast_Utils.c_numeric_type) option
@@ -462,6 +463,8 @@ structure C_Trans_Ctxt : sig
   val lookup_enum_const : t -> string -> int option
   val add_enum_consts : (string * int) list -> t -> t
   val get_typedef_tab : t -> C_Ast_Utils.c_numeric_type Symtab.table
+  val register_func_return_type : string -> C_Ast_Utils.c_numeric_type -> t -> unit
+  val lookup_func_return_type : t -> string -> C_Ast_Utils.c_numeric_type option
   val get_break_ref : t -> term option
   val get_continue_ref : t -> term option
   val set_break_ref : term -> t -> t
@@ -480,25 +483,28 @@ struct
     struct_fields : (string * C_Ast_Utils.c_numeric_type) list Symtab.table,
     enum_consts : int Symtab.table,             (* enum_name -> int_value *)
     typedef_tab : C_Ast_Utils.c_numeric_type Symtab.table,
+    func_ret_types : C_Ast_Utils.c_numeric_type Symtab.table Unsynchronized.ref,
     break_ref : term option,
     continue_ref : term option,
     goto_refs : (string * term) list            (* label_name -> flag ref variable *)
   }
 
-  fun make ctxt struct_fields enum_consts typedef_tab : t =
+  fun make ctxt struct_fields enum_consts typedef_tab func_ret_types : t =
     { ctxt = ctxt, vars = Symtab.empty, struct_types = Symtab.empty,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab, break_ref = NONE, continue_ref = NONE,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = NONE, continue_ref = NONE,
       goto_refs = [] }
 
   fun get_ctxt ({ ctxt, ... } : t) = ctxt
 
   fun add_var name kind tm cty ({ ctxt, vars, struct_types, struct_fields,
-                                   enum_consts, typedef_tab,
+                                   enum_consts, typedef_tab, func_ret_types,
                                    break_ref, continue_ref, goto_refs } : t) : t =
     { ctxt = ctxt, vars = Symtab.update (name, (kind, tm, cty)) vars,
       struct_types = struct_types, struct_fields = struct_fields,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
+      func_ret_types = func_ret_types,
       break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs }
 
@@ -507,11 +513,12 @@ struct
 
   fun set_struct_type var_name struct_name
       ({ ctxt, vars, struct_types, struct_fields, enum_consts, typedef_tab,
-         break_ref, continue_ref, goto_refs } : t) : t =
+         func_ret_types, break_ref, continue_ref, goto_refs } : t) : t =
     { ctxt = ctxt, vars = vars,
       struct_types = Symtab.update (var_name, struct_name) struct_types,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab, break_ref = break_ref, continue_ref = continue_ref,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs }
 
   fun get_struct_type ({ struct_types, ... } : t) name =
@@ -530,52 +537,63 @@ struct
     Symtab.lookup enum_consts name
 
   fun add_enum_consts entries ({ ctxt, vars, struct_types, struct_fields,
-                                 enum_consts, typedef_tab,
+                                 enum_consts, typedef_tab, func_ret_types,
                                  break_ref, continue_ref, goto_refs } : t) : t =
     { ctxt = ctxt, vars = vars, struct_types = struct_types,
       struct_fields = struct_fields,
       enum_consts = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                       enum_consts entries,
-      typedef_tab = typedef_tab, break_ref = break_ref, continue_ref = continue_ref,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs }
 
   fun get_typedef_tab ({ typedef_tab, ... } : t) = typedef_tab
+
+  fun register_func_return_type name cty ({ func_ret_types, ... } : t) =
+    func_ret_types := Symtab.update (name, cty) (! func_ret_types)
+
+  fun lookup_func_return_type ({ func_ret_types, ... } : t) name =
+    Symtab.lookup (! func_ret_types) name
 
   fun get_break_ref ({ break_ref, ... } : t) = break_ref
   fun get_continue_ref ({ continue_ref, ... } : t) = continue_ref
 
   fun set_break_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
-                                 enum_consts, typedef_tab,
+                                 enum_consts, typedef_tab, func_ret_types,
                                  break_ref = _, continue_ref, goto_refs } : t) : t =
     { ctxt = ctxt, vars = vars, struct_types = struct_types,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab, break_ref = SOME ref_term,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = SOME ref_term,
       continue_ref = continue_ref, goto_refs = goto_refs }
 
   fun set_continue_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
-                                    enum_consts, typedef_tab,
+                                    enum_consts, typedef_tab, func_ret_types,
                                     break_ref, continue_ref = _, goto_refs } : t) : t =
     { ctxt = ctxt, vars = vars, struct_types = struct_types,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab, break_ref = break_ref,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = break_ref,
       continue_ref = SOME ref_term, goto_refs = goto_refs }
 
   fun clear_break_ref ({ ctxt, vars, struct_types, struct_fields,
-                          enum_consts, typedef_tab,
+                          enum_consts, typedef_tab, func_ret_types,
                           break_ref = _, continue_ref, goto_refs } : t) : t =
     { ctxt = ctxt, vars = vars, struct_types = struct_types,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab, break_ref = NONE, continue_ref = continue_ref,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = NONE, continue_ref = continue_ref,
       goto_refs = goto_refs }
 
   fun get_goto_refs ({ goto_refs, ... } : t) = goto_refs
 
   fun set_goto_refs refs ({ ctxt, vars, struct_types, struct_fields,
-                             enum_consts, typedef_tab,
+                             enum_consts, typedef_tab, func_ret_types,
                              break_ref, continue_ref, goto_refs = _ } : t) : t =
     { ctxt = ctxt, vars = vars, struct_types = struct_types,
       struct_fields = struct_fields, enum_consts = enum_consts,
-      typedef_tab = typedef_tab, break_ref = break_ref,
+      typedef_tab = typedef_tab, func_ret_types = func_ret_types,
+      break_ref = break_ref,
       continue_ref = continue_ref, goto_refs = refs }
 
   fun lookup_goto_ref ({ goto_refs, ... } : t) name =
@@ -826,6 +844,7 @@ structure C_Translate : sig
   val translate_fundef : (string * C_Ast_Utils.c_numeric_type) list Symtab.table
                          -> int Symtab.table
                          -> C_Ast_Utils.c_numeric_type Symtab.table
+                         -> C_Ast_Utils.c_numeric_type Symtab.table Unsynchronized.ref
                          -> Proof.context
                          -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
 end =
@@ -1422,7 +1441,10 @@ struct
             val (full_name, _) = Term.dest_Const
               (Proof_Context.read_const {proper = true, strict = false} ctxt ("c_" ^ fname))
             val func_ref = Isa_Const (full_name, isa_dummyT)
-        in (C_Term_Build.mk_funcall func_ref arg_terms, C_Ast_Utils.CInt) end
+            (* Use registered return type if available, fall back to CInt *)
+            val ret_cty = case C_Trans_Ctxt.lookup_func_return_type tctx fname of
+                            SOME cty => cty | NONE => C_Ast_Utils.CInt
+        in (C_Term_Build.mk_funcall func_ref arg_terms, ret_cty) end
     | translate_expr _ (CCall0 _) =
         unsupported "indirect function call (function pointers)"
     | translate_expr tctx (CUnary0 (CAdrOp0, CVar0 (ident, _), _)) =
@@ -1712,7 +1734,22 @@ struct
                       val elem_terms = List.map
                         (fn ([], CInitExpr0 (e, _)) => #1 (translate_expr tctx e)
                           | _ => unsupported "complex array initializer element") init_list
-                      val list_term = HOLogic.mk_list isa_dummyT elem_terms
+                      (* Extract declared array size from CArrDeclr0 if present *)
+                      val declared_size =
+                        let val CDeclr0 (_, derived, _, _, _) = declr
+                        in List.mapPartial
+                             (fn CArrDeclr0 (_, CArrSize0 (_, CConst0 (CIntConst0 (CInteger0 (n, _, _), _))), _) =>
+                                   SOME (IntInf.toInt n)
+                               | _ => NONE) derived
+                           |> (fn (n :: _) => SOME n | [] => NONE)
+                        end
+                      (* For {0} with declared size N, replicate the single element N times *)
+                      val list_term = case (declared_size, elem_terms) of
+                            (SOME n, [single]) =>
+                              if n > List.length elem_terms
+                              then HOLogic.mk_list isa_dummyT (List.tabulate (n, fn _ => single))
+                              else HOLogic.mk_list isa_dummyT elem_terms
+                          | _ => HOLogic.mk_list isa_dummyT elem_terms
                   in (name, C_Term_Build.mk_literal list_term, actual_cty) end
               | process_one ((Some declr, None), _) =
                   let val name = C_Ast_Utils.declr_name declr
@@ -2136,9 +2173,14 @@ struct
     | translate_stmt _ _ =
         (warning "micro_c_translate: unknown statement replaced with stub"; C_Term_Build.mk_unsupported_stub)
 
-  fun translate_fundef struct_tab enum_tab typedef_tab ctxt (CFunDef0 (specs, declr, _, body, _)) =
+  fun translate_fundef struct_tab enum_tab typedef_tab func_ret_types ctxt (CFunDef0 (specs, declr, _, body, _)) =
     let
       val name = C_Ast_Utils.declr_name declr
+      (* Register the function's return type for cross-function call type tracking *)
+      val ret_cty = (case C_Ast_Utils.resolve_c_type_full typedef_tab specs of
+                       SOME C_Ast_Utils.CVoid => C_Ast_Utils.CVoid
+                     | SOME t => t | NONE => C_Ast_Utils.CInt)
+      val _ = func_ret_types := Symtab.update (name, ret_cty) (! func_ret_types)
       val param_names = C_Ast_Utils.extract_params declr
       val param_decls = C_Ast_Utils.extract_param_decls declr
       (* Extract parameter types and pointer-ness from declarations.
@@ -2166,7 +2208,7 @@ struct
       (* Add parameters to the translation context as Param (by-value) *)
       val tctx = List.foldl
         (fn ((n, v, cty), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v cty ctx)
-        (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab) param_vars
+        (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab func_ret_types) param_vars
       (* Annotate struct pointer parameters with their struct type *)
       val tctx = List.foldl (fn (pdecl, ctx) =>
         case (C_Ast_Utils.param_name pdecl,
@@ -2285,12 +2327,14 @@ struct
         List.app (fn (name, _) =>
           writeln ("Registered typedef: " ^ name)) typedef_defs
       val fundefs = C_Ast_Utils.extract_fundefs tu
+      (* Shared mutable ref for tracking function return types across definitions *)
+      val func_ret_types = Unsynchronized.ref (Symtab.empty : C_Ast_Utils.c_numeric_type Symtab.table)
     in
       (* Translate and define each function one at a time, so that later
          functions can reference earlier ones via Syntax.check_term. *)
       List.foldl (fn (fundef, lthy) =>
         let val (name, term) = C_Translate.translate_fundef
-              struct_tab enum_tab typedef_tab lthy fundef
+              struct_tab enum_tab typedef_tab func_ret_types lthy fundef
         in define_c_function name term lthy end) lthy fundefs
     end
 end
@@ -2792,5 +2836,29 @@ void local_arr_test(void) {
 \<close>
 
 thm c_local_arr_test_def
+
+text \<open>Smoke test: function call return type tracking.
+     helper returns int16_t (signed short), caller uses result in arithmetic.
+     The addition should use c_signed_add (not c_unsigned_add).\<close>
+micro_c_translate \<open>
+typedef short int16_t;
+int16_t ret_type_helper(int16_t x) { return x; }
+int16_t ret_type_caller(int16_t a, int16_t b) {
+  return ret_type_helper(a) + ret_type_helper(b);
+}
+\<close>
+
+thm c_ret_type_helper_def c_ret_type_caller_def
+
+text \<open>Smoke test: zero-initialized array with declared size.\<close>
+micro_c_translate \<open>
+typedef unsigned char uint8_t;
+void zero_init_test(void) {
+  uint8_t t[4] = {0};
+  uint8_t x = t[2];
+}
+\<close>
+
+thm c_zero_init_test_def
 
 end
