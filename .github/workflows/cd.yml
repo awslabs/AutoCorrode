@@ -37,7 +37,10 @@ jobs:
 
       - name: Build AutoCorrode
         run: |
-          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info -d $AFP_COMPONENT_BASE/Word_Lib AutoCorrode
+          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info \
+            -d $AFP_COMPONENT_BASE/Word_Lib \
+            -d $AFP_COMPONENT_BASE/Isabelle_C \
+            AutoCorrode
 
       - name: Upload documentation as pages artifact
         uses: actions/upload-pages-artifact@v3

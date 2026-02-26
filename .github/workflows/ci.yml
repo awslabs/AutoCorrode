@@ -38,7 +38,10 @@ jobs:
       # Build with HTML documentation, to make sure we can deploy to pages on merge
       - name: Build AutoCorrode
         run: |
-          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info -d $AFP_COMPONENT_BASE/Word_Lib AutoCorrode
+          $ISABELLE_HOME/bin/isabelle build -v -b -d . -o browser_info \
+            -d $AFP_COMPONENT_BASE/Word_Lib \
+            -d $AFP_COMPONENT_BASE/Isabelle_C \
+            AutoCorrode
 
   iq-build:
     runs-on: ubuntu-latest
@@ -134,6 +137,7 @@ jobs:
     - name: Build HOL heap (local)
       run: |
         $ISABELLE components -u $AFP_COMPONENT_BASE/Word_Lib
+        $ISABELLE components -u $AFP_COMPONENT_BASE/Isabelle_C
         $ISABELLE build -b HOL
 
     - name: Configure I/P remote (localhost, fresh install + push heaps)
