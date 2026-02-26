@@ -178,7 +178,7 @@ qed
 
 lemma MLKEM_N_sub_step [simp]:
   assumes \<open>k < MLKEM_N\<close>
-    shows \<open> MLKEM_N - k = Suc (255 - k)\<close>
+    shows \<open>MLKEM_N - k = Suc (255 - k)\<close>
 using assms by simp
 
 section \<open>C verification\<close>
@@ -217,75 +217,75 @@ text \<open>The C code below is taken verbatim from mlkem-native
 subsection \<open>Translation\<close>
 
 micro_c_translate \<open>
-typedef short int16_t;
-typedef int int32_t;
+  typedef short int16_t;
+  typedef int int32_t;
 
-typedef struct {
-  int16_t coeffs[256];
-} mlk_poly;
+  typedef struct {
+    int16_t coeffs[256];
+  } mlk_poly;
 
-/* Reference: `poly_add()` in the reference implementation @[REF].
- *            - We use destructive version (output=first input) to avoid
- *              reasoning about aliasing in the CBMC specification */
-void mlk_poly_add(mlk_poly *r, const mlk_poly *b)
-{
-  unsigned i;
-  for (i = 0; i < 256; i++)
+  /* Reference: `poly_add()` in the reference implementation @[REF].
+   *            - We use destructive version (output=first input) to avoid
+   *              reasoning about aliasing in the CBMC specification */
+  void mlk_poly_add(mlk_poly *r, const mlk_poly *b)
   {
-    /* The preconditions imply that the addition stays within int16_t. */
-    r->coeffs[i] = (int16_t)(r->coeffs[i] + b->coeffs[i]);
+    unsigned i;
+    for (i = 0; i < 256; i++)
+    {
+      /* The preconditions imply that the addition stays within int16_t. */
+      r->coeffs[i] = (int16_t)(r->coeffs[i] + b->coeffs[i]);
+    }
   }
-}
 
-/* Reference: `poly_sub()` in the reference implementation @[REF].
- *            - We use destructive version (output=first input) to avoid
- *              reasoning about aliasing in the CBMC specification */
-void mlk_poly_sub(mlk_poly *r, const mlk_poly *b)
-{
-  unsigned i;
-  for (i = 0; i < 256; i++)
+  /* Reference: `poly_sub()` in the reference implementation @[REF].
+   *            - We use destructive version (output=first input) to avoid
+   *              reasoning about aliasing in the CBMC specification */
+  void mlk_poly_sub(mlk_poly *r, const mlk_poly *b)
   {
-    /* The preconditions imply that the subtraction stays within int16_t. */
-    r->coeffs[i] = (int16_t)(r->coeffs[i] - b->coeffs[i]);
+    unsigned i;
+    for (i = 0; i < 256; i++)
+    {
+      /* The preconditions imply that the subtraction stays within int16_t. */
+      r->coeffs[i] = (int16_t)(r->coeffs[i] - b->coeffs[i]);
+    }
   }
-}
 
-/* Reference: `barrett_reduce()` in the reference implementation @[REF]. */
-int16_t mlk_barrett_reduce(int16_t a)
-{
-  /* Barrett reduction approximates
-   *     round(a/MLKEM_Q)
-   *   = round(a*(2^N/MLKEM_Q))/2^N)
-   *  ~= round(a*round(2^N/MLKEM_Q)/2^N)
-   * Here, we pick N=26.
-   */
-  const int32_t magic = 20159; /* check-magic: 20159 == round(2^26 / MLKEM_Q) */
+  /* Reference: `barrett_reduce()` in the reference implementation @[REF]. */
+  int16_t mlk_barrett_reduce(int16_t a)
+  {
+    /* Barrett reduction approximates
+     *     round(a/MLKEM_Q)
+     *   = round(a*(2^N/MLKEM_Q))/2^N)
+     *  ~= round(a*round(2^N/MLKEM_Q)/2^N)
+     * Here, we pick N=26.
+     */
+    const int32_t magic = 20159; /* check-magic: 20159 == round(2^26 / MLKEM_Q) */
 
-  /*
-   * PORTABILITY: Right-shift on a signed integer is
-   * implementation-defined for negative left argument.
-   * Here, we assume it's sign-preserving "arithmetic" shift right.
-   * See (C99 6.5.7 (5))
-   */
-  const int32_t t = (magic * a + ((int32_t)1 << 25)) >> 26;
+    /*
+     * PORTABILITY: Right-shift on a signed integer is
+     * implementation-defined for negative left argument.
+     * Here, we assume it's sign-preserving "arithmetic" shift right.
+     * See (C99 6.5.7 (5))
+     */
+    const int32_t t = (magic * a + ((int32_t)1 << 25)) >> 26;
 
-  /*
-   * t is in -10 .. +10, so we need 32-bit math to
-   * evaluate t * MLKEM_Q and the subsequent subtraction
-   */
-  int16_t res = (int16_t)(a - t * 3329);
+    /*
+     * t is in -10 .. +10, so we need 32-bit math to
+     * evaluate t * MLKEM_Q and the subsequent subtraction
+     */
+    int16_t res = (int16_t)(a - t * 3329);
 
-  return res;
-}
+    return res;
+  }
 \<close>
 
 subsection \<open>\<^verbatim>\<open>mlk\_barrett\_reduce\<close> contract\<close>
 
-definition c_mlk_barrett_reduce_contract ::
-    \<open>c_short \<Rightarrow> ('s::{sepalg}, c_short, 'b) function_contract\<close> where
+definition c_mlk_barrett_reduce_contract :: \<open>c_short \<Rightarrow> ('s::{sepalg}, c_short, 'b) function_contract\<close> where
   \<open>c_mlk_barrett_reduce_contract a \<equiv>
-    let pre  = can_alloc_reference \<star> \<langle>True\<rangle>;
-        post = \<lambda>r. can_alloc_reference \<star> \<langle>sint r mod MLKEM_Q = sint a mod MLKEM_Q\<rangle>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star>
+               \<langle>sint r mod MLKEM_Q = sint a mod MLKEM_Q\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_mlk_barrett_reduce_contract
 
@@ -293,14 +293,16 @@ lemma barrett_sint_bounds:
     fixes a :: \<open>16 sword\<close>
   defines \<open>sa \<equiv> sint a\<close>
     shows \<open>sa \<ge> -32768\<close> \<open>sa < 32768\<close>
-      and \<open>20159 * sa \<ge> -(2^31)\<close> \<open>20159 * sa < 2^31\<close>
-      and \<open>20159 * sa + 2^25 \<ge> -(2^31)\<close> \<open>20159 * sa + 2^25 < 2^31\<close>
+      and \<open>20159 * sa \<ge> -(2^31)\<close>
+      and \<open>20159 * sa < 2^31\<close>
+      and \<open>20159 * sa + 2^25 \<ge> -(2^31)\<close>
+      and \<open>20159 * sa + 2^25 < 2^31\<close>
 proof -
   have \<open>sa \<ge> -32768\<close> and \<open>sa < 32768\<close>
     using sint_range_size[where w=a] by (auto simp: sa_def word_size)
   then show \<open>sa \<ge> -32768\<close> and \<open>sa < 32768\<close> and
-        \<open>20159 * sa \<ge> -(2^31)\<close> \<open>20159 * sa < 2^31\<close> and
-        \<open>20159 * sa + 2^25 \<ge> -(2^31)\<close> \<open>20159 * sa + 2^25 < 2^31\<close>
+        \<open>20159 * sa \<ge> -(2^31)\<close> and \<open>20159 * sa < 2^31\<close> and
+        \<open>20159 * sa + 2^25 \<ge> -(2^31)\<close> and \<open>20159 * sa + 2^25 < 2^31\<close>
     by auto
 qed
 
@@ -331,10 +333,12 @@ proof -
     using m2 by simp
   have \<open>(-627015680::int) div 67108864 \<le> (20159 * sint a + 33554432) div 67108864\<close>
     using lower by (rule zdiv_mono1) auto
-  thus \<open>t \<ge> -10\<close> unfolding t_def by simp
+  thus \<open>t \<ge> -10\<close>
+    unfolding t_def by simp
   have \<open>(20159 * sint a + 33554432) div 67108864 \<le> (694104385::int) div 67108864\<close>
     using upper by (rule zdiv_mono1) auto
-  thus \<open>t \<le> 10\<close> unfolding t_def by simp
+  thus \<open>t \<le> 10\<close>
+    unfolding t_def by simp
 qed
 
 lemma barrett_sint_woi:
@@ -342,9 +346,10 @@ lemma barrett_sint_woi:
           (20159 * sint a + 33554432) div 67108864\<close>
 proof -
   have t: \<open>(20159 * sint a + 33554432) div 67108864 \<ge> -10\<close>
-          \<open>(20159 * sint a + 33554432) div 67108864 \<le> 10\<close>
+      \<open>(20159 * sint a + 33554432) div 67108864 \<le> 10\<close>
     using barrett_quotient_bounds[of a] by auto
-  show ?thesis by (rule sint_of_int_eq) (use t in auto)
+  show ?thesis
+    by (rule sint_of_int_eq) (use t in auto)
 qed
 
 lemma barrett_stb31_tq:
@@ -378,7 +383,7 @@ proof -
     unfolding r_def by (intro pos_mod_bound) auto
   have t_r_eq: \<open>t * 67108864 + r = 20159 * sa + 33554432\<close>
     unfolding t_def r_def using div_mult_mod_eq[of \<open>20159 * sa + 33554432\<close> 67108864]
-    by (simp add: algebra_simps)
+      by (simp add: algebra_simps)
   \<comment> \<open>Key: 67108864 * (sa - t * 3329) = 3329 * r - 447 * sa - 111702704128
      using 20159 * 3329 = 67108864 + 447\<close>
   have key: \<open>67108864 * (sa - t * 3329) = 3329 * r - 447 * sa - 111702704128\<close>
@@ -418,9 +423,7 @@ lemma barrett_result_sint:
     fixes a :: \<open>16 sword\<close>
   defines \<open>t \<equiv> (20159 * sint a + 33554432) div (67108864 :: int)\<close>
     shows \<open>sint (SCAST(32 signed \<rightarrow> 16 signed)
-            (SCAST(16 signed \<rightarrow> 32 signed) a -
-             word_of_int t * (0xD01 :: 32 sword)))
-           = sint a - t * 3329\<close>
+              (SCAST(16 signed \<rightarrow> 32 signed) a - word_of_int t * (0xD01 :: 32 sword))) = sint a - t * 3329\<close>
 proof -
   have res: \<open>-1664 \<le> sint a - t * 3329\<close> \<open>sint a - t * 3329 \<le> 1664\<close>
     using barrett_result_bounds[of a] by (auto simp: t_def)
@@ -458,11 +461,10 @@ qed
 lemma c_mlk_barrett_reduce_spec:
   shows \<open>\<Gamma>; c_mlk_barrett_reduce a \<Turnstile>\<^sub>F c_mlk_barrett_reduce_contract a\<close>
   apply (crush_boot f: c_mlk_barrett_reduce_def contract: c_mlk_barrett_reduce_contract_def)
-  apply crush_base
-  apply (simp_all add: sint_up_scast is_up sint_word_ariths
+  apply (crush_base simp add: sint_up_scast is_up sint_word_ariths
             barrett_stb31_prod barrett_stb31_sum
-            signed_take_bit_int_eq_self barrett_sint_bounds)
-  apply (simp_all add: barrett_sint_woi barrett_stb31_tq)
+            signed_take_bit_int_eq_self barrett_sint_bounds
+            barrett_sint_woi barrett_stb31_tq)
   apply (all \<open>(insert barrett_result_bounds[of a] barrett_quotient_bounds[of a]
                barrett_sint_bounds[of a]; linarith)?\<close>)
   apply (simp add: barrett_result_sint mod_diff_right_eq[symmetric])
@@ -476,18 +478,19 @@ text \<open>
   The postcondition asserts the result refines the abstract polynomial sum.
   No external assumptions needed on the specification theorem.
 \<close>
-definition c_mlk_poly_add_contract ::
-    \<open>('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow> int_poly \<Rightarrow>
-     ('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow> int_poly \<Rightarrow>
-     ('s, 'a, 'b) function_contract\<close> where
+definition c_mlk_poly_add_contract :: \<open>('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
+      c_mlk_poly \<Rightarrow> int_poly \<Rightarrow> ('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow>
+      int_poly \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_mlk_poly_add_contract r gr vr ar b gb vb ab \<equiv>
     let pre  = can_alloc_reference \<star>
-               r \<mapsto>\<langle>\<top>\<rangle> gr\<down>vr \<star> \<langle>refines_mlk_poly vr ar\<rangle> \<star>
-               b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb \<star> \<langle>refines_mlk_poly vb ab\<rangle> \<star>
+               r \<mapsto>\<langle>\<top>\<rangle> gr\<down>vr \<star>
+               \<langle>refines_mlk_poly vr ar\<rangle> \<star>
+               b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb \<star>
+               \<langle>refines_mlk_poly vb ab\<rangle> \<star>
                \<langle>no_overflow_add ar ab\<rangle>;
-        post = \<lambda>_.
-               can_alloc_reference \<star>
-               (\<Squnion>gr' vr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>vr' \<star> \<langle>refines_mlk_poly vr' (poly_add_int ar ab)\<rangle>) \<star>
+        post = \<lambda>_. can_alloc_reference \<star>
+               (\<Squnion>gr' vr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>vr' \<star>
+               \<langle>refines_mlk_poly vr' (poly_add_int ar ab)\<rangle>) \<star>
                b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb
      in make_function_contract pre post\<close>
 ucincl_auto c_mlk_poly_add_contract
@@ -518,38 +521,31 @@ lemma c_mlk_poly_add_spec:
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_bounded_while_framedI\<close>)
   subgoal \<comment> \<open>Initialization + frame\<close>
-    apply crush_base
-    apply (auto simp: refines_mlk_poly_def c_mlk_poly.record_simps
-                   poly_add_int_def no_overflow_add_def
-                   map2_map_map word_size
-             intro!: nth_equalityI sint_plus_no_overflow)
-    done
+    by (crush_base simp: refines_mlk_poly_def c_mlk_poly.record_simps
+      poly_add_int_def no_overflow_add_def map2_map_map word_size
+      intro!: nth_equalityI sint_plus_no_overflow)
   subgoal \<comment> \<open>Condition\<close>
-    apply crush_base
-    apply (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat)
-    done
+    by crush_base (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat)
   subgoal \<comment> \<open>Loop body\<close>
-    apply crush_base
-    apply (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat
-                         c_mlk_poly.record_simps nth_append
-                         refines_mlk_poly_def inv_list_step)
+    by (crush_base simp add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat
+      c_mlk_poly.record_simps nth_append refines_mlk_poly_def inv_list_step)
   done
-done
 
 subsection \<open>\<^verbatim>\<open>mlk\_poly\_sub\<close> contract\<close>
 
-definition c_mlk_poly_sub_contract ::
-    \<open>('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow> int_poly \<Rightarrow>
-     ('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow> int_poly \<Rightarrow>
-     ('s, 'a, 'b) function_contract\<close> where
+definition c_mlk_poly_sub_contract :: \<open>('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
+      c_mlk_poly \<Rightarrow> int_poly \<Rightarrow> ('addr, 'gv, c_mlk_poly) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_mlk_poly \<Rightarrow>
+      int_poly \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_mlk_poly_sub_contract r gr vr ar b gb vb ab \<equiv>
     let pre  = can_alloc_reference \<star>
-               r \<mapsto>\<langle>\<top>\<rangle> gr\<down>vr \<star> \<langle>refines_mlk_poly vr ar\<rangle> \<star>
-               b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb \<star> \<langle>refines_mlk_poly vb ab\<rangle> \<star>
+               r \<mapsto>\<langle>\<top>\<rangle> gr\<down>vr \<star>
+               \<langle>refines_mlk_poly vr ar\<rangle> \<star>
+               b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb \<star>
+               \<langle>refines_mlk_poly vb ab\<rangle> \<star>
                \<langle>no_overflow_sub ar ab\<rangle>;
-        post = \<lambda>_.
-               can_alloc_reference \<star>
-               (\<Squnion>gr' vr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>vr' \<star> \<langle>refines_mlk_poly vr' (poly_sub_int ar ab)\<rangle>) \<star>
+        post = \<lambda>_. can_alloc_reference \<star>
+               (\<Squnion>gr' vr'. r \<mapsto>\<langle>\<top>\<rangle> gr'\<down>vr' \<star>
+               \<langle>refines_mlk_poly vr' (poly_sub_int ar ab)\<rangle>) \<star>
                b \<mapsto>\<langle>\<top>\<rangle> gb\<down>vb
      in make_function_contract pre post\<close>
 ucincl_auto c_mlk_poly_sub_contract
@@ -580,23 +576,15 @@ lemma c_mlk_poly_sub_spec:
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_bounded_while_framedI\<close>)
   subgoal \<comment> \<open>Initialization + frame\<close>
-    apply crush_base
-    apply (auto simp: refines_mlk_poly_def c_mlk_poly.record_simps
-                   poly_sub_int_def no_overflow_sub_def
-                   map2_map_map word_size
-             intro!: nth_equalityI sint_minus_no_overflow)
-    done
+    by (crush_base simp: refines_mlk_poly_def c_mlk_poly.record_simps
+      poly_sub_int_def no_overflow_sub_def map2_map_map word_size
+      intro!: nth_equalityI sint_minus_no_overflow)
   subgoal \<comment> \<open>Condition\<close>
-    apply crush_base
-    apply (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat)
-    done
+    by crush_base (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat)
   subgoal \<comment> \<open>Loop body\<close>
-    apply crush_base
-    apply (simp_all add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat
-                         c_mlk_poly.record_simps nth_append
-                         refines_mlk_poly_def inv_list_step)
+    by (crush_base simp add: word_less_nat_alt unat_sub word_le_nat_alt unat_of_nat
+     c_mlk_poly.record_simps nth_append refines_mlk_poly_def inv_list_step)
   done
-done
 
 end
 

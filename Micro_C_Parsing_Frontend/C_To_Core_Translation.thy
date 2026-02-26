@@ -1,8 +1,3 @@
-(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   SPDX-License-Identifier: MIT *)
-
-
-
 theory C_To_Core_Translation
   imports
     Micro_C_Syntax
@@ -13,6 +8,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_C.C_Numeric_Types"
     "Shallow_Micro_C.C_Sizeof"
   keywords "micro_c_translate" :: thy_decl
+       and "micro_c_file" :: thy_load
 begin
 
 section \<open>C-to-Core Monad Translation Infrastructure\<close>
@@ -2528,6 +2524,44 @@ val _ =
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
+\<close>
+
+text \<open>
+  The @{text "micro_c_file"} command loads C source from an external file,
+  parses it using Isabelle/C, and generates core monad definitions.
+  This enables keeping verified C code in separate @{text ".c"} files,
+  identical to upstream sources.
+
+  Usage: @{text [display] "micro_c_file \<open>path/to/file.c\<close>"}
+\<close>
+
+ML \<open>
+local
+  val semi = Scan.option \<^keyword>\<open>;\<close>;
+in
+val _ =
+  Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
+    "load C file and generate core monad definitions"
+    (Resources.parse_file --| semi >> (fn get_file => fn lthy =>
+      let
+        val thy = Proof_Context.theory_of lthy
+        val {src_path, lines, digest, pos} : Token.file = get_file thy
+
+        (* Step 1: Parse the C file using Isabelle/C's parser *)
+        val source = Input.source true (cat_lines lines) (pos, pos)
+        val context' = C_Module.exec_eval source (Context.Theory thy)
+        val thy' = Context.theory_of context'
+
+        (* Step 2: Register file dependency so Isabelle rebuilds if file changes *)
+        val lthy = Local_Theory.background_theory
+                     (Resources.provide (src_path, digest)) lthy
+
+        (* Step 3: Retrieve parsed AST and translate *)
+        val tu = get_CTranslUnit thy'
+      in
+        C_Def_Gen.process_translation_unit tu lthy
+      end))
+end
 \<close>
 
 subsection \<open>Smoke Tests\<close>

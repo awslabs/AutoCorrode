@@ -1,6 +1,3 @@
-(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   SPDX-License-Identifier: MIT *)
-
 theory C_Abort
   imports
     "Shallow_Micro_Rust.Core_Expression"

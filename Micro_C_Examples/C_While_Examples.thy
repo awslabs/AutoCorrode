@@ -1,6 +1,3 @@
-(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   SPDX-License-Identifier: MIT *)
-
 theory C_While_Examples
   imports Simple_C_Functions
 begin
@@ -23,19 +20,18 @@ text \<open>A simple countdown loop that decrements a counter to zero.
   wraps and does not abort, unlike signed arithmetic which uses @{typ c_abort}).\<close>
 
 micro_c_translate \<open>
-void countdown(unsigned int *counter) {
-  while (*counter > 0) {
-    *counter = *counter - 1;
+  void countdown(unsigned int *counter) {
+    while (*counter > 0) {
+      *counter = *counter - 1;
+    }
   }
-}
 \<close>
 
 thm c_countdown_def
 
 text \<open>Contract: counter starts at @{term v} and ends at 0. Fuel = @{term \<open>unat v\<close>}.\<close>
 
-definition c_countdown_contract ::
-    \<open>('addr, 'gv, c_uint) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_uint \<Rightarrow>
+definition c_countdown_contract :: \<open>('addr, 'gv, c_uint) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow> c_uint \<Rightarrow>
      ('s, 'a, 'b) function_contract\<close> where
   \<open>c_countdown_contract counter g v \<equiv>
     make_function_contract
@@ -55,38 +51,41 @@ lemma c_countdown_correct:
         and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_bounded_while_framedI\<close>)
-  apply (auto simp add: unat_of_nat_eq word_of_nat_eq_0_iff of_nat_diff)
-  apply crush_base
-  apply (simp add: linorder_not_less)
+  apply (crush_base simp add: unat_of_nat_eq word_of_nat_eq_0_iff of_nat_diff linorder_not_less)
   done
 
-subsection \<open>Break in Loop\<close>
+subsection \<open>Break in loop\<close>
 
 text \<open>A loop that immediately breaks. Tests the break-flag mechanism:
   allocates a break ref, sets it to True on break, augments the condition
   to check the break flag.\<close>
 
 micro_c_translate \<open>
-unsigned int break_imm(void) {
-  unsigned int x = 42;
-  while (x < 100) {
-    break;
+  unsigned int break_imm(void) {
+    unsigned int x = 42;
+    while (x < 100) {
+      break;
+    }
+    return x;
   }
-  return x;
-}
 \<close>
 
 thm c_break_imm_def
 
 text \<open>Contract: break fires immediately, so x stays 42. Needs fuel \<ge> 1.\<close>
 
-definition c_break_imm_contract ::
-    \<open>('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+definition c_break_imm_contract :: \<open>('s::{sepalg}, c_uint, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_break_imm_contract \<equiv>
     let pre  = can_alloc_reference;
-        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = 42\<rangle>
+        post = \<lambda>r. can_alloc_reference \<star>
+               \<langle>r = 42\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_break_imm_contract
+
+lemma ucincl_Un [ucincl_intros]:
+  assumes \<open>\<And>x. ucincl (f x)\<close>
+    shows \<open>ucincl (\<Union>x. f x)\<close>
+using assms by (intro ucinclI ucpredI) (metis UN_iff asat_def asat_derived_order_monotone)
 
 lemma c_break_imm_correct:
   assumes \<open>while_fuel \<ge> 1\<close>
@@ -100,7 +99,7 @@ lemma c_break_imm_correct:
         and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_bounded_while_framedI\<close>)
-  apply crush_base
+  apply (crush_base simp add: ucincl_intros split: if_splits)
   done
 
 subsection \<open>Continue in Loop\<close>
@@ -127,11 +126,11 @@ thm c_skip_three_def
 text \<open>Contract: the loop sums 1 for each iteration except when @{term \<open>i = 3\<close>}.
   Result is @{term n} minus one if @{term \<open>n \<ge> 3\<close>}, otherwise @{term n}.\<close>
 
-definition c_skip_three_contract ::
-    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+definition c_skip_three_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_skip_three_contract n \<equiv>
     let pre  = can_alloc_reference;
-        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = (if 3 \<le> n then n - 1 else n)\<rangle>
+        post = \<lambda>r. can_alloc_reference \<star>
+               \<langle>r = (if 3 \<le> n then n - 1 else n)\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_skip_three_contract
 
@@ -152,15 +151,13 @@ lemma c_skip_three_correct_small:
         and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_bounded_while_framedI\<close>)
-  apply (auto simp add: unat_of_nat_eq word_of_nat_eq_0_iff of_nat_diff
-                         word_le_nat_alt word_less_nat_alt not_le not_less
-                         word_of_nat_less)
-  apply crush_base
+  apply (crush_base simp add: unat_of_nat_eq word_of_nat_eq_0_iff of_nat_diff
+    word_le_nat_alt word_less_nat_alt not_le not_less word_of_nat_less)
   apply (all \<open>frule word_of_nat_less, frule inc_le, frule less_is_non_zero_p1\<close>)
   apply (all \<open>frule word_diff_less[of "word_of_nat _ + 1", rotated 2],
     (assumption | simp add: word_neq_0_conv add.commute[where a="word_of_nat _" and b=1])+\<close>)
-  apply (drule arg_cong[where f=unat])
-  apply (simp add: unat_sub less_imp_le unat_of_nat_eq word_less_nat_alt)
+  apply (auto simp add: unat_sub less_imp_le unat_of_nat_eq word_less_nat_alt
+    dest: arg_cong[where f=unat])
   done
 
 definition skip_count :: \<open>c_uint \<Rightarrow> c_uint\<close> where
@@ -173,7 +170,8 @@ by (simp add: skip_count_def)
 lemma skip_count_step:
   assumes \<open>i + 1 \<noteq> (0 :: c_uint)\<close>
     shows \<open>skip_count (i + 1) = skip_count i + (if i + 1 = 3 then 0 else 1)\<close>
-using assms by (auto simp add: skip_count_def word_le_nat_alt word_less_nat_alt not_le not_less) unat_arith+
+using assms by (auto simp add: skip_count_def word_le_nat_alt word_less_nat_alt not_le not_less)
+  unat_arith+
 
 lemma skip_count_ge3[simp]:
   assumes \<open>3 \<le> n\<close>
@@ -201,7 +199,8 @@ using assms
 lemma word_of_nat_sub_ne_zero:
   assumes \<open>k < unat (n :: c_uint)\<close>
     shows \<open>n - word_of_nat k \<noteq> 0\<close>
-using assms by (auto simp add: word_less_nat_alt unat_sub less_imp_le unat_eq_zero dest: word_of_nat_less)
+using assms by (auto simp add: word_less_nat_alt unat_sub less_imp_le unat_eq_zero
+  dest: word_of_nat_less)
 
 lemma skip_count_step_down:
   assumes \<open>k < unat (n :: c_uint)\<close>

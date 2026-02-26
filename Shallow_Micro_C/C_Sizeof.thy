@@ -1,6 +1,3 @@
-(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   SPDX-License-Identifier: MIT *)
-
 theory C_Sizeof
   imports
     C_Numeric_Types
@@ -69,23 +66,29 @@ end
 
 text \<open>Basic sizeof lemmas.\<close>
 
-lemma c_sizeof_char_val [simp]: \<open>c_sizeof TYPE(c_char) = 1\<close>
-  by (simp add: c_sizeof_char_def)
+lemma c_sizeof_char_val [simp]:
+  shows \<open>c_sizeof TYPE(c_char) = 1\<close>
+by (simp add: c_sizeof_char_def)
 
-lemma c_sizeof_short_val [simp]: \<open>c_sizeof TYPE(c_short) = 2\<close>
-  by (simp add: c_sizeof_short_def)
+lemma c_sizeof_short_val [simp]:
+  shows \<open>c_sizeof TYPE(c_short) = 2\<close>
+by (simp add: c_sizeof_short_def)
 
-lemma c_sizeof_int_val [simp]: \<open>c_sizeof TYPE(c_int) = 4\<close>
-  by (simp add: c_sizeof_int_def)
+lemma c_sizeof_int_val [simp]:
+  shows \<open>c_sizeof TYPE(c_int) = 4\<close>
+by (simp add: c_sizeof_int_def)
 
-lemma c_sizeof_uint_val [simp]: \<open>c_sizeof TYPE(c_uint) = 4\<close>
-  by (simp add: c_sizeof_uint_def)
+lemma c_sizeof_uint_val [simp]:
+  shows \<open>c_sizeof TYPE(c_uint) = 4\<close>
+by (simp add: c_sizeof_uint_def)
 
-lemma c_sizeof_long_val [simp]: \<open>c_sizeof TYPE(c_long) = 8\<close>
-  by (simp add: c_sizeof_long_def)
+lemma c_sizeof_long_val [simp]:
+  shows \<open>c_sizeof TYPE(c_long) = 8\<close>
+by (simp add: c_sizeof_long_def)
 
-lemma c_sizeof_ulong_val [simp]: \<open>c_sizeof TYPE(c_ulong) = 8\<close>
-  by (simp add: c_sizeof_ulong_def)
+lemma c_sizeof_ulong_val [simp]: 
+  shows \<open>c_sizeof TYPE(c_ulong) = 8\<close>
+by (simp add: c_sizeof_ulong_def)
 
 text \<open>
   Connection to byte-level encoding: the sizeof value is consistent
@@ -93,11 +96,11 @@ text \<open>
 \<close>
 
 lemma c_sizeof_uint_encoding:
-  \<open>c_sizeof TYPE(c_uint) = length (word32_to_byte_list_le n)\<close>
-  by (simp add: word_byte_list_le_bij)
+  shows \<open>c_sizeof TYPE(c_uint) = length (word32_to_byte_list_le n)\<close>
+by (simp add: word_byte_list_le_bij)
 
 lemma c_sizeof_ulong_encoding:
-  \<open>c_sizeof TYPE(c_ulong) = length (word64_to_byte_list_le n)\<close>
-  by (simp add: word_byte_list_le_bij)
+  shows \<open>c_sizeof TYPE(c_ulong) = length (word64_to_byte_list_le n)\<close>
+by (simp add: word_byte_list_le_bij)
 
 end

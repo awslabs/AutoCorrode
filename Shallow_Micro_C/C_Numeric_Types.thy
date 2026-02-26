@@ -1,6 +1,3 @@
-(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   SPDX-License-Identifier: MIT *)
-
 theory C_Numeric_Types
   imports
     C_Abort
@@ -8,7 +5,7 @@ theory C_Numeric_Types
     "Word_Lib.Signed_Words"
 begin
 
-section \<open>C Numeric Type Aliases\<close>
+section \<open>C numeric type aliases\<close>
 
 text \<open>
   We define type synonyms for C's standard integer types using Isabelle's
@@ -16,16 +13,16 @@ text \<open>
   use @{typ "'l sword"} (from Word\_Lib).
 \<close>
 
-type_synonym c_char  = "8 word"
-type_synonym c_schar = "8 sword"
-type_synonym c_short = "16 sword"
-type_synonym c_ushort = "16 word"
-type_synonym c_int   = "32 sword"
-type_synonym c_uint  = "32 word"
-type_synonym c_long  = "64 sword"
-type_synonym c_ulong = "64 word"
+type_synonym c_char  = \<open>8 word\<close>
+type_synonym c_schar = \<open>8 sword\<close>
+type_synonym c_short = \<open>16 sword\<close>
+type_synonym c_ushort = \<open>16 word\<close>
+type_synonym c_int   = \<open>32 sword\<close>
+type_synonym c_uint  = \<open>32 word\<close>
+type_synonym c_long  = \<open>64 sword\<close>
+type_synonym c_ulong = \<open>64 word\<close>
 
-section \<open>C Signed Arithmetic with Overflow Detection\<close>
+section \<open>C signed arithmetic with overflow detection\<close>
 
 text \<open>
   In C, signed integer overflow is undefined behavior. We model this by
@@ -70,20 +67,24 @@ definition c_signed_mul :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
 definition c_signed_div :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_div a b \<equiv>
-     if b = 0 then c_abort DivisionByZero
-     else let result_int = sint a div sint b in
-       if result_int < -(2^(LENGTH('l) - 1)) \<or> result_int \<ge> 2^(LENGTH('l) - 1) then
-         c_signed_overflow
-       else
-         literal (word_of_int result_int)\<close>
+     if b = 0 then
+       c_abort DivisionByZero
+     else
+       let result_int = sint a div sint b in
+         if result_int < -(2^(LENGTH('l) - 1)) \<or> result_int \<ge> 2^(LENGTH('l) - 1) then
+           c_signed_overflow
+         else
+           literal (word_of_int result_int)\<close>
 
 definition c_signed_mod :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_mod a b \<equiv>
-     if b = 0 then c_abort DivisionByZero
-     else literal (word_of_int (sint a mod sint b))\<close>
+     if b = 0 then
+       c_abort DivisionByZero
+     else
+       literal (word_of_int (sint a mod sint b))\<close>
 
-section \<open>C Unsigned Arithmetic (Wrapping)\<close>
+section \<open>C unsigned arithmetic (wrapping)\<close>
 
 text \<open>
   Unsigned arithmetic in C wraps modulo \<open>2^LENGTH('l)\<close>, which is
@@ -106,16 +107,20 @@ definition c_unsigned_mul :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
 definition c_unsigned_div :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_div a b \<equiv>
-     if b = 0 then c_abort DivisionByZero
-     else literal (a div b)\<close>
+     if b = 0 then
+       c_abort DivisionByZero
+     else
+       literal (a div b)\<close>
 
 definition c_unsigned_mod :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_mod a b \<equiv>
-     if b = 0 then c_abort DivisionByZero
-     else literal (a mod b)\<close>
+     if b = 0 then
+       c_abort DivisionByZero
+     else
+       literal (a mod b)\<close>
 
-section \<open>C Bitwise Operations\<close>
+section \<open>C bitwise operations\<close>
 
 text \<open>
   Bitwise AND, OR, XOR, and NOT have no undefined behavior in C —
@@ -154,7 +159,7 @@ definition c_unsigned_not :: \<open>'l::{len} word \<Rightarrow>
     ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_not a \<equiv> literal (NOT a)\<close>
 
-section \<open>C Shift Operations\<close>
+section \<open>C shift operations\<close>
 
 text \<open>
   Shift operations have undefined behavior when the shift amount is
@@ -167,23 +172,30 @@ text \<open>
 definition c_unsigned_shl :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_shl a b \<equiv>
-     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
-     else literal (push_bit (unat b) a)\<close>
+     if unat b \<ge> LENGTH('l) then
+       c_shift_out_of_range
+     else
+       literal (push_bit (unat b) a)\<close>
 
 definition c_unsigned_shr :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_shr a b \<equiv>
-     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
-     else literal (drop_bit (unat b) a)\<close>
+     if unat b \<ge> LENGTH('l) then
+       c_shift_out_of_range
+     else
+       literal (drop_bit (unat b) a)\<close>
 
 definition c_signed_shl :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_shl a b \<equiv>
-     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
-     else let result_int = sint a * 2 ^ unat b in
-       if sint a < 0 \<or> result_int < -(2^(LENGTH('l) - 1)) \<or> result_int \<ge> 2^(LENGTH('l) - 1) then
-         c_signed_overflow
-       else literal (word_of_int result_int)\<close>
+     if unat b \<ge> LENGTH('l) then
+       c_shift_out_of_range
+     else
+       let result_int = sint a * 2 ^ unat b in
+         if sint a < 0 \<or> result_int < -(2^(LENGTH('l) - 1)) \<or> result_int \<ge> 2^(LENGTH('l) - 1) then
+           c_signed_overflow
+         else
+           literal (word_of_int result_int)\<close>
 
 text \<open>Arithmetic right shift: implementation-defined in C11 but universally
   implemented as sign-extending shift (floor division by 2\^n). We match
@@ -192,10 +204,12 @@ text \<open>Arithmetic right shift: implementation-defined in C11 but universall
 definition c_signed_shr :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_shr a b \<equiv>
-     if unat b \<ge> LENGTH('l) then c_shift_out_of_range
-     else literal (word_of_int (sint a div 2 ^ unat b))\<close>
+     if unat b \<ge> LENGTH('l) then
+       c_shift_out_of_range
+     else
+       literal (word_of_int (sint a div 2 ^ unat b))\<close>
 
-section \<open>C Unsigned Comparison Operations\<close>
+section \<open>C unsigned comparison operations\<close>
 
 definition c_unsigned_less :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
@@ -213,7 +227,7 @@ definition c_unsigned_neq :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_neq a b \<equiv> literal (a \<noteq> b)\<close>
 
-section \<open>C Comparison Operations\<close>
+section \<open>C comparison operations\<close>
 
 definition c_signed_less :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
@@ -231,7 +245,7 @@ definition c_signed_neq :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_signed_neq a b \<equiv> literal (a \<noteq> b)\<close>
 
-section \<open>C Type Cast Operations\<close>
+section \<open>C type cast operations\<close>
 
 definition c_ucast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_ucast w \<equiv> literal (ucast w)\<close>

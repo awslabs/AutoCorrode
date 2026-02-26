@@ -1,6 +1,3 @@
-(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
-   SPDX-License-Identifier: MIT *)
-
 theory C_Memory_Operations
   imports
     C_Pointer_Types
