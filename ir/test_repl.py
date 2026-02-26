@@ -105,55 +105,81 @@ def main():
     p.add_argument("--dir", default=None)
     p.add_argument("--server-only", action="store_true",
                    help="Pass --server-only to repl.py")
+    p.add_argument("--port", type=int, default=9147,
+                   help="Port to probe for an existing repl.py (default: 9147)")
     p.add_argument("--require-source", action="store_true",
                    help="Fail if source commands are not available")
     args = p.parse_args()
 
-    port = find_free_port()
     repl_py = os.path.join(SCRIPT_DIR, "repl.py")
+    proc = None  # only set if we start our own repl.py
 
-    # Start repl.py
-    print(f"{_BOLD}Starting{_RESET} repl.py "
-          f"{_DIM}(port={port}, session={args.session}){_RESET}", flush=True)
-    print(f"  {_SYM_BUSY} loading heap", end="", flush=True)
+    # Try connecting to an already-running repl.py
+    try:
+        sock = socket.create_connection(("127.0.0.1", args.port), timeout=2)
+        # Quick probe: does it speak the sentinel protocol?
+        sock.sendall(b'Ir.help ();\n')
+        buf = b""
+        sock.settimeout(10)
+        while SENTINEL.encode() not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                raise ConnectionError("closed")
+            buf += chunk
+        if b"Ir.init" not in buf:
+            raise ConnectionError("not an I/R server")
+        sock.close()
+        port = args.port
+        print(f"{_SYM_OK} Connected to existing repl.py on port {port}",
+              flush=True)
+    except (ConnectionRefusedError, ConnectionError, OSError, socket.timeout):
+        # No existing server — start our own
+        port = find_free_port()
+        print(f"{_BOLD}Starting{_RESET} repl.py "
+              f"{_DIM}(port={port}, session={args.session}){_RESET}",
+              flush=True)
+        print(f"  {_SYM_BUSY} loading heap", end="", flush=True)
+
+        cmd = [sys.executable, repl_py,
+             "--port", str(port),
+             "--isabelle", args.isabelle,
+             "--session", args.session]
+        if args.dir:
+            cmd += ["--dir", args.dir]
+        if args.server_only:
+            cmd.append("--server-only")
+
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
     t0 = time.time()
 
-    cmd = [sys.executable, repl_py,
-         "--port", str(port),
-         "--isabelle", args.isabelle,
-         "--session", args.session]
-    if args.dir:
-        cmd += ["--dir", args.dir]
-    if args.server_only:
-        cmd.append("--server-only")
-
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
-
     try:
-        try:
-            sock = connect(port, proc=proc)
-        except RuntimeError:
-            elapsed = time.time() - t0
-            print(f"{_CLEAR_LINE}  {_SYM_FAIL} server failed to start "
-                  f"{_DIM}({elapsed:.1f}s){_RESET}")
-            # Kill the process if still alive
-            if proc.poll() is None:
-                os.killpg(proc.pid, signal.SIGTERM)
-                try:
-                    proc.wait(timeout=10)
-                except Exception as e:
-                    print(f"    {_DIM}(could not stop server: {e}){_RESET}")
-            sys.exit(1)
+        if proc is not None:
+            try:
+                sock = connect(port, proc=proc)
+            except RuntimeError:
+                elapsed = time.time() - t0
+                print(f"{_CLEAR_LINE}  {_SYM_FAIL} server failed to start "
+                      f"{_DIM}({elapsed:.1f}s){_RESET}")
+                if proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGTERM)
+                    try:
+                        proc.wait(timeout=10)
+                    except Exception as e:
+                        print(f"    {_DIM}(could not stop server: {e}){_RESET}")
+                sys.exit(1)
 
-        elapsed = time.time() - t0
-        print(f"{_CLEAR_LINE}  {_SYM_OK} connected "
-              f"{_DIM}({elapsed:.1f}s){_RESET}")
+            elapsed = time.time() - t0
+            print(f"{_CLEAR_LINE}  {_SYM_OK} connected "
+                  f"{_DIM}({elapsed:.1f}s){_RESET}")
+        else:
+            sock = connect(port)
 
         # -- Single-client tests --
         print(f"\n{_BOLD}Running{_RESET} single-client tests")
@@ -527,7 +553,7 @@ def main():
             run_test(t.__name__, t)
 
     finally:
-        if proc.poll() is None:
+        if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)
             try:
                 proc.wait(timeout=10)
