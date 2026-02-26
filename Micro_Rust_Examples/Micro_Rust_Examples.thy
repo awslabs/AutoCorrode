@@ -6,6 +6,7 @@ theory Micro_Rust_Examples
     Basic_Micro_Rust
     Common_Pitfalls
     Crush_Examples
+    Fibonacci_Iterative
     Pullback_Example
     Linked_List
     Linked_List_Executable_Heap
