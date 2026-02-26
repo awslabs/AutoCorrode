@@ -245,6 +245,22 @@ definition c_signed_neq :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
     ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_signed_neq a b \<equiv> literal (a \<noteq> b)\<close>
 
+section \<open>C truthiness conversion\<close>
+
+text \<open>
+  In C, scalar conditions are interpreted as booleans via comparison against zero.
+  These helpers model the implicit conversion used by conditionals and logical
+  operators.
+\<close>
+
+definition c_signed_truthy :: \<open>'l::{len} sword \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_truthy a \<equiv> literal (a \<noteq> 0)\<close>
+
+definition c_unsigned_truthy :: \<open>'l::{len} word \<Rightarrow>
+    ('s, bool, 'r, 'abort, 'i, 'o) expression\<close> where
+  \<open>c_unsigned_truthy a \<equiv> literal (a \<noteq> 0)\<close>
+
 section \<open>C type cast operations\<close>
 
 definition c_ucast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where

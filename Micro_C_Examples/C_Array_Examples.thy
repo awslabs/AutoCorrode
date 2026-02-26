@@ -66,6 +66,16 @@ proof -
     by (simp add: list_copy_prefix_def)
 qed
 
+
+lemma sint_word_of_nat_Suc_ge_zero:
+  assumes \<open>i < n\<close>
+      and \<open>n < 2147483648\<close>
+    shows \<open>sint (1 + word_of_nat i :: 32 sword) \<ge> 0\<close>
+  apply (simp only: add.commute[of 1] word_succ_p1[symmetric] Abs_fnat_hom_Suc)
+  apply (rule More_Word.sint_of_nat_ge_zero)
+  using assms apply simp
+  done
+
 context c_verification_ctx begin
 
 subsection \<open>C Array Functions\<close>
@@ -97,7 +107,7 @@ text \<open>
 definition c_read_at_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow>
      'gv \<Rightarrow> c_int list \<Rightarrow> ('s, c_int, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_read_at_contract arr idx g vs \<equiv>
-    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
+    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star> \<langle>\<not> (sint idx < 0)\<rangle> \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
         post = \<lambda>r. arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star> \<langle>r = vs ! (c_idx_to_nat idx)\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_read_at_contract
@@ -114,8 +124,8 @@ text \<open>
 \<close>
 
 micro_c_translate \<open>
-  void array_fill(int *arr, int val, int n) {
-    for (int i = 0; i < n; i++) {
+  void array_fill(int *arr, int val, unsigned int n) {
+    for (unsigned int i = 0; i < n; i++) {
       arr[i] = val;
     }
   }
@@ -123,11 +133,12 @@ micro_c_translate \<open>
 
 thm c_array_fill_def
 
-definition c_array_fill_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow> c_int \<Rightarrow>
+definition c_array_fill_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow> c_uint \<Rightarrow>
      'gv \<Rightarrow> c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_array_fill_contract arr val n g vs \<equiv>
     let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star>
                \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
+               \<langle>c_idx_to_nat n < 2147483648\<rangle> \<star>
                can_alloc_reference;
         post = \<lambda>_. (\<Squnion>g'. arr \<mapsto>\<langle>\<top>\<rangle> g'\<down>(list_fill_prefix (c_idx_to_nat n) val vs)) \<star>
                can_alloc_reference
@@ -135,16 +146,18 @@ definition c_array_fill_contract :: \<open>('addr, 'gv, c_int list) Global_Store
 ucincl_auto c_array_fill_contract
 
 lemma c_array_fill_spec:
-  shows \<open>\<Gamma>; c_array_fill TYPE(32 signed) arr val n \<Turnstile>\<^sub>F c_array_fill_contract arr val n g vs\<close>
+  shows \<open>\<Gamma>; c_array_fill arr val n \<Turnstile>\<^sub>F c_array_fill_contract arr val n g vs\<close>
   apply (crush_boot f: c_array_fill_def contract: c_array_fill_contract_def)
   apply crush_base
   apply (ucincl_discharge\<open>
       rule_tac
-        INV=\<open>\<lambda>_ i. \<Squnion> g. arr \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_fill_prefix i val vs)\<close>
+        INV=\<open>\<lambda>_ i. (\<Squnion> g. arr \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_fill_prefix i val vs))
+                  \<star> \<langle>\<not> sint (word_of_nat i :: c_int) < 0\<rangle>\<close>
         and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_raw_for_loop_framedI'\<close>)
-  using unat_lt2p[of n] apply (crush_base simp add: list_fill_prefix_step unat_of_nat_eq)
+  using unat_lt2p[of n] apply (crush_base simp add: list_fill_prefix_step unat_of_nat_eq More_Word.sint_of_nat_ge_zero)
+  apply (metis sint_word_of_nat_Suc_ge_zero not_le)
   done
 
 subsection \<open>Array Copy (memcpy-style)\<close>
@@ -155,8 +168,8 @@ text \<open>
 \<close>
 
 micro_c_translate \<open>
-  void array_copy(int *dst, int *src, int n) {
-    for (int i = 0; i < n; i++) {
+  void array_copy(int *dst, int *src, unsigned int n) {
+    for (unsigned int i = 0; i < n; i++) {
       dst[i] = src[i];
     }
   }
@@ -165,12 +178,13 @@ micro_c_translate \<open>
 thm c_array_copy_def
 
 definition c_array_copy_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow>
-      ('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow> 'gv \<Rightarrow> c_int list \<Rightarrow> 'gv \<Rightarrow>
+      ('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_uint \<Rightarrow> 'gv \<Rightarrow> c_int list \<Rightarrow> 'gv \<Rightarrow>
       c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_array_copy_contract dst src n gd vd gs vs \<equiv>
     let pre  = dst \<mapsto>\<langle>\<top>\<rangle> gd\<down>vd \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
                \<langle>c_idx_to_nat n \<le> length vd\<rangle> \<star>
                \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
+               \<langle>c_idx_to_nat n < 2147483648\<rangle> \<star>
                can_alloc_reference;
         post = \<lambda>_. (\<Squnion> g'. dst \<mapsto>\<langle>\<top>\<rangle> g'\<down>(list_copy_prefix (c_idx_to_nat n) vs vd)) \<star>
                src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
@@ -179,16 +193,18 @@ definition c_array_copy_contract :: \<open>('addr, 'gv, c_int list) Global_Store
 ucincl_auto c_array_copy_contract
 
 lemma c_array_copy_spec:
-  shows \<open>\<Gamma>; c_array_copy TYPE(32 signed) dst src n \<Turnstile>\<^sub>F c_array_copy_contract dst src n gd vd gs vs\<close>
+  shows \<open>\<Gamma>; c_array_copy dst src n \<Turnstile>\<^sub>F c_array_copy_contract dst src n gd vd gs vs\<close>
   apply (crush_boot f: c_array_copy_def contract: c_array_copy_contract_def)
   apply crush_base
   apply (ucincl_discharge\<open>
       rule_tac
-        INV=\<open>\<lambda>_ i. (\<Squnion> g. dst \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_copy_prefix i vs vd)) \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs\<close>
+        INV=\<open>\<lambda>_ i. ((\<Squnion> g. dst \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_copy_prefix i vs vd)) \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs)
+                  \<star> \<langle>\<not> sint (word_of_nat i :: c_int) < 0\<rangle>\<close>
         and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
         and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_raw_for_loop_framedI'\<close>)
-  using unat_lt2p[of n] apply (crush_base simp add: list_copy_prefix_step unat_of_nat_eq)
+  using unat_lt2p[of n] apply (crush_base simp add: list_copy_prefix_step unat_of_nat_eq More_Word.sint_of_nat_ge_zero)
+  apply (metis sint_word_of_nat_Suc_ge_zero not_le)
   done
 
 end

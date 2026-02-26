@@ -317,6 +317,34 @@ lemma wp_c_unsigned_neqI [micro_rust_wp_intros]:
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_neq a b) \<psi> \<rho> \<theta>\<close>
 using assms by (simp add: c_unsigned_neq_def wp_literalI asepconj_simp)
 
+subsection \<open>C Truthiness\<close>
+
+lemma wp_c_signed_truthy [micro_rust_wp_simps]:
+    fixes a :: \<open>'l::{len} sword\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+    shows \<open>\<W>\<P> \<Gamma> (c_signed_truthy a) \<psi> \<rho> \<theta> = \<psi> (a \<noteq> 0)\<close>
+using assms by (simp add: c_signed_truthy_def micro_rust_wp_simps)
+
+lemma wp_c_signed_truthyI [micro_rust_wp_intros]:
+    fixes a :: \<open>'l::{len} sword\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi> (a \<noteq> 0)\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_truthy a) \<psi> \<rho> \<theta>\<close>
+using assms by (simp add: c_signed_truthy_def wp_literalI asepconj_simp)
+
+lemma wp_c_unsigned_truthy [micro_rust_wp_simps]:
+    fixes a :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+    shows \<open>\<W>\<P> \<Gamma> (c_unsigned_truthy a) \<psi> \<rho> \<theta> = \<psi> (a \<noteq> 0)\<close>
+using assms by (simp add: c_unsigned_truthy_def micro_rust_wp_simps)
+
+lemma wp_c_unsigned_truthyI [micro_rust_wp_intros]:
+    fixes a :: \<open>'l::{len} word\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi> (a \<noteq> 0)\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_unsigned_truthy a) \<psi> \<rho> \<theta>\<close>
+using assms by (simp add: c_unsigned_truthy_def wp_literalI asepconj_simp)
+
 subsection \<open>Signed bitwise operations\<close>
 
 lemma wp_c_signed_and [micro_rust_wp_simps]:
@@ -716,4 +744,3 @@ proof -
 qed
 
 end
-

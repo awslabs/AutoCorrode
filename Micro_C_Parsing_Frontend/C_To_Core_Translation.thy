@@ -706,6 +706,7 @@ text \<open>
 consts c_while_stub :: "('s, 'v, 'r, 'abort, 'i, 'o) expression"
 consts c_goto_stub :: "('s, 'v, 'r, 'abort, 'i, 'o) expression"
 consts c_unsupported :: "('s, 'v, 'r, 'abort, 'i, 'o) expression"
+consts c_uninitialized :: "'a"
 
 subsection \<open>Term Construction\<close>
 
@@ -953,11 +954,10 @@ struct
         val (name, _) = Name.variant stem (Name.make_context used)
     in Isa_Free (name, typ) end
 
-  (* Binary operator classification: monadic operators (arithmetic/comparison)
-     return expressions and need bind2; pure operators (logical) return plain
-     values and use bindlift2.
+  (* Binary operator classification: arithmetic/comparison/bitwise operators are
+     monadic and compose via bind2.
      NB: Must be defined before 'open C_Ast' which shadows the term type. *)
-  datatype binop_kind = Monadic of term | Pure of term
+  datatype binop_kind = Monadic of term
 
   (* C11 implicit integer promotion cast.
      Inserts c_scast or c_ucast when from_cty <> to_cty.
@@ -966,6 +966,23 @@ struct
      Must be defined before 'open C_Ast' to use Const/Free/dummyT. *)
   fun mk_implicit_cast (tm, from_cty, to_cty) =
     if from_cty = to_cty then tm
+    else if C_Ast_Utils.is_bool to_cty then
+      (* scalar -> _Bool : compare against zero *)
+      if C_Ast_Utils.is_ptr from_cty then
+        error "micro_c_translate: pointer-to-_Bool conversion not supported"
+      else
+        let val from_ty = if C_Ast_Utils.is_bool from_cty
+                          then @{typ bool}
+                          else C_Ast_Utils.hol_type_of from_cty
+            val v = Isa_Free ("v__promo", from_ty)
+            val truthy_expr =
+              if C_Ast_Utils.is_bool from_cty then
+                C_Term_Build.mk_literal v
+              else if C_Ast_Utils.is_signed from_cty then
+                Const (\<^const_name>\<open>c_signed_truthy\<close>, isa_dummyT) $ v
+              else
+                Const (\<^const_name>\<open>c_unsigned_truthy\<close>, isa_dummyT) $ v
+        in C_Term_Build.mk_bind tm (Term.lambda v truthy_expr) end
     else if C_Ast_Utils.is_bool from_cty then
       (* Bool \<rightarrow> integer: if b then 1 else 0 *)
       let val v = Isa_Free ("v__promo", @{typ bool})
@@ -974,6 +991,8 @@ struct
       in C_Term_Build.mk_bind tm
            (Term.lambda v (C_Term_Build.mk_two_armed_cond
               (C_Term_Build.mk_literal v) one zero)) end
+    else if C_Ast_Utils.is_ptr from_cty orelse C_Ast_Utils.is_ptr to_cty then
+      error "micro_c_translate: pointer cast not supported"
     else let val cast_const =
                if C_Ast_Utils.is_signed from_cty
                then Const (\<^const_name>\<open>c_scast\<close>, isa_dummyT)
@@ -996,9 +1015,8 @@ struct
 
   (* Translate a C binary operator to a HOL function constant, dispatching
      signed vs unsigned based on the operand type.
-     Arithmetic and comparison operations use the overflow-checked C operations
-     from C_Numeric_Types which are monadic (they can abort).
-     Logical operators remain pure and type-independent. *)
+     Arithmetic, comparison and bitwise operations use the overflow-checked
+     C operations from C_Numeric_Types which are monadic (they can abort). *)
   fun translate_binop cty CAddOp0 =
         if C_Ast_Utils.is_signed cty
         then Monadic (Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT))
@@ -1043,8 +1061,6 @@ struct
         if C_Ast_Utils.is_signed cty
         then Monadic (Isa_Const (\<^const_name>\<open>c_signed_neq\<close>, isa_dummyT))
         else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_neq\<close>, isa_dummyT))
-    | translate_binop _ CLndOp0 = Pure (Isa_Const (\<^const_name>\<open>conj\<close>, isa_dummyT))
-    | translate_binop _ CLorOp0 = Pure (Isa_Const (\<^const_name>\<open>disj\<close>, isa_dummyT))
     | translate_binop cty CAndOp0 = (* bitwise AND *)
         if C_Ast_Utils.is_signed cty
         then Monadic (Isa_Const (\<^const_name>\<open>c_signed_and\<close>, isa_dummyT))
@@ -1065,7 +1081,7 @@ struct
         if C_Ast_Utils.is_signed cty
         then Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr\<close>, isa_dummyT))
         else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shr\<close>, isa_dummyT))
-    | translate_binop _ _ = unsupported "binary operator"
+    | translate_binop _ _ = unsupported "unsupported binary operator"
 
   (* Determine the C struct type of a variable expression.
      Handles simple variable references and chained member access (p->vec[i].coeffs). *)
@@ -1207,13 +1223,25 @@ struct
         end
     | case_label_value _ _ _ = error "micro_c_translate: unsupported case label expression"
 
-  (* Build condition for a case group: switch_var = label1 OR ... OR labelN *)
-  fun make_switch_cond switch_var switch_cty tctx labels =
+  (* Build condition for a case group: switch_var = label1 OR ... OR labelN.
+     Default labels map to default_cond, which should be ~(any explicit case matched). *)
+  fun make_switch_cond switch_var switch_cty tctx default_cond labels =
     let fun one_label (SOME e) =
               HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e)
-          | one_label NONE =
-              Isa_Const (\<^const_name>\<open>HOL.True\<close>, @{typ bool})
-        fun combine [] = Isa_Const (\<^const_name>\<open>HOL.True\<close>, @{typ bool})
+          | one_label NONE = default_cond
+        fun combine [] = Isa_Const (\<^const_name>\<open>HOL.False\<close>, @{typ bool})
+          | combine [c] = c
+          | combine (c :: cs) =
+              Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
+                @{typ bool} --> @{typ bool} --> @{typ bool}) $ c $ (combine cs)
+    in combine (List.map one_label labels) end
+
+  (* Build a condition that says whether switch_var matches any explicit case label. *)
+  fun make_any_case_match switch_var switch_cty tctx groups =
+    let val labels = List.concat (List.map #labels groups)
+                    |> List.mapPartial I
+        fun one_label e = HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e)
+        fun combine [] = Isa_Const (\<^const_name>\<open>HOL.False\<close>, @{typ bool})
           | combine [c] = c
           | combine (c :: cs) =
               Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
@@ -1270,62 +1298,94 @@ struct
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
         let val (lhs', lhs_cty) = translate_expr tctx lhs
             val (rhs', rhs_cty) = translate_expr tctx rhs
+            fun to_bool (tm, cty) = mk_implicit_cast (tm, cty, C_Ast_Utils.CBool)
+            fun mk_ptr_add ptr_term idx_term idx_cty elem_cty =
+              let val p_var = Isa_Free ("v__ptr", isa_dummyT)
+                  val i_var = Isa_Free ("v__idx", isa_dummyT)
+                  val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+                  val idx_p_term = mk_implicit_cast (idx_term, idx_cty, idx_p_cty)
+                  val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) p_var
+                  val focused_lit = C_Term_Build.mk_literal focused
+                  val guarded =
+                    if C_Ast_Utils.is_signed idx_p_cty then
+                      let val lt_zero =
+                            C_Term_Build.mk_bind2
+                              (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+                              (C_Term_Build.mk_literal i_var)
+                              (C_Term_Build.mk_literal_num idx_p_cty 0)
+                      in C_Term_Build.mk_two_armed_cond lt_zero
+                           C_Term_Build.mk_unsupported_stub focused_lit
+                      end
+                    else focused_lit
+              in (C_Term_Build.mk_bind ptr_term (Term.lambda p_var
+                    (C_Term_Build.mk_bind idx_p_term (Term.lambda i_var guarded))),
+                  C_Ast_Utils.CPtr elem_cty)
+              end
         in
-        (* Pointer arithmetic: p + n or n + p via focus_nth *)
-        case (binop, lhs_cty, rhs_cty) of
-          (CAddOp0, C_Ast_Utils.CPtr elem_cty, _) =>
-            let val p_var = Isa_Free ("v__ptr", isa_dummyT)
-                val i_var = Isa_Free ("v__idx", isa_dummyT)
-                val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) p_var
-            in (C_Term_Build.mk_bind lhs' (Term.lambda p_var
-                  (C_Term_Build.mk_bind rhs' (Term.lambda i_var
-                    (C_Term_Build.mk_literal focused)))),
-                C_Ast_Utils.CPtr elem_cty) end
-        | (CAddOp0, _, C_Ast_Utils.CPtr elem_cty) =>
-            (* n + p = p + n *)
-            let val p_var = Isa_Free ("v__ptr", isa_dummyT)
-                val i_var = Isa_Free ("v__idx", isa_dummyT)
-                val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) p_var
-            in (C_Term_Build.mk_bind rhs' (Term.lambda p_var
-                  (C_Term_Build.mk_bind lhs' (Term.lambda i_var
-                    (C_Term_Build.mk_literal focused)))),
-                C_Ast_Utils.CPtr elem_cty) end
-        | (CSubOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-            unsupported "pointer subtraction"
+        case binop of
+          (* C logical operators short-circuit and return _Bool *)
+          CLndOp0 =>
+            let val lhs_bool = to_bool (lhs', lhs_cty)
+                val rhs_bool = to_bool (rhs', rhs_cty)
+                val v = Isa_Free ("v__lhsb", @{typ bool})
+            in (C_Term_Build.mk_bind lhs_bool (Term.lambda v
+                  (C_Term_Build.mk_two_armed_cond
+                    (C_Term_Build.mk_literal v)
+                    rhs_bool
+                    (C_Term_Build.mk_literal (Isa_Const (\<^const_name>\<open>HOL.False\<close>, @{typ bool}))))),
+                C_Ast_Utils.CBool)
+            end
+        | CLorOp0 =>
+            let val lhs_bool = to_bool (lhs', lhs_cty)
+                val rhs_bool = to_bool (rhs', rhs_cty)
+                val v = Isa_Free ("v__lhsb", @{typ bool})
+            in (C_Term_Build.mk_bind lhs_bool (Term.lambda v
+                  (C_Term_Build.mk_two_armed_cond
+                    (C_Term_Build.mk_literal v)
+                    (C_Term_Build.mk_literal (Isa_Const (\<^const_name>\<open>HOL.True\<close>, @{typ bool})))
+                    rhs_bool)),
+                C_Ast_Utils.CBool)
+            end
         | _ =>
-        let
-            (* C11 integer promotion and usual arithmetic conversions.
-               Shifts: each operand independently promoted, result = promoted LHS.
-               Other ops: usual_arith_conv determines common type. *)
-            val is_shift = case binop of CShlOp0 => true | CShrOp0 => true | _ => false
-            val (cty, lhs_p, rhs_p) =
-              if is_shift then
-                let val lp_cty = C_Ast_Utils.integer_promote lhs_cty
-                    (* Shift RHS: independently promoted per C11, but our Isabelle
-                       shift ops require both operands to have the same type.
-                       Cast RHS to match the promoted LHS type. *)
-                in (lp_cty,
-                    mk_implicit_cast (lhs', lhs_cty, lp_cty),
-                    mk_implicit_cast (rhs', rhs_cty, lp_cty)) end
-              else
-                let val conv_cty = C_Ast_Utils.usual_arith_conv (lhs_cty, rhs_cty)
-                in (conv_cty,
-                    mk_implicit_cast (lhs', lhs_cty, conv_cty),
-                    mk_implicit_cast (rhs', rhs_cty, conv_cty)) end
-            (* For > and >=, swap operands to use < and <= *)
-            val (l, r) = case binop of CGrOp0 => (rhs_p, lhs_p)
-                                     | CGeqOp0 => (rhs_p, lhs_p)
-                                     | _ => (lhs_p, rhs_p)
-            (* Comparisons return CBool — they produce Isabelle bool values *)
-            val result_cty = case binop of
-                CLeOp0 => C_Ast_Utils.CBool | CLeqOp0 => C_Ast_Utils.CBool
-              | CGrOp0 => C_Ast_Utils.CBool | CGeqOp0 => C_Ast_Utils.CBool
-              | CEqOp0 => C_Ast_Utils.CBool | CNeqOp0 => C_Ast_Utils.CBool
-              | _ => cty
-        in case translate_binop cty binop of
-             Monadic f => (C_Term_Build.mk_bind2 f l r, result_cty)
-           | Pure f => (C_Term_Build.mk_bindlift2 f l r, result_cty)
-        end
+            (* Pointer arithmetic: p + n or n + p via focus_nth *)
+            (case (binop, lhs_cty, rhs_cty) of
+              (CAddOp0, C_Ast_Utils.CPtr elem_cty, _) =>
+                mk_ptr_add lhs' rhs' rhs_cty elem_cty
+            | (CAddOp0, _, C_Ast_Utils.CPtr elem_cty) =>
+                (* n + p = p + n *)
+                mk_ptr_add rhs' lhs' lhs_cty elem_cty
+            | (CSubOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
+                unsupported "pointer subtraction"
+            | _ =>
+                let
+                  (* C11 integer promotion and usual arithmetic conversions.
+                     Shifts: each operand independently promoted, result = promoted LHS.
+                     Other ops: usual_arith_conv determines common type. *)
+                  val is_shift = case binop of CShlOp0 => true | CShrOp0 => true | _ => false
+                  val (cty, lhs_p, rhs_p) =
+                    if is_shift then
+                      let val lp_cty = C_Ast_Utils.integer_promote lhs_cty
+                      in (lp_cty,
+                          mk_implicit_cast (lhs', lhs_cty, lp_cty),
+                          mk_implicit_cast (rhs', rhs_cty, lp_cty)) end
+                    else
+                      let val conv_cty = C_Ast_Utils.usual_arith_conv (lhs_cty, rhs_cty)
+                      in (conv_cty,
+                          mk_implicit_cast (lhs', lhs_cty, conv_cty),
+                          mk_implicit_cast (rhs', rhs_cty, conv_cty)) end
+                  (* For > and >=, swap operands to use < and <= *)
+                  val (l, r) = case binop of CGrOp0 => (rhs_p, lhs_p)
+                                           | CGeqOp0 => (rhs_p, lhs_p)
+                                           | _ => (lhs_p, rhs_p)
+                  (* Comparisons return CBool — they produce Isabelle bool values *)
+                  val result_cty = case binop of
+                      CLeOp0 => C_Ast_Utils.CBool | CLeqOp0 => C_Ast_Utils.CBool
+                    | CGrOp0 => C_Ast_Utils.CBool | CGeqOp0 => C_Ast_Utils.CBool
+                    | CEqOp0 => C_Ast_Utils.CBool | CNeqOp0 => C_Ast_Utils.CBool
+                    | _ => cty
+                in case translate_binop cty binop of
+                     Monadic f => (C_Term_Build.mk_bind2 f l r, result_cty)
+                end)
         end
     (* p->field = rhs : struct field write through pointer *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, true, _), rhs, _)) =
@@ -1335,10 +1395,11 @@ struct
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val updater_const = resolve_const ctxt updater_name
             val (ptr_expr, _) = translate_expr tctx expr
-            val (rhs', _) = translate_expr tctx rhs
             val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                               SOME cty => cty | NONE => C_Ast_Utils.CInt
-        in (C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs', field_cty) end
+            val (rhs', rhs_cty) = translate_expr tctx rhs
+            val rhs_cast = mk_implicit_cast (rhs', rhs_cty, field_cty)
+        in (C_Term_Build.mk_struct_field_write updater_const ptr_expr rhs_cast, field_cty) end
     (* p->field op= rhs : compound struct field write through pointer *)
     | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, true, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
@@ -1351,7 +1412,7 @@ struct
                  val accessor_const = resolve_const ctxt accessor_name
                  val updater_const = resolve_const ctxt updater_name
                  val (ptr_term, _) = translate_expr tctx expr
-                 val (rhs_term, _) = translate_expr tctx rhs
+                 val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
                  val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
                  val struct_var = Isa_Free ("v__struct", isa_dummyT)
                  val new_var = Isa_Free ("v__new", isa_dummyT)
@@ -1361,6 +1422,7 @@ struct
                        $ struct_var
                  val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                    SOME cty => cty | NONE => C_Ast_Utils.CInt
+                 val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, field_cty)
              in case translate_binop field_cty binop of
                   Monadic f =>
                     (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
@@ -1396,8 +1458,10 @@ struct
               handle ERROR _ =>
                 Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
             val (ptr_expr, _) = translate_expr tctx expr
-            val (idx_term, _) = translate_expr tctx idx_expr
-            val (rhs_term, _) = translate_expr tctx rhs
+            val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+            val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+            val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
+            val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
             val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
             val struct_var = Isa_Free ("v__struct", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
@@ -1416,39 +1480,74 @@ struct
                      $ deref_const)
             val field_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                               SOME (C_Ast_Utils.CPtr inner) => inner | _ => C_Ast_Utils.CInt
-        in (C_Term_Build.mk_bind rhs_term (Term.lambda v_var
-             (C_Term_Build.mk_bind ptr_expr (Term.lambda ptr_var
-               (C_Term_Build.mk_bind deref_expr
-                 (Term.lambda struct_var
-                   (C_Term_Build.mk_bind idx_term (Term.lambda i_var
-                     (C_Term_Build.mk_ptr_write
-                       (C_Term_Build.mk_literal ptr_var)
-                       (C_Term_Build.mk_literal new_struct))))))))),
+            val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, field_cty)
+            val write_term =
+              C_Term_Build.mk_ptr_write
+                (C_Term_Build.mk_literal ptr_var)
+                (C_Term_Build.mk_literal new_struct)
+            val write_term =
+              if C_Ast_Utils.is_signed idx_p_cty then
+                let val lt_zero =
+                      C_Term_Build.mk_bind2
+                        (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+                        (C_Term_Build.mk_literal i_var)
+                        (C_Term_Build.mk_literal_num idx_p_cty 0)
+                in C_Term_Build.mk_two_armed_cond lt_zero
+                     C_Term_Build.mk_unsupported_stub write_term
+                end
+              else write_term
+        in (C_Term_Build.mk_bind rhs_term
+              (Term.lambda v_var
+                (C_Term_Build.mk_bind ptr_expr
+                  (Term.lambda ptr_var
+                    (C_Term_Build.mk_bind deref_expr
+                      (Term.lambda struct_var
+                        (C_Term_Build.mk_bind idx_term
+                          (Term.lambda i_var write_term))))))),
             field_cty)
         end
     (* arr[idx] = rhs : array element write via focus *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
-        let val (arr_term, _) = translate_expr tctx arr_expr
-            val (idx_term, _) = translate_expr tctx idx_expr
-            val (rhs_term, _) = translate_expr tctx rhs
+        let val (arr_term, arr_cty) = translate_expr tctx arr_expr
+            val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+            val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+            val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
+            val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val v_var = Isa_Free ("v__rhs", isa_dummyT)
             val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
+            val elem_cty = case arr_cty of C_Ast_Utils.CPtr inner => inner | _ => C_Ast_Utils.CInt
+            val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, elem_cty)
+            val write_term =
+              C_Term_Build.mk_ptr_write
+                (C_Term_Build.mk_literal focused)
+                (C_Term_Build.mk_literal v_var)
+            val write_term =
+              if C_Ast_Utils.is_signed idx_p_cty then
+                let val lt_zero =
+                      C_Term_Build.mk_bind2
+                        (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+                        (C_Term_Build.mk_literal i_var)
+                        (C_Term_Build.mk_literal_num idx_p_cty 0)
+                in C_Term_Build.mk_two_armed_cond lt_zero
+                     C_Term_Build.mk_unsupported_stub write_term
+                end
+              else write_term
         in (C_Term_Build.mk_bind rhs_term (Term.lambda v_var
              (C_Term_Build.mk_bind arr_term (Term.lambda a_var
                (C_Term_Build.mk_bind idx_term (Term.lambda i_var
-                 (C_Term_Build.mk_ptr_write
-                   (C_Term_Build.mk_literal focused)
-                   (C_Term_Build.mk_literal v_var))))))), C_Ast_Utils.CInt)
+                 write_term))))), elem_cty)
         end
     (* arr[idx] op= rhs : compound array element write *)
     | translate_expr tctx (CAssign0 (asgn_op, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
            SOME binop =>
              let val (arr_term, arr_cty) = translate_expr tctx arr_expr
-                 val (idx_term, _) = translate_expr tctx idx_expr
-                 val (rhs_term, _) = translate_expr tctx rhs
+                 val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+                 val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+                 val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
+                 val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
                  val ctxt = C_Trans_Ctxt.get_ctxt tctx
                  val deref_const =
                    resolve_const ctxt "dereference_fun"
@@ -1473,7 +1572,24 @@ struct
                           $ deref_const)
                  val focused = C_Term_Build.mk_focus_nth
                                  (C_Term_Build.mk_unat i_var) a_var
-             in case translate_binop arr_cty binop of
+                 val elem_cty = case arr_cty of C_Ast_Utils.CPtr inner => inner | _ => C_Ast_Utils.CInt
+                 val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, elem_cty)
+                 val write_term =
+                   C_Term_Build.mk_ptr_write
+                     (C_Term_Build.mk_literal focused)
+                     (C_Term_Build.mk_literal new_var)
+                 val write_term =
+                   if C_Ast_Utils.is_signed idx_p_cty then
+                     let val lt_zero =
+                           C_Term_Build.mk_bind2
+                             (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+                             (C_Term_Build.mk_literal i_var)
+                             (C_Term_Build.mk_literal_num idx_p_cty 0)
+                     in C_Term_Build.mk_two_armed_cond lt_zero
+                          C_Term_Build.mk_unsupported_stub write_term
+                     end
+                   else write_term
+             in case translate_binop elem_cty binop of
                   Monadic f =>
                     (C_Term_Build.mk_bind arr_term (Term.lambda a_var
                       (C_Term_Build.mk_bind idx_term (Term.lambda i_var
@@ -1484,39 +1600,41 @@ struct
                               rhs_term)
                             (Term.lambda new_var
                               (C_Term_Build.mk_sequence
-                                (C_Term_Build.mk_ptr_write
-                                  (C_Term_Build.mk_literal focused)
-                                  (C_Term_Build.mk_literal new_var))
+                                write_term
                                 (C_Term_Build.mk_literal new_var))))))))),
-                     arr_cty)
+                     elem_cty)
                 | _ => unsupported "pure compound assignment on array element"
              end
          | NONE => unsupported "unsupported compound operator on array element")
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
-            val (rhs', _) = translate_expr tctx rhs
+            val (rhs', rhs_cty) = translate_expr tctx rhs
         in case C_Trans_Ctxt.lookup_var tctx name of
              SOME (C_Trans_Ctxt.Local, var, cty) =>
-               (C_Term_Build.mk_var_write var rhs', cty)
+               (C_Term_Build.mk_var_write var (mk_implicit_cast (rhs', rhs_cty, cty)), cty)
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                error ("micro_c_translate: assignment to parameter: " ^ name)
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
     | translate_expr tctx (CAssign0 (CAssignOp0, CUnary0 (CIndOp0, lhs, _), rhs, _)) =
         (* *p = v : write through pointer *)
-        let val (lhs', _) = translate_expr tctx lhs
-            val (rhs', _) = translate_expr tctx rhs
-        in (C_Term_Build.mk_ptr_write lhs' rhs', C_Ast_Utils.CInt) end
+        let val (lhs', lhs_cty) = translate_expr tctx lhs
+            val pointee_cty = case lhs_cty of C_Ast_Utils.CPtr inner => inner | _ => C_Ast_Utils.CInt
+            val (rhs', rhs_cty) = translate_expr tctx rhs
+            val rhs_cast = mk_implicit_cast (rhs', rhs_cty, pointee_cty)
+        in (C_Term_Build.mk_ptr_write lhs' rhs_cast, pointee_cty) end
     (* *p op= rhs : compound assignment through pointer dereference *)
     | translate_expr tctx (CAssign0 (asgn_op, CUnary0 (CIndOp0, ptr_expr, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
            SOME binop =>
              let val (ptr_term, cty) = translate_expr tctx ptr_expr
-                 val (rhs_term, _) = translate_expr tctx rhs
+                 val pointee_cty = case cty of C_Ast_Utils.CPtr inner => inner | _ => C_Ast_Utils.CInt
+                 val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
+                 val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, pointee_cty)
                  val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
                  val old_var = Isa_Free ("v__old", isa_dummyT)
                  val new_var = Isa_Free ("v__new", isa_dummyT)
-             in case translate_binop cty binop of
+             in case translate_binop pointee_cty binop of
                   Monadic f =>
                     (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
                       (C_Term_Build.mk_bind
@@ -1530,7 +1648,7 @@ struct
                                 (C_Term_Build.mk_ptr_write
                                   (C_Term_Build.mk_literal ptr_var)
                                   (C_Term_Build.mk_literal new_var))
-                                (C_Term_Build.mk_literal new_var))))))), cty)
+                                (C_Term_Build.mk_literal new_var))))))), pointee_cty)
                 | _ => unsupported "pure compound assignment on dereferenced pointer"
              end
          | NONE => unsupported "unsupported operator on dereferenced pointer")
@@ -1539,11 +1657,12 @@ struct
         (case compound_assign_to_binop asgn_op of
              SOME binop =>
                let val name = C_Ast_Utils.ident_name ident
-                   val (rhs', _) = translate_expr tctx rhs
+                   val (rhs_raw, rhs_cty) = translate_expr tctx rhs
                in case C_Trans_Ctxt.lookup_var tctx name of
                     SOME (C_Trans_Ctxt.Local, var, cty) =>
                       let val old_var = Isa_Free ("v__old", isa_dummyT)
                           val new_var = Isa_Free ("v__new", isa_dummyT)
+                          val rhs' = mk_implicit_cast (rhs_raw, rhs_cty, cty)
                       in case translate_binop cty binop of
                            Monadic f =>
                              (C_Term_Build.mk_bind (C_Term_Build.mk_var_read var)
@@ -1647,22 +1766,13 @@ struct
     | translate_expr tctx (CUnary0 (CNegOp0, expr, _)) =
         (* !x : logical NOT *)
         let val (expr', cty) = translate_expr tctx expr
-        in if C_Ast_Utils.is_bool cty then
-             (* Bool: bind expr (\<lambda>v. literal (Not v)) *)
-             let val v = Isa_Free ("v__neg", isa_dummyT)
-             in (C_Term_Build.mk_bind expr'
-                   (Term.lambda v
-                     (C_Term_Build.mk_literal
-                       (Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT) $ v))),
-                 C_Ast_Utils.CBool) end
-           else
-             (* Word: translate as x == 0 *)
-             let val zero = C_Term_Build.mk_literal_num cty 0
-                 val eq_const =
-                   if C_Ast_Utils.is_signed cty
-                   then Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT)
-                   else Isa_Const (\<^const_name>\<open>c_unsigned_eq\<close>, isa_dummyT)
-             in (C_Term_Build.mk_bind2 eq_const expr' zero, C_Ast_Utils.CBool) end
+            val b = mk_implicit_cast (expr', cty, C_Ast_Utils.CBool)
+            val v = Isa_Free ("v__neg", @{typ bool})
+        in (C_Term_Build.mk_bind b
+              (Term.lambda v
+                (C_Term_Build.mk_literal
+                  (Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool}) $ v))),
+            C_Ast_Utils.CBool)
         end
     | translate_expr _ (CUnary0 _) =
         unsupported "unary expression"
@@ -1680,7 +1790,9 @@ struct
               handle ERROR _ =>
                 Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
             val (ptr_expr, _) = translate_expr tctx expr
-            val (idx_term, _) = translate_expr tctx idx_expr
+            val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+            val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+            val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
             val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
             val struct_var = Isa_Free ("v__struct", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
@@ -1695,10 +1807,22 @@ struct
                      $ deref_const)
             val elem_cty = case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                              SOME (C_Ast_Utils.CPtr inner) => inner | _ => C_Ast_Utils.CInt
+            val value_term = C_Term_Build.mk_literal nth_term
+            val value_term =
+              if C_Ast_Utils.is_signed idx_p_cty then
+                let val lt_zero =
+                      C_Term_Build.mk_bind2
+                        (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+                        (C_Term_Build.mk_literal i_var)
+                        (C_Term_Build.mk_literal_num idx_p_cty 0)
+                in C_Term_Build.mk_two_armed_cond lt_zero
+                     C_Term_Build.mk_unsupported_stub value_term
+                end
+              else value_term
         in (C_Term_Build.mk_bind ptr_expr (Term.lambda ptr_var
              (C_Term_Build.mk_bind deref_expr (Term.lambda struct_var
                (C_Term_Build.mk_bind idx_term (Term.lambda i_var
-                 (C_Term_Build.mk_literal nth_term)))))), elem_cty)
+                 value_term))))), elem_cty)
         end
     (* arr[idx] : deref whole list, then index with nth.
        We resolve dereference_fun from the locale context instead of using
@@ -1706,7 +1830,9 @@ struct
        (dereference_fun vs ro_dereference_fun) for read-only references. *)
     | translate_expr tctx (CIndex0 (arr_expr, idx_expr, _)) =
         let val (arr_term, arr_cty) = translate_expr tctx arr_expr
-            val (idx_term, _) = translate_expr tctx idx_expr
+            val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+            val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+            val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             (* Resolve dereference_fun from locale context to avoid adhoc
                overloading ambiguity; fall back to store_dereference_const
@@ -1728,11 +1854,23 @@ struct
                 $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                      $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
                      $ deref_const)
+            val value_term = C_Term_Build.mk_literal nth_term
+            val value_term =
+              if C_Ast_Utils.is_signed idx_p_cty then
+                let val lt_zero =
+                      C_Term_Build.mk_bind2
+                        (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
+                        (C_Term_Build.mk_literal i_var)
+                        (C_Term_Build.mk_literal_num idx_p_cty 0)
+                in C_Term_Build.mk_two_armed_cond lt_zero
+                     C_Term_Build.mk_unsupported_stub value_term
+                end
+              else value_term
         in (C_Term_Build.mk_bind arr_term (Term.lambda a_var
              (C_Term_Build.mk_bind idx_term (Term.lambda i_var
                (C_Term_Build.mk_bind deref_expr
                  (Term.lambda list_var
-                   (C_Term_Build.mk_literal nth_term)))))),
+                   value_term))))),
             (case arr_cty of C_Ast_Utils.CPtr inner => inner | _ => C_Ast_Utils.CInt))
         end
     (* p->field : struct field read through pointer *)
@@ -1763,14 +1901,33 @@ struct
     | translate_expr tctx (CCond0 (cond, Some then_expr, else_expr, _)) =
         (* x ? y : z — ternary conditional *)
         let val (then', then_cty) = translate_expr tctx then_expr
-            val (else', _) = translate_expr tctx else_expr
-        in (C_Term_Build.mk_two_armed_cond (ensure_bool_cond tctx cond) then' else', then_cty) end
+            val (else', else_cty) = translate_expr tctx else_expr
+            val result_cty =
+              if then_cty = else_cty then then_cty
+              else if C_Ast_Utils.is_ptr then_cty orelse C_Ast_Utils.is_ptr else_cty
+              then unsupported "ternary with pointer operands"
+              else C_Ast_Utils.usual_arith_conv (then_cty, else_cty)
+            val then_cast = mk_implicit_cast (then', then_cty, result_cty)
+            val else_cast = mk_implicit_cast (else', else_cty, result_cty)
+        in (C_Term_Build.mk_two_armed_cond (ensure_bool_cond tctx cond) then_cast else_cast, result_cty) end
     | translate_expr tctx (CCond0 (cond, None, else_expr, _)) =
         (* GNU extension: x ?: y means x ? x : y *)
-        let val cond_bool = ensure_bool_cond tctx cond
-            val (else', _) = translate_expr tctx else_expr
-        in (C_Term_Build.mk_two_armed_cond cond_bool cond_bool else',
-            C_Ast_Utils.CBool) end
+        let val (cond_term, cond_cty) = translate_expr tctx cond
+            val (else', else_cty) = translate_expr tctx else_expr
+            val result_cty =
+              if cond_cty = else_cty then cond_cty
+              else if C_Ast_Utils.is_ptr cond_cty orelse C_Ast_Utils.is_ptr else_cty
+              then unsupported "GNU ?: with pointer operands"
+              else C_Ast_Utils.usual_arith_conv (cond_cty, else_cty)
+            val cond_v = Isa_Free ("v__condv", isa_dummyT)
+            val cond_bool = mk_implicit_cast (C_Term_Build.mk_literal cond_v, cond_cty, C_Ast_Utils.CBool)
+            val then_cast = mk_implicit_cast (C_Term_Build.mk_literal cond_v, cond_cty, result_cty)
+            val else_cast = mk_implicit_cast (else', else_cty, result_cty)
+        in (C_Term_Build.mk_bind cond_term
+              (Term.lambda cond_v
+                (C_Term_Build.mk_two_armed_cond cond_bool then_cast else_cast)),
+            result_cty)
+        end
     | translate_expr _ (CConst0 (CCharConst0 (CChar0 (c, _), _))) =
         (* Character literal — convert to ASCII ordinal *)
         (C_Term_Build.mk_literal_num C_Ast_Utils.CChar (IntInf.toInt (integer_of_char c)),
@@ -1793,15 +1950,7 @@ struct
                                     (case target_decl of CDecl0 (specs, _, _) => specs
                                                         | _ => []) of
                                SOME ct => ct | NONE => unsupported "cast to non-numeric type"
-        in if source_cty = target_cty
-           then (source_term, target_cty)
-           else let val cast_const =
-                      if C_Ast_Utils.is_signed source_cty
-                      then Isa_Const (\<^const_name>\<open>c_scast\<close>, isa_dummyT)
-                      else Isa_Const (\<^const_name>\<open>c_ucast\<close>, isa_dummyT)
-                    val v = Isa_Free ("v__cast", C_Ast_Utils.hol_type_of source_cty)
-                in (C_Term_Build.mk_bind source_term
-                      (Term.lambda v (cast_const $ v)), target_cty) end
+        in (mk_implicit_cast (source_term, source_cty, target_cty), target_cty)
         end
     (* sizeof(type) *)
     | translate_expr tctx (CSizeofType0 (decl, _)) =
@@ -1845,15 +1994,7 @@ struct
      bind expr (\<lambda>v. literal (v \<noteq> 0)). *)
   and ensure_bool_cond tctx cond_expr =
     let val (cond_term, cond_cty) = translate_expr tctx cond_expr
-    in if C_Ast_Utils.is_bool cond_cty then cond_term
-       else
-         let val v = Isa_Free ("v__cond", isa_dummyT)
-             val zero = Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT)
-             val neq_term = Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
-                            $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT) $ v $ zero)
-         in C_Term_Build.mk_bind cond_term
-              (Term.lambda v (C_Term_Build.mk_literal neq_term))
-         end
+    in mk_implicit_cast (cond_term, cond_cty, C_Ast_Utils.CBool)
     end
 
   (* Extract variable declarations as a list of (name, init_term, cty) triples.
@@ -1899,7 +2040,8 @@ struct
                   let val name = C_Ast_Utils.declr_name declr
                       val actual_cty = if is_pointer_declr declr
                                        then C_Ast_Utils.CPtr cty else cty
-                  in (name, C_Term_Build.mk_literal_num cty 0, actual_cty) end
+                      val uninit = Isa_Const (\<^const_name>\<open>c_uninitialized\<close>, isa_dummyT)
+                  in (name, C_Term_Build.mk_literal uninit, actual_cty) end
               | process_one _ = unsupported "complex declarator"
         in List.map process_one declarators end
     | translate_decl _ _ = unsupported "complex declaration"
@@ -2234,60 +2376,81 @@ struct
                           CCompound0 (_, items, _) => items
                         | _ => [CBlockStmt0 body]
             val groups = extract_switch_groups items
-            (* Clear break_ref for switch context: break inside switch exits the switch,
-               not any enclosing loop. Continue_ref is preserved for loops. *)
-            val tctx_sw = C_Trans_Ctxt.clear_break_ref tctx
-            val all_have_break = List.all #has_break groups
-                                 orelse List.length groups <= 1
             val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
             val true_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1
-        in if all_have_break then
-             (* Simple if-else chain: no fall-through *)
-             let fun build_chain [] = C_Term_Build.mk_literal_unit
-                   | build_chain ({labels, body, ...} :: rest) =
-                       let val body_term = translate_compound_items tctx_sw body
-                           val rest_term = build_chain rest
-                           val cond = C_Term_Build.mk_literal
-                                        (make_switch_cond switch_var switch_cty tctx labels)
-                       in C_Term_Build.mk_two_armed_cond cond body_term rest_term end
-             in C_Term_Build.mk_bind switch_term
-                  (Term.lambda switch_var (build_chain groups))
-             end
-           else
-             (* Fall-through: use matched_ref *)
-             let val matched_ref = fresh_var [switch_term] "v__matched" isa_dummyT
-                 val matched_var = Isa_Free ("v__m", isa_dummyT)
-                 val matched_nonzero =
-                   Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
-                   $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
-                      $ matched_var
-                      $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
-                 fun build_groups [] = C_Term_Build.mk_literal_unit
-                   | build_groups ({labels, body, has_break} :: rest) =
-                       let val body_term = translate_compound_items tctx_sw body
-                           val label_cond = make_switch_cond switch_var switch_cty tctx labels
-                           val full_cond =
-                             Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
-                               @{typ bool} --> @{typ bool} --> @{typ bool})
-                             $ matched_nonzero $ label_cond
-                           val group_action =
-                             C_Term_Build.mk_sequence body_term
-                               (if has_break
-                                then C_Term_Build.mk_var_write matched_ref false_lit
-                                else C_Term_Build.mk_var_write matched_ref true_lit)
-                           val group_term =
-                             C_Term_Build.mk_bind (C_Term_Build.mk_var_read matched_ref)
-                               (Term.lambda matched_var
-                                 (C_Term_Build.mk_two_armed_cond
-                                   (C_Term_Build.mk_literal full_cond)
-                                   group_action C_Term_Build.mk_literal_unit))
-                       in C_Term_Build.mk_sequence group_term (build_groups rest) end
-             in C_Term_Build.mk_bind switch_term
-                  (Term.lambda switch_var
-                    (C_Term_Build.mk_bind
-                      (C_Term_Build.mk_var_alloc false_lit)
-                      (Term.lambda matched_ref (build_groups groups))))
-             end
+            val switch_break_ref = fresh_var [switch_term] "v__switch_break" isa_dummyT
+            (* break inside switch exits this switch, not any enclosing loop *)
+            val tctx_sw = C_Trans_Ctxt.set_break_ref switch_break_ref
+                            (C_Trans_Ctxt.clear_break_ref tctx)
+            val all_have_break = List.all #has_break groups
+                                 orelse List.length groups <= 1
+            val any_case_match = make_any_case_match switch_var switch_cty tctx groups
+            val default_cond = Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool}) $ any_case_match
+            val brk = Isa_Free ("v__sw_break", isa_dummyT)
+            val break_nonzero =
+              Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
+              $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+                 $ brk
+                 $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+            fun guard_break inner =
+              C_Term_Build.mk_bind
+                (mk_resolved_var_read (C_Trans_Ctxt.get_ctxt tctx_sw) switch_break_ref)
+                (Term.lambda brk
+                  (C_Term_Build.mk_two_armed_cond
+                    (C_Term_Build.mk_literal break_nonzero)
+                    C_Term_Build.mk_literal_unit
+                    inner))
+        in C_Term_Build.mk_bind
+             (C_Term_Build.mk_var_alloc false_lit)
+             (Term.lambda switch_break_ref
+               (if all_have_break then
+                  (* Simple if-else chain: no fall-through *)
+                  let fun build_chain [] = C_Term_Build.mk_literal_unit
+                        | build_chain ({labels, body, ...} :: rest) =
+                            let val body_term = translate_compound_items tctx_sw body
+                                val rest_term = build_chain rest
+                                val cond = C_Term_Build.mk_literal
+                                             (make_switch_cond switch_var switch_cty tctx default_cond labels)
+                            in C_Term_Build.mk_two_armed_cond cond body_term rest_term end
+                  in C_Term_Build.mk_bind switch_term
+                       (Term.lambda switch_var (build_chain groups))
+                  end
+                else
+                  (* Fall-through: use matched_ref *)
+                  let val matched_ref = fresh_var [switch_term] "v__matched" isa_dummyT
+                      val matched_var = Isa_Free ("v__m", isa_dummyT)
+                      val matched_nonzero =
+                        Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
+                        $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+                           $ matched_var
+                           $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+                      fun build_groups [] = C_Term_Build.mk_literal_unit
+                        | build_groups ({labels, body, has_break} :: rest) =
+                            let val body_term = translate_compound_items tctx_sw body
+                                val label_cond =
+                                  make_switch_cond switch_var switch_cty tctx default_cond labels
+                                val full_cond =
+                                  Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
+                                    @{typ bool} --> @{typ bool} --> @{typ bool})
+                                  $ matched_nonzero $ label_cond
+                                val group_action =
+                                  C_Term_Build.mk_sequence body_term
+                                    (if has_break
+                                     then C_Term_Build.mk_var_write matched_ref false_lit
+                                     else C_Term_Build.mk_var_write matched_ref true_lit)
+                                val group_term =
+                                  C_Term_Build.mk_bind (C_Term_Build.mk_var_read matched_ref)
+                                    (Term.lambda matched_var
+                                      (C_Term_Build.mk_two_armed_cond
+                                        (C_Term_Build.mk_literal full_cond)
+                                        group_action C_Term_Build.mk_literal_unit))
+                            in guard_break (C_Term_Build.mk_sequence group_term (build_groups rest)) end
+                  in C_Term_Build.mk_bind switch_term
+                       (Term.lambda switch_var
+                         (C_Term_Build.mk_bind
+                           (C_Term_Build.mk_var_alloc false_lit)
+                           (Term.lambda matched_ref (build_groups groups))))
+                  end))
         end
     | translate_stmt tctx (CGoto0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
@@ -2481,8 +2644,16 @@ struct
         List.app (fn (name, _) =>
           writeln ("Registered typedef: " ^ name)) typedef_defs
       val fundefs = C_Ast_Utils.extract_fundefs tu
-      (* Shared mutable ref for tracking function return types across definitions *)
-      val func_ret_types = Unsynchronized.ref (Symtab.empty : C_Ast_Utils.c_numeric_type Symtab.table)
+      (* Pre-register all function return types so calls to later-defined
+         functions are translated with the correct result type. *)
+      fun fundef_signature (C_Ast.CFunDef0 (specs, declr, _, _, _)) =
+            let val fname = C_Ast_Utils.declr_name declr
+                val rty = (case C_Ast_Utils.resolve_c_type_full typedef_tab specs of
+                             SOME C_Ast_Utils.CVoid => C_Ast_Utils.CVoid
+                           | SOME t => t | NONE => C_Ast_Utils.CInt)
+            in (fname, rty) end
+      val func_ret_table = List.map fundef_signature fundefs |> Symtab.make
+      val func_ret_types = Unsynchronized.ref func_ret_table
     in
       (* Translate and define each function one at a time, so that later
          functions can reference earlier ones via Syntax.check_term. *)
