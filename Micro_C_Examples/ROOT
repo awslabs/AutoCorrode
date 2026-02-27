@@ -3,7 +3,6 @@ session Micro_C_Examples = HOL +
   sessions
     "HOL-Library"
     Micro_C_Parsing_Frontend
-    Micro_C_Interfaces
     Shallow_Micro_C
     Micro_Rust_Std_Lib
     Crush
@@ -13,5 +12,4 @@ session Micro_C_Examples = HOL +
     C_Array_Examples
     C_Bitwise_Examples
     C_While_Examples
-  theories [document=false]
-    Micro_C_Examples
+    Mlkem_Native_Examples

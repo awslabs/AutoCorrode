@@ -17,7 +17,6 @@ session AutoCorrode = HOL +
     "Micro_Rust_Std_Lib"
     "Micro_C_Parsing_Frontend"
     "Shallow_Micro_C"
-    "Micro_C_Interfaces"
     "Micro_C_Examples"
     "Misc"
     "Lenses_And_Other_Optics"

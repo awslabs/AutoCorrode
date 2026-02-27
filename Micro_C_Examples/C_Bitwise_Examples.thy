@@ -3,137 +3,137 @@ theory C_Bitwise_Examples
     Simple_C_Functions
 begin
 
-section ‹C Bitwise Operation Verification›
+section \<open>C Bitwise Operation Verification\<close>
 
-text ‹
+text \<open>
   This theory demonstrates verification of C bitwise and shift operations.
   Bitwise AND, OR, XOR, and NOT have no undefined behavior in C.
   Shifts abort when the shift amount is out of range, and signed shifts
   additionally detect negative-operand and overflow UB.
-›
+\<close>
 
-subsection ‹Unsigned bitwise smoke tests›
+subsection \<open>Unsigned bitwise smoke tests\<close>
 
 context c_uint_verification_ctx
 begin
 
-micro_c_translate ‹
+micro_c_translate \<open>
   unsigned int u_and(unsigned int a, unsigned int b) {
     return a & b;
   }
-›
+\<close>
 
 definition c_u_and_bw_contract ::
-    ‹c_uint ⇒ c_uint ⇒ ('s::{sepalg}, c_uint, 'b) function_contract› where
-  [crush_contracts]: ‹c_u_and_bw_contract a b ≡
-    let pre  = ⟨True⟩;
-        post = λr. ⟨r = a AND b⟩
-     in make_function_contract pre post›
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_and_bw_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a AND b\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_u_and_bw_contract
 
 lemma c_u_and_bw_spec [crush_specs]:
-  shows ‹Γ; c_u_and a b ⊨⇩F c_u_and_bw_contract a b›
+  shows \<open>\<Gamma>; c_u_and a b \<Turnstile>\<^sub>F c_u_and_bw_contract a b\<close>
 by (crush_boot f: c_u_and_def contract: c_u_and_bw_contract_def)
   (crush_base simp add: c_unsigned_and_def)
 
-micro_c_translate ‹
+micro_c_translate \<open>
   unsigned int u_not(unsigned int x) {
     return ~x;
   }
-›
+\<close>
 
-definition c_u_not_contract :: ‹c_uint ⇒ ('s::{sepalg}, c_uint, 'b) function_contract› where
-  [crush_contracts]: ‹c_u_not_contract x ≡
-    let pre  = ⟨True⟩;
-        post = λr. ⟨r = NOT x⟩
-     in make_function_contract pre post›
+definition c_u_not_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_not_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = NOT x\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_u_not_contract
 
 lemma c_u_not_spec [crush_specs]:
-  shows ‹Γ; c_u_not x ⊨⇩F c_u_not_contract x›
+  shows \<open>\<Gamma>; c_u_not x \<Turnstile>\<^sub>F c_u_not_contract x\<close>
 by (crush_boot f: c_u_not_def contract: c_u_not_contract_def)
   (crush_base simp add: c_unsigned_not_def)
 
-micro_c_translate ‹
+micro_c_translate \<open>
   unsigned int u_shl(unsigned int x, unsigned int n) {
     return x << n;
   }
-›
+\<close>
 
 definition c_u_shl_contract ::
-    ‹c_uint ⇒ c_uint ⇒ ('s::{sepalg}, c_uint, 'b) function_contract› where
-  [crush_contracts]: ‹c_u_shl_contract x n ≡
-    let pre  = ⟨unat n < 32⟩;
-        post = λr. ⟨r = push_bit (unat n) x⟩
-     in make_function_contract pre post›
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_shl_contract x n \<equiv>
+    let pre  = \<langle>unat n < 32\<rangle>;
+        post = \<lambda>r. \<langle>r = push_bit (unat n) x\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_u_shl_contract
 
 lemma c_u_shl_spec [crush_specs]:
-  shows ‹Γ; c_u_shl x n ⊨⇩F c_u_shl_contract x n›
+  shows \<open>\<Gamma>; c_u_shl x n \<Turnstile>\<^sub>F c_u_shl_contract x n\<close>
 by (crush_boot f: c_u_shl_def contract: c_u_shl_contract_def)
     (crush_base simp add: c_unsigned_shl_def)
 
-subsection ‹Interesting semantic examples›
+subsection \<open>Interesting semantic examples\<close>
 
-text ‹Mask low byte: result fits in a byte.›
+text \<open>Mask low byte: result fits in a byte.\<close>
 
-micro_c_translate ‹
+micro_c_translate \<open>
   unsigned int mask_low_byte(unsigned int x) {
     return x & 255;
   }
-›
+\<close>
 
-definition c_mask_low_byte_contract :: ‹c_uint ⇒ ('s::{sepalg}, c_uint, 'b) function_contract› where
-  [crush_contracts]: ‹c_mask_low_byte_contract x ≡
-    let pre  = ⟨True⟩;
-        post = λr. ⟨unat r < 256⟩
-     in make_function_contract pre post›
+definition c_mask_low_byte_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_mask_low_byte_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>unat r < 256\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_mask_low_byte_contract
 
 lemma c_mask_low_byte_spec [crush_specs]:
-  shows ‹Γ; c_mask_low_byte x ⊨⇩F c_mask_low_byte_contract x›
+  shows \<open>\<Gamma>; c_mask_low_byte x \<Turnstile>\<^sub>F c_mask_low_byte_contract x\<close>
 by (crush_boot f: c_mask_low_byte_def contract: c_mask_low_byte_contract_def)
     (crush_base simp add: c_unsigned_and_def intro!: word_unat_and_lt)
 
-text ‹Set bit: the bit at position n is set in the result.›
+text \<open>Set bit: the bit at position n is set in the result.\<close>
 
-micro_c_translate ‹
+micro_c_translate \<open>
   unsigned int set_bit(unsigned int x, unsigned int n) {
     return x | (1U << n);
   }
-›
+\<close>
 
-definition c_set_bit_contract :: ‹c_uint ⇒ c_uint ⇒ ('s::{sepalg}, c_uint, 'b) function_contract› where
-  [crush_contracts]: ‹c_set_bit_contract x n ≡
-    let pre  = ⟨unat n < 32⟩;
-        post = λr. ⟨bit r (unat n)⟩
-     in make_function_contract pre post›
+definition c_set_bit_contract :: \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_set_bit_contract x n \<equiv>
+    let pre  = \<langle>unat n < 32\<rangle>;
+        post = \<lambda>r. \<langle>bit r (unat n)\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_set_bit_contract
 
 lemma c_set_bit_spec [crush_specs]:
-  shows ‹Γ; c_set_bit x n ⊨⇩F c_set_bit_contract x n›
+  shows \<open>\<Gamma>; c_set_bit x n \<Turnstile>\<^sub>F c_set_bit_contract x n\<close>
   apply (crush_boot f: c_set_bit_def contract: c_set_bit_contract_def)
   apply (crush_base simp add: c_unsigned_or_def c_unsigned_shl_def bit_or_iff bit_push_bit_iff
     nth_w2p_same)
   done
 
-text ‹Clear bit: the bit at position n is cleared in the result.›
+text \<open>Clear bit: the bit at position n is cleared in the result.\<close>
 
-micro_c_translate ‹
+micro_c_translate \<open>
   unsigned int clear_bit(unsigned int x, unsigned int n) {
     return x & ~(1U << n);
   }
-›
+\<close>
 
-definition c_clear_bit_contract :: ‹c_uint ⇒ c_uint ⇒ ('s::{sepalg}, c_uint, 'b) function_contract› where
-  [crush_contracts]: ‹c_clear_bit_contract x n ≡
-    let pre  = ⟨unat n < 32⟩;
-        post = λr. ⟨¬ bit r (unat n)⟩
-     in make_function_contract pre post›
+definition c_clear_bit_contract :: \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_clear_bit_contract x n \<equiv>
+    let pre  = \<langle>unat n < 32\<rangle>;
+        post = \<lambda>r. \<langle>\<not> bit r (unat n)\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_clear_bit_contract
 
 lemma c_clear_bit_spec [crush_specs]:
-  shows ‹Γ; c_clear_bit x n ⊨⇩F c_clear_bit_contract x n›
+  shows \<open>\<Gamma>; c_clear_bit x n \<Turnstile>\<^sub>F c_clear_bit_contract x n\<close>
   apply (crush_boot f: c_clear_bit_def contract: c_clear_bit_contract_def)
   apply (crush_base simp add: c_unsigned_and_def c_unsigned_not_def c_unsigned_shl_def
       bit_and_iff bit_not_iff bit_push_bit_iff nth_w2p_same)
@@ -141,28 +141,28 @@ lemma c_clear_bit_spec [crush_specs]:
 
 end
 
-subsection ‹Signed bitwise›
+subsection \<open>Signed bitwise\<close>
 
 context c_verification_ctx
 begin
 
-text ‹Signed bitwise AND has no UB precondition.›
+text \<open>Signed bitwise AND has no UB precondition.\<close>
 
-micro_c_translate ‹
+micro_c_translate \<open>
   int s_and(int a, int b) {
     return a & b;
   }
-›
+\<close>
 
-definition c_s_and_contract :: ‹c_int ⇒ c_int ⇒ ('s::{sepalg}, c_int, 'b) function_contract› where
-  [crush_contracts]: ‹c_s_and_contract a b ≡
-    let pre  = ⟨True⟩;
-        post = λr. ⟨r = a AND b⟩
-     in make_function_contract pre post›
+definition c_s_and_contract :: \<open>c_int \<Rightarrow> c_int \<Rightarrow> ('s::{sepalg}, c_int, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_s_and_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a AND b\<rangle>
+     in make_function_contract pre post\<close>
 ucincl_auto c_s_and_contract
 
 lemma c_s_and_spec [crush_specs]:
-  shows ‹Γ; c_s_and a b ⊨⇩F c_s_and_contract a b›
+  shows \<open>\<Gamma>; c_s_and a b \<Turnstile>\<^sub>F c_s_and_contract a b\<close>
 by (crush_boot f: c_s_and_def contract: c_s_and_contract_def) (crush_base simp add: c_signed_and_def)
 
 end

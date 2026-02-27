@@ -5,7 +5,9 @@ theory C_Struct_Examples
     "Micro_Rust_Std_Lib.StdLib_All"
 begin
 
-micro_rust_record c_point
+datatype_record c_point =
+  c_point_x :: c_int
+  c_point_y :: c_int
 
 section \<open>C struct verification\<close>
 
@@ -54,16 +56,15 @@ definition c_swap_coords_contract :: \<open>('addr, 'gv, c_point) Global_Store.r
     let pre  = can_alloc_reference \<star>
                pref \<mapsto>\<langle>\<top>\<rangle> pg\<down>pval;
         post = \<lambda>_. can_alloc_reference \<star>
-               pref \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. make_c_point (c_point_y pval) (c_point_x pval)) \<sqdot> (pg\<down>pval)
+               pref \<mapsto>\<langle>\<top>\<rangle>
+                 (\<lambda>_. update_c_point_y (\<lambda>_. c_point_x pval)
+                         (update_c_point_x (\<lambda>_. c_point_y pval) pval)) \<sqdot> (pg\<down>pval)
      in make_function_contract pre post\<close>
 ucincl_auto c_swap_coords_contract
 
 lemma c_swap_coords_spec:
   shows \<open>\<Gamma>; c_swap_coords pref \<Turnstile>\<^sub>F c_swap_coords_contract pref pg pval\<close>
-  apply (crush_boot f: c_swap_coords_def contract: c_swap_coords_contract_def)
-  apply crush_base
-  apply (all \<open>cases pval; simp add: c_point_c_point_x_update_explicit c_point_c_point_y_update_explicit\<close>)
-  done
+by (crush_boot f: c_swap_coords_def contract: c_swap_coords_contract_def) crush_base
 
 end
 

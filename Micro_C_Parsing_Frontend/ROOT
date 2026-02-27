@@ -7,7 +7,11 @@ session Micro_C_Parsing_Frontend = HOL +
     Shallow_Micro_Rust
     Shallow_Micro_C
   theories
-    Micro_C_Syntax
     C_To_Core_Translation
   theories [document=false]
-    Micro_C_Parsing_Frontend
+    C_Parser_Smoke
+    C_Translation_Smoke_Core
+    C_Translation_Smoke_Control
+    C_Translation_Smoke_Memory
+    C_Translation_Smoke_Types
+    C_File_Load_Smoke

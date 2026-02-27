@@ -854,13 +854,4 @@ lemma c_read_byte_spec [crush_specs]:
 by (crush_boot f: c_read_byte_def contract: c_read_byte_contract_def) crush_base
 
 end
-
-section \<open>Loading C from external files\<close>
-
-text \<open>Test the @{text "micro_c_file"} command which loads C source from a file.\<close>
-
-micro_c_file "test_file.c"
-
-thm c_file_add_def
-
 end
