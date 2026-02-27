@@ -167,23 +167,23 @@ struct
     then SOME CBool
     else
     let
-      fun accumulate (CTypeSpec0 (CSignedType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+      fun accumulate (CTypeSpec0 (CSignedType0 _)) (_, us, ch, sh, it, lg, vd, st) =
             (true, us, ch, sh, it, lg, vd, st)
-        | accumulate (CTypeSpec0 (CUnsigType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CUnsigType0 _)) (sg, _, ch, sh, it, lg, vd, st) =
             (sg, true, ch, sh, it, lg, vd, st)
-        | accumulate (CTypeSpec0 (CCharType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CCharType0 _)) (sg, us, _, sh, it, lg, vd, st) =
             (sg, us, true, sh, it, lg, vd, st)
-        | accumulate (CTypeSpec0 (CShortType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CShortType0 _)) (sg, us, ch, _, it, lg, vd, st) =
             (sg, us, ch, true, it, lg, vd, st)
-        | accumulate (CTypeSpec0 (CIntType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CIntType0 _)) (sg, us, ch, sh, _, lg, vd, st) =
             (sg, us, ch, sh, true, lg, vd, st)
-        | accumulate (CTypeSpec0 (CLongType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CLongType0 _)) (sg, us, ch, sh, it, _, vd, st) =
             (sg, us, ch, sh, it, true, vd, st)
-        | accumulate (CTypeSpec0 (CVoidType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CVoidType0 _)) (sg, us, ch, sh, it, lg, _, st) =
             (sg, us, ch, sh, it, lg, true, st)
-        | accumulate (CTypeSpec0 (CSUType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CSUType0 _)) (sg, us, ch, sh, it, lg, vd, _) =
             (sg, us, ch, sh, it, lg, vd, true)
-        | accumulate (CTypeSpec0 (CEnumType0 _)) (sg, us, ch, sh, it, lg, vd, st) =
+        | accumulate (CTypeSpec0 (CEnumType0 _)) (sg, us, ch, sh, _, lg, vd, st) =
             (sg, us, ch, sh, true, lg, vd, st)  (* enum treated as int *)
         | accumulate (CTypeSpec0 (CFloatType0 _)) _ =
             error "micro_c_translate: float type not supported"
@@ -197,7 +197,7 @@ struct
         | accumulate (CTypeSpec0 _) _ =
             error "micro_c_translate: unsupported type specifier"
         | accumulate _ flags = flags
-      val (has_signed, has_unsigned, has_char, has_short, has_int, has_long, has_void, has_struct) =
+      val (has_signed, has_unsigned, has_char, has_short, _, has_long, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
           (false, false, false, false, false, false, false, false) specs
     in
@@ -237,7 +237,6 @@ struct
 
   fun pointer_depth_of_declr (CDeclr0 (_, derived, _, _, _)) =
         pointer_depth_of_derived derived
-    | pointer_depth_of_declr _ = 0
 
   fun pointer_depth_of_decl (CDecl0 (_, [((Some declr, _), _)], _)) =
         pointer_depth_of_declr declr
@@ -285,7 +284,6 @@ struct
        SOME (CFunDeclr0 (Right (_, has_varargs), _, _)) => has_varargs
      | SOME (CFunDeclr0 _) => true
      | _ => false)
-    | declr_is_variadic _ = false
 
   (* Check if a declaration has a struct type specifier and return the struct name.
      E.g. for "struct point *p", returns SOME "point". *)
@@ -714,6 +712,8 @@ structure C_Trans_Ctxt : sig
   val get_ctxt : t -> Proof.context
   val add_var : string -> var_kind -> term -> C_Ast_Utils.c_numeric_type -> t -> t
   val lookup_var : t -> string -> (var_kind * term * C_Ast_Utils.c_numeric_type) option
+  val add_global_const : string -> term -> C_Ast_Utils.c_numeric_type -> t -> t
+  val lookup_global_const : t -> string -> (term * C_Ast_Utils.c_numeric_type) option
   val get_struct_names : t -> string list
   val set_struct_type : string -> string -> t -> t
   val get_struct_type : t -> string -> string option
@@ -744,6 +744,7 @@ struct
   type t = {
     ctxt : Proof.context,
     vars : (var_kind * term * C_Ast_Utils.c_numeric_type) Symtab.table,
+    global_consts : (term * C_Ast_Utils.c_numeric_type) Symtab.table,
     struct_types : string Symtab.table,         (* var_name -> c_struct_name *)
     struct_fields : (string * C_Ast_Utils.c_numeric_type) list Symtab.table,
     array_decls : (C_Ast_Utils.c_numeric_type * int) Symtab.table,  (* var_name -> (elem_cty, size) *)
@@ -758,7 +759,7 @@ struct
   }
 
   fun make ctxt struct_fields enum_consts typedef_tab func_ret_types func_param_types : t =
-    { ctxt = ctxt, vars = Symtab.empty, struct_types = Symtab.empty,
+    { ctxt = ctxt, vars = Symtab.empty, global_consts = Symtab.empty, struct_types = Symtab.empty,
       struct_fields = struct_fields, array_decls = Symtab.empty,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
@@ -768,11 +769,12 @@ struct
 
   fun get_ctxt ({ ctxt, ... } : t) = ctxt
 
-  fun add_var name kind tm cty ({ ctxt, vars, struct_types, struct_fields,
+  fun add_var name kind tm cty ({ ctxt, vars, global_consts, struct_types, struct_fields,
                                    array_decls, enum_consts, typedef_tab, func_ret_types,
                                    func_param_types, break_ref, continue_ref, goto_refs,
                                    active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = Symtab.update (name, (kind, tm, cty)) vars,
+      global_consts = global_consts,
       struct_types = struct_types, struct_fields = struct_fields,
       array_decls = array_decls,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
@@ -784,14 +786,29 @@ struct
   fun lookup_var ({ vars, ... } : t) name =
     Symtab.lookup vars name
 
+  fun add_global_const name tm cty
+      ({ ctxt, vars, global_consts, struct_types, struct_fields, array_decls, enum_consts,
+         typedef_tab, func_ret_types, func_param_types, break_ref, continue_ref, goto_refs,
+         active_goto_labels } : t) : t =
+    { ctxt = ctxt, vars = vars,
+      global_consts = Symtab.update (name, (tm, cty)) global_consts,
+      struct_types = struct_types, struct_fields = struct_fields,
+      array_decls = array_decls, enum_consts = enum_consts, typedef_tab = typedef_tab,
+      func_ret_types = func_ret_types, func_param_types = func_param_types,
+      break_ref = break_ref, continue_ref = continue_ref,
+      goto_refs = goto_refs, active_goto_labels = active_goto_labels }
+
+  fun lookup_global_const ({ global_consts, ... } : t) name =
+    Symtab.lookup global_consts name
+
   fun get_struct_names ({ struct_fields, ... } : t) =
     Symtab.keys struct_fields
 
   fun set_struct_type var_name struct_name
-      ({ ctxt, vars, struct_types, struct_fields, array_decls, enum_consts, typedef_tab,
+      ({ ctxt, vars, global_consts, struct_types, struct_fields, array_decls, enum_consts, typedef_tab,
          func_ret_types, func_param_types, break_ref, continue_ref, goto_refs,
          active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts,
       struct_types = Symtab.update (var_name, struct_name) struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
@@ -813,10 +830,10 @@ struct
     | NONE => NONE
 
   fun set_array_decl var_name elem_cty size
-      ({ ctxt, vars, struct_types, struct_fields, array_decls, enum_consts,
+      ({ ctxt, vars, global_consts, struct_types, struct_fields, array_decls, enum_consts,
          typedef_tab, func_ret_types, func_param_types, break_ref, continue_ref,
          goto_refs, active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields,
       array_decls = Symtab.update (var_name, (elem_cty, size)) array_decls,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
@@ -831,10 +848,10 @@ struct
     Symtab.lookup enum_consts name
 
   fun add_enum_consts entries ({ ctxt, vars, struct_types, struct_fields,
-                                 array_decls, enum_consts, typedef_tab, func_ret_types,
+                                 global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
                                  func_param_types, break_ref, continue_ref, goto_refs,
                                  active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields,
       array_decls = array_decls,
       enum_consts = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
@@ -862,10 +879,10 @@ struct
   fun get_continue_ref ({ continue_ref, ... } : t) = continue_ref
 
   fun set_break_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
-                                 array_decls, enum_consts, typedef_tab, func_ret_types,
+                                 global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
                                  func_param_types, break_ref = _, continue_ref,
                                  goto_refs, active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
@@ -875,10 +892,10 @@ struct
       active_goto_labels = active_goto_labels }
 
   fun set_continue_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
-                                    array_decls, enum_consts, typedef_tab, func_ret_types,
+                                    global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
                                     func_param_types, break_ref, continue_ref = _,
                                     goto_refs, active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
@@ -888,10 +905,10 @@ struct
       active_goto_labels = active_goto_labels }
 
   fun clear_break_ref ({ ctxt, vars, struct_types, struct_fields,
-                          array_decls, enum_consts, typedef_tab, func_ret_types,
+                          global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
                           func_param_types, break_ref = _, continue_ref, goto_refs,
                           active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
@@ -902,10 +919,10 @@ struct
   fun get_goto_refs ({ goto_refs, ... } : t) = goto_refs
 
   fun set_goto_refs refs ({ ctxt, vars, struct_types, struct_fields,
-                             array_decls, enum_consts, typedef_tab, func_ret_types,
+                             global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
                              func_param_types, break_ref, continue_ref, goto_refs = _,
                              active_goto_labels } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
@@ -923,10 +940,10 @@ struct
     active_goto_labels
 
   fun set_active_goto_labels labels ({ ctxt, vars, struct_types, struct_fields,
-                                       array_decls, enum_consts, typedef_tab, func_ret_types,
+                                       global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
                                        func_param_types, break_ref, continue_ref, goto_refs,
                                        active_goto_labels = _ } : t) : t =
-    { ctxt = ctxt, vars = vars, struct_types = struct_types,
+    { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
       func_ret_types = func_ret_types, func_param_types = func_param_types,
@@ -998,6 +1015,7 @@ structure C_Term_Build : sig
   val mk_struct_field_write : term -> term -> term -> term
   val mk_unat : term -> term
   val mk_focus_nth : term -> term -> term
+  val mk_focus_field : term -> term -> term
   val mk_bounded_while : term -> term -> term -> term
   val mk_goto_stub : term
   val mk_unsupported_stub : term
@@ -1171,6 +1189,11 @@ struct
       $ (Const (\<^const_name>\<open>nth_focus\<close>, dummyT --> dummyT) $ idx_nat)
       $ ref_term
 
+  fun mk_focus_field focus_const ref_term =
+    Const (\<^const_name>\<open>focus_focused\<close>, dummyT --> dummyT --> dummyT)
+      $ focus_const
+      $ ref_term
+
   (* bounded_while fuel cond body *)
   fun mk_bounded_while fuel cond body =
     Const (\<^const_name>\<open>bounded_while\<close>, dummyT --> dummyT --> dummyT --> dummyT)
@@ -1198,6 +1221,8 @@ structure C_Translate : sig
                          -> C_Ast_Utils.c_numeric_type Symtab.table
                          -> C_Ast_Utils.c_numeric_type Symtab.table Unsynchronized.ref
                          -> C_Ast_Utils.c_numeric_type list Symtab.table Unsynchronized.ref
+                         -> (string * term * C_Ast_Utils.c_numeric_type *
+                             (C_Ast_Utils.c_numeric_type * int) option * string option) list
                          -> Proof.context
                          -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
 end =
@@ -1461,7 +1486,12 @@ struct
                         return_term)))), cty) end
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                error ("micro_c_translate: cannot increment/decrement parameter: " ^ name)
-           | NONE => error ("micro_c_translate: undefined variable: " ^ name)
+           | NONE =>
+               (case C_Trans_Ctxt.lookup_global_const tctx name of
+                  SOME _ =>
+                    error ("micro_c_translate: cannot increment/decrement global constant: " ^ name)
+                | NONE =>
+                    error ("micro_c_translate: undefined variable: " ^ name))
         end
     | translate_inc_dec _ _ _ _ =
         unsupported "increment/decrement on non-variable expression"
@@ -1645,7 +1675,7 @@ struct
     in walk items [] [] [] end
 
   (* Translate a case label expression to a pure HOL value *)
-  fun case_label_value switch_cty tctx (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
+  fun case_label_value switch_cty _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
         HOLogic.mk_number (C_Ast_Utils.hol_type_of switch_cty)
           (intinf_to_int_checked "switch case label" n)
     | case_label_value switch_cty tctx (CVar0 (ident, _)) =
@@ -1737,10 +1767,13 @@ struct
            | SOME (C_Trans_Ctxt.Local, var, cty) =>
                (mk_resolved_var_read (C_Trans_Ctxt.get_ctxt tctx) var, cty)
            | NONE =>
-               (* Fallback: check enum constants *)
+               (* Fallback: check global consts, then enum constants *)
+               (case C_Trans_Ctxt.lookup_global_const tctx name of
+                  SOME (tm, cty) => (C_Term_Build.mk_literal tm, cty)
+                | NONE =>
                (case C_Trans_Ctxt.lookup_enum_const tctx name of
                   SOME value => (C_Term_Build.mk_literal_int value, C_Ast_Utils.CInt)
-                | NONE => error ("micro_c_translate: undefined variable: " ^ name))
+                | NONE => error ("micro_c_translate: undefined variable: " ^ name)))
         end
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
         let val (lhs', lhs_cty) = translate_expr tctx lhs
@@ -2015,7 +2048,6 @@ struct
                     in
                       (assign_term, field_cty)
                     end
-                | _ => unsupported "pure compound assignment on struct field"
              end
          | NONE => unsupported "unsupported compound operator on struct field")
     (* p->field[idx] = rhs : struct field array write through pointer.
@@ -2099,10 +2131,19 @@ struct
             val arr_has_effect = C_Ast_Utils.expr_has_side_effect arr_expr
             val idx_has_effect = C_Ast_Utils.expr_has_side_effect idx_expr
             val rhs_has_effect = C_Ast_Utils.expr_has_side_effect rhs
+            val arr_is_global_const =
+              (case arr_expr of
+                 CVar0 (ident, _) =>
+                   (case C_Trans_Ctxt.lookup_global_const tctx (C_Ast_Utils.ident_name ident) of
+                      SOME _ => true
+                    | NONE => false)
+               | _ => false)
             val unseq_lhs = arr_has_effect orelse idx_has_effect
             val unseq_lhs_rhs = unseq_lhs orelse rhs_has_effect
             val _ =
-              if unseq_lhs_rhs andalso
+              if arr_is_global_const then
+                unsupported "assignment to global constant array element"
+              else if unseq_lhs_rhs andalso
                    (C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr idx_expr orelse
                     C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr rhs orelse
                     C_Ast_Utils.expr_has_unsequenced_ub_risk idx_expr rhs)
@@ -2148,10 +2189,19 @@ struct
                  val arr_has_effect = C_Ast_Utils.expr_has_side_effect arr_expr
                  val idx_has_effect = C_Ast_Utils.expr_has_side_effect idx_expr
                  val rhs_has_effect = C_Ast_Utils.expr_has_side_effect rhs
+                 val arr_is_global_const =
+                   (case arr_expr of
+                      CVar0 (ident, _) =>
+                        (case C_Trans_Ctxt.lookup_global_const tctx (C_Ast_Utils.ident_name ident) of
+                           SOME _ => true
+                         | NONE => false)
+                    | _ => false)
                  val unseq_lhs = arr_has_effect orelse idx_has_effect
                  val unseq_lhs_rhs = unseq_lhs orelse rhs_has_effect
                  val _ =
-                   if unseq_lhs_rhs andalso
+                   if arr_is_global_const then
+                     unsupported "compound assignment to global constant array element"
+                   else if unseq_lhs_rhs andalso
                         (C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr idx_expr orelse
                          C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr rhs orelse
                          C_Ast_Utils.expr_has_unsequenced_ub_risk idx_expr rhs)
@@ -2205,7 +2255,6 @@ struct
                     in
                       (assign_term, elem_cty)
                     end
-                | _ => unsupported "pure compound assignment on array element"
              end
          | NONE => unsupported "unsupported compound operator on array element")
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
@@ -2223,7 +2272,12 @@ struct
                end
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                error ("micro_c_translate: assignment to parameter: " ^ name)
-           | NONE => error ("micro_c_translate: undefined variable: " ^ name)
+           | NONE =>
+               (case C_Trans_Ctxt.lookup_global_const tctx name of
+                  SOME _ =>
+                    error ("micro_c_translate: assignment to global constant: " ^ name)
+                | NONE =>
+                    error ("micro_c_translate: undefined variable: " ^ name))
         end
     | translate_expr tctx (CAssign0 (CAssignOp0, CUnary0 (CIndOp0, lhs, _), rhs, _)) =
         (* *p = v : write through pointer *)
@@ -2313,7 +2367,6 @@ struct
                     in
                       (assign_term, pointee_cty)
                     end
-                | _ => unsupported "pure compound assignment on dereferenced pointer"
              end
          | NONE => unsupported "unsupported operator on dereferenced pointer")
     | translate_expr tctx (CAssign0 (asgn_op, CVar0 (ident, _), rhs, _)) =
@@ -2351,9 +2404,11 @@ struct
                                          new_assigned)
                                        new_assigned)
                                       end)))), cty)
-                         | _ => unsupported "pure compound assignment"
                       end
-                  | _ => unsupported "compound assignment to non-local variable"
+                  | _ =>
+                      (case C_Trans_Ctxt.lookup_global_const tctx name of
+                         SOME _ => unsupported ("compound assignment to global constant: " ^ name)
+                       | NONE => unsupported "compound assignment to non-local variable")
                end
            | NONE => unsupported "compound assignment or non-variable lhs")
     | translate_expr _ (CAssign0 _) =
@@ -2425,19 +2480,8 @@ struct
         end
     | translate_expr _ (CCall0 _) =
         unsupported "indirect function call (function pointers)"
-    | translate_expr tctx (CUnary0 (CAdrOp0, CVar0 (ident, _), _)) =
-        (* &x : address-of local variable. Local variables are already refs,
-           so &x simply returns the ref variable as a literal value. *)
-        let val name = C_Ast_Utils.ident_name ident
-        in case C_Trans_Ctxt.lookup_var tctx name of
-             SOME (C_Trans_Ctxt.Local, ref_var, cty) =>
-               (C_Term_Build.mk_literal ref_var, C_Ast_Utils.CPtr cty)
-           | SOME (C_Trans_Ctxt.Param, _, _) =>
-               unsupported ("address-of by-value parameter: " ^ name)
-           | NONE => error ("micro_c_translate: undefined variable: " ^ name)
-        end
-    | translate_expr _ (CUnary0 (CAdrOp0, _, _)) =
-        unsupported "address-of complex expression"
+    | translate_expr tctx (CUnary0 (CAdrOp0, expr, _)) =
+        translate_lvalue_location tctx expr
     | translate_expr tctx (CUnary0 (CIndOp0, expr, _)) =
         (* *p : dereference pointer. Resolve dereference_fun from locale context
            to avoid adhoc overloading ambiguity (same as CIndex0 reads).
@@ -2504,8 +2548,6 @@ struct
                   (Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool}) $ v))),
             C_Ast_Utils.CBool)
         end
-    | translate_expr _ (CUnary0 _) =
-        unsupported "unary expression"
     (* p->field[idx] : struct field (list) read via pointer, then index with nth.
        AST: CIndex0(CMember0(expr, field, true, _), idx, _)
        Uses resolved dereference_fun to avoid store_dereference_const adhoc overloading. *)
@@ -2586,10 +2628,26 @@ struct
                 $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                      $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
                      $ deref_const)
+            val arr_is_global_const =
+              (case arr_expr of
+                 CVar0 (ident, _) =>
+                   (case C_Trans_Ctxt.lookup_global_const tctx (C_Ast_Utils.ident_name ident) of
+                      SOME _ => true
+                    | NONE => false)
+               | _ => false)
             val value_term = C_Term_Build.mk_literal nth_term
             val value_term = mk_index_guard idx_p_cty i_var list_var value_term
         in (mk_pair_eval unseq_index arr_term idx_term a_var i_var
-              (C_Term_Build.mk_bind deref_expr (Term.lambda list_var value_term)),
+              (if arr_is_global_const then
+                 let
+                   val direct_nth =
+                     Isa_Const (\<^const_name>\<open>nth\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                       $ a_var $ (C_Term_Build.mk_unat i_var)
+                   val direct_term = C_Term_Build.mk_literal direct_nth
+                   val direct_term = mk_index_guard idx_p_cty i_var a_var direct_term
+                 in direct_term end
+               else
+                 C_Term_Build.mk_bind deref_expr (Term.lambda list_var value_term)),
             (case arr_cty of
                C_Ast_Utils.CPtr inner => inner
              | _ => unsupported "indexing non-array expression"))
@@ -2656,7 +2714,7 @@ struct
         (C_Term_Build.mk_literal_num C_Ast_Utils.CInt
            (intinf_to_int_checked "character literal" (integer_of_char c)),
          C_Ast_Utils.CInt)
-    | translate_expr tctx (CComma0 ([], _)) =
+    | translate_expr _ (CComma0 ([], _)) =
         (C_Term_Build.mk_literal_unit, C_Ast_Utils.CInt)
     | translate_expr tctx (CComma0 (exprs, _)) =
         let val translated = List.map (translate_expr tctx) exprs
@@ -2757,6 +2815,88 @@ struct
     | translate_expr _ _ =
         unsupported "expression"
 
+  and translate_lvalue_location tctx (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in case C_Trans_Ctxt.lookup_var tctx name of
+             SOME (C_Trans_Ctxt.Local, ref_var, cty) =>
+               (C_Term_Build.mk_literal ref_var, C_Ast_Utils.CPtr cty)
+           | SOME (C_Trans_Ctxt.Param, _, _) =>
+               unsupported ("address-of by-value parameter: " ^ name)
+           | NONE =>
+               (case C_Trans_Ctxt.lookup_global_const tctx name of
+                  SOME _ =>
+                    unsupported ("address-of global const without reference storage not supported: " ^ name)
+                | NONE =>
+                    error ("micro_c_translate: undefined variable: " ^ name))
+        end
+    | translate_lvalue_location tctx (CUnary0 (CIndOp0, expr, _)) =
+        let val (ptr_term, ptr_cty) = translate_expr tctx expr
+        in case ptr_cty of
+             C_Ast_Utils.CPtr _ => (ptr_term, ptr_cty)
+           | _ => unsupported "address-of dereference on non-pointer expression"
+        end
+    | translate_lvalue_location tctx (CMember0 (expr, field_ident, is_ptr, _)) =
+        let
+          val field_name = C_Ast_Utils.ident_name field_ident
+          val struct_name = determine_struct_type tctx expr
+          val field_cty =
+            (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+               SOME cty => cty
+             | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
+          val focus_name = "c_" ^ struct_name ^ "_" ^ field_name ^ "_focus"
+          val focus_const = resolve_const (C_Trans_Ctxt.get_ctxt tctx) focus_name
+          val base_expr =
+            if is_ptr then
+              let val (ptr_expr, ptr_cty) = translate_expr tctx expr
+              in case ptr_cty of
+                   C_Ast_Utils.CPtr _ => ptr_expr
+                 | _ => unsupported "member access through non-pointer expression"
+              end
+            else
+              #1 (translate_lvalue_location tctx expr)
+          val base_var = Isa_Free ("v__base_loc", isa_dummyT)
+          val focused = C_Term_Build.mk_focus_field focus_const base_var
+        in (C_Term_Build.mk_bind base_expr (Term.lambda base_var (C_Term_Build.mk_literal focused)),
+            C_Ast_Utils.CPtr field_cty)
+        end
+    | translate_lvalue_location tctx (CIndex0 (arr_expr, idx_expr, _)) =
+        let
+          val (arr_term, arr_cty) =
+            (translate_lvalue_location tctx arr_expr
+             handle ERROR _ => translate_expr tctx arr_expr)
+          val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+          val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+          val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
+          val arr_is_global_const =
+            (case arr_expr of
+               CVar0 (ident, _) =>
+                 (case C_Trans_Ctxt.lookup_global_const tctx (C_Ast_Utils.ident_name ident) of
+                    SOME _ => true
+                  | NONE => false)
+             | _ => false)
+          val arr_has_effect = C_Ast_Utils.expr_has_side_effect arr_expr
+          val idx_has_effect = C_Ast_Utils.expr_has_side_effect idx_expr
+          val unseq_index = arr_has_effect orelse idx_has_effect
+          val _ =
+            if arr_is_global_const then
+              unsupported "address-of global constant array element is not supported without reference storage"
+            else if unseq_index andalso C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr idx_expr then
+              unsupported "potential unsequenced side-effect UB in indexed lvalue"
+            else ()
+          val a_var = Isa_Free ("v__arr_loc", isa_dummyT)
+          val i_var = Isa_Free ("v__idx", isa_dummyT)
+          val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
+          val elem_cty =
+            (case arr_cty of
+               C_Ast_Utils.CPtr inner => inner
+             | _ => unsupported "indexing non-array expression")
+          val loc_expr =
+            mk_pair_eval unseq_index arr_term idx_term a_var i_var
+              (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+        in (loc_expr, C_Ast_Utils.CPtr elem_cty) end
+    | translate_lvalue_location _ _ =
+        unsupported "address-of non-lvalue expression"
+
   (* Convenience: extract just the term from translate_expr *)
   and expr_term tctx e = #1 (translate_expr tctx e)
 
@@ -2796,7 +2936,6 @@ struct
                             SOME (intinf_to_int_checked "array bound" n)
                       | _ => NONE) derived
                   |> (fn n :: _ => SOME n | [] => NONE)
-              | array_decl_size _ = NONE
             fun init_scalar_const_term target_cty (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
                   HOLogic.mk_number (C_Ast_Utils.hol_type_of target_cty)
                     (intinf_to_int_checked "array initializer literal" n)
@@ -3098,11 +3237,10 @@ struct
     | translate_stmt tctx (CIf0 (cond, then_br, None, _)) =
         C_Term_Build.mk_two_armed_cond
           (ensure_bool_cond tctx cond) (translate_stmt tctx then_br) C_Term_Build.mk_literal_unit
-    | translate_stmt tctx (stmt as CFor0 _) =
+    | translate_stmt tctx (stmt as CFor0 (init_part, cond_opt, step_opt, body, _)) =
         let
           fun translate_general_for () =
             let
-              val CFor0 (init_part, cond_opt, step_opt, body, _) = stmt
               fun cond_term_of tctx' =
                     (case cond_opt of
                        Some c => ensure_bool_cond tctx' c
@@ -3284,7 +3422,6 @@ struct
         let val has_brk = contains_break body_stmt
             val has_cont = contains_continue body_stmt
             val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
-            val true_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1
         in if not has_brk andalso not has_cont then
              (* Simple case: no break/continue *)
              let val cond_term = ensure_bool_cond tctx cond
@@ -3477,7 +3614,7 @@ struct
     | translate_stmt _ _ =
         unsupported "statement"
 
-  fun translate_fundef struct_tab enum_tab typedef_tab func_ret_types func_param_types ctxt
+  fun translate_fundef struct_tab enum_tab typedef_tab func_ret_types func_param_types global_consts ctxt
       (CFunDef0 (specs, declr, _, body, _)) =
     let
       val name = C_Ast_Utils.declr_name declr
@@ -3520,6 +3657,17 @@ struct
       val tctx = List.foldl
         (fn ((n, v, cty), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v cty ctx)
         (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab func_ret_types func_param_types) param_vars
+      val tctx = List.foldl (fn ((gname, gterm, gcty, garr_meta, gstruct), ctx) =>
+                    let
+                      val ctx' = C_Trans_Ctxt.add_global_const gname gterm gcty ctx
+                      val ctx' = (case gstruct of
+                                    SOME sn => C_Trans_Ctxt.set_struct_type gname sn ctx'
+                                  | NONE => ctx')
+                      val ctx' = (case garr_meta of
+                                    SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl gname elem_cty n ctx'
+                                  | NONE => ctx')
+                    in ctx' end)
+                  tctx global_consts
       (* Annotate struct pointer parameters with their struct type.
          Uses _full variant to also recognize typedef'd struct names. *)
       val struct_names = Symtab.keys struct_tab
@@ -3601,6 +3749,135 @@ struct
       val _ = writeln ("Defined: c_" ^ name)
     in lthy' end
 
+  fun define_c_global_value name term lthy =
+    let
+      val binding = Binding.name ("c_global_" ^ name)
+      val ((_, (_, _)), lthy') =
+        Local_Theory.define
+          ((binding, NoSyn),
+           ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term))
+          lthy
+      val _ = writeln ("Defined: c_global_" ^ name)
+    in lthy' end
+
+  fun intinf_to_int_checked what n =
+    let
+      val ge_min =
+        (case Int.minInt of
+           SOME lo => n >= IntInf.fromInt lo
+         | NONE => true)
+      val le_max =
+        (case Int.maxInt of
+           SOME hi => n <= IntInf.fromInt hi
+         | NONE => true)
+    in
+      if ge_min andalso le_max then IntInf.toInt n
+      else error ("micro_c_translate: " ^ what ^ " out of ML-int range: " ^ IntInf.toString n)
+    end
+
+  fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
+    | struct_name_of_cty _ = NONE
+
+  fun extract_global_consts typedef_tab struct_tab enum_tab
+      (C_Ast.CTranslUnit0 (ext_decls, _)) =
+    let
+      val struct_names = Symtab.keys struct_tab
+      fun has_const_qual specs =
+        List.exists (fn C_Ast.CTypeQual0 (C_Ast.CConstQual0 _) => true | _ => false) specs
+      fun has_array_declr (C_Ast.CDeclr0 (_, derived, _, _, _)) =
+            List.exists (fn C_Ast.CArrDeclr0 _ => true | _ => false) derived
+      fun array_decl_size (C_Ast.CDeclr0 (_, derived, _, _, _)) =
+            List.mapPartial
+              (fn C_Ast.CArrDeclr0 (_, C_Ast.CArrSize0 (_, C_Ast.CConst0
+                    (C_Ast.CIntConst0 (C_Ast.CInteger0 (n, _, _), _))), _) =>
+                    if n < 0 then
+                      error "micro_c_translate: negative array bound not supported"
+                    else
+                      SOME (intinf_to_int_checked "array bound" n)
+                | _ => NONE) derived
+            |> (fn n :: _ => SOME n | [] => NONE)
+      fun init_scalar_const_term target_cty (C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (n, _, _), _))) =
+            HOLogic.mk_number (C_Ast_Utils.hol_type_of target_cty)
+              (intinf_to_int_checked "global initializer literal" n)
+        | init_scalar_const_term target_cty (C_Ast.CConst0 (C_Ast.CCharConst0 (C_Ast.CChar0 (c, _), _))) =
+            HOLogic.mk_number (C_Ast_Utils.hol_type_of target_cty)
+              (intinf_to_int_checked "global initializer char literal" (C_Ast.integer_of_char c))
+        | init_scalar_const_term target_cty (C_Ast.CVar0 (ident, _)) =
+            let val name = C_Ast_Utils.ident_name ident
+            in case Symtab.lookup enum_tab name of
+                 SOME value =>
+                   HOLogic.mk_number (C_Ast_Utils.hol_type_of target_cty) value
+               | NONE =>
+                   error ("micro_c_translate: unsupported global initializer element: " ^ name)
+            end
+        | init_scalar_const_term _ _ =
+            error "micro_c_translate: non-constant global initializer element"
+      fun process_decl specs declarators =
+        if not (has_const_qual specs) then []
+        else
+          let
+            val base_cty =
+              (case C_Ast_Utils.resolve_c_type_full typedef_tab specs of
+                 SOME C_Ast_Utils.CVoid => C_Ast_Utils.CInt
+               | SOME t => t
+               | NONE =>
+                   (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
+                      SOME sn => C_Ast_Utils.CStruct sn
+                    | NONE => C_Ast_Utils.CInt))
+            fun process_one ((C_Ast.Some declr, C_Ast.Some (C_Ast.CInitExpr0 (init, _))), _) =
+                  let
+                    val name = C_Ast_Utils.declr_name declr
+                    val ptr_depth = C_Ast_Utils.pointer_depth_of_declr declr
+                    val actual_cty = C_Ast_Utils.apply_ptr_depth base_cty ptr_depth
+                    val init_term = init_scalar_const_term actual_cty init
+                    val arr_meta =
+                      (case array_decl_size declr of
+                         SOME n =>
+                           if ptr_depth > 0
+                           then SOME (C_Ast_Utils.apply_ptr_depth base_cty (ptr_depth - 1), n)
+                           else NONE
+                       | NONE => NONE)
+                  in SOME (name, init_term, actual_cty, arr_meta, struct_name_of_cty actual_cty) end
+              | process_one ((C_Ast.Some declr, C_Ast.Some (C_Ast.CInitList0 (init_list, _))), _) =
+                  let
+                    val name = C_Ast_Utils.declr_name declr
+                    val _ =
+                      if has_array_declr declr then ()
+                      else error "micro_c_translate: initializer list for non-array global declaration"
+                    val ptr_depth = C_Ast_Utils.pointer_depth_of_declr declr
+                    val actual_cty = C_Ast_Utils.apply_ptr_depth base_cty ptr_depth
+                    val elem_cty =
+                      if ptr_depth > 0 then C_Ast_Utils.apply_ptr_depth base_cty (ptr_depth - 1) else base_cty
+                    val elem_values = List.map
+                      (fn ([], C_Ast.CInitExpr0 (e, _)) => init_scalar_const_term elem_cty e
+                        | _ => error "micro_c_translate: complex global array initializer element") init_list
+                    val declared_size = array_decl_size declr
+                    val zero_value = HOLogic.mk_number (C_Ast_Utils.hol_type_of elem_cty) 0
+                    val padded_values =
+                      case declared_size of
+                        SOME n =>
+                          if List.length elem_values > n
+                          then error "micro_c_translate: too many initializers for global array"
+                          else elem_values @ List.tabulate (n - List.length elem_values, fn _ => zero_value)
+                      | NONE => elem_values
+                    val list_term = HOLogic.mk_list (C_Ast_Utils.hol_type_of elem_cty) padded_values
+                    val arr_meta =
+                      (case declared_size of
+                         SOME n => SOME (elem_cty, n)
+                       | NONE => NONE)
+                  in SOME (name, list_term, actual_cty, arr_meta, struct_name_of_cty actual_cty) end
+              | process_one ((C_Ast.Some _, C_Ast.None), _) = NONE
+              | process_one _ =
+                  error "micro_c_translate: unsupported global declarator"
+          in List.mapPartial process_one declarators end
+      fun from_ext_decl (C_Ast.CDeclExt0 (C_Ast.CDecl0 (specs, declarators, _))) =
+            process_decl specs declarators
+        | from_ext_decl _ = []
+    in
+      List.concat (List.map from_ext_decl ext_decls)
+    end
+
   fun process_translation_unit tu lthy =
     let
       val builtin_typedefs = [
@@ -3672,7 +3949,6 @@ struct
             in (fname, (rty, ptys)) end
       fun declr_is_function (C_Ast.CDeclr0 (_, derived, _, _, _)) =
             List.exists (fn C_Ast.CFunDeclr0 _ => true | _ => false) derived
-        | declr_is_function _ = false
       fun signatures_from_ext_decl (C_Ast.CDeclExt0 (C_Ast.CDecl0 (specs, declarators, _))) =
             List.mapPartial
               (fn ((C_Ast.Some declr, _), _) =>
@@ -3693,12 +3969,26 @@ struct
         (fn ((n, (_, ptys)), tab) => Symtab.update (n, ptys) tab)
         Symtab.empty signatures
       val func_param_types = Unsynchronized.ref func_param_table
+      val global_const_inits = extract_global_consts typedef_tab struct_tab enum_tab tu
+      val (lthy, global_consts) =
+        List.foldl (fn ((gname, init_term, gcty, garr_meta, gstruct), (lthy_acc, acc)) =>
+          let
+            val lthy' = define_c_global_value gname init_term lthy_acc
+            val ctxt' = Local_Theory.target_of lthy'
+            val (full_name, _) =
+              Term.dest_Const
+                (Proof_Context.read_const {proper = true, strict = false} ctxt' ("c_global_" ^ gname))
+            val gterm = Const (full_name, dummyT)
+          in
+            (lthy', acc @ [(gname, gterm, gcty, garr_meta, gstruct)])
+          end)
+        (lthy, []) global_const_inits
     in
       (* Translate and define each function one at a time, so that later
          functions can reference earlier ones via Syntax.check_term. *)
       List.foldl (fn (fundef, lthy) =>
         let val (name, term) = C_Translate.translate_fundef
-              struct_tab enum_tab typedef_tab func_ret_types func_param_types lthy fundef
+              struct_tab enum_tab typedef_tab func_ret_types func_param_types global_consts lthy fundef
         in define_c_function name term lthy end) lthy fundefs
     end
 end

@@ -117,4 +117,38 @@ unsigned int smoke_mem_inc_via_addr(void) {
 
 thm c_smoke_mem_inc_via_addr_def
 
+micro_c_translate \<open>
+int smoke_mem_addr_of_index(int *arr, unsigned int idx) {
+  int *p = &arr[idx];
+  return *p;
+}
+\<close>
+
+thm c_smoke_mem_addr_of_index_def
+
+datatype_record c_smoke_mem_holder =
+  c_smoke_mem_holder_vec :: c_int list
+
+micro_c_translate \<open>
+struct smoke_mem_holder {
+  int vec[4];
+};
+int smoke_mem_addr_of_struct_index(struct smoke_mem_holder *h, unsigned int i) {
+  int *p = &h->vec[i];
+  return *p;
+}
+\<close>
+
+thm c_smoke_mem_addr_of_struct_index_def
+
+micro_c_translate \<open>
+const int smoke_mem_global_vals[3] = {1, 2, 3};
+int smoke_mem_read_global(unsigned int i) {
+  return smoke_mem_global_vals[i];
+}
+\<close>
+
+thm c_global_smoke_mem_global_vals_def
+thm c_smoke_mem_read_global_def
+
 end
