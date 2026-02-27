@@ -42,6 +42,7 @@ sig
   val sledgehammer : int -> unit
   val find_theorems : int -> string -> unit
   val timeout : int -> unit
+  val is_interactive_session : unit -> bool
   val help : unit -> unit
 end;
 
@@ -488,10 +489,18 @@ fun repls () =
 fun theories () =
   List.app (fn s => out ("  " ^ s)) (Thy_Info.get_names ());
 
+fun is_interactive_session () =
+  ! Printer.show_markup_default;
+
 (* Load a theory (and its transitive dependencies) by fully qualified name,
    e.g. "HOL-Library.Multiset".  After loading, the theory is available
-   for Ir.init and appears in Ir.theories. *)
+   for Ir.init and appears in Ir.theories.
+   Not available in interactive PIDE sessions (jEdit); use init_from_document instead. *)
 fun load_theory name =
+  if is_interactive_session () then
+    error "load_theory is not available in interactive PIDE sessions. \
+          \Open theories in Isabelle/jEdit and use init_from_document instead."
+  else
   let val opts = Options.update "record_theories" "true" (Options.default ())
       val _ = Thy_Info.use_theories opts "" [(name, Position.none)]
   in out ("Loaded theory " ^ quote name) end;

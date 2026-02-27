@@ -306,7 +306,9 @@ def theories() -> str:
 @mcp.tool(description=(
     "Load a theory (and its transitive dependencies) by fully qualified name into the Isabelle session. "
     "After loading, the theory becomes available for `init` and appears in `theories`. "
-    "Example: load_theory(\"HOL-Library.Multiset\") loads the Multiset theory from HOL-Library."
+    "Example: load_theory(\"HOL-Library.Multiset\") loads the Multiset theory from HOL-Library. "
+    "NOTE: Not available when I/R is running inside Isabelle/jEdit (PIDE mode). "
+    "In PIDE mode, open theories in jEdit instead and use init_from_document."
 ))
 def load_theory(theory_name: str, verbose: bool = False) -> str:
     result = repl.send(f"Ir.load_theory {ml_str(theory_name)};")
