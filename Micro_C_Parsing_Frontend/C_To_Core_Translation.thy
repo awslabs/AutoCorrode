@@ -75,6 +75,8 @@ structure C_Ast_Utils : sig
                             -> c_numeric_type option
   val int_literal_type : 'a C_Ast.flags -> c_numeric_type
   val expr_has_side_effect : C_Ast.nodeInfo C_Ast.cExpression -> bool
+  val expr_has_unsequenced_ub_risk :
+      C_Ast.nodeInfo C_Ast.cExpression -> C_Ast.nodeInfo C_Ast.cExpression -> bool
   val find_assigned_vars : C_Ast.nodeInfo C_Ast.cStatement -> string list
   val find_goto_targets : C_Ast.nodeInfo C_Ast.cStatement -> string list
 
@@ -433,6 +435,98 @@ struct
           (case t of Some te => expr_has_side_effect te | None => false) orelse
           expr_has_side_effect e
     | expr_has_side_effect _ = false
+
+  fun expr_reads_vars (CVar0 (ident, _)) = [ident_name ident]
+    | expr_reads_vars (CAssign0 (_, lhs, rhs, _)) =
+        expr_reads_vars lhs @ expr_reads_vars rhs
+    | expr_reads_vars (CBinary0 (_, l, r, _)) =
+        expr_reads_vars l @ expr_reads_vars r
+    | expr_reads_vars (CUnary0 (_, e, _)) = expr_reads_vars e
+    | expr_reads_vars (CIndex0 (a, i, _)) =
+        expr_reads_vars a @ expr_reads_vars i
+    | expr_reads_vars (CMember0 (e, _, _, _)) = expr_reads_vars e
+    | expr_reads_vars (CCast0 (_, e, _)) = expr_reads_vars e
+    | expr_reads_vars (CCall0 (f, args, _)) =
+        expr_reads_vars f @ List.concat (List.map expr_reads_vars args)
+    | expr_reads_vars (CComma0 (es, _)) = List.concat (List.map expr_reads_vars es)
+    | expr_reads_vars (CCond0 (c, t, e, _)) =
+        expr_reads_vars c @
+          (case t of Some te => expr_reads_vars te | None => []) @
+          expr_reads_vars e
+    | expr_reads_vars _ = []
+
+  fun expr_written_vars (CAssign0 (_, CVar0 (ident, _), rhs, _)) =
+        ident_name ident :: expr_written_vars rhs
+    | expr_written_vars (CAssign0 (_, lhs, rhs, _)) =
+        expr_written_vars lhs @ expr_written_vars rhs
+    | expr_written_vars (CUnary0 (CPreIncOp0, CVar0 (ident, _), _)) = [ident_name ident]
+    | expr_written_vars (CUnary0 (CPostIncOp0, CVar0 (ident, _), _)) = [ident_name ident]
+    | expr_written_vars (CUnary0 (CPreDecOp0, CVar0 (ident, _), _)) = [ident_name ident]
+    | expr_written_vars (CUnary0 (CPostDecOp0, CVar0 (ident, _), _)) = [ident_name ident]
+    | expr_written_vars (CBinary0 (_, l, r, _)) =
+        expr_written_vars l @ expr_written_vars r
+    | expr_written_vars (CUnary0 (_, e, _)) = expr_written_vars e
+    | expr_written_vars (CIndex0 (a, i, _)) =
+        expr_written_vars a @ expr_written_vars i
+    | expr_written_vars (CMember0 (e, _, _, _)) = expr_written_vars e
+    | expr_written_vars (CCast0 (_, e, _)) = expr_written_vars e
+    | expr_written_vars (CCall0 (f, args, _)) =
+        expr_written_vars f @ List.concat (List.map expr_written_vars args)
+    | expr_written_vars (CComma0 (es, _)) = List.concat (List.map expr_written_vars es)
+    | expr_written_vars (CCond0 (c, t, e, _)) =
+        expr_written_vars c @
+          (case t of Some te => expr_written_vars te | None => []) @
+          expr_written_vars e
+    | expr_written_vars _ = []
+
+  fun expr_has_opaque_side_effect (CCall0 _) = true
+    | expr_has_opaque_side_effect (CAssign0 (_, CVar0 _, rhs, _)) =
+        expr_has_opaque_side_effect rhs
+    | expr_has_opaque_side_effect (CAssign0 (_, lhs, rhs, _)) =
+        true orelse expr_has_opaque_side_effect lhs orelse expr_has_opaque_side_effect rhs
+    | expr_has_opaque_side_effect (CUnary0 (CPreIncOp0, CVar0 _, _)) = false
+    | expr_has_opaque_side_effect (CUnary0 (CPostIncOp0, CVar0 _, _)) = false
+    | expr_has_opaque_side_effect (CUnary0 (CPreDecOp0, CVar0 _, _)) = false
+    | expr_has_opaque_side_effect (CUnary0 (CPostDecOp0, CVar0 _, _)) = false
+    | expr_has_opaque_side_effect (CUnary0 (CPreIncOp0, _, _)) = true
+    | expr_has_opaque_side_effect (CUnary0 (CPostIncOp0, _, _)) = true
+    | expr_has_opaque_side_effect (CUnary0 (CPreDecOp0, _, _)) = true
+    | expr_has_opaque_side_effect (CUnary0 (CPostDecOp0, _, _)) = true
+    | expr_has_opaque_side_effect (CBinary0 (_, l, r, _)) =
+        expr_has_opaque_side_effect l orelse expr_has_opaque_side_effect r
+    | expr_has_opaque_side_effect (CUnary0 (_, e, _)) = expr_has_opaque_side_effect e
+    | expr_has_opaque_side_effect (CIndex0 (a, i, _)) =
+        expr_has_opaque_side_effect a orelse expr_has_opaque_side_effect i
+    | expr_has_opaque_side_effect (CMember0 (e, _, _, _)) =
+        expr_has_opaque_side_effect e
+    | expr_has_opaque_side_effect (CCast0 (_, e, _)) = expr_has_opaque_side_effect e
+    | expr_has_opaque_side_effect (CComma0 (es, _)) =
+        List.exists expr_has_opaque_side_effect es
+    | expr_has_opaque_side_effect (CCond0 (c, t, e, _)) =
+        expr_has_opaque_side_effect c orelse
+          (case t of Some te => expr_has_opaque_side_effect te | None => false) orelse
+          expr_has_opaque_side_effect e
+    | expr_has_opaque_side_effect _ = false
+
+  fun list_intersects xs ys =
+    List.exists (fn x => List.exists (fn y => x = y) ys) xs
+
+  fun expr_has_unsequenced_ub_risk e0 e1 =
+    let
+      val r0 = distinct (op =) (expr_reads_vars e0)
+      val r1 = distinct (op =) (expr_reads_vars e1)
+      val w0 = distinct (op =) (expr_written_vars e0)
+      val w1 = distinct (op =) (expr_written_vars e1)
+      val writes_conflict =
+        list_intersects w0 (r1 @ w1) orelse list_intersects w1 (r0 @ w0)
+      val opaque0 = expr_has_opaque_side_effect e0
+      val opaque1 = expr_has_opaque_side_effect e1
+      val opaque_conflict =
+        (opaque0 andalso (expr_has_side_effect e1 orelse not (null r1))) orelse
+        (opaque1 andalso (expr_has_side_effect e0 orelse not (null r0)))
+    in
+      writes_conflict orelse opaque_conflict
+    end
 
   (* Walk the C AST and collect variable names that appear on the LHS of
      assignments or as operands of pre/post increment/decrement.
@@ -1339,32 +1433,78 @@ struct
              SOME (C_Trans_Ctxt.Local, ref_var, cty) =>
                let val old_var = Isa_Free ("v__old", isa_dummyT)
                    val new_var = Isa_Free ("v__new", isa_dummyT)
-                   val one = C_Term_Build.mk_literal_num cty 1
+                   val arith_cty = C_Ast_Utils.integer_promote cty
+                   val one = C_Term_Build.mk_literal_num arith_cty 1
                    val arith_const =
                      if is_inc then
-                       (if C_Ast_Utils.is_signed cty
+                       (if C_Ast_Utils.is_signed arith_cty
                         then Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT)
                         else Isa_Const (\<^const_name>\<open>c_unsigned_add\<close>, isa_dummyT))
                      else
-                       (if C_Ast_Utils.is_signed cty
+                       (if C_Ast_Utils.is_signed arith_cty
                         then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
                         else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT))
                    val read = C_Term_Build.mk_var_read ref_var
+                   val old_promoted =
+                     mk_implicit_cast (C_Term_Build.mk_literal old_var, cty, arith_cty)
                    val add = C_Term_Build.mk_bind2 arith_const
-                               (C_Term_Build.mk_literal old_var) one
+                               old_promoted one
+                   val new_assigned =
+                     mk_implicit_cast (C_Term_Build.mk_literal new_var, arith_cty, cty)
                    val write = C_Term_Build.mk_var_write ref_var
-                                 (C_Term_Build.mk_literal new_var)
-                   val return_var = if is_pre then new_var else old_var
+                                 new_assigned
+                   val return_term =
+                     if is_pre then new_assigned else C_Term_Build.mk_literal old_var
                in (C_Term_Build.mk_bind read (Term.lambda old_var
                     (C_Term_Build.mk_bind add (Term.lambda new_var
                       (C_Term_Build.mk_sequence write
-                        (C_Term_Build.mk_literal return_var))))), cty) end
+                        return_term)))), cty) end
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                error ("micro_c_translate: cannot increment/decrement parameter: " ^ name)
            | NONE => error ("micro_c_translate: undefined variable: " ^ name)
         end
     | translate_inc_dec _ _ _ _ =
         unsupported "increment/decrement on non-variable expression"
+
+  fun mk_pair_eval unseq ltm rtm lvar rvar body =
+    if unseq then
+      C_Term_Build.mk_bind2_unseq (Term.lambda lvar (Term.lambda rvar body)) ltm rtm
+    else
+      C_Term_Build.mk_bind ltm (Term.lambda lvar
+        (C_Term_Build.mk_bind rtm (Term.lambda rvar body)))
+
+  fun is_shift_binop CShlOp0 = true
+    | is_shift_binop CShrOp0 = true
+    | is_shift_binop _ = false
+
+  (* C11 compound assignment arithmetic:
+     e1 op= e2 is computed in the same arithmetic type as e1 op e2
+     (with integer promotions/usual conversions), then converted back to e1 type. *)
+  fun prepare_compound_operands lhs_cty rhs_tm rhs_cty binop lhs_old_tm =
+    if is_shift_binop binop then
+      let
+        val lhs_prom_cty = C_Ast_Utils.integer_promote lhs_cty
+        val rhs_prom_cty = C_Ast_Utils.integer_promote rhs_cty
+        val lhs_prom = mk_implicit_cast (lhs_old_tm, lhs_cty, lhs_prom_cty)
+        val rhs_prom =
+          mk_implicit_cast
+            (mk_implicit_cast (rhs_tm, rhs_cty, rhs_prom_cty), rhs_prom_cty, lhs_prom_cty)
+      in
+        (lhs_prom_cty, lhs_prom, rhs_prom)
+      end
+    else
+      let
+        val op_cty = C_Ast_Utils.usual_arith_conv (lhs_cty, rhs_cty)
+        val lhs_prom = mk_implicit_cast (lhs_old_tm, lhs_cty, op_cty)
+        val rhs_prom = mk_implicit_cast (rhs_tm, rhs_cty, op_cty)
+      in
+        (op_cty, lhs_prom, rhs_prom)
+      end
+
+  fun compound_op_cty lhs_cty rhs_cty binop =
+    if is_shift_binop binop
+    then C_Ast_Utils.integer_promote lhs_cty
+    else C_Ast_Utils.usual_arith_conv (lhs_cty, rhs_cty)
 
   (* Map compound assignment operators to their binary operator equivalents *)
   fun compound_assign_to_binop CAddAssOp0 = SOME CAddOp0
@@ -1607,13 +1747,11 @@ struct
             val (rhs', rhs_cty) = translate_expr tctx rhs
             val unseq_operands =
               C_Ast_Utils.expr_has_side_effect lhs orelse C_Ast_Utils.expr_has_side_effect rhs
+            val _ =
+              if unseq_operands andalso C_Ast_Utils.expr_has_unsequenced_ub_risk lhs rhs then
+                unsupported "potential unsequenced side-effect UB in binary expression"
+              else ()
             fun to_bool (tm, cty) = mk_implicit_cast (tm, cty, C_Ast_Utils.CBool)
-            fun mk_pair_eval ltm rtm lvar rvar body =
-              if unseq_operands then
-                C_Term_Build.mk_bind2_unseq (Term.lambda lvar (Term.lambda rvar body)) ltm rtm
-              else
-                C_Term_Build.mk_bind ltm (Term.lambda lvar
-                  (C_Term_Build.mk_bind rtm (Term.lambda rvar body)))
             fun mk_ptr_add ptr_term idx_term idx_cty elem_cty =
               let val p_var = Isa_Free ("v__ptr", isa_dummyT)
                   val i_var = Isa_Free ("v__idx", isa_dummyT)
@@ -1622,8 +1760,7 @@ struct
                   val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) p_var
                   val focused_lit = C_Term_Build.mk_literal focused
                   val guarded = mk_index_guard idx_p_cty i_var p_var focused_lit
-              in (C_Term_Build.mk_bind ptr_term (Term.lambda p_var
-                    (C_Term_Build.mk_bind idx_p_term (Term.lambda i_var guarded))),
+              in (mk_pair_eval unseq_operands ptr_term idx_p_term p_var i_var guarded,
                   C_Ast_Utils.CPtr elem_cty)
               end
         in
@@ -1658,7 +1795,7 @@ struct
                 let val l = Isa_Free ("v__lptr", isa_dummyT)
                     val r = Isa_Free ("v__rptr", isa_dummyT)
                     val eq_t = Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool}) $ l $ r
-                in (mk_pair_eval lhs' rhs' l r (C_Term_Build.mk_literal eq_t),
+                in (mk_pair_eval unseq_operands lhs' rhs' l r (C_Term_Build.mk_literal eq_t),
                     C_Ast_Utils.CBool)
                 end
             | (CNeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
@@ -1667,7 +1804,7 @@ struct
                     val neq_t =
                       Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool})
                         $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool}) $ l $ r)
-                in (mk_pair_eval lhs' rhs' l r (C_Term_Build.mk_literal neq_t),
+                in (mk_pair_eval unseq_operands lhs' rhs' l r (C_Term_Build.mk_literal neq_t),
                     C_Ast_Utils.CBool)
                 end
             | (CEqOp0, C_Ast_Utils.CPtr _, _) =>
@@ -1780,11 +1917,32 @@ struct
             val (rhs', rhs_cty) = translate_expr tctx rhs
             val rhs_cast = mk_implicit_cast (rhs', rhs_cty, field_cty)
             val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
-        in (C_Term_Build.mk_bind rhs_cast (Term.lambda rhs_var
-              (C_Term_Build.mk_sequence
-                (C_Term_Build.mk_struct_field_write updater_const ptr_expr
-                  (C_Term_Build.mk_literal rhs_var))
-                (C_Term_Build.mk_literal rhs_var))),
+            val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
+            val struct_var = Isa_Free ("v__struct", isa_dummyT)
+            val dummy_var = Isa_Free ("_uu__", isa_dummyT)
+            val updated_struct =
+              updater_const $ (Term.lambda dummy_var rhs_var) $ struct_var
+            val unseq_lhs_rhs =
+              C_Ast_Utils.expr_has_side_effect expr orelse C_Ast_Utils.expr_has_side_effect rhs
+            val _ =
+              if unseq_lhs_rhs andalso C_Ast_Utils.expr_has_unsequenced_ub_risk expr rhs then
+                unsupported "potential unsequenced side-effect UB in struct-field assignment"
+              else ()
+            val assign_fun =
+              Term.lambda rhs_var (Term.lambda ptr_var
+                (C_Term_Build.mk_bind
+                  (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
+                  (Term.lambda struct_var
+                    (C_Term_Build.mk_sequence
+                      (C_Term_Build.mk_ptr_write
+                        (C_Term_Build.mk_literal ptr_var)
+                        (C_Term_Build.mk_literal updated_struct))
+                      (C_Term_Build.mk_literal rhs_var)))))
+            val assign_term =
+              (if unseq_lhs_rhs
+               then C_Term_Build.mk_bind2_unseq assign_fun rhs_cast ptr_expr
+               else C_Term_Build.mk_bind2 assign_fun rhs_cast ptr_expr)
+        in (assign_term,
             field_cty)
         end
     (* p->field op= rhs : compound struct field write through pointer *)
@@ -1801,32 +1959,62 @@ struct
                  val (ptr_term, _) = translate_expr tctx expr
                  val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
                  val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
+                 val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
                  val struct_var = Isa_Free ("v__struct", isa_dummyT)
                  val new_var = Isa_Free ("v__new", isa_dummyT)
                  val old_val = accessor_const $ struct_var
-                 val updated_struct = updater_const
-                       $ Term.lambda (Isa_Free ("_uu", isa_dummyT)) new_var
-                       $ struct_var
                  val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                     SOME cty => cty
                                   | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
-                 val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, field_cty)
-             in case translate_binop field_cty binop of
+                 val op_cty = compound_op_cty field_cty rhs_cty binop
+                 val unseq_lhs_rhs =
+                   C_Ast_Utils.expr_has_side_effect expr orelse C_Ast_Utils.expr_has_side_effect rhs
+                 val _ =
+                   if unseq_lhs_rhs andalso C_Ast_Utils.expr_has_unsequenced_ub_risk expr rhs then
+                     unsupported "potential unsequenced side-effect UB in struct-field compound assignment"
+                   else ()
+             in case translate_binop op_cty binop of
                   Monadic f =>
-                    (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
-                      (C_Term_Build.mk_bind
-                        (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
-                        (Term.lambda struct_var
+                    let
+                      val combine_rhs_ptr =
+                        if unseq_lhs_rhs then C_Term_Build.mk_bind2_unseq else C_Term_Build.mk_bind2
+                      val assign_fun =
+                        Term.lambda rhs_var (Term.lambda ptr_var
                           (C_Term_Build.mk_bind
-                            (C_Term_Build.mk_bind2 f
-                              (C_Term_Build.mk_literal old_val)
-                              rhs_term)
-                            (Term.lambda new_var
-                              (C_Term_Build.mk_sequence
-                                (C_Term_Build.mk_ptr_write
-                                  (C_Term_Build.mk_literal ptr_var)
-                                  (C_Term_Build.mk_literal updated_struct))
-                                (C_Term_Build.mk_literal new_var))))))), field_cty)
+                            (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
+                            (Term.lambda struct_var
+                              (C_Term_Build.mk_bind
+                                (let
+                                   val (_, old_prom, rhs_prom) =
+                                     prepare_compound_operands
+                                       field_cty
+                                       (C_Term_Build.mk_literal rhs_var)
+                                       rhs_cty
+                                       binop
+                                       (C_Term_Build.mk_literal old_val)
+                                 in
+                                   C_Term_Build.mk_bind2 f old_prom rhs_prom
+                                 end)
+                                (Term.lambda new_var
+                                  (let
+                                     val new_assigned =
+                                       mk_implicit_cast
+                                         (C_Term_Build.mk_literal new_var, op_cty, field_cty)
+                                     val updated_struct =
+                                       updater_const
+                                         $ Term.lambda (Isa_Free ("_uu", isa_dummyT)) new_assigned
+                                         $ struct_var
+                                   in
+                                     C_Term_Build.mk_sequence
+                                       (C_Term_Build.mk_ptr_write
+                                         (C_Term_Build.mk_literal ptr_var)
+                                         (C_Term_Build.mk_literal updated_struct))
+                                       new_assigned
+                                   end))))))
+                      val assign_term = combine_rhs_ptr assign_fun rhs_term_raw ptr_term
+                    in
+                      (assign_term, field_cty)
+                    end
                 | _ => unsupported "pure compound assignment on struct field"
              end
          | NONE => unsupported "unsupported compound operator on struct field")
@@ -1850,6 +2038,14 @@ struct
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
             val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
+            val _ =
+              if C_Ast_Utils.expr_has_side_effect expr orelse
+                 C_Ast_Utils.expr_has_side_effect idx_expr orelse
+                 C_Ast_Utils.expr_has_side_effect rhs
+              then
+                unsupported
+                  "side-effecting indexed struct-field assignment has unspecified C evaluation order and is unsupported"
+              else ()
             val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
             val struct_var = Isa_Free ("v__struct", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
@@ -1899,26 +2095,39 @@ struct
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val v_var = Isa_Free ("v__rhs", isa_dummyT)
+            val loc_var = Isa_Free ("v__loc", isa_dummyT)
+            val arr_has_effect = C_Ast_Utils.expr_has_side_effect arr_expr
+            val idx_has_effect = C_Ast_Utils.expr_has_side_effect idx_expr
+            val rhs_has_effect = C_Ast_Utils.expr_has_side_effect rhs
+            val unseq_lhs = arr_has_effect orelse idx_has_effect
+            val unseq_lhs_rhs = unseq_lhs orelse rhs_has_effect
+            val _ =
+              if unseq_lhs_rhs andalso
+                   (C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr idx_expr orelse
+                    C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr rhs orelse
+                    C_Ast_Utils.expr_has_unsequenced_ub_risk idx_expr rhs)
+              then
+                unsupported "potential unsequenced side-effect UB in indexed assignment"
+              else ()
             val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
             val elem_cty = (case arr_cty of
                               C_Ast_Utils.CPtr inner => inner
                             | _ => unsupported "indexing non-array expression")
             val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, elem_cty)
-            val write_term =
-              C_Term_Build.mk_ptr_write
-                (C_Term_Build.mk_literal focused)
-                (C_Term_Build.mk_literal v_var)
-            val write_term = mk_index_guard idx_p_cty i_var a_var write_term
+            val loc_expr =
+              mk_pair_eval unseq_lhs arr_term idx_term a_var i_var
+                (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+            val write_fun =
+              Term.lambda v_var (Term.lambda loc_var
+                (C_Term_Build.mk_sequence
+                  (C_Term_Build.mk_ptr_write
+                    (C_Term_Build.mk_literal loc_var)
+                    (C_Term_Build.mk_literal v_var))
+                  (C_Term_Build.mk_literal v_var)))
             val assign_term =
-              C_Term_Build.mk_bind rhs_term
-                (Term.lambda v_var
-                  (C_Term_Build.mk_bind arr_term
-                    (Term.lambda a_var
-                      (C_Term_Build.mk_bind idx_term
-                        (Term.lambda i_var
-                          (C_Term_Build.mk_sequence
-                            write_term
-                            (C_Term_Build.mk_literal v_var)))))))
+              (if unseq_lhs_rhs
+               then C_Term_Build.mk_bind2_unseq write_fun rhs_term loc_expr
+               else C_Term_Build.mk_bind2 write_fun rhs_term loc_expr)
         in (assign_term, elem_cty)
         end
     (* arr[idx] op= rhs : compound array element write *)
@@ -1930,53 +2139,72 @@ struct
                  val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
                  val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
                  val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
-                 val ctxt = C_Trans_Ctxt.get_ctxt tctx
-                 val deref_const =
-                   resolve_const ctxt "dereference_fun"
-                   handle ERROR _ =>
-                     Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
                  val a_var = Isa_Free ("v__arr", isa_dummyT)
                  val i_var = Isa_Free ("v__idx", isa_dummyT)
-                 val list_var = Isa_Free ("v__list", isa_dummyT)
+                 val loc_var = Isa_Free ("v__loc", isa_dummyT)
+                 val old_var = Isa_Free ("v__old", isa_dummyT)
+                 val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
                  val new_var = Isa_Free ("v__new", isa_dummyT)
-                 val nth_term = Isa_Const (\<^const_name>\<open>nth\<close>,
-                                  isa_dummyT --> isa_dummyT --> isa_dummyT)
-                                  $ list_var $ (C_Term_Build.mk_unat i_var)
-                 val deref_expr =
-                   Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>,
-                     isa_dummyT --> isa_dummyT --> isa_dummyT)
-                     $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>,
-                          isa_dummyT --> isa_dummyT) $ a_var)
-                     $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>,
-                          isa_dummyT --> isa_dummyT --> isa_dummyT)
-                          $ Isa_Const (\<^const_name>\<open>call\<close>,
-                              isa_dummyT --> isa_dummyT)
-                          $ deref_const)
+                 val arr_has_effect = C_Ast_Utils.expr_has_side_effect arr_expr
+                 val idx_has_effect = C_Ast_Utils.expr_has_side_effect idx_expr
+                 val rhs_has_effect = C_Ast_Utils.expr_has_side_effect rhs
+                 val unseq_lhs = arr_has_effect orelse idx_has_effect
+                 val unseq_lhs_rhs = unseq_lhs orelse rhs_has_effect
+                 val _ =
+                   if unseq_lhs_rhs andalso
+                        (C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr idx_expr orelse
+                         C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr rhs orelse
+                         C_Ast_Utils.expr_has_unsequenced_ub_risk idx_expr rhs)
+                   then
+                     unsupported "potential unsequenced side-effect UB in indexed compound assignment"
+                   else ()
                  val focused = C_Term_Build.mk_focus_nth
                                  (C_Term_Build.mk_unat i_var) a_var
                  val elem_cty = (case arr_cty of
                                    C_Ast_Utils.CPtr inner => inner
                                  | _ => unsupported "indexing non-array expression")
-                 val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, elem_cty)
-                 val write_term =
-                   C_Term_Build.mk_ptr_write
-                     (C_Term_Build.mk_literal focused)
-                     (C_Term_Build.mk_literal new_var)
-                 val write_term = mk_index_guard idx_p_cty i_var list_var write_term
-             in case translate_binop elem_cty binop of
+                 val op_cty = compound_op_cty elem_cty rhs_cty binop
+                 val loc_expr =
+                   mk_pair_eval unseq_lhs arr_term idx_term a_var i_var
+                     (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+             in case translate_binop op_cty binop of
                   Monadic f =>
-                    (C_Term_Build.mk_bind arr_term (Term.lambda a_var
-                      (C_Term_Build.mk_bind idx_term (Term.lambda i_var
-                        (C_Term_Build.mk_bind deref_expr (Term.lambda list_var
+                    let
+                      val combine_rhs_loc =
+                        if unseq_lhs_rhs then C_Term_Build.mk_bind2_unseq else C_Term_Build.mk_bind2
+                      val assign_fun =
+                        Term.lambda rhs_var (Term.lambda loc_var
                           (C_Term_Build.mk_bind
-                            (C_Term_Build.mk_bind2 f
-                              (C_Term_Build.mk_literal nth_term)
-                              rhs_term)
-                            (Term.lambda new_var
-                              (C_Term_Build.mk_sequence
-                                write_term
-                                (C_Term_Build.mk_literal new_var))))))))),
-                     elem_cty)
+                            (C_Term_Build.mk_deref (C_Term_Build.mk_literal loc_var))
+                            (Term.lambda old_var
+                              (let
+                                 val (_, old_prom, rhs_prom) =
+                                   prepare_compound_operands
+                                     elem_cty
+                                     (C_Term_Build.mk_literal rhs_var)
+                                     rhs_cty
+                                     binop
+                                     (C_Term_Build.mk_literal old_var)
+                               in
+                                 C_Term_Build.mk_bind
+                                   (C_Term_Build.mk_bind2 f old_prom rhs_prom)
+                                   (Term.lambda new_var
+                                     (let
+                                        val new_assigned =
+                                          mk_implicit_cast
+                                            (C_Term_Build.mk_literal new_var, op_cty, elem_cty)
+                                      in
+                                        C_Term_Build.mk_sequence
+                                          (C_Term_Build.mk_ptr_write
+                                            (C_Term_Build.mk_literal loc_var)
+                                            new_assigned)
+                                          new_assigned
+                                      end))
+                               end))))
+                      val assign_term = combine_rhs_loc assign_fun rhs_term_raw loc_expr
+                    in
+                      (assign_term, elem_cty)
+                    end
                 | _ => unsupported "pure compound assignment on array element"
              end
          | NONE => unsupported "unsupported compound operator on array element")
@@ -2006,10 +2234,25 @@ struct
             val (rhs', rhs_cty) = translate_expr tctx rhs
             val rhs_cast = mk_implicit_cast (rhs', rhs_cty, pointee_cty)
             val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
-        in (C_Term_Build.mk_bind rhs_cast (Term.lambda rhs_var
-              (C_Term_Build.mk_sequence
-                (C_Term_Build.mk_ptr_write lhs' (C_Term_Build.mk_literal rhs_var))
-                (C_Term_Build.mk_literal rhs_var))),
+            val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
+            val unseq_lhs_rhs =
+              C_Ast_Utils.expr_has_side_effect lhs orelse C_Ast_Utils.expr_has_side_effect rhs
+            val _ =
+              if unseq_lhs_rhs andalso C_Ast_Utils.expr_has_unsequenced_ub_risk lhs rhs then
+                unsupported "potential unsequenced side-effect UB in dereference assignment"
+              else ()
+            val write_fun =
+              Term.lambda rhs_var (Term.lambda ptr_var
+                (C_Term_Build.mk_sequence
+                  (C_Term_Build.mk_ptr_write
+                    (C_Term_Build.mk_literal ptr_var)
+                    (C_Term_Build.mk_literal rhs_var))
+                  (C_Term_Build.mk_literal rhs_var)))
+            val assign_term =
+              (if unseq_lhs_rhs
+               then C_Term_Build.mk_bind2_unseq write_fun rhs_cast lhs'
+               else C_Term_Build.mk_bind2 write_fun rhs_cast lhs')
+        in (assign_term,
             pointee_cty)
         end
     (* *p op= rhs : compound assignment through pointer dereference *)
@@ -2021,25 +2264,55 @@ struct
                                       C_Ast_Utils.CPtr inner => inner
                                     | _ => unsupported "compound dereference assignment on non-pointer expression")
                  val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
-                 val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, pointee_cty)
+                 val op_cty = compound_op_cty pointee_cty rhs_cty binop
                  val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
                  val old_var = Isa_Free ("v__old", isa_dummyT)
+                 val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
                  val new_var = Isa_Free ("v__new", isa_dummyT)
-             in case translate_binop pointee_cty binop of
+                 val unseq_lhs_rhs =
+                   C_Ast_Utils.expr_has_side_effect ptr_expr orelse C_Ast_Utils.expr_has_side_effect rhs
+                 val _ =
+                   if unseq_lhs_rhs andalso C_Ast_Utils.expr_has_unsequenced_ub_risk ptr_expr rhs then
+                     unsupported "potential unsequenced side-effect UB in dereference compound assignment"
+                   else ()
+             in case translate_binop op_cty binop of
                   Monadic f =>
-                    (C_Term_Build.mk_bind ptr_term (Term.lambda ptr_var
-                      (C_Term_Build.mk_bind
-                        (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
-                        (Term.lambda old_var
+                    let
+                      val combine_rhs_ptr =
+                        if unseq_lhs_rhs then C_Term_Build.mk_bind2_unseq else C_Term_Build.mk_bind2
+                      val assign_fun =
+                        Term.lambda rhs_var (Term.lambda ptr_var
                           (C_Term_Build.mk_bind
-                            (C_Term_Build.mk_bind2 f
-                              (C_Term_Build.mk_literal old_var) rhs_term)
-                            (Term.lambda new_var
-                              (C_Term_Build.mk_sequence
-                                (C_Term_Build.mk_ptr_write
-                                  (C_Term_Build.mk_literal ptr_var)
-                                  (C_Term_Build.mk_literal new_var))
-                                (C_Term_Build.mk_literal new_var))))))), pointee_cty)
+                            (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
+                            (Term.lambda old_var
+                              (let
+                                 val (_, old_prom, rhs_prom) =
+                                   prepare_compound_operands
+                                     pointee_cty
+                                     (C_Term_Build.mk_literal rhs_var)
+                                     rhs_cty
+                                     binop
+                                     (C_Term_Build.mk_literal old_var)
+                               in
+                                 C_Term_Build.mk_bind
+                                   (C_Term_Build.mk_bind2 f old_prom rhs_prom)
+                                   (Term.lambda new_var
+                                     (let
+                                        val new_assigned =
+                                          mk_implicit_cast
+                                            (C_Term_Build.mk_literal new_var, op_cty, pointee_cty)
+                                      in
+                                        C_Term_Build.mk_sequence
+                                          (C_Term_Build.mk_ptr_write
+                                            (C_Term_Build.mk_literal ptr_var)
+                                            new_assigned)
+                                          new_assigned
+                                      end))
+                               end))))
+                      val assign_term = combine_rhs_ptr assign_fun rhs_term_raw ptr_term
+                    in
+                      (assign_term, pointee_cty)
+                    end
                 | _ => unsupported "pure compound assignment on dereferenced pointer"
              end
          | NONE => unsupported "unsupported operator on dereferenced pointer")
@@ -2053,19 +2326,31 @@ struct
                     SOME (C_Trans_Ctxt.Local, var, cty) =>
                       let val old_var = Isa_Free ("v__old", isa_dummyT)
                           val new_var = Isa_Free ("v__new", isa_dummyT)
-                          val rhs' = mk_implicit_cast (rhs_raw, rhs_cty, cty)
-                      in case translate_binop cty binop of
+                          val op_cty = compound_op_cty cty rhs_cty binop
+                      in case translate_binop op_cty binop of
                            Monadic f =>
                              (C_Term_Build.mk_bind (C_Term_Build.mk_var_read var)
                                (Term.lambda old_var
                                  (C_Term_Build.mk_bind
-                                   (C_Term_Build.mk_bind2 f
-                                     (C_Term_Build.mk_literal old_var) rhs')
+                                   (let
+                                      val (_, old_prom, rhs_prom) =
+                                        prepare_compound_operands
+                                          cty rhs_raw rhs_cty binop
+                                          (C_Term_Build.mk_literal old_var)
+                                    in
+                                      C_Term_Build.mk_bind2 f old_prom rhs_prom
+                                    end)
                                    (Term.lambda new_var
+                                     (let
+                                        val new_assigned =
+                                          mk_implicit_cast
+                                            (C_Term_Build.mk_literal new_var, op_cty, cty)
+                                      in
                                      (C_Term_Build.mk_sequence
                                        (C_Term_Build.mk_var_write var
-                                         (C_Term_Build.mk_literal new_var))
-                                       (C_Term_Build.mk_literal new_var))))), cty)
+                                         new_assigned)
+                                       new_assigned)
+                                      end)))), cty)
                          | _ => unsupported "pure compound assignment"
                       end
                   | _ => unsupported "compound assignment to non-local variable"
@@ -2109,6 +2394,13 @@ struct
               if argc > 2 andalso any_arg_effect then
                 unsupported ("call to " ^ fname ^
                   " uses side-effecting arguments with unspecified C evaluation order (arity > 2)")
+              else ()
+            val _ =
+              if argc = 2 andalso any_arg_effect andalso
+                 C_Ast_Utils.expr_has_unsequenced_ub_risk (List.nth (args, 0)) (List.nth (args, 1))
+              then
+                unsupported ("call to " ^ fname ^
+                  " has potential unsequenced side-effect UB across arguments")
               else ()
             (* Use registered return type if available, fall back to CInt *)
             val ret_cty =
@@ -2231,6 +2523,12 @@ struct
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
+            val unseq_index =
+              C_Ast_Utils.expr_has_side_effect expr orelse C_Ast_Utils.expr_has_side_effect idx_expr
+            val _ =
+              if unseq_index andalso C_Ast_Utils.expr_has_unsequenced_ub_risk expr idx_expr then
+                unsupported "potential unsequenced side-effect UB in indexed access"
+              else ()
             val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
             val struct_var = Isa_Free ("v__struct", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
@@ -2248,10 +2546,9 @@ struct
                             | _ => unsupported "indexing non-array struct field")
             val value_term = C_Term_Build.mk_literal nth_term
             val value_term = mk_index_guard idx_p_cty i_var list_val value_term
-        in (C_Term_Build.mk_bind ptr_expr (Term.lambda ptr_var
-             (C_Term_Build.mk_bind deref_expr (Term.lambda struct_var
-               (C_Term_Build.mk_bind idx_term (Term.lambda i_var
-                 value_term))))), elem_cty)
+        in (mk_pair_eval unseq_index ptr_expr idx_term ptr_var i_var
+              (C_Term_Build.mk_bind deref_expr (Term.lambda struct_var value_term)),
+            elem_cty)
         end
     (* arr[idx] : deref whole list, then index with nth.
        We resolve dereference_fun from the locale context instead of using
@@ -2262,6 +2559,12 @@ struct
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
+            val unseq_index =
+              C_Ast_Utils.expr_has_side_effect arr_expr orelse C_Ast_Utils.expr_has_side_effect idx_expr
+            val _ =
+              if unseq_index andalso C_Ast_Utils.expr_has_unsequenced_ub_risk arr_expr idx_expr then
+                unsupported "potential unsequenced side-effect UB in indexed access"
+              else ()
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             (* Resolve dereference_fun from locale context to avoid adhoc
                overloading ambiguity; fall back to store_dereference_const
@@ -2285,11 +2588,8 @@ struct
                      $ deref_const)
             val value_term = C_Term_Build.mk_literal nth_term
             val value_term = mk_index_guard idx_p_cty i_var list_var value_term
-        in (C_Term_Build.mk_bind arr_term (Term.lambda a_var
-             (C_Term_Build.mk_bind idx_term (Term.lambda i_var
-               (C_Term_Build.mk_bind deref_expr
-                 (Term.lambda list_var
-                   value_term))))),
+        in (mk_pair_eval unseq_index arr_term idx_term a_var i_var
+              (C_Term_Build.mk_bind deref_expr (Term.lambda list_var value_term)),
             (case arr_cty of
                C_Ast_Utils.CPtr inner => inner
              | _ => unsupported "indexing non-array expression"))
@@ -2352,10 +2652,10 @@ struct
             result_cty)
         end
     | translate_expr _ (CConst0 (CCharConst0 (CChar0 (c, _), _))) =
-        (* Character literal — convert to ASCII ordinal *)
-        (C_Term_Build.mk_literal_num C_Ast_Utils.CChar
+        (* C character constants have type int. *)
+        (C_Term_Build.mk_literal_num C_Ast_Utils.CInt
            (intinf_to_int_checked "character literal" (integer_of_char c)),
-         C_Ast_Utils.CChar)
+         C_Ast_Utils.CInt)
     | translate_expr tctx (CComma0 ([], _)) =
         (C_Term_Build.mk_literal_unit, C_Ast_Utils.CInt)
     | translate_expr tctx (CComma0 (exprs, _)) =
@@ -2932,31 +3232,52 @@ struct
         in
           case try_bounded_for stmt of
             SOME (var_name, init_c_expr, bound_c_expr, body) =>
-              if contains_break body orelse contains_continue body then
+              let
+                val body_assigned = C_Ast_Utils.find_assigned_vars body
+                val loop_var_mutated_or_escaped =
+                  List.exists (fn n => n = var_name) body_assigned
+              in
+              if contains_break body orelse contains_continue body orelse loop_var_mutated_or_escaped then
                 translate_general_for ()
               else
                 (case (try_translate_pure_nat_expr tctx init_c_expr,
                        try_translate_pure_nat_expr tctx bound_c_expr) of
                    (SOME start_nat, SOME bound_nat) =>
-                     let val loop_cty =
-                           (case stmt of
-                              CFor0 (Right (CDecl0 (specs, [((Some declr, _), _)], _)), _, _, _, _) =>
-                                let val base_cty = (case C_Ast_Utils.resolve_c_type_full
-                                                          (C_Trans_Ctxt.get_typedef_tab tctx) specs of
-                                                      SOME C_Ast_Utils.CVoid => C_Ast_Utils.CInt
-                                                    | SOME t => t
-                                                    | NONE => C_Ast_Utils.CInt)
-                                in C_Ast_Utils.apply_ptr_depth base_cty
-                                     (C_Ast_Utils.pointer_depth_of_declr declr)
-                                end
-                            | _ => C_Ast_Utils.CInt)
-                         val loop_hol_ty = C_Ast_Utils.hol_type_of loop_cty
-                         val loop_var = Isa_Free (var_name, loop_hol_ty)
-                         val tctx' = C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param loop_var loop_cty tctx
-                         val body_term = translate_stmt tctx' body
-                         val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
-                     in C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term) end
+                     let
+                       val loop_cty =
+                         (case stmt of
+                            CFor0 (Right (CDecl0 (specs, [((Some declr, _), _)], _)), _, _, _, _) =>
+                              let
+                                val base_cty =
+                                  (case C_Ast_Utils.resolve_c_type_full
+                                          (C_Trans_Ctxt.get_typedef_tab tctx) specs of
+                                     SOME C_Ast_Utils.CVoid => C_Ast_Utils.CInt
+                                   | SOME t => t
+                                   | NONE => C_Ast_Utils.CInt)
+                              in
+                                C_Ast_Utils.apply_ptr_depth base_cty
+                                  (C_Ast_Utils.pointer_depth_of_declr declr)
+                              end
+                          | _ => C_Ast_Utils.CInt)
+                     in
+                       if C_Ast_Utils.is_signed loop_cty orelse
+                          C_Ast_Utils.is_bool loop_cty orelse
+                          C_Ast_Utils.is_ptr loop_cty then
+                         translate_general_for ()
+                       else
+                         let
+                           val loop_hol_ty = C_Ast_Utils.hol_type_of loop_cty
+                           val loop_var = Isa_Free (var_name, loop_hol_ty)
+                           val tctx' =
+                             C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param loop_var loop_cty tctx
+                           val body_term = translate_stmt tctx' body
+                           val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
+                         in
+                           C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term)
+                         end
+                     end
                  | _ => translate_general_for ())
+              end
           | NONE => translate_general_for ()
         end
     | translate_stmt tctx (CWhile0 (cond, body_stmt, is_do_while, _)) =
