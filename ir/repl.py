@@ -29,6 +29,8 @@ Management commands:
 Usage:
     python3 repl.py [--port PORT] [--isabelle PATH] [--session SESSION]
                     [--dir DIR]
+    python3 repl.py --daemon [...]   Start in daemon mode (mgmt console on Unix socket)
+    python3 repl.py --attach         Connect to a running daemon's mgmt console
 """
 
 import argparse
@@ -434,7 +436,7 @@ CYAN = "\033[36m"
 class BashServer:
     """Starts an Isabelle Bash.Server for external tool support (e.g. Sledgehammer)."""
 
-    def __init__(self, isabelle):
+    def __init__(self, isabelle, quiet=False):
         cmd = [isabelle, "scala", "-e",
                '{ val server = isabelle.Bash.Server.start(debugging = false); '
                'println("BASH_SERVER_ADDRESS=" + server.address); '
@@ -446,13 +448,16 @@ class BashServer:
             start_new_session=True)
         self.address = None
         self.password = None
-        done = threading.Event()
-        t = threading.Thread(target=spinner, args=("Starting Bash.Server...", done), daemon=True)
-        t.start()
+        if quiet:
+            done = None; t = None
+        else:
+            done = threading.Event()
+            t = threading.Thread(target=spinner, args=("Starting Bash.Server...", done), daemon=True)
+            t.start()
         while True:
             line = self.proc.stdout.readline().decode().strip()
             if not line and self.proc.poll() is not None:
-                done.set(); t.join()
+                if done: done.set(); t.join()
                 err = self.proc.stderr.read().decode()
                 raise RuntimeError(f"Bash.Server failed to start: {err}")
             if line.startswith("BASH_SERVER_ADDRESS="):
@@ -461,8 +466,7 @@ class BashServer:
                 self.password = line.split("=", 1)[1]
             if self.address and self.password:
                 break
-        done.set()
-        t.join()
+        if done: done.set(); t.join()
 
     def close(self):
         if self.proc.poll() is None:
@@ -674,10 +678,11 @@ class PolyMLConnection:
 class Server:
     """TCP server that serializes client commands to the Poly/ML process."""
 
-    def __init__(self, poly, port, host="127.0.0.1"):
+    def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None):
         self.poly = poly
         self.port = port
         self.host = host
+        self.mgmt_output = mgmt_output or print
         self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -690,7 +695,7 @@ class Server:
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
-        print(msg)
+        self.mgmt_output(msg)
 
     def log_input(self, ctx, command):
         """Log an input command (verbose >= 1)."""
@@ -942,8 +947,121 @@ def make_toolbar(completer):
     return toolbar
 
 
-def console_loop(server, session):
-    """Interactive console for the server operator."""
+def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
+                               completer=None):
+    """Process a single line of management console input.
+
+    Handles both / commands and REPL commands (accumulated across lines
+    until a trailing semicolon).
+
+    Args:
+        line: The input line to process.
+        server: The Server instance.
+        cmd_lines: Mutable list of accumulated (incomplete) command lines.
+        output_fn: Callable for output (default: server.mgmt_output).
+        completer: Optional IrCompleter to update from command output.
+
+    Returns:
+        True if the console should quit, False otherwise.
+    """
+    out = output_fn or server.mgmt_output
+    stripped = line.strip()
+    if not stripped and not cmd_lines:
+        return False
+
+    if stripped.startswith("/") and not cmd_lines:
+        cmd = stripped.split()[0].lower()
+        if cmd == "/connections":
+            infos = server.client_info()
+            out(f"{DIM}Listening on 127.0.0.1:{server.port}{RST}")
+            if not infos:
+                out(f"{DIM}No open connections.{RST}")
+            else:
+                now = time.time()
+                out(f"{BOLD}{len(infos)} open connection(s):{RST}")
+                for i, c in enumerate(infos):
+                    age = int(now - c["started"])
+                    idle = int(now - c["last_active"])
+                    out(f"  {CYAN}{i}: {c['peer']}{RST}  "
+                        f"age={age}s  "
+                        f"idle={idle}s  "
+                        f"cmds={c['commands']}  "
+                        f"in={c['bytes_in']}B out={c['bytes_out']}B")
+        elif cmd == "/quit":
+            return True
+        elif cmd == "/verbosity":
+            parts = stripped.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                server.verbose = min(int(parts[1]), 3)
+            else:
+                server.verbose = (server.verbose + 1) % 4
+            labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
+            state = labels[server.verbose]
+            out(f"Verbosity {server.verbose} / {state}")
+        elif cmd == "/show_types":
+            if "typing" in yxml_suppress:
+                yxml_suppress.discard("typing")
+                out("Type annotations: shown")
+            else:
+                yxml_suppress.add("typing")
+                out("Type annotations: hidden")
+        elif cmd == "/help":
+            out(f"{BOLD}Management commands:{RST}")
+            labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
+            state = labels[server.verbose]
+            out(f"  {YELLOW}/connections{RST}     Show open client connections")
+            out(f"  {YELLOW}/verbosity [N]{RST}   Set verbosity (currently {server.verbose} / {state})")
+            out(f"                      0=off  1=non-empty  2=all messages  3=all+hex")
+            types_state = "hidden" if "typing" in yxml_suppress else "shown"
+            out(f"  {YELLOW}/show_types{RST}      Toggle type annotations (currently {types_state})")
+            out(f"  {YELLOW}/quit{RST}            Shut down the server")
+            out(f"  {YELLOW}/help{RST}            This help")
+            out("Anything else is sent to the REPL.")
+        else:
+            out(f"{RED}Unknown command: {cmd}{RST} (try /help)")
+        return False
+
+    # REPL command accumulation
+    cmd_lines.append(line)
+    if not line.rstrip().endswith(";"):
+        return False
+    command = " ".join(cmd_lines).strip()
+    cmd_lines.clear()
+    with server.lock:
+        if not server.poly.alive():
+            out(f"{RED}ERR: Poly/ML process terminated{RST}")
+            return True
+        def on_msg(kind, props, body):
+            if body and strip_yxml(body).strip():
+                out(apply_transforms(console_transforms, body))
+            server.log_output("[this]", kind, props, body)
+        server.log_input("[this]", command)
+        output = server.poly.send_streaming(command, on_msg)
+    # Update completer from command output
+    if completer:
+        if command.startswith("Ir.theories"):
+            completer.learn_theories(output)
+        elif command.startswith("Ir.load_theory"):
+            refresh = server.poly.send("Ir.theories ();")
+            completer.learn_theories(refresh)
+        elif command.startswith("Ir.repls"):
+            completer.learn_repls(output)
+        elif command.startswith("Ir.source"):
+            m = re.match(r'Ir\.source\s+"([^"]+)"', command)
+            if m:
+                completer.learn_source(m.group(1), output)
+    return False
+
+
+def console_loop(server, session, output_fn=None):
+    """Interactive console for the server operator.
+
+    Args:
+        server: The Server instance.
+        session: prompt_toolkit PromptSession.
+        output_fn: Callable for output (default: server.mgmt_output).
+    """
+    out = output_fn or server.mgmt_output
     cmd_lines = []
     last_interrupt = 0
     while server.running:
@@ -959,96 +1077,197 @@ def console_loop(server, session):
             last_interrupt = now
             if cmd_lines:
                 cmd_lines = []
-                print(f"{YELLOW}Input cancelled.{RST}")
+                out(f"{YELLOW}Input cancelled.{RST}")
             else:
-                print(f"{YELLOW}Press Ctrl+C again to quit.{RST}")
+                out(f"{YELLOW}Press Ctrl+C again to quit.{RST}")
             continue
         except EOFError:
             break
 
-        stripped = line.strip()
-        if not stripped and not cmd_lines:
-            continue
+        if process_mgmt_console_input(line, server, cmd_lines,
+                                      output_fn=out,
+                                      completer=session.completer):
+            break
 
-        if stripped.startswith("/") and not cmd_lines:
-            cmd = stripped.split()[0].lower()
-            if cmd == "/connections":
-                infos = server.client_info()
-                print(f"{DIM}Listening on 127.0.0.1:{server.port}{RST}")
-                if not infos:
-                    print(f"{DIM}No open connections.{RST}")
-                else:
-                    now = time.time()
-                    print(f"{BOLD}{len(infos)} open connection(s):{RST}")
-                    for i, c in enumerate(infos):
-                        age = int(now - c["started"])
-                        idle = int(now - c["last_active"])
-                        print(f"  {CYAN}{i}: {c['peer']}{RST}  "
-                              f"age={age}s  "
-                              f"idle={idle}s  "
-                              f"cmds={c['commands']}  "
-                              f"in={c['bytes_in']}B out={c['bytes_out']}B")
-            elif cmd == "/quit":
-                break
-            elif cmd == "/verbosity":
-                parts = stripped.split()
-                if len(parts) >= 2 and parts[1].isdigit():
-                    server.verbose = min(int(parts[1]), 3)
-                else:
-                    server.verbose = (server.verbose + 1) % 4
-                labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
-                state = labels[server.verbose]
-                print(f"Verbosity {server.verbose} / {state}")
-            elif cmd == "/show_types":
-                if "typing" in yxml_suppress:
-                    yxml_suppress.discard("typing")
-                    print("Type annotations: shown")
-                else:
-                    yxml_suppress.add("typing")
-                    print("Type annotations: hidden")
-            elif cmd == "/help":
-                print(f"{BOLD}Management commands:{RST}")
-                labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
-                state = labels[server.verbose]
-                print(f"  {YELLOW}/connections{RST}     Show open client connections")
-                print(f"  {YELLOW}/verbosity [N]{RST}   Set verbosity (currently {server.verbose} / {state})")
-                print(f"                      0=off  1=non-empty  2=all messages  3=all+hex")
-                types_state = "hidden" if "typing" in yxml_suppress else "shown"
-                print(f"  {YELLOW}/show_types{RST}      Toggle type annotations (currently {types_state})")
-                print(f"  {YELLOW}/quit{RST}            Shut down the server")
-                print(f"  {YELLOW}/help{RST}            This help")
-                print("Anything else is sent to the REPL.")
-            else:
-                print(f"{RED}Unknown command: {cmd}{RST} (try /help)")
-        else:
-            cmd_lines.append(line)
-            if not line.rstrip().endswith(";"):
+
+MGMT_SOCKET_PATH = os.path.expanduser("~/.ir_repl_mgmt.sock")
+
+
+class MgmtSocketServer:
+    """Unix socket server for the management console in daemon mode.
+
+    Accepts multiple connections. Output is broadcast to all connected
+    clients. Input from any client is fed to process_mgmt_console_input.
+    """
+
+    def __init__(self, server, sock_path, completer=None):
+        self.server = server
+        self.sock_path = sock_path
+        self.completer = completer
+        self.clients = []
+        self.clients_lock = threading.Lock()
+        # Wire server output to broadcast
+        server.mgmt_output = self.broadcast
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+        self.sock.bind(sock_path)
+        self.sock.listen(4)
+        self.running = True
+
+    def broadcast(self, msg):
+        """Send a line to all connected management clients."""
+        data = (str(msg) + "\n").encode("utf-8")
+        with self.clients_lock:
+            dead = []
+            for c in self.clients:
+                try:
+                    c.sendall(data)
+                except (BrokenPipeError, OSError):
+                    dead.append(c)
+            for c in dead:
+                self.clients.remove(c)
+                try:
+                    c.close()
+                except OSError:
+                    pass
+
+    def serve_forever(self):
+        self.sock.settimeout(1.0)
+        while self.running and self.server.running:
+            try:
+                client, _ = self.sock.accept()
+            except socket.timeout:
                 continue
-            command = " ".join(cmd_lines).strip()
-            cmd_lines = []
-            with server.lock:
-                if not server.poly.alive():
-                    print(f"{RED}ERR: Poly/ML process terminated{RST}")
+            except OSError:
+                break
+            with self.clients_lock:
+                self.clients.append(client)
+            print("Management console attached", flush=True)
+            threading.Thread(target=self._handle_client, args=(client,),
+                             daemon=True).start()
+
+    def _handle_client(self, client):
+        cmd_lines = []
+        buf = b""
+        try:
+            while self.running and self.server.running:
+                chunk = client.recv(4096)
+                if not chunk:
                     break
-                def on_msg(kind, props, body):
-                    if body and strip_yxml(body).strip():
-                        print(apply_transforms(console_transforms, body))
-                    server.log_output("[this]", kind, props, body)
-                server.log_input("[this]", command)
-                output = server.poly.send_streaming(command, on_msg)
-            # Update completer from command output
-            if command.startswith("Ir.theories"):
-                session.completer.learn_theories(output)
-            elif command.startswith("Ir.load_theory"):
-                # After loading, refresh the theory list
-                refresh = server.poly.send("Ir.theories ();")
-                session.completer.learn_theories(refresh)
-            elif command.startswith("Ir.repls"):
-                session.completer.learn_repls(output)
-            elif command.startswith("Ir.source"):
-                m = re.match(r'Ir\.source\s+"([^"]+)"', command)
-                if m:
-                    session.completer.learn_source(m.group(1), output)
+                buf += chunk
+                while b"\n" in buf:
+                    line_bytes, buf = buf.split(b"\n", 1)
+                    line = line_bytes.decode("utf-8", errors="replace")
+                    if process_mgmt_console_input(line, self.server, cmd_lines,
+                                                  output_fn=self.broadcast,
+                                                  completer=self.completer):
+                        self.server.running = False
+                        return
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            with self.clients_lock:
+                if client in self.clients:
+                    self.clients.remove(client)
+            try:
+                client.close()
+            except OSError:
+                pass
+            print("Management console detached", flush=True)
+
+    def shutdown(self):
+        self.running = False
+        self.sock.close()
+        with self.clients_lock:
+            for c in self.clients:
+                try:
+                    c.close()
+                except OSError:
+                    pass
+            self.clients.clear()
+        try:
+            os.unlink(self.sock_path)
+        except OSError:
+            pass
+
+
+def attach_mode(sock_path):
+    """Connect to a daemon's management socket and run the prompt loop locally."""
+    if not os.path.exists(sock_path):
+        print(f"{RED}No daemon socket at {sock_path}{RST}", file=sys.stderr)
+        print(f"{DIM}Start with: repl.py --daemon{RST}", file=sys.stderr)
+        sys.exit(1)
+
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(sock_path)
+    except (ConnectionRefusedError, OSError) as e:
+        print(f"{RED}Cannot connect to {sock_path}: {e}{RST}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"{GREEN}● Attached to daemon at {sock_path}{RST}", flush=True)
+
+    # Background thread: read output from daemon and print it
+    stop = threading.Event()
+
+    def reader():
+        buf = b""
+        try:
+            while not stop.is_set():
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line_bytes, buf = buf.split(b"\n", 1)
+                    print(line_bytes.decode("utf-8", errors="replace"))
+        except OSError:
+            pass
+        if not stop.is_set():
+            print(f"\n{RED}Daemon disconnected.{RST}")
+
+    reader_thread = threading.Thread(target=reader, daemon=True)
+    reader_thread.start()
+
+    # Prompt loop
+    if _HAVE_PROMPT_TOOLKIT and sys.stdin.isatty():
+        histfile = os.path.expanduser("~/.ir_repl_history")
+        completer = IrCompleter()
+        session = PromptSession(history=FileHistory(histfile), completer=completer,
+                                complete_while_typing=Always())
+        last_interrupt = 0
+        try:
+            with patch_stdout(raw=True):
+                while not stop.is_set():
+                    try:
+                        prompt = HTML("<b><ansicyan>%&gt;</ansicyan></b> ")
+                        line = session.prompt(prompt,
+                                              bottom_toolbar=make_toolbar(completer))
+                        last_interrupt = 0
+                    except KeyboardInterrupt:
+                        now = time.time()
+                        if now - last_interrupt < 2:
+                            break
+                        last_interrupt = now
+                        print(f"{YELLOW}Press Ctrl+C again to detach.{RST}")
+                        continue
+                    except EOFError:
+                        break
+                    sock.sendall((line + "\n").encode("utf-8"))
+        except (BrokenPipeError, OSError):
+            pass
+    else:
+        # Fallback: raw stdin
+        try:
+            for line in sys.stdin:
+                sock.sendall(line.encode("utf-8"))
+        except (BrokenPipeError, OSError, KeyboardInterrupt):
+            pass
+
+    stop.set()
+    sock.close()
+    print(f"{DIM}Detached.{RST}")
 
 
 def main():
@@ -1078,7 +1297,18 @@ def main():
                    help="Start mcp_server.py in the background (streamable-http by default)")
     p.add_argument("--mcp-options", default="--transport streamable-http",
                    help="Options for mcp_server.py (default: '--transport streamable-http')")
+    p.add_argument("--daemon", action="store_true",
+                   help="Run in daemon mode: mgmt console on Unix socket instead of stdin")
+    p.add_argument("--attach", action="store_true",
+                   help="Attach to a running daemon's mgmt console")
+    p.add_argument("--mgmt-socket", default=MGMT_SOCKET_PATH,
+                   help=f"Unix socket path for --daemon/--attach (default: {MGMT_SOCKET_PATH})")
     args = p.parse_args()
+
+    # --attach: connect to daemon and run prompt loop
+    if args.attach:
+        attach_mode(args.mgmt_socket)
+        sys.exit(0)
 
     # --show-server / --kill-server: probe a running ML_Repl and exit
     if args.show_server or args.kill_server:
@@ -1147,27 +1377,39 @@ def main():
     except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
         # No running ML_Repl — start Poly/ML ourselves
         conn.close()
+        quiet = args.daemon
+
+        def _log(msg):
+            """Startup log: plain in daemon mode, styled otherwise."""
+            print(msg, flush=True)
 
         if not args.no_bash_server:
-            print(f"{BOLD}Starting Bash.Server...{RST}", flush=True)
-            bash_server = BashServer(args.isabelle)
-            print(f"{GREEN}● Bash.Server ready at {bash_server.address}{RST}", flush=True)
+            _log("Starting Bash.Server..." if quiet else
+                 f"{BOLD}Starting Bash.Server...{RST}")
+            bash_server = BashServer(args.isabelle, quiet=quiet)
+            _log(f"Bash.Server ready at {bash_server.address}" if quiet else
+                 f"{GREEN}● Bash.Server ready at {bash_server.address}{RST}")
         else:
-            print(f"{DIM}Bash.Server skipped (sledgehammer unavailable){RST}", flush=True)
+            _log("Bash.Server skipped (sledgehammer unavailable)" if quiet else
+                 f"{DIM}Bash.Server skipped (sledgehammer unavailable){RST}")
 
-        print(f"{BOLD}Starting Isabelle ML_process "
-              f"(session={args.session})...{RST}", flush=True)
-        done = threading.Event()
-        t = threading.Thread(target=spinner,
-                             args=("Loading heap + ML_Repl...", done), daemon=True)
-        t.start()
+        _log(f"Starting Isabelle ML_process (session={args.session})..." if quiet else
+             f"{BOLD}Starting Isabelle ML_process "
+             f"(session={args.session})...{RST}")
+        if not quiet:
+            done = threading.Event()
+            t = threading.Thread(target=spinner,
+                                 args=("Loading heap + ML_Repl...", done), daemon=True)
+            t.start()
+        else:
+            done = None; t = None
         poly = PolyMLProcess(args.isabelle, args.session, args.dir, ml_dir,
                              args.poly_ml_port, bash_server=bash_server)
 
         # Wait for ML_Repl TCP port to become available
         for attempt in range(300):  # up to 60s
             if not poly.alive():
-                done.set(); t.join()
+                if done: done.set(); t.join()
                 # Read any output for diagnostics
                 out = poly.proc.stdout.read().decode("utf-8", errors="replace")
                 print(f"{RED}Poly/ML process exited (rc={poly.proc.returncode}){RST}",
@@ -1185,14 +1427,15 @@ def main():
                 conn.close()
             time.sleep(0.2)
         else:
-            done.set(); t.join()
+            if done: done.set(); t.join()
             print(f"{RED}ML_Repl did not become available{RST}", file=sys.stderr)
             poly.close()
             sys.exit(1)
 
-        done.set(); t.join()
-        print(f"{GREEN}● ML_Repl ready on "
-              f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
+        if done: done.set(); t.join()
+        _log(f"ML_Repl ready on 127.0.0.1:{args.poly_ml_port}" if quiet else
+             f"{GREEN}● ML_Repl ready on "
+             f"127.0.0.1:{args.poly_ml_port}{RST}")
 
     def _signal_cleanup(signum, frame):
         if poly:
@@ -1204,15 +1447,16 @@ def main():
     signal.signal(signal.SIGHUP, _signal_cleanup)
 
     server = Server(conn, args.port, host=args.host)
+    mgmt_output = server.mgmt_output
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
 
-    print(f"{GREEN}● REPL ready.{RST} Waiting for connections on "
-          f"{BOLD}{args.host}:{args.port}{RST}", flush=True)
+    mgmt_output(f"{GREEN}● REPL ready.{RST} Waiting for connections on "
+                f"{BOLD}{args.host}:{args.port}{RST}")
 
     mcp_proc = None
     if args.mcp:
-        print(f"{BOLD}Starting MCP server...{RST}", flush=True)
+        mgmt_output(f"{BOLD}Starting MCP server...{RST}")
         mcp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")
         mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options)
         mcp_proc = subprocess.Popen(mcp_cmd, stdin=subprocess.DEVNULL,
@@ -1236,45 +1480,64 @@ def main():
                 if line:
                     if "No module named" in line:
                         req_path = os.path.join(os.path.dirname(mcp_path), "requirements.txt")
-                        print(f"{RED}[MCP] {line}{RST}")
-                        print(f"{YELLOW}⚠️  MCP server failed to start. "
-                              f"Install dependencies: "
-                              f"pip install -r {req_path}{RST}")
-                        print(f"{DIM}   REPL is still available on "
-                              f"{args.host}:{args.port}{RST}")
+                        mgmt_output(f"{RED}[MCP] {line}{RST}")
+                        mgmt_output(f"{YELLOW}⚠️  MCP server failed to start. "
+                                    f"Install dependencies: "
+                                    f"pip install -r {req_path}{RST}")
+                        mgmt_output(f"{DIM}   REPL is still available on "
+                                    f"{args.host}:{args.port}{RST}")
                     elif not started and "running on" in line.lower():
                         started = True
-                        print(f"{DIM}[MCP]{RST} {line}")
-                        print(f"{GREEN}● MCP server started{RST}")
+                        mgmt_output(f"{DIM}[MCP]{RST} {line}")
+                        mgmt_output(f"{GREEN}● MCP server started{RST}")
                     else:
                         if line.startswith("ERROR:"):
-                            print(f"{RED}[MCP] {line}{RST}")
+                            mgmt_output(f"{RED}[MCP] {line}{RST}")
                         elif server.verbose:
-                            print(f"{DIM}[MCP]{RST} {line}")
+                            mgmt_output(f"{DIM}[MCP]{RST} {line}")
             rc = mcp_proc.wait()
             if rc != 0:
-                print(f"{RED}⚠️  MCP server exited (rc={rc}){RST}")
-                print(f"{DIM}   REPL is still available on "
-                      f"{args.host}:{args.port}{RST}")
+                mgmt_output(f"{RED}⚠️  MCP server exited (rc={rc}){RST}")
+                mgmt_output(f"{DIM}   REPL is still available on "
+                            f"{args.host}:{args.port}{RST}")
 
         threading.Thread(target=_mcp_log_reader, daemon=True).start()
 
     if args.server_only:
-        print(f"{DIM}Running in server-only mode (no stdin REPL). "
-              f"Send SIGTERM or SIGINT to stop.{RST}", flush=True)
+        mgmt_output(f"{DIM}Running in server-only mode (no stdin REPL). "
+                    f"Send SIGTERM or SIGINT to stop.{RST}")
         try:
             accept_thread.join()
         except KeyboardInterrupt:
             pass
+    elif args.daemon:
+        completer = IrCompleter()
+        with server.lock:
+            completer.learn_theories(server.poly.send("Ir.theories ();"))
+        mgmt_sock = MgmtSocketServer(server, args.mgmt_socket, completer=completer)
+        mgmt_output = server.mgmt_output  # now points to mgmt_sock.broadcast
+        mgmt_output(f"{DIM}Daemon mode. Attach with: repl.py --attach{RST}")
+        mgmt_output(f"{DIM}Management socket: {args.mgmt_socket}{RST}")
+        # Print to local stderr too so the operator sees it
+        print(f"{GREEN}● Daemon mode.{RST} Mgmt socket: {args.mgmt_socket}",
+              file=sys.stderr, flush=True)
+        print(f"{DIM}Attach with: repl.py --attach{RST}",
+              file=sys.stderr, flush=True)
+        try:
+            mgmt_sock.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            mgmt_sock.shutdown()
     elif not _HAVE_PROMPT_TOOLKIT or not sys.stdin.isatty():
         if not _HAVE_PROMPT_TOOLKIT:
             req_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
-            print(f"{YELLOW}⚠️  prompt_toolkit is not installed. "
-                  f"Install dependencies for the full experience: "
-                  f"pip install -r {req_path}{RST}", flush=True)
-        print(f"{DIM}Running in server-only mode. "
-              f"Connect on {args.host}:{args.port}, "
-              f"e.g. nc {args.host} {args.port}{RST}", flush=True)
+            mgmt_output(f"{YELLOW}⚠️  prompt_toolkit is not installed. "
+                        f"Install dependencies for the full experience: "
+                        f"pip install -r {req_path}{RST}")
+        mgmt_output(f"{DIM}Running in server-only mode. "
+                    f"Connect on {args.host}:{args.port}, "
+                    f"e.g. nc {args.host} {args.port}{RST}")
         try:
             accept_thread.join()
         except KeyboardInterrupt:
@@ -1293,7 +1556,7 @@ def main():
         except KeyboardInterrupt:
             pass
 
-    print("Shutting down...", flush=True)
+    mgmt_output("Shutting down...")
     if mcp_proc and mcp_proc.poll() is None:
         mcp_proc.terminate()
         try:
