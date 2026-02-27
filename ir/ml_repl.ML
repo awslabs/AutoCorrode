@@ -186,16 +186,20 @@ fun eval_handler line out_stream =
 val ir_pri = ~1;
 
 fun start port =
+  if Tcp_Handler.is_running () then
+    (Output.information ("IR_Repl: server already running on port " ^ string_of_int port);
+     NONE)
+  else
   let
     val accept_loop = Tcp_Handler.start port
     val ir_group = Future.new_group NONE
     val _ = Synchronized.change server_group_id (K (Task_Queue.group_id ir_group))
     val _ = Synchronized.change Tcp_Handler.handler (K eval_handler)
   in
-    (singleton o Future.forks)
+    SOME ((singleton o Future.forks)
       {name = "ml_repl_accept", group = SOME ir_group,
        deps = [], pri = ir_pri, interrupts = true}
-      accept_loop
+      accept_loop)
   end;
 
 fun stop () =

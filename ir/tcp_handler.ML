@@ -16,6 +16,7 @@
 signature TCP_HANDLER =
 sig
   val handler : (string -> BinIO.outstream -> unit) Synchronized.var
+  val is_running : unit -> bool
   val start : int -> (unit -> unit)
   val stop : unit -> unit
 end;
@@ -111,5 +112,7 @@ fun stop () =
   Synchronized.change server_socket (fn old =>
     (case old of SOME s => (Socket.close s handle OS.SysErr _ => ()) | NONE => ();
      NONE));
+
+fun is_running () = is_some (Synchronized.value server_socket);
 
 end;
