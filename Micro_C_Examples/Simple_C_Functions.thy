@@ -143,13 +143,16 @@ text \<open>
 
 locale c_uint_verification_ctx =
     reference reference_types +
-    ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism
+    ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism +
+    ref_c_uint_ptr: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_ptr_prism
   for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
         'o prompt_output \<Rightarrow> unit\<close>
   and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
+  and c_uint_ptr_prism :: \<open>('gv, ('addr, 'gv, c_uint) Global_Store.ref) prism\<close>
 begin
 
 adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint.new
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint_ptr.new
 adhoc_overloading store_update_const \<rightleftharpoons> update_fun
 
 micro_c_translate \<open>
@@ -604,7 +607,8 @@ thm c_ptr_add_read_def
 definition c_ptr_add_read_contract :: \<open>('addr, 'gv, c_uint list) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
       c_uint list \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_ptr_add_read_contract arr ag vs idx \<equiv>
-    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
+    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>c_idx_to_nat idx < size arr\<rangle> \<star>
+               \<langle>c_idx_to_nat idx < length vs\<rangle>;
         post = \<lambda>r. arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>r = vs ! c_idx_to_nat idx\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_ptr_add_read_contract
@@ -839,7 +843,8 @@ thm c_read_byte_def
 definition c_read_byte_contract :: \<open>('addr, 'gv, c_char list) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
      c_char list \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_char, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_read_byte_contract buf bg vs idx \<equiv>
-    let pre  = buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
+    let pre  = buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>c_idx_to_nat idx < size buf\<rangle> \<star>
+               \<langle>c_idx_to_nat idx < length vs\<rangle>;
         post = \<lambda>r. buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>r = vs ! c_idx_to_nat idx\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_read_byte_contract

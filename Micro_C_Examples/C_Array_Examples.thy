@@ -137,6 +137,7 @@ definition c_array_fill_contract :: \<open>('addr, 'gv, c_int list) Global_Store
      'gv \<Rightarrow> c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_array_fill_contract arr val n g vs \<equiv>
     let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star>
+               \<langle>c_idx_to_nat n \<le> size arr\<rangle> \<star>
                \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
                \<langle>c_idx_to_nat n < 2147483648\<rangle> \<star>
                can_alloc_reference;
@@ -182,6 +183,8 @@ definition c_array_copy_contract :: \<open>('addr, 'gv, c_int list) Global_Store
       c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
   \<open>c_array_copy_contract dst src n gd vd gs vs \<equiv>
     let pre  = dst \<mapsto>\<langle>\<top>\<rangle> gd\<down>vd \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
+               \<langle>c_idx_to_nat n \<le> size dst\<rangle> \<star>
+               \<langle>c_idx_to_nat n \<le> size src\<rangle> \<star>
                \<langle>c_idx_to_nat n \<le> length vd\<rangle> \<star>
                \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
                \<langle>c_idx_to_nat n < 2147483648\<rangle> \<star>

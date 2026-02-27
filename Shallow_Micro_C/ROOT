@@ -8,6 +8,7 @@ session Shallow_Micro_C = HOL +
     Byte_Level_Encoding
   theories
     C_Abort
+    C_Abort_Rules
     C_Numeric_Types
     C_Sizeof
     C_Pointer_Types

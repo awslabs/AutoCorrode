@@ -181,6 +181,10 @@ lemma MLKEM_N_sub_step [simp]:
     shows \<open>MLKEM_N - k = Suc (255 - k)\<close>
 using assms by simp
 
+lemma mlkem_rev_index_bound [simp]:
+  shows \<open>255 - k < MLKEM_N\<close>
+by simp
+
 section \<open>C verification\<close>
 
 locale c_mlk_poly_verification_ctx =
@@ -589,4 +593,3 @@ lemma c_mlk_poly_sub_spec:
 end
 
 end
-
