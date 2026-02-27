@@ -118,20 +118,20 @@ fun run_quickcheck state =
 fun run_print_context state =
   let
     val ctxt = Toplevel.context_of state
-    
+
     (* Local facts (assumptions, etc.) *)
     val local_pretty = Proof_Context.pretty_local_facts true ctxt
-    
+
     (* Try to get goal for MePo filtering *)
-    val mepo_results = 
+    val mepo_results =
       (case try Toplevel.proof_of state of
-        SOME prf => 
+        SOME prf =>
           (case try Proof.goal prf of
-            SOME {goal, ...} => 
+            SOME {goal, ...} =>
               let
                 val concl = Logic.strip_imp_concl (Thm.prop_of goal)
                 val hyps = Logic.strip_imp_prems (Thm.prop_of goal)
-                val facts = Sledgehammer_Fact.nearly_all_facts_of_context ctxt true 
+                val facts = Sledgehammer_Fact.nearly_all_facts_of_context ctxt true
                   Sledgehammer_Fact.no_fact_override [] hyps concl
                 val params = Sledgehammer_Commands.default_params \<^theory> []
                 val relevant = Sledgehammer_MePo.mepo_suggested_facts ctxt params 20 NONE hyps concl facts
@@ -139,13 +139,13 @@ fun run_print_context state =
             | NONE => [])
         | NONE => [])
       handle ERROR _ => []
-    
+
     val mepo_pretty = if null mepo_results then []
-      else [Pretty.big_list "Relevant theorems (MePo):" 
+      else [Pretty.big_list "Relevant theorems (MePo):"
         (map (fn ((name, _), _) => Pretty.str name) mepo_results)]
-    
+
     val all_pretty = local_pretty @ mepo_pretty
-    val result = if null all_pretty 
+    val result = if null all_pretty
       then "No facts in scope."
       else Pretty.string_of (Pretty.chunks all_pretty)
   in result end
@@ -155,11 +155,11 @@ fun run_print_context state =
 fun get_defs state names =
   let
     val ctxt = Toplevel.context_of state
-    
+
     (* Try to get definition for an entity name *)
-    fun try_get_thms n = 
+    fun try_get_thms n =
       (SOME (Proof_Context.get_thms ctxt n)) handle ERROR _ => NONE
-    
+
     fun get_def name =
       let val base = Long_Name.base_name name
       in
@@ -171,9 +171,9 @@ fun get_defs state names =
               SOME thms => SOME (name, thms)
             | NONE => NONE)))
       end
-    
+
     val defs = map_filter get_def names
-    
+
     fun pretty_def (name, thms) = Pretty.block [
       Pretty.str (name ^ ":"),
       Pretty.brk 1,
@@ -191,30 +191,30 @@ fun run_simp_trace state method_name timeout_secs trace_depth =
     val trace_output = Unsynchronized.ref ([] : string list)
     val old_tracing_fn = ! Private_Output.tracing_fn
     val _ = Private_Output.tracing_fn := (fn ss => trace_output := ss @ (! trace_output))
-    
+
     val ctxt = Toplevel.context_of state
-    val ctxt' = ctxt 
+    val ctxt' = ctxt
       |> Config.put Raw_Simplifier.simp_trace true
       |> Config.put Raw_Simplifier.simp_trace_depth_limit trace_depth
-    
+
     val prf = Toplevel.proof_of state
     val {goal, ...} = Proof.goal prf
     val goal_term = Thm.prop_of goal
-    
+
     val result = Timeout.apply (Time.fromSeconds (Int.toLarge timeout_secs)) (fn () =>
       let
         val simplified = Simplifier.asm_full_rewrite ctxt' (Thm.cterm_of ctxt' goal_term)
         val result_term = Thm.rhs_of simplified
-      in 
+      in
         "SUCCEEDED:\n" ^ Syntax.string_of_term ctxt' (Thm.term_of result_term)
       end) ()
     handle Timeout.TIMEOUT _ => "TIMED_OUT: Method did not terminate within " ^ Int.toString timeout_secs ^ " seconds"
          | ERROR msg => "ERROR: " ^ msg
-    
+
     val _ = Private_Output.tracing_fn := old_tracing_fn
     val trace = String.concatWith "\n" (rev (! trace_output))
   in
-    "=== GOAL ===\n" ^ Syntax.string_of_term ctxt goal_term ^ 
+    "=== GOAL ===\n" ^ Syntax.string_of_term ctxt goal_term ^
     "\n\n=== RESULT ===\n" ^ result ^
     "\n\n=== TRACE ===\n" ^ (if trace = "" then "(no trace output)" else trace)
   end
@@ -225,7 +225,7 @@ val _ = register {name = "isar_explore", pri = Task_Queue.urgent_pri}
       (case args of [isar_text] =>
         let
           val trimmed = Symbol.trim_blanks isar_text
-          val result_text = 
+          val result_text =
             if trimmed = "quickcheck" then
               run_quickcheck state
             else if trimmed = "print_context" then
@@ -253,5 +253,11 @@ val _ = register {name = "isar_explore", pri = Task_Queue.urgent_pri}
         end
          | _ => raise (ERROR "Invalid number of arguments for isar_explore")))
 \<close>
+
+declare [[ML_write_global = true]]
+ML_file\<open>../ir/ir.ML\<close>
+ML_file\<open>../ir/tcp_handler.ML\<close>
+ML_file\<open>../ir/ml_repl.ML\<close>
+declare [[ML_write_global = false]]
 
 end

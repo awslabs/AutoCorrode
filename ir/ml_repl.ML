@@ -207,3 +207,20 @@ fun stop () =
    Synchronized.change server_group_id (K 0));
 
 end;
+
+(* PIDE protocol command for starting I/R from jEdit *)
+val _ =
+  Protocol_Command.define "IR_Repl.start"
+    (fn args =>
+      let
+        val port =
+          (case args of
+            [] => 9146
+          | [p] => the_default 9146 (Int.fromString p)
+          | _ => error "IR_Repl.start: expected at most one argument (port)")
+      in
+        case ML_Repl.start port of
+          SOME f => (Output.writeln ("IR_Repl: started on port " ^ string_of_int port);
+                     Future.join f)
+        | NONE => Output.writeln ("IR_Repl: already running on port " ^ string_of_int port)
+      end);

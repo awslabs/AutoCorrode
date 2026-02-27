@@ -515,6 +515,16 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   buttonsPanel.add(locateButton)
   buttonsPanel.add(statusLabel)
 
+  private val startIRButton = new JButton("Start I/R")
+  startIRButton.setToolTipText("Start the I/R TCP REPL server (port 9146)")
+  startIRButton.addActionListener(new ActionListener {
+    def actionPerformed(e: ActionEvent): Unit = {
+      PIDE.session.protocol_command("IR_Repl.start", XML.string("9146"))
+      appendOutput("Sent IR_Repl.start request (port 9146)")
+    }
+  })
+  buttonsPanel.add(startIRButton)
+
   controlsPanel.add(queryPanel)
   controlsPanel.add(inputPanel)
   controlsPanel.add(commandModePanel)

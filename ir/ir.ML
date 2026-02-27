@@ -40,16 +40,13 @@ sig
   val load_theory : string -> unit
   val source : string -> int -> int -> unit
   val sledgehammer : int -> unit
+  val sledgehammer_state : (Proof.state * int) option Synchronized.var
+  val sledgehammer_result : string Synchronized.var
   val find_theorems : int -> string -> unit
   val timeout : int -> unit
   val is_interactive_session : unit -> bool
   val help : unit -> unit
 end;
-
-(* Shared refs for sledgehammer compiler bridge -- must be in global namespace *)
-val sh_state_ref = Unsynchronized.ref (Toplevel.make_state NONE);
-val sh_timeout_ref = Unsynchronized.ref 30;
-val sh_result_ref = Unsynchronized.ref "";
 
 (* Segment access via Thy_Info.get_theory_segments (requires record_theories=true) *)
 
@@ -170,6 +167,13 @@ type repl = {
   base_state: Toplevel.state,
   steps: repl_step list
 };
+
+(* Sledgehammer bridge: structure-qualified vars survive heap save/load,
+   unlike top-level val bindings. Used by ML_Compiler.eval in sledgehammer. *)
+val sledgehammer_state : (Proof.state * int) option Synchronized.var =
+  Synchronized.var "Ir.sledgehammer_state" NONE;
+val sledgehammer_result : string Synchronized.var =
+  Synchronized.var "Ir.sledgehammer_result" "";
 
 val repl_tab : repl Symtab.table Synchronized.var
   = Synchronized.var "Ir.repls" Symtab.empty;
@@ -528,37 +532,34 @@ fun find_theorems max_results query =
 
 fun sledgehammer timeout_secs =
   let val st = last_state (snd (the_current ()))
-      val _ = Toplevel.proof_of st
+      val prf = Toplevel.proof_of st
       val thy = Toplevel.theory_of st
-      val _ = sh_state_ref := st
-      val _ = sh_timeout_ref := timeout_secs
-      val buf = Unsynchronized.ref ([] : string list)
-      fun capture ss = buf := implode ss :: !buf
-      val old_writeln = ! Private_Output.writeln_fn
-      val old_warning = ! Private_Output.warning_fn
+      (* Sledgehammer structures are loaded by HOL/Sledgehammer.thy, which is
+         not available at ir.ML compile time. We use ML_Compiler.eval to defer
+         name resolution. Unlike the old approach, we pass arguments via
+         Ir.sledgehammer_state/timeout which are structure-qualified and
+         survive heap save/load (unlike top-level val bindings). *)
+      val _ = Synchronized.change sledgehammer_state (K (SOME (prf, timeout_secs)))
       val code =
-        "val _ = sh_result_ref := (let " ^
-        "val prf = Toplevel.proof_of (! sh_state_ref) " ^
+        "let " ^
+        "val (prf, timeout) = the (Synchronized.value Ir.sledgehammer_state) " ^
         "val params = Sledgehammer_Commands.default_params " ^
         "  (Proof_Context.theory_of (Proof.context_of prf)) " ^
-        "  [(\"timeout\", Int.toString (! sh_timeout_ref))] " ^
+        "  [(\"timeout\", string_of_int timeout)] " ^
         "val (_, (_, msg)) = Sledgehammer.run_sledgehammer params " ^
         "  Sledgehammer_Prover.Normal NONE 1 " ^
         "  Sledgehammer_Fact.no_fact_override prf " ^
-        "in msg end)"
-      val _ = Private_Output.writeln_fn := capture
-      val _ = Private_Output.warning_fn := (K ())
-      val result = Exn.capture (fn () =>
+        "in Synchronized.change Ir.sledgehammer_result (K msg) end"
+      val _ = Synchronized.change sledgehammer_result (K "")
+      val _ =
         Context.setmp_generic_context (SOME (Context.Theory thy)) (fn () =>
           ML_Compiler.eval ML_Compiler.flags Position.none
-            (ML_Lex.tokenize code)) ()) ()
-      val _ = Private_Output.writeln_fn := old_writeln
-      val _ = Private_Output.warning_fn := old_warning
-      val _ = Exn.release result
-      val all_text = rev (!buf) |> String.concatWith "\n"
-      val lines = String.fields (fn c => c = #"\n") all_text
+            (ML_Lex.tokenize code)) ()
+      val msg = Synchronized.value sledgehammer_result
+      val _ = Synchronized.change sledgehammer_state (K NONE)
+      val lines = String.fields (fn c => c = #"\n") msg
       val tries = filter (fn l => String.isSubstring "Try this" l) lines
-  in if null tries then out all_text
+  in if null tries then out msg
      else List.app out tries
   end;
 
