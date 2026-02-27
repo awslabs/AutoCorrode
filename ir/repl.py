@@ -275,20 +275,62 @@ def isabelle_to_unicode(text):
     return re.sub(r'(?<!\\)\\<[a-zA-Z_]+>', lambda m: ASCII_TO_UNICODE.get(m.group(), m.group()), text)
 
 
-def strip_yxml(text):
-    """Parse YXML and extract plain text content, discarding all markup."""
-    result = []
+# YXML elements whose content should be suppressed (invisible in jEdit)
+_YXML_SUPPRESS = {"typing"}
+
+
+def walk_yxml(text, on_open, on_close, on_text):
+    """Walk YXML tree, calling callbacks for open/close tags and text spans."""
+    X = "\x05"
     i = 0
     n = len(text)
     while i < n:
-        if text[i] == "\x05" and i + 1 < n and text[i + 1] == "\x06":
-            # Start of YXML tag — skip until closing \x05
-            i += 2
-            j = text.index("\x05", i)
-            i = j + 1
+        j = text.find(X, i)
+        if j < 0:
+            on_text(text[i:])
+            break
+        if j > i:
+            on_text(text[i:j])
+        if j + 1 < n and text[j + 1] == "\x06":
+            k = text.index(X, j + 2)
+            tag_content = text[j + 2:k]
+            i = k + 1
+            if tag_content == "":
+                on_close()
+            else:
+                parts = tag_content.split("\x06")
+                name = parts[0]
+                props = dict(p.split("=", 1) for p in parts[1:] if "=" in p)
+                on_open(name, props)
         else:
-            result.append(text[i])
-            i += 1
+            on_text(X)
+            i = j + 1
+
+
+def strip_yxml(text):
+    """Parse YXML and extract plain text content, discarding all markup.
+    Suppresses content inside xml_body of xml_elem xml_name=typing blocks."""
+    result = []
+    suppress = 0
+    in_typing_elem = 0
+    def on_open(name, props):
+        nonlocal suppress, in_typing_elem
+        if suppress > 0:
+            suppress += 1
+        elif name == "xml_elem" and props.get("xml_name") in _YXML_SUPPRESS:
+            in_typing_elem += 1
+        elif name == "xml_body" and in_typing_elem > 0:
+            suppress += 1
+    def on_close():
+        nonlocal suppress, in_typing_elem
+        if suppress > 0:
+            suppress -= 1
+        elif in_typing_elem > 0:
+            in_typing_elem -= 1
+    def on_text(s):
+        if suppress == 0:
+            result.append(s)
+    walk_yxml(text, on_open, on_close, on_text)
     return "".join(result)
 
 
@@ -320,41 +362,44 @@ _MARKUP_ANSI = {
 
 def yxml_to_ansi(text):
     """Parse YXML control chars and convert markup to ANSI colors.
-    YXML uses \\x05 (X) and \\x06 (Y) as delimiters:
-      \\x05\\x06name\\x06key=val\\x05  = begin element
-      \\x05\\x06\\x05                  = end element
-    """
+    Suppresses content inside xml_body of xml_elem xml_name=typing blocks."""
     RST = "\033[0m"
     result = []
     color_stack = []
-    i = 0
-    n = len(text)
-    while i < n:
-        if text[i] == "\x05" and i + 1 < n and text[i + 1] == "\x06":
-            # Start of YXML tag
-            i += 2  # skip X Y
-            # Find end of tag (next \x05)
-            j = text.index("\x05", i)
-            tag_content = text[i:j]
-            i = j + 1  # skip closing \x05
-            if tag_content == "":
-                # End element: \x05\x06\x05
-                if color_stack:
-                    color_stack.pop()
-                result.append(RST)
-                if color_stack:
-                    result.append(color_stack[-1])
-            else:
-                # Begin element: name\x06key=val...
-                parts = tag_content.split("\x06")
-                name = parts[0]
-                ansi = _MARKUP_ANSI.get(name, "")
-                color_stack.append(ansi)
-                if ansi:
-                    result.append(ansi)
-        else:
-            result.append(text[i])
-            i += 1
+    suppress = 0
+    in_typing_elem = 0
+    def on_open(name, props):
+        nonlocal suppress, in_typing_elem
+        if suppress > 0:
+            suppress += 1
+            return
+        if name == "xml_elem" and props.get("xml_name") in _YXML_SUPPRESS:
+            in_typing_elem += 1
+            return
+        if name == "xml_body" and in_typing_elem > 0:
+            suppress += 1
+            return
+        ansi = _MARKUP_ANSI.get(name, "")
+        color_stack.append(ansi)
+        if ansi:
+            result.append(ansi)
+    def on_close():
+        nonlocal suppress, in_typing_elem
+        if suppress > 0:
+            suppress -= 1
+            return
+        if in_typing_elem > 0:
+            in_typing_elem -= 1
+            return
+        if color_stack:
+            color_stack.pop()
+        result.append(RST)
+        if color_stack:
+            result.append(color_stack[-1])
+    def on_text(s):
+        if suppress == 0:
+            result.append(s)
+    walk_yxml(text, on_open, on_close, on_text)
     return "".join(result)
 
 # ---------------------------------------------------------------------------
