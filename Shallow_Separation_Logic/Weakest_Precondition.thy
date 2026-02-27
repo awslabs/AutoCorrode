@@ -437,6 +437,44 @@ lemma wp_sequenceI [micro_rust_wp_intros]:
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (sequence e f) \<xi> \<rho> \<theta>\<close>
 using assms wp_sequence_core by blast
 
+lemma wp_nondet_choiceI [micro_rust_wp_intros]:
+    notes aentails_intro[intro]
+  assumes \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> l \<psi> \<rho> \<theta>\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> r \<psi> \<rho> \<theta>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (nondet_choice l r) \<psi> \<rho> \<theta>\<close>
+proof (intro wp_is_weakest_precondition)
+  from assms(1) have l:
+      \<open>\<Gamma> ; \<phi> \<turnstile> l \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    by (rule wp_to_sstriple)
+  from assms(2) have r:
+      \<open>\<Gamma> ; \<phi> \<turnstile> r \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    by (rule wp_to_sstriple)
+  have yh_eq: \<open>\<And>\<sigma>. yh \<Gamma> NondetOrder \<sigma> =
+      {YieldContinue (NondetLeft, \<sigma>), YieldContinue (NondetRight, \<sigma>)}\<close>
+    using striple_context_yh_is_nondet_order[of \<Gamma>]
+    by (simp add: is_nondet_order_yield_handler_def)
+  have y:
+      \<open>\<Gamma> ; \<phi> \<turnstile> yield NondetOrder \<stileturn> (\<lambda>_. \<phi>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    by (simp add: sstriple_yield, intro conjI allI impI;
+        auto simp add: is_local_def yh_eq
+             dest: aentails_top_R'[OF aentails_refl,
+                     unfolded aentails_def, rule_format])
+  have k: \<open>\<And>resp. \<Gamma> ; (\<lambda>_. \<phi>) resp \<turnstile> (if resp = NondetLeft then l else r) \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    using l r by (simp split: if_splits)
+  from sstriple_bindI[OF y k] show \<open>\<Gamma> ; \<phi> \<turnstile> nondet_choice l r \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    by (simp add: nondet_choice_def)
+qed
+
+lemma wp_bind2_unseqI [micro_rust_wp_intros]:
+    notes aentails_intro[intro]
+  assumes \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e0 (\<lambda>v0. \<W>\<P> \<Gamma> e1 (\<lambda>v1. \<W>\<P> \<Gamma> (f v0 v1) \<xi> \<rho> \<theta>) \<rho> \<theta>) \<rho> \<theta>\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e1 (\<lambda>v1. \<W>\<P> \<Gamma> e0 (\<lambda>v0. \<W>\<P> \<Gamma> (f v0 v1) \<xi> \<rho> \<theta>) \<rho> \<theta>) \<rho> \<theta>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (bind2_unseq f e0 e1) \<xi> \<rho> \<theta>\<close>
+  apply (simp add: bind2_unseq_def)
+  apply (intro wp_nondet_choiceI wp_is_weakest_precondition sstriple_bindI)
+  apply (rule wp_to_sstriple[OF assms(1)] wp_to_sstriple[OF assms(2)] wp_is_precondition)+
+  done
+
 lemma wp_two_armed_conditional:
   shows \<open>\<W>\<P> \<Gamma> \<lbrakk> if x { \<epsilon>\<open>t\<close> } else { \<epsilon>\<open>f\<close> } \<rbrakk> \<psi> \<rho> \<theta>
      = (if x then \<W>\<P> \<Gamma> t \<psi> \<rho> \<theta> else \<W>\<P> \<Gamma> f \<psi> \<rho> \<theta>)\<close>

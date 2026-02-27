@@ -158,6 +158,14 @@ lemma canonical_pull_back_yield_handler_log_preserving:
     canonical_pull_back_yield_handler_def lift_yield_result_def)
     (metis LV is_valid_lens_def lens_update_def)
 
+lemma canonical_pull_back_yield_handler_nondet_order_preserving:
+  assumes \<open>is_nondet_order_yield_handler y\<close>
+  shows \<open>is_nondet_order_yield_handler (canonical_pull_back_yield_handler y)\<close>
+  using assms
+  by (clarsimp simp add: is_nondet_order_yield_handler_def
+    canonical_pull_back_yield_handler_def lift_yield_result_def)
+    (metis LV is_valid_lens_def lens_update_def)
+
 text\<open>At the level of the evaluation relation, pullback of expressions is pullback of relations:\<close>
 
 definition continuation_map :: \<open>('a, 'v, 'r, 'abort, 'i, 'o) continuation \<Rightarrow> ('b, 'v, 'r, 'abort, 'i, 'o) continuation\<close>

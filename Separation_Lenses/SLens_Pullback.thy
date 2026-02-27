@@ -52,6 +52,7 @@ begin
 lift_definition pull_back_striple_context :: \<open>('t, 'abort, 'i, 'o) striple_context \<Rightarrow> ('s, 'abort, 'i, 'o) striple_context\<close>
   is \<open>\<lambda>\<Gamma>. make_striple_context_raw (canonical_pull_back_yield_handler l (yield_handler_raw \<Gamma>))\<close>
    by (simp add: lens_valid canonical_pull_back_yield_handler_log_preserving
+     canonical_pull_back_yield_handler_nondet_order_preserving
      is_valid_striple_context_def)
 
 lemma pull_back_striple_context_yield_handler:

@@ -2,6 +2,7 @@ theory C_To_Core_Translation
   imports
     "Isabelle_C.C_Main"
     "Shallow_Micro_Rust.Core_Expression"
+    "Shallow_Micro_Rust.Prompts_And_Responses"
     "Shallow_Micro_Rust.Core_Syntax"
     "Shallow_Micro_Rust.Bool_Type"
     "Shallow_Micro_Rust.Rust_Iterator"
@@ -73,6 +74,7 @@ structure C_Ast_Utils : sig
                             -> C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list
                             -> c_numeric_type option
   val int_literal_type : 'a C_Ast.flags -> c_numeric_type
+  val expr_has_side_effect : C_Ast.nodeInfo C_Ast.cExpression -> bool
   val find_assigned_vars : C_Ast.nodeInfo C_Ast.cStatement -> string list
   val find_goto_targets : C_Ast.nodeInfo C_Ast.cStatement -> string list
 
@@ -409,6 +411,28 @@ struct
            | NONE => NONE)
       | _ => resolve_c_type specs
     end
+
+  (* Conservative side-effect analysis for expression-order soundness checks.
+     Calls and mutating operators are treated as side-effecting. *)
+  fun expr_has_side_effect (CAssign0 _) = true
+    | expr_has_side_effect (CUnary0 (CPreIncOp0, _, _)) = true
+    | expr_has_side_effect (CUnary0 (CPostIncOp0, _, _)) = true
+    | expr_has_side_effect (CUnary0 (CPreDecOp0, _, _)) = true
+    | expr_has_side_effect (CUnary0 (CPostDecOp0, _, _)) = true
+    | expr_has_side_effect (CCall0 _) = true
+    | expr_has_side_effect (CBinary0 (_, l, r, _)) =
+        expr_has_side_effect l orelse expr_has_side_effect r
+    | expr_has_side_effect (CUnary0 (_, e, _)) = expr_has_side_effect e
+    | expr_has_side_effect (CIndex0 (a, i, _)) =
+        expr_has_side_effect a orelse expr_has_side_effect i
+    | expr_has_side_effect (CMember0 (e, _, _, _)) = expr_has_side_effect e
+    | expr_has_side_effect (CCast0 (_, e, _)) = expr_has_side_effect e
+    | expr_has_side_effect (CComma0 (es, _)) = List.exists expr_has_side_effect es
+    | expr_has_side_effect (CCond0 (c, t, e, _)) =
+        expr_has_side_effect c orelse
+          (case t of Some te => expr_has_side_effect te | None => false) orelse
+          expr_has_side_effect e
+    | expr_has_side_effect _ = false
 
   (* Walk the C AST and collect variable names that appear on the LHS of
      assignments or as operands of pre/post increment/decrement.
@@ -868,6 +892,7 @@ structure C_Term_Build : sig
   val mk_var_write : term -> term -> term
   val mk_bindlift2 : term -> term -> term -> term
   val mk_bind2 : term -> term -> term -> term
+  val mk_bind2_unseq : term -> term -> term -> term
   val mk_two_armed_cond : term -> term -> term -> term
   val mk_one_armed_cond : term -> term -> term
   val mk_funcall : term -> term list -> term
@@ -957,6 +982,11 @@ struct
   (* bind2 f e1 e2 : evaluate e1 and e2, then apply monadic f *)
   fun mk_bind2 f e1 e2 =
     Const (\<^const_name>\<open>bind2\<close>, dummyT --> dummyT --> dummyT --> dummyT)
+      $ f $ e1 $ e2
+
+  (* bind2_unseq f e1 e2 : evaluate e1/e2 in unspecified order, then apply monadic f *)
+  fun mk_bind2_unseq f e1 e2 =
+    Const (\<^const_name>\<open>bind2_unseq\<close>, dummyT --> dummyT --> dummyT --> dummyT)
       $ f $ e1 $ e2
 
   (* two_armed_conditional test then_br else_br *)
@@ -1575,7 +1605,15 @@ struct
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
         let val (lhs', lhs_cty) = translate_expr tctx lhs
             val (rhs', rhs_cty) = translate_expr tctx rhs
+            val unseq_operands =
+              C_Ast_Utils.expr_has_side_effect lhs orelse C_Ast_Utils.expr_has_side_effect rhs
             fun to_bool (tm, cty) = mk_implicit_cast (tm, cty, C_Ast_Utils.CBool)
+            fun mk_pair_eval ltm rtm lvar rvar body =
+              if unseq_operands then
+                C_Term_Build.mk_bind2_unseq (Term.lambda lvar (Term.lambda rvar body)) ltm rtm
+              else
+                C_Term_Build.mk_bind ltm (Term.lambda lvar
+                  (C_Term_Build.mk_bind rtm (Term.lambda rvar body)))
             fun mk_ptr_add ptr_term idx_term idx_cty elem_cty =
               let val p_var = Isa_Free ("v__ptr", isa_dummyT)
                   val i_var = Isa_Free ("v__idx", isa_dummyT)
@@ -1620,9 +1658,7 @@ struct
                 let val l = Isa_Free ("v__lptr", isa_dummyT)
                     val r = Isa_Free ("v__rptr", isa_dummyT)
                     val eq_t = Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool}) $ l $ r
-                in (C_Term_Build.mk_bind lhs' (Term.lambda l
-                      (C_Term_Build.mk_bind rhs' (Term.lambda r
-                        (C_Term_Build.mk_literal eq_t)))),
+                in (mk_pair_eval lhs' rhs' l r (C_Term_Build.mk_literal eq_t),
                     C_Ast_Utils.CBool)
                 end
             | (CNeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
@@ -1631,9 +1667,7 @@ struct
                     val neq_t =
                       Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool})
                         $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool}) $ l $ r)
-                in (C_Term_Build.mk_bind lhs' (Term.lambda l
-                      (C_Term_Build.mk_bind rhs' (Term.lambda r
-                        (C_Term_Build.mk_literal neq_t)))),
+                in (mk_pair_eval lhs' rhs' l r (C_Term_Build.mk_literal neq_t),
                     C_Ast_Utils.CBool)
                 end
             | (CEqOp0, C_Ast_Utils.CPtr _, _) =>
@@ -1727,7 +1761,9 @@ struct
                     | CEqOp0 => C_Ast_Utils.CBool | CNeqOp0 => C_Ast_Utils.CBool
                     | _ => cty
                 in case translate_binop cty binop of
-                     Monadic f => (C_Term_Build.mk_bind2 f l r, result_cty)
+                     Monadic f =>
+                       ((if unseq_operands then C_Term_Build.mk_bind2_unseq f l r
+                         else C_Term_Build.mk_bind2 f l r), result_cty)
                 end)
         end
     (* p->field = rhs : struct field write through pointer *)
@@ -2040,6 +2076,8 @@ struct
     | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
         let val fname = C_Ast_Utils.ident_name ident
             val arg_terms_typed = List.map (translate_expr tctx) args
+            val arg_has_effects = List.map C_Ast_Utils.expr_has_side_effect args
+            val any_arg_effect = List.exists I arg_has_effects
             val param_ctys = C_Trans_Ctxt.lookup_func_param_types tctx fname
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val func_ref =
@@ -2066,6 +2104,12 @@ struct
               (case param_ctys of
                  SOME tys => cast_args arg_terms_typed tys
                | NONE => List.map #1 arg_terms_typed)
+            val argc = List.length arg_terms
+            val _ =
+              if argc > 2 andalso any_arg_effect then
+                unsupported ("call to " ^ fname ^
+                  " uses side-effecting arguments with unspecified C evaluation order (arity > 2)")
+              else ()
             (* Use registered return type if available, fall back to CInt *)
             val ret_cty =
               (case C_Trans_Ctxt.lookup_func_return_type tctx fname of
@@ -2073,7 +2117,18 @@ struct
                | NONE => C_Ast_Utils.CInt)
         in
           (case func_ref of
-             SOME fref => (C_Term_Build.mk_funcall fref arg_terms, ret_cty)
+             SOME fref =>
+               let
+                 val call_term =
+                   if argc = 2 andalso any_arg_effect then
+                     let val call2 =
+                           Isa_Const (\<^const_name>\<open>deep_compose2\<close>, dummyT --> dummyT --> dummyT)
+                             $ Isa_Const (\<^const_name>\<open>call\<close>, dummyT --> dummyT)
+                             $ fref
+                     in C_Term_Build.mk_bind2_unseq call2 (List.nth (arg_terms, 0)) (List.nth (arg_terms, 1)) end
+                   else
+                     C_Term_Build.mk_funcall fref arg_terms
+               in (call_term, ret_cty) end
            | NONE => unsupported ("call to undeclared function: " ^ fname))
         end
     | translate_expr _ (CCall0 _) =

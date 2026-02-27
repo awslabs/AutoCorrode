@@ -20,7 +20,9 @@ text\<open>The following class of yield handlers is sufficient for functions whi
 throw \<^verbatim>\<open>FatalError\<close>s. If \<^verbatim>\<open>FatalError\<close> can occur, specifications are likely only true
 for \<^term>\<open>standard_yield_handler\<close>.\<close>
 definition is_valid_striple_context :: \<open>('st, 'abort, 'i prompt, 'o prompt_output) striple_context_raw \<Rightarrow> bool\<close> where
-  \<open>is_valid_striple_context \<Gamma> \<equiv> is_log_transparent_yield_handler (yield_handler_raw \<Gamma>)\<close>
+  \<open>is_valid_striple_context \<Gamma> \<equiv>
+      is_log_transparent_yield_handler (yield_handler_raw \<Gamma>) \<and>
+      is_nondet_order_yield_handler (yield_handler_raw \<Gamma>)\<close>
 
 text\<open>Until the context is properly integrated, offer a dummy context\<close>
 definition striple_context_raw_no_yield :: \<open>('st, 'abort, 'i prompt, 'o prompt_output) striple_context_raw\<close> where
@@ -29,7 +31,7 @@ definition striple_context_raw_no_yield :: \<open>('st, 'abort, 'i prompt, 'o pr
 lemma striple_context_raw_no_yield_is_valid:
   shows \<open>is_valid_striple_context striple_context_raw_no_yield\<close>
 by (auto simp add: is_valid_striple_context_def striple_context_raw_no_yield_def
-  intro: yield_handler_no_yield_is_log_transparent)
+  intro: yield_handler_no_yield_is_log_transparent yield_handler_no_yield_is_nondet_order)
 
 typedef (overloaded) ('st, 'abort, 'i, 'o) striple_context =
   \<open>{ ctxt :: ('st, 'abort, 'i prompt, 'o prompt_output) striple_context_raw . is_valid_striple_context ctxt }\<close>
@@ -48,6 +50,10 @@ abbreviation \<open>yh \<equiv> yield_handler\<close>
 lemma striple_context_yh_is_log_transparaent[simp]:
   shows \<open>is_log_transparent_yield_handler (yh \<Gamma>)\<close>
   by  (transfer, simp add: is_valid_striple_context_def)
+
+lemma striple_context_yh_is_nondet_order[simp]:
+  shows \<open>is_nondet_order_yield_handler (yh \<Gamma>)\<close>
+  by (transfer, simp add: is_valid_striple_context_def)
 
 definition is_aborting_striple_context where
   \<open>is_aborting_striple_context \<Gamma> \<equiv> is_aborting_yield_handler (yh \<Gamma>)\<close>
@@ -873,6 +879,35 @@ lemma striple_yield:
             (\<forall>\<sigma> \<sigma>' a. YieldAbort a \<sigma>' \<in> yh \<Gamma> \<omega> \<sigma> \<longrightarrow> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<theta> a))\<close>
   by (auto intro!: stripleI; clarsimp simp add: striple_def urust_eval_action_via_predicate
     urust_eval_predicate_simps)
+
+lemma striple_nondet_choiceI:
+  assumes \<open>\<Gamma> ; \<phi> \<turnstile> l \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+      and \<open>\<Gamma> ; \<phi> \<turnstile> r \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    shows \<open>\<Gamma> ; \<phi> \<turnstile> nondet_choice l r \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+proof -
+  have y: \<open>\<Gamma> ; \<phi> \<turnstile> yield NondetOrder \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<lambda>_. \<phi>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  proof (simp add: striple_yield, intro conjI allI impI)
+    fix \<sigma> \<sigma>'
+    assume hy: \<open>\<exists>p. YieldContinue (p, \<sigma>') \<in> yh \<Gamma> NondetOrder \<sigma>\<close>
+    from striple_context_yh_is_nondet_order[of \<Gamma>] have hset:
+      \<open>yh \<Gamma> NondetOrder \<sigma> = {YieldContinue (NondetLeft, \<sigma>), YieldContinue (NondetRight, \<sigma>)}\<close>
+      by (simp add: is_nondet_order_yield_handler_def)
+    from hy hset have eq: \<open>\<sigma>' = \<sigma>\<close> by auto
+    from eq show \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<phi>\<close>
+      by (simp add: atriple_refl)
+  next
+    fix \<sigma> \<sigma>' a
+    assume hy: \<open>YieldAbort a \<sigma>' \<in> yh \<Gamma> NondetOrder \<sigma>\<close>
+    from striple_context_yh_is_nondet_order[of \<Gamma>] have
+      \<open>yh \<Gamma> NondetOrder \<sigma> = {YieldContinue (NondetLeft, \<sigma>), YieldContinue (NondetRight, \<sigma>)}\<close>
+      by (simp add: is_nondet_order_yield_handler_def)
+    with hy show \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<theta> a\<close> by auto
+  qed
+  have k: \<open>\<And>resp. \<Gamma> ; \<phi> \<turnstile> (if resp = NondetLeft then l else r) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    using assms by (simp split: if_splits)
+  from striple_bindI[OF y k] show ?thesis
+    by (simp add: nondet_choice_def)
+qed
 
 text\<open>This rule does not hold for the strong striple: \<^verbatim>\<open>call f\<close> could be local without \<^verbatim>\<open>f\<close>
 being local.\<close>
