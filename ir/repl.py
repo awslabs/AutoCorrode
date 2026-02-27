@@ -82,6 +82,7 @@ IR_CMDS = {
     'Ir.help':           '()  — show full help text',
     '/connections':           'show open client connections',
     '/verbosity':             'set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)',
+    '/show_types':            'toggle display of type annotations',
     '/quit':                  'shut down the server',
     '/help':                  'show available commands',
 }
@@ -276,7 +277,8 @@ def isabelle_to_unicode(text):
 
 
 # YXML elements whose content should be suppressed (invisible in jEdit)
-_YXML_SUPPRESS = {"typing"}
+# Mutable: toggled via /show_types command
+yxml_suppress = {"typing"}
 
 
 def walk_yxml(text, on_open, on_close, on_text):
@@ -317,7 +319,7 @@ def strip_yxml(text):
         nonlocal suppress, in_typing_elem
         if suppress > 0:
             suppress += 1
-        elif name == "xml_elem" and props.get("xml_name") in _YXML_SUPPRESS:
+        elif name == "xml_elem" and props.get("xml_name") in yxml_suppress:
             in_typing_elem += 1
         elif name == "xml_body" and in_typing_elem > 0:
             suppress += 1
@@ -373,7 +375,7 @@ def yxml_to_ansi(text):
         if suppress > 0:
             suppress += 1
             return
-        if name == "xml_elem" and props.get("xml_name") in _YXML_SUPPRESS:
+        if name == "xml_elem" and props.get("xml_name") in yxml_suppress:
             in_typing_elem += 1
             return
         if name == "xml_body" and in_typing_elem > 0:
@@ -997,6 +999,13 @@ def console_loop(server, session):
                 labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
                 state = labels[server.verbose]
                 print(f"Verbosity {server.verbose} / {state}")
+            elif cmd == "/show_types":
+                if "typing" in yxml_suppress:
+                    yxml_suppress.discard("typing")
+                    print("Type annotations: shown")
+                else:
+                    yxml_suppress.add("typing")
+                    print("Type annotations: hidden")
             elif cmd == "/help":
                 print(f"{BOLD}Management commands:{RST}")
                 labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
@@ -1004,8 +1013,10 @@ def console_loop(server, session):
                 print(f"  {YELLOW}/connections{RST}     Show open client connections")
                 print(f"  {YELLOW}/verbosity [N]{RST}   Set verbosity (currently {server.verbose} / {state})")
                 print(f"                      0=off  1=non-empty  2=all messages  3=all+hex")
+                types_state = "hidden" if "typing" in yxml_suppress else "shown"
+                print(f"  {YELLOW}/show_types{RST}      Toggle type annotations (currently {types_state})")
                 print(f"  {YELLOW}/quit{RST}            Shut down the server")
-                print(f"  {YELLOW}/help{RST}          This help")
+                print(f"  {YELLOW}/help{RST}            This help")
                 print("Anything else is sent to the REPL.")
             else:
                 print(f"{RED}Unknown command: {cmd}{RST} (try /help)")
