@@ -22,7 +22,6 @@ theory AutoCorrode
     "Micro_C_Examples.C_Array_Examples"
     "Micro_C_Examples.C_Bitwise_Examples"
     "Micro_C_Examples.C_While_Examples"
-    "Micro_C_Examples.Mlkem_Native_Examples"
     "Misc.Misc"
     "Lenses_And_Other_Optics.Lenses_And_Other_Optics"
     "Separation_Lenses.Separation_Lenses"
