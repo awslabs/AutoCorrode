@@ -1299,6 +1299,8 @@ def main():
                    help="Options for mcp_server.py (default: '--transport streamable-http')")
     p.add_argument("--daemon", action="store_true",
                    help="Run in daemon mode: mgmt console on Unix socket instead of stdin")
+    p.add_argument("--expect-ml", action="store_true",
+                   help="Require an existing ML_Repl (retry, never start own Poly/ML)")
     p.add_argument("--attach", action="store_true",
                    help="Attach to a running daemon's mgmt console")
     p.add_argument("--kill-daemon", action="store_true",
@@ -1394,15 +1396,30 @@ def main():
     conn = PolyMLConnection(port=args.poly_ml_port)
     poly = None  # PolyMLProcess, only if we need to start one
     bash_server = None
-    try:
-        conn.connect()
-        # Verify it's alive
-        probe = conn.send('Ir.help ();')
-        if "Ir.init" not in probe:
-            raise ConnectionError("Connected but Ir not available")
-        print(f"{GREEN}● Connected to existing ML_Repl on "
-              f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
-    except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
+    connected = False
+    max_attempts = 60 if (args.daemon or args.expect_ml) else 1
+    for attempt in range(max_attempts):
+        try:
+            conn.connect()
+            probe = conn.send('Ir.help ();')
+            if "Ir.init" not in probe:
+                raise ConnectionError("Connected but Ir not available")
+            connected = True
+            print(f"{GREEN}● Connected to existing ML_Repl on "
+                  f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
+            break
+        except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
+            conn.close()
+            if attempt < max_attempts - 1:
+                if attempt == 0:
+                    print(f"Waiting for ML_Repl on port {args.poly_ml_port}...",
+                          flush=True)
+                time.sleep(2)
+    if not connected and args.expect_ml:
+        print(f"{RED}ML_Repl not available on port {args.poly_ml_port} "
+              f"after {max_attempts * 2}s{RST}", file=sys.stderr)
+        sys.exit(1)
+    if not connected:
         # No running ML_Repl — start Poly/ML ourselves
         conn.close()
         quiet = args.daemon

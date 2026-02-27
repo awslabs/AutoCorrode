@@ -224,3 +224,9 @@ val _ =
                      Future.join f)
         | NONE => Output.writeln ("IR_Repl: already running on port " ^ string_of_int port)
       end);
+
+val _ =
+  Protocol_Command.define "IR_Repl.stop"
+    (fn _ =>
+      (ML_Repl.stop ();
+       Output.writeln "IR_Repl: stopped"));

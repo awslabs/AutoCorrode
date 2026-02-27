@@ -2,6 +2,7 @@
    SPDX-License-Identifier: MIT */
 
 import isabelle._
+import isabelle.jedit._
 
 import org.gjt.sp.jedit.{EBMessage, EBPlugin}
 
@@ -64,6 +65,13 @@ class IQPlugin extends EBPlugin {
     // Stop MCP server
     iqServer.foreach(_.stop())
     iqServer = None
+
+    // Stop I/R daemon
+    IQExploreDockable.shutdown()
+
+    // Stop ML_Repl TCP server so Poly/ML can exit cleanly
+    try { PIDE.session.protocol_command("IR_Repl.stop") }
+    catch { case _: Exception => }
 
     Output.writeln("Isabelle/Q Plugin stopped")
     IQPlugin.unregister(this)
