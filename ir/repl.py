@@ -56,6 +56,7 @@ except ImportError:
 
 IR_CMDS = {
     'Ir.init':           'id ["thy"]  — create REPL "id" importing theories',
+    'Ir.init_from_document': 'id "node" cmd_id  — create REPL from PIDE document state (node+id via I/Q)',
     'Ir.fork':           'id state_idx  — fork new REPL from current at given state (0=base, ~1=latest)',
     'Ir.focus':          'id  — switch to REPL "id"',
     'Ir.step':           '"isar text"  — execute Isar text as next step in current REPL',
@@ -88,6 +89,7 @@ IR_CMDS = {
 # Structured signatures: (params_list, description)
 IR_SIGS = {
     'Ir.init':          (['id', '["thy"]'], 'create REPL "id" importing theories'),
+    'Ir.init_from_document': (['id', 'node', 'cmd_id'], 'create REPL from PIDE document state (node+id via I/Q)'),
     'Ir.fork':          (['id', 'state_idx'], 'fork new REPL from current at given state (0=base, ~1=latest)'),
     'Ir.focus':         (['id'], 'switch to REPL "id"'),
     'Ir.step':          (['"isar text"'], 'execute Isar text as next step in current REPL'),
@@ -152,6 +154,9 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
         g = grammar_compile(
             r"""
                 (
+                    # init_from_document must come before init (longer prefix)
+                    (?P<cmd>Ir\.init_from_document) \s+ (?P<rid>"[^"]*") \s+ (?P<sid>"[^"]*") \s+ (?P<num>[^\s]+)
+                |
                     # init: id then theory list
                     (?P<cmd>Ir\.init) \s+ (?P<sid>"[^"]*") \s+
                         \[ \s* (?P<thy>"[^"]*") \s*
@@ -864,9 +869,9 @@ def make_toolbar(completer):
             elif p == 'id':
                 var_to_params.setdefault('sid', []).append(i)
                 var_to_params.setdefault('rid', []).append(i)
-            elif p in ('idx', 'state_idx', 'secs', 'start', 'stop', 'n'):
+            elif p in ('idx', 'state_idx', 'secs', 'start', 'stop', 'n', 'cmd_id'):
                 var_to_params.setdefault('num', []).append(i)
-            elif p in ('"isar text"', '"text"', '"query"', 'path'):
+            elif p in ('"isar text"', '"text"', '"query"', 'path', 'node'):
                 var_to_params.setdefault('sid', []).append(i)
 
         active_idx = None

@@ -203,6 +203,17 @@ def init(id: str, theories: list[str]) -> str:
     ml_list = "[" + ", ".join(ml_str(t) for t in theories) + "]"
     return repl.send(f"Ir.init {ml_str(id)} {ml_list};")
 
+@mcp.tool(description=(
+    "Create a new REPL session rooted at a specific command in the PIDE document model. "
+    "This allows forking from any Toplevel.state (theory or proof) in a file currently "
+    "open and processed in Isabelle/jEdit. "
+    "Requires the exact node name (as used by PIDE) and the command ID (integer). "
+    "These must be obtained out-of-band from the PIDE document model, e.g. via the I/Q plugin "
+    "(get_command_info or resolve_command_target), since the ML side cannot discover them."
+))
+def init_from_document(id: str, node_name: str, command_id: int) -> str:
+    return repl.send(f"Ir.init_from_document {ml_str(id)} {ml_str(node_name)} {ml_int(command_id)};")
+
 @mcp.tool(description="Fork a sub-REPL from the current REPL at the given state index (0=base, -1=latest).")
 def fork(id: str, state_idx: int) -> str:
     return repl.send(f"Ir.fork {ml_str(id)} {ml_int(state_idx)};")

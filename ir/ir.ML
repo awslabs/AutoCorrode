@@ -20,6 +20,7 @@ sig
   val get_cfg : unit -> config
 
   val init : string -> string list -> unit
+  val init_from_document : string -> string -> int -> unit
   val fork : string -> int -> unit
   val focus : string -> unit
   val step : string -> unit
@@ -153,7 +154,8 @@ fun source thy_name start stop =
 datatype origin =
   From_Theory of string
 | From_Segment of string * int
-| From_REPL of string * int;
+| From_REPL of string * int
+| From_Document of string * int;
 
 type repl_step = {
   text: string,
@@ -255,6 +257,36 @@ fun init id specs =
      out ("Created REPL " ^ quote id ^ ", set as current")
   end;
 
+fun init_from_document id node_name command_id =
+  let
+    val _ = if Symtab.defined (Synchronized.value repl_tab) id
+            then error ("REPL " ^ quote id ^ " already exists") else ()
+    val st = Document.state ()
+    val exec =
+      (case Exn.capture (Document.command_exec st node_name) command_id of
+        Exn.Res (SOME e) => e
+      | Exn.Res NONE =>
+          error ("Command " ^ string_of_int command_id ^ " in " ^ quote node_name ^
+                 " has not been executed yet")
+      | Exn.Exn exn =>
+          error ("Cannot access command " ^ string_of_int command_id ^ " in " ^
+                 quote node_name ^ ": " ^ Runtime.exn_message exn))
+    val (eval, _) = exec
+    val _ = if not (Command.eval_finished eval) then
+              error ("Command " ^ string_of_int command_id ^ " in " ^ quote node_name ^
+                     " is still being evaluated")
+            else ()
+    val toplevel_st = Command.eval_result_state eval
+    val r : repl = {origin = From_Document (node_name, command_id),
+                    base_state = toplevel_st, steps = []}
+  in update_repl id r;
+     Synchronized.change current_repl (K id);
+     out ("Created REPL " ^ quote id ^ " from document " ^ quote node_name ^
+          " command " ^ string_of_int command_id ^
+          (if Toplevel.is_proof toplevel_st then " [proof]" else " [theory]") ^
+          ", set as current")
+  end;
+
 fun fork id state_idx =
   let val _ = if Symtab.defined (Synchronized.value repl_tab) id
               then error ("REPL " ^ quote id ^ " already exists")
@@ -312,6 +344,7 @@ fun show () =
           From_Theory t => "theory " ^ t
         | From_Segment (t, i) => t ^ ":" ^ string_of_int i
         | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
+        | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i
       val n = length (#steps r)
       val _ = out ("REPL " ^ quote id ^
                    (if id = cur_id then " (current)" else "") ^
@@ -442,6 +475,7 @@ fun repls () =
             From_Theory t => "theory " ^ t
           | From_Segment (t, i) => t ^ ":" ^ string_of_int i
           | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
+          | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i
         val stale = length (filter #stale (#steps r))
         val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
             (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
