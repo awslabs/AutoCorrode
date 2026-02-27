@@ -1301,9 +1301,37 @@ def main():
                    help="Run in daemon mode: mgmt console on Unix socket instead of stdin")
     p.add_argument("--attach", action="store_true",
                    help="Attach to a running daemon's mgmt console")
+    p.add_argument("--kill-daemon", action="store_true",
+                   help="Kill a running daemon and exit")
     p.add_argument("--mgmt-socket", default=MGMT_SOCKET_PATH,
                    help=f"Unix socket path for --daemon/--attach (default: {MGMT_SOCKET_PATH})")
     args = p.parse_args()
+
+    # --kill-daemon: send /quit to the daemon's mgmt socket
+    if args.kill_daemon:
+        sock_path = args.mgmt_socket
+        if not os.path.exists(sock_path):
+            print(f"{DIM}No daemon running (no socket at {sock_path}){RST}")
+            sys.exit(0)
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect(sock_path)
+            sock.sendall(b"/quit\n")
+            sock.close()
+            # Wait for socket file to disappear
+            for _ in range(20):
+                if not os.path.exists(sock_path):
+                    break
+                time.sleep(0.25)
+            print(f"{GREEN}Daemon stopped{RST}")
+        except (ConnectionRefusedError, OSError) as e:
+            print(f"{RED}Failed to stop daemon: {e}{RST}")
+            # Stale socket — clean up
+            try:
+                os.unlink(sock_path)
+            except OSError:
+                pass
+        sys.exit(0)
 
     # --attach: connect to daemon and run prompt loop
     if args.attach:
