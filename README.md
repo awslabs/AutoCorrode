@@ -4,7 +4,7 @@
 
 # AutoCorrode
 
-AutoCorrode provides infrastructure for reasoning about imperative programs in Isabelle/HOL. It supports classical and separation logic and includes configurable and scalable custom automation, written in Standard ML. The core of AutoCorrode is language-agnostic, but particular emphasis placed on a Rust-dialect called µRust.
+AutoCorrode provides infrastructure for reasoning about imperative programs in Isabelle/HOL. It supports classical and separation logic and includes configurable and scalable custom automation, written in Standard ML. The core of AutoCorrode is language-agnostic, with frontends and examples for both the Rust-like language µRust and C11.
 
 AutoCorrode gets its name as the little rusty brother of the independent C verification framework [AutoCorres](https://github.com/seL4/l4v/tree/master/tools/autocorres) for Isabelle/HOL.
 
@@ -115,6 +115,14 @@ This session provides concrete interpretations for the locales defined in [Micro
 ### [Micro_Rust_Std_Lib](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Micro_Rust_Std_Lib.Micro_Rust_Std_Lib.html)
 
 Specifications and proofs for common µRust operations.
+
+### [Micro_C_Parsing_Frontend](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Micro_C_Parsing_Frontend.C_To_Core_Translation.html)
+
+This session provides the C11 frontend. It parses C11 via Isabelle/C and translates C11 code into AutoCorrode Core expressions, including support for arithmetic, pointers, arrays, structs, control flow, and function calls.
+
+### [Micro_C_Examples](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Micro_C_Examples.Simple_C_Functions.html)
+
+This session contains end-to-end C11 verification examples over the translated Core definitions, including arrays, structs, loops, and bitwise code. See [Micro_C_Examples/README.md](Micro_C_Examples/README.md) for a guide to the material.
 
 ### [Data_Structures](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Data_Structures.Data_Structures.html)
 
