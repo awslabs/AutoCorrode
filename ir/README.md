@@ -152,3 +152,102 @@ Created REPL "R", set as current
 
 The REPL is now rooted at segment 6 (after `lemma bar`), with all
 prior definitions and lemmas available.
+
+### I/Q Integration
+
+Here's the high-level overview of the different components coming
+together when I/R is integrated into Isabelle/Scala and I/Q:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                  Isabelle/jEdit + Scala                      │
+│                                                              │
+│  ┌──────────────┐   ┌───────────────────┐                    │
+│  │ I/Q Plugin   │   │ I/R Client        │                    │
+│  │ (IQPlugin)   │   │ (IRClient, Scala) │                    │
+│  └──┬───┬───────┘   └────┬──────────────┘                    │
+│     │   │                │                                   │
+│     │   │            (5) │ TCP                               │
+│     │   │                │ connect                           │
+│     │   │                │                                   │
+└─────┼───┼────────────────┼───────────────────────────────────┘
+      │   │                │
+      │   │                │
+      │ (1) "IR_Repl.start"│
+      │ (8) "IR_Repl.stop" │
+      │   │                │
+      │   ▼                │
+┌─────┼───────────────────────────────────────────────────────────────┐
+│     :               Isabelle/ML                                     │
+│     :          (Poly/ML session process)                            │
+│     :                    :                                          │
+│     :                    :  ┌──────────────────────────────────┐    │
+│     :                    :  │  Isabelle Prover                 │    │
+│     :                    :  │  (HOL, tactics, sledgehammer)    │    │
+│     :                    :  └──────────────▲───────────────────┘    │
+│     :                    :                 │ (6c) Isar commands     │
+│     :                    :                 │      evaluated by      │
+│     :                    :                 │      prover kernel     │
+│     :                    :  ┌──────────────┴───────────────────┐    │
+│     :                    :  │  I/R  (ir.ML)                    │    │
+│     :                    :  │  REPL management: init, step,    │    │
+│     :                    :  │  fork, merge, state, replay, ... │    │
+│     :                    :  └──────────────▲───────────────────┘    │
+│     :                    :                 │ (6b) Ir.* commands     │
+│     :                    :                 │      dispatched        │
+│     :                    :  ┌──────────────┴───────────────────┐    │
+│     :                    :  │  ML_Repl (ml_repl.ML)            │    │
+│     :                    :  │  TCP listener :9146              │    │
+│     :                    :  │  ◄── (1) started by IR_Repl.start│    │
+│     :                    :  │  ◄── (8) stopped by IR_Repl.stop │    │
+│     :                    :  └──────────────▲───────────────────┘    │
+│     :                    :                 │                        │
+└─────┼────────────────────┼─────────────────┼────────────────────────┘
+      │                    │                 │
+      │ (2) spawns         │             (3) │ TCP :9146
+      │                    │                 │ daemon connects
+      ▼                    ▼                 │
+┌───────────────────────────────────────────────────────────────┐
+│              I/R REPL Daemon  (repl.py --daemon)              │
+│                                                               │
+│  ┌──────────────────┐  ┌───────────────┐  ┌───────────────┐   │
+│  │ I/R REPL TCP     │  │ Connection    │  │ I/R Mgmt      │   │
+│  │ Server (:9147)   │  │ to ML_Repl    │  │ Console       │   │
+│  │                  │  │ (:9146)       │  │ (Unix socket) │   │
+│  └────────┬─────────┘  └───────────────┘  └──────┬────────┘   │
+│           │                                      │            │
+│       (4) │ spawns                               │            │
+│           ▼                                      │            │
+│  ┌──────────────────┐                            │            │
+│  │ I/R MCP Server   │                            │            │
+│  │ (:9148)          │                            │            │
+│  └──────────────────┘                            │            │
+│           │                                      │            │
+└───────────┼──────────────────────────────────────┼────────────┘
+            │ MCP                                  │ Unix socket
+            ▼                                      ▼
+      ┌──────────────────┐               ┌───────────────────┐
+      │  I/R MCP Client  │               │     repl.py       │
+      │  (e.g. Claude,   │               │ Mangement console │
+      │    Bedrock)      │               │    (Debugging)    │
+      └──────────────────┘               └───────────────────┘
+
+Startup:
+  (1) I/Q sends "IR_Repl.start" → ML_Repl opens single TCP REPL at :9146
+  (2) I/Q spawns repl.py --daemon
+  (3) repl.py daemon connects to ML_Repl on :9146,
+  (4) repl.py daemon multiplexes raw TCP REPL into
+      - TCP (:9147)
+      - MCP (:9148)
+      - Management Console (:socket)
+  (5) IRClient connects to daemon on :9147 via TCP;
+      I/R functionality wrapped in Scala API IRScala
+
+Command flow:
+  (6a) IRClient sends command to daemon via :9147
+       → daemon forwards to ML_Repl via :9146
+  (6b) ML_Repl dispatches Ir.* commands to I/R module
+  (6c) I/R evaluates Isar commands via the prover kernel
+  (6d) Output channels (normally directed at Isabelle/Scala)
+       redirected to repl.py; still via PIDE
+```
