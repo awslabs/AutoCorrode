@@ -1,0 +1,6 @@
+# Keep function filter non-matching to make this pass type-only.
+functions:
+  __smoke_no_functions__
+
+types:
+  poly_t

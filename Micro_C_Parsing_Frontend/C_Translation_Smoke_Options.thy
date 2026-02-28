@@ -33,4 +33,14 @@ ML \<open>
       handle ERROR _ => ());
 \<close>
 
+section \<open>Two-Phase Type-Then-Function Smoke\<close>
+
+micro_c_file prefix: smoke_split_ manifest: "smoke_manifest_types.txt" "smoke_manifest_file_types_phase1.c"
+
+micro_c_file prefix: smoke_split_ addr: 'addr gv: 'gv
+  manifest: "smoke_manifest_phase2.txt" "smoke_manifest_file_types_phase2.c"
+
+thm smoke_split_poly_get0_def
+thm smoke_split_poly_t.record_simps
+
 end

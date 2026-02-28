@@ -10,7 +10,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_C.C_Sizeof"
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
-       and "prefix:" and "manifest:"
+       and "prefix:" and "manifest:" and "addr:" and "gv:"
 begin
 
 section \<open>C-to-Core Monad Translation Infrastructure\<close>
@@ -481,35 +481,6 @@ struct
           expr_written_vars e
     | expr_written_vars _ = []
 
-  fun expr_has_opaque_side_effect (CCall0 _) = true
-    | expr_has_opaque_side_effect (CAssign0 (_, CVar0 _, rhs, _)) =
-        expr_has_opaque_side_effect rhs
-    | expr_has_opaque_side_effect (CAssign0 (_, lhs, rhs, _)) =
-        true orelse expr_has_opaque_side_effect lhs orelse expr_has_opaque_side_effect rhs
-    | expr_has_opaque_side_effect (CUnary0 (CPreIncOp0, CVar0 _, _)) = false
-    | expr_has_opaque_side_effect (CUnary0 (CPostIncOp0, CVar0 _, _)) = false
-    | expr_has_opaque_side_effect (CUnary0 (CPreDecOp0, CVar0 _, _)) = false
-    | expr_has_opaque_side_effect (CUnary0 (CPostDecOp0, CVar0 _, _)) = false
-    | expr_has_opaque_side_effect (CUnary0 (CPreIncOp0, _, _)) = true
-    | expr_has_opaque_side_effect (CUnary0 (CPostIncOp0, _, _)) = true
-    | expr_has_opaque_side_effect (CUnary0 (CPreDecOp0, _, _)) = true
-    | expr_has_opaque_side_effect (CUnary0 (CPostDecOp0, _, _)) = true
-    | expr_has_opaque_side_effect (CBinary0 (_, l, r, _)) =
-        expr_has_opaque_side_effect l orelse expr_has_opaque_side_effect r
-    | expr_has_opaque_side_effect (CUnary0 (_, e, _)) = expr_has_opaque_side_effect e
-    | expr_has_opaque_side_effect (CIndex0 (a, i, _)) =
-        expr_has_opaque_side_effect a orelse expr_has_opaque_side_effect i
-    | expr_has_opaque_side_effect (CMember0 (e, _, _, _)) =
-        expr_has_opaque_side_effect e
-    | expr_has_opaque_side_effect (CCast0 (_, e, _)) = expr_has_opaque_side_effect e
-    | expr_has_opaque_side_effect (CComma0 (es, _)) =
-        List.exists expr_has_opaque_side_effect es
-    | expr_has_opaque_side_effect (CCond0 (c, t, e, _)) =
-        expr_has_opaque_side_effect c orelse
-          (case t of Some te => expr_has_opaque_side_effect te | None => false) orelse
-          expr_has_opaque_side_effect e
-    | expr_has_opaque_side_effect _ = false
-
   fun list_intersects xs ys =
     List.exists (fn x => List.exists (fn y => x = y) ys) xs
 
@@ -781,8 +752,11 @@ structure C_Trans_Ctxt : sig
   val make : Proof.context -> (string * C_Ast_Utils.c_numeric_type) list Symtab.table
              -> int Symtab.table -> C_Ast_Utils.c_numeric_type Symtab.table
              -> C_Ast_Utils.c_numeric_type Symtab.table Unsynchronized.ref
-             -> C_Ast_Utils.c_numeric_type list Symtab.table Unsynchronized.ref -> t
+             -> C_Ast_Utils.c_numeric_type list Symtab.table Unsynchronized.ref
+             -> typ -> typ -> t
   val get_ctxt : t -> Proof.context
+  val get_ref_addr_ty : t -> typ
+  val get_ref_gv_ty : t -> typ
   val add_var : string -> var_kind -> term -> C_Ast_Utils.c_numeric_type -> t -> t
   val lookup_var : t -> string -> (var_kind * term * C_Ast_Utils.c_numeric_type) option
   val add_global_const : string -> term -> C_Ast_Utils.c_numeric_type -> t -> t
@@ -825,26 +799,31 @@ struct
     typedef_tab : C_Ast_Utils.c_numeric_type Symtab.table,
     func_ret_types : C_Ast_Utils.c_numeric_type Symtab.table Unsynchronized.ref,
     func_param_types : C_Ast_Utils.c_numeric_type list Symtab.table Unsynchronized.ref,
+    ref_addr_ty : typ,
+    ref_gv_ty : typ,
     break_ref : term option,
     continue_ref : term option,
     goto_refs : (string * term) list,           (* label_name -> flag ref variable *)
     active_goto_labels : string list             (* labels that are valid forward goto targets from here *)
   }
 
-  fun make ctxt struct_fields enum_consts typedef_tab func_ret_types func_param_types : t =
+  fun make ctxt struct_fields enum_consts typedef_tab func_ret_types func_param_types
+      ref_addr_ty ref_gv_ty : t =
     { ctxt = ctxt, vars = Symtab.empty, global_consts = Symtab.empty, struct_types = Symtab.empty,
       struct_fields = struct_fields, array_decls = Symtab.empty,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = NONE, continue_ref = NONE,
       goto_refs = [], active_goto_labels = [] }
 
   fun get_ctxt ({ ctxt, ... } : t) = ctxt
+  fun get_ref_addr_ty ({ ref_addr_ty, ... } : t) = ref_addr_ty
+  fun get_ref_gv_ty ({ ref_gv_ty, ... } : t) = ref_gv_ty
 
   fun add_var name kind tm cty ({ ctxt, vars, global_consts, struct_types, struct_fields,
                                    array_decls, enum_consts, typedef_tab, func_ret_types,
-                                   func_param_types, break_ref, continue_ref, goto_refs,
+                                   func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref, goto_refs,
                                    active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = Symtab.update (name, (kind, tm, cty)) vars,
       global_consts = global_consts,
@@ -852,7 +831,7 @@ struct
       array_decls = array_decls,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
       func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs, active_goto_labels = active_goto_labels }
 
@@ -861,13 +840,14 @@ struct
 
   fun add_global_const name tm cty
       ({ ctxt, vars, global_consts, struct_types, struct_fields, array_decls, enum_consts,
-         typedef_tab, func_ret_types, func_param_types, break_ref, continue_ref, goto_refs,
+         typedef_tab, func_ret_types, func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref, goto_refs,
          active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars,
       global_consts = Symtab.update (name, (tm, cty)) global_consts,
       struct_types = struct_types, struct_fields = struct_fields,
       array_decls = array_decls, enum_consts = enum_consts, typedef_tab = typedef_tab,
       func_ret_types = func_ret_types, func_param_types = func_param_types,
+      ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs, active_goto_labels = active_goto_labels }
 
@@ -879,14 +859,14 @@ struct
 
   fun set_struct_type var_name struct_name
       ({ ctxt, vars, global_consts, struct_types, struct_fields, array_decls, enum_consts, typedef_tab,
-         func_ret_types, func_param_types, break_ref, continue_ref, goto_refs,
+         func_ret_types, func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref, goto_refs,
          active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts,
       struct_types = Symtab.update (var_name, struct_name) struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs, active_goto_labels = active_goto_labels }
 
@@ -904,13 +884,14 @@ struct
 
   fun set_array_decl var_name elem_cty size
       ({ ctxt, vars, global_consts, struct_types, struct_fields, array_decls, enum_consts,
-         typedef_tab, func_ret_types, func_param_types, break_ref, continue_ref,
+         typedef_tab, func_ret_types, func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref,
          goto_refs, active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields,
       array_decls = Symtab.update (var_name, (elem_cty, size)) array_decls,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
       func_ret_types = func_ret_types, func_param_types = func_param_types,
+      ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref, continue_ref = continue_ref, goto_refs = goto_refs,
       active_goto_labels = active_goto_labels }
 
@@ -922,7 +903,7 @@ struct
 
   fun add_enum_consts entries ({ ctxt, vars, struct_types, struct_fields,
                                  global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
-                                 func_param_types, break_ref, continue_ref, goto_refs,
+                                 func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref, goto_refs,
                                  active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields,
@@ -930,7 +911,7 @@ struct
       enum_consts = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                       enum_consts entries,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs, active_goto_labels = active_goto_labels }
 
@@ -953,39 +934,39 @@ struct
 
   fun set_break_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
                                  global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
-                                 func_param_types, break_ref = _, continue_ref,
+                                 func_param_types, ref_addr_ty, ref_gv_ty, break_ref = _, continue_ref,
                                  goto_refs, active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = SOME ref_term,
       continue_ref = continue_ref, goto_refs = goto_refs,
       active_goto_labels = active_goto_labels }
 
   fun set_continue_ref ref_term ({ ctxt, vars, struct_types, struct_fields,
                                     global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
-                                    func_param_types, break_ref, continue_ref = _,
+                                    func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref = _,
                                     goto_refs, active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref,
       continue_ref = SOME ref_term, goto_refs = goto_refs,
       active_goto_labels = active_goto_labels }
 
   fun clear_break_ref ({ ctxt, vars, struct_types, struct_fields,
                           global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
-                          func_param_types, break_ref = _, continue_ref, goto_refs,
+                          func_param_types, ref_addr_ty, ref_gv_ty, break_ref = _, continue_ref, goto_refs,
                           active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = NONE, continue_ref = continue_ref,
       goto_refs = goto_refs, active_goto_labels = active_goto_labels }
 
@@ -993,13 +974,13 @@ struct
 
   fun set_goto_refs refs ({ ctxt, vars, struct_types, struct_fields,
                              global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
-                             func_param_types, break_ref, continue_ref, goto_refs = _,
+                             func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref, goto_refs = _,
                              active_goto_labels } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts,
       typedef_tab = typedef_tab, func_ret_types = func_ret_types,
-      func_param_types = func_param_types,
+      func_param_types = func_param_types, ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref,
       continue_ref = continue_ref, goto_refs = refs,
       active_goto_labels = active_goto_labels }
@@ -1014,12 +995,13 @@ struct
 
   fun set_active_goto_labels labels ({ ctxt, vars, struct_types, struct_fields,
                                        global_consts, array_decls, enum_consts, typedef_tab, func_ret_types,
-                                       func_param_types, break_ref, continue_ref, goto_refs,
+                                       func_param_types, ref_addr_ty, ref_gv_ty, break_ref, continue_ref, goto_refs,
                                        active_goto_labels = _ } : t) : t =
     { ctxt = ctxt, vars = vars, global_consts = global_consts, struct_types = struct_types,
       struct_fields = struct_fields, array_decls = array_decls,
       enum_consts = enum_consts, typedef_tab = typedef_tab,
       func_ret_types = func_ret_types, func_param_types = func_param_types,
+      ref_addr_ty = ref_addr_ty, ref_gv_ty = ref_gv_ty,
       break_ref = break_ref, continue_ref = continue_ref,
       goto_refs = goto_refs, active_goto_labels = distinct (op =) labels }
 end
@@ -1290,6 +1272,7 @@ ML \<open>
 structure C_Translate : sig
   val translate_stmt : C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cStatement -> term
   val set_decl_prefix : string -> unit
+  val set_ref_universe_types : typ -> typ -> unit
   val translate_fundef : (string * C_Ast_Utils.c_numeric_type) list Symtab.table
                          -> int Symtab.table
                          -> C_Ast_Utils.c_numeric_type Symtab.table
@@ -1385,13 +1368,51 @@ struct
     Unsynchronized.ref NONE
   val current_decl_prefix : string Unsynchronized.ref =
     Unsynchronized.ref "c_"
+  val current_ref_addr_ty : typ Unsynchronized.ref =
+    Unsynchronized.ref (TFree ("'addr", []))
+  val current_ref_gv_ty : typ Unsynchronized.ref =
+    Unsynchronized.ref (TFree ("'gv", []))
 
   fun set_decl_prefix pfx = (current_decl_prefix := pfx)
+  fun set_ref_universe_types addr_ty gv_ty =
+    (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
 
   open C_Ast
 
   fun unsupported construct =
     error ("micro_c_translate: unsupported C construct: " ^ construct)
+
+  fun normalize_ref_universe_type tctx ty =
+    let
+      val addr_ty = C_Trans_Ctxt.get_ref_addr_ty tctx
+      val gv_ty = C_Trans_Ctxt.get_ref_gv_ty tctx
+      fun go (Term.Type (name, args)) =
+            let
+              val args' = List.map go args
+            in
+              (case args' of
+                 [Term.Type (gname, [_ , _]), _, vty] =>
+                   if Long_Name.base_name name = "focused"
+                      andalso Long_Name.base_name gname = "gref"
+                   then Isa_Type (name, [Isa_Type (gname, [addr_ty, gv_ty]), gv_ty, vty])
+                   else Isa_Type (name, args')
+               | _ => Isa_Type (name, args'))
+            end
+        | go t = t
+    in go ty end
+
+  fun mk_typed_ref_var tctx name alloc_expr =
+    Isa_Free (name, normalize_ref_universe_type tctx (expr_value_type alloc_expr))
+
+  fun mk_flag_ref_type tctx =
+    let
+      val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
+      val alloc_expr =
+        C_Term_Build.mk_var_alloc_typed
+          (C_Ast_Utils.hol_type_of C_Ast_Utils.CUInt) false_lit
+    in
+      normalize_ref_universe_type tctx (expr_value_type alloc_expr)
+    end
 
   (* Translate a C binary operator to a HOL function constant, dispatching
      signed vs unsigned based on the operand type.
@@ -3251,7 +3272,7 @@ struct
                         in if ty = isa_dummyT then expr_value_type init_term else ty end
                       val alloc_expr =
                         mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt tctx') val_type init_term
-                      val var = Isa_Free (name, expr_value_type alloc_expr)
+                      val var = mk_typed_ref_var tctx' name alloc_expr
                       val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
                       val tctx'' = (case struct_name_of_cty cty of
                                       SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
@@ -3460,12 +3481,13 @@ struct
                        val cond_raw = cond_term_of dummy_tctx
                        val body_raw = translate_stmt dummy_tctx body
                        val step_raw = step_term_of dummy_tctx
-                       val break_ref = if has_brk
-                         then SOME (fresh_var [cond_raw, body_raw, step_raw] "v__for_break" isa_dummyT)
-                         else NONE
-                       val continue_ref = if has_cont
-                         then SOME (fresh_var [cond_raw, body_raw, step_raw] "v__for_cont" isa_dummyT)
-                         else NONE
+                        val flag_ref_ty = mk_flag_ref_type tctx'
+                        val break_ref = if has_brk
+                          then SOME (fresh_var [cond_raw, body_raw, step_raw] "v__for_break" flag_ref_ty)
+                          else NONE
+                        val continue_ref = if has_cont
+                          then SOME (fresh_var [cond_raw, body_raw, step_raw] "v__for_cont" flag_ref_ty)
+                          else NONE
                        val tctx_loop = case break_ref of
                            SOME b => C_Trans_Ctxt.set_break_ref b tctx'
                          | NONE => tctx'
@@ -3544,7 +3566,7 @@ struct
                                   in if ty = isa_dummyT then expr_value_type init else ty end
                                 val alloc_expr =
                                   mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt tctx') val_type init
-                                val var = Isa_Free (name, expr_value_type alloc_expr)
+                                val var = mk_typed_ref_var tctx' name alloc_expr
                                 val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
                                 val tctx'' = (case struct_name_of_cty cty of
                                                 SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
@@ -3624,20 +3646,21 @@ struct
            else
              (* Allocate break/continue flag refs *)
              let (* Pre-set dummy refs so first-pass translation doesn't warn *)
-                 val dummy_tctx = (if has_brk
-                   then C_Trans_Ctxt.set_break_ref (Isa_Free ("__dummy_brk", isa_dummyT)) tctx
-                   else tctx)
-                 val dummy_tctx = (if has_cont
-                   then C_Trans_Ctxt.set_continue_ref (Isa_Free ("__dummy_cont", isa_dummyT)) dummy_tctx
-                   else dummy_tctx)
+                val flag_ref_ty = mk_flag_ref_type tctx
+                val dummy_tctx = (if has_brk
+                  then C_Trans_Ctxt.set_break_ref (Isa_Free ("__dummy_brk", flag_ref_ty)) tctx
+                  else tctx)
+                val dummy_tctx = (if has_cont
+                  then C_Trans_Ctxt.set_continue_ref (Isa_Free ("__dummy_cont", flag_ref_ty)) dummy_tctx
+                  else dummy_tctx)
                  val cond_term_raw = ensure_bool_cond dummy_tctx cond
                  val body_raw = translate_stmt dummy_tctx body_stmt
-                 val break_ref = if has_brk
-                   then SOME (fresh_var [cond_term_raw, body_raw] "v__break" isa_dummyT)
-                   else NONE
-                 val continue_ref = if has_cont
-                   then SOME (fresh_var [cond_term_raw, body_raw] "v__cont" isa_dummyT)
-                   else NONE
+                val break_ref = if has_brk
+                  then SOME (fresh_var [cond_term_raw, body_raw] "v__break" flag_ref_ty)
+                  else NONE
+                val continue_ref = if has_cont
+                  then SOME (fresh_var [cond_term_raw, body_raw] "v__cont" flag_ref_ty)
+                  else NONE
                  (* Update context *)
                  val tctx' = case break_ref of
                      SOME b => C_Trans_Ctxt.set_break_ref b tctx | NONE => tctx
@@ -3696,7 +3719,8 @@ struct
             val groups = extract_switch_groups items
             val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
             val true_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1
-            val switch_break_ref = fresh_var [switch_term] "v__switch_break" isa_dummyT
+            val flag_ref_ty = mk_flag_ref_type tctx
+            val switch_break_ref = fresh_var [switch_term] "v__switch_break" flag_ref_ty
             (* break inside switch exits this switch, not any enclosing loop *)
             val tctx_sw = C_Trans_Ctxt.set_break_ref switch_break_ref
                             (C_Trans_Ctxt.clear_break_ref tctx)
@@ -3735,7 +3759,7 @@ struct
                   end
                 else
                   (* Fall-through: use matched_ref *)
-                  let val matched_ref = fresh_var [switch_term] "v__matched" isa_dummyT
+                  let val matched_ref = fresh_var [switch_term] "v__matched" flag_ref_ty
                       val matched_var = Isa_Free ("v__m", isa_dummyT)
                       val matched_nonzero =
                         Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
@@ -3845,7 +3869,8 @@ struct
       (* Add parameters to the translation context as Param (by-value) *)
       val tctx = List.foldl
         (fn ((n, v, cty), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v cty ctx)
-        (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab func_ret_types func_param_types) param_vars
+        (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab func_ret_types func_param_types
+          (!current_ref_addr_ty) (!current_ref_gv_ty)) param_vars
       val tctx = List.foldl (fn ((gname, gterm, gcty, garr_meta, gstruct), ctx) =>
                     let
                       val ctx' = C_Trans_Ctxt.add_global_const gname gterm gcty ctx
@@ -3873,24 +3898,30 @@ struct
         List.exists (fn a => a = n) assigned_names) param_vars
       val (tctx, promoted_bindings) = List.foldl
         (fn ((n, orig_var, cty), (ctx, binds)) =>
-          let val ref_var = Isa_Free (n ^ "_ref", isa_dummyT)
+          let
+              val val_type = C_Ast_Utils.hol_type_of cty
+              val alloc_expr =
+                mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt ctx) val_type
+                  (C_Term_Build.mk_literal orig_var)
+              val ref_var = mk_typed_ref_var ctx (n ^ "_ref") alloc_expr
               val ctx' = C_Trans_Ctxt.add_var n C_Trans_Ctxt.Local ref_var cty ctx
-          in (ctx', binds @ [(ref_var, orig_var)]) end)
+          in (ctx', binds @ [(ref_var, alloc_expr)]) end)
         (tctx, []) promoted_params
       (* Allocate goto flag references for forward-only goto support.
          Each label targeted by a goto gets a flag ref initialized to 0. *)
       val goto_labels = C_Ast_Utils.find_goto_targets body
+      val goto_ref_ty = mk_flag_ref_type tctx
       val goto_refs = List.map (fn label_name =>
-        (label_name, Isa_Free ("v__goto_" ^ label_name, isa_dummyT))) goto_labels
+        (label_name, Isa_Free ("v__goto_" ^ label_name, goto_ref_ty))) goto_labels
       val tctx = C_Trans_Ctxt.set_goto_refs goto_refs tctx
       (* Set current return type for implicit narrowing in CReturn0 *)
       val _ = current_ret_cty := SOME ret_cty
       val body_term = translate_stmt tctx body
       (* Wrap body with Ref::new for each promoted parameter *)
       val body_term = List.foldr
-        (fn ((ref_var, orig_var), b) =>
+        (fn ((ref_var, alloc_expr), b) =>
           C_Term_Build.mk_bind
-            (mk_resolved_var_alloc ctxt (C_Term_Build.mk_literal orig_var))
+            alloc_expr
             (Term.lambda ref_var b))
         body_term promoted_bindings
       (* Wrap body with Ref::new(0) for each goto flag ref *)
@@ -3925,6 +3956,7 @@ structure C_Def_Gen : sig
   type manifest = {functions: string list option, types: string list option}
   val set_decl_prefix : string -> unit
   val set_manifest : manifest -> unit
+  val set_ref_universe_types : typ -> typ -> unit
   val define_c_function : string -> string -> term -> local_theory -> local_theory
   val process_translation_unit : C_Ast.nodeInfo C_Ast.cTranslationUnit
                                  -> local_theory -> local_theory
@@ -3935,18 +3967,25 @@ struct
   val current_decl_prefix : string Unsynchronized.ref = Unsynchronized.ref "c_"
   val current_manifest : manifest Unsynchronized.ref =
     Unsynchronized.ref {functions = NONE, types = NONE}
+  val current_ref_addr_ty : typ Unsynchronized.ref =
+    Unsynchronized.ref (TFree ("'addr", []))
+  val current_ref_gv_ty : typ Unsynchronized.ref =
+    Unsynchronized.ref (TFree ("'gv", []))
 
   fun set_decl_prefix pfx = (current_decl_prefix := pfx)
   fun set_manifest m = (current_manifest := m)
+  fun set_ref_universe_types addr_ty gv_ty =
+    (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
 
   fun define_c_function prefix name term lthy =
     let
       val full_name = prefix ^ name
       val binding = Binding.name full_name
+      val term' = term |> Syntax.check_term lthy
       val ((_, (_, _)), lthy') =
         Local_Theory.define
           ((binding, NoSyn),
-           ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term))
+           ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term'))
           lthy
       val _ = writeln ("Defined: " ^ full_name)
     in lthy' end
@@ -3955,10 +3994,11 @@ struct
     let
       val full_name = prefix ^ "global_" ^ name
       val binding = Binding.name full_name
+      val term' = term |> Syntax.check_term lthy
       val ((_, (_, _)), lthy') =
         Local_Theory.define
           ((binding, NoSyn),
-           ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term))
+           ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term'))
           lthy
       val _ = writeln ("Defined: " ^ full_name)
     in lthy' end
@@ -4122,6 +4162,7 @@ struct
       val decl_prefix = !current_decl_prefix
       val {functions = manifest_functions, types = manifest_types} = !current_manifest
       val _ = C_Translate.set_decl_prefix decl_prefix
+      val _ = C_Translate.set_ref_universe_types (!current_ref_addr_ty) (!current_ref_gv_ty)
       fun mk_name_filter NONE = NONE
         | mk_name_filter (SOME xs) =
             SOME (List.foldl (fn (x, tab) => Symtab.update (x, ()) tab) Symtab.empty xs)
@@ -4270,25 +4311,56 @@ text \<open>
   Usage:
   @{text [display] "micro_c_translate \<open>void f() { return; }\<close>"}
   @{text [display] "micro_c_translate prefix: my_ \<open>void f() { return; }\<close>"}
+  @{text [display] "micro_c_translate addr: 'addr gv: 'gv \<open>void f() { return; }\<close>"}
 
   Notes:
-  \<^item> The option keyword is exactly @{text "prefix:"} (including the colon).
+  \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, and @{text "gv:"}.
   \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
+  \<^item> When omitted, @{text "addr:"} and @{text "gv:"} default to @{text "'addr"} and @{text "'gv"}.
   \<^item> Struct declarations in the input are translated to corresponding
          @{command "datatype_record"} declarations automatically when possible.
 \<close>
 
 ML \<open>
 local
+  datatype translate_opt =
+      TranslatePrefix of string
+    | TranslateAddrTy of string
+    | TranslateGvTy of string
   val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
-  val parse_prefix = Scan.option (parse_prefix_key |-- Parse.name)
+  val parse_addr_key = Parse.$$$ "addr:" >> K ()
+  val parse_gv_key = Parse.$$$ "gv:" >> K ()
+  val parse_translate_opt =
+      (parse_prefix_key |-- Parse.name >> TranslatePrefix)
+      || (parse_addr_key |-- Parse.typ >> TranslateAddrTy)
+      || (parse_gv_key |-- Parse.typ >> TranslateGvTy)
+
+  fun apply_translate_opt (TranslatePrefix pfx) (prefix_opt, addr_opt, gv_opt) =
+        (case prefix_opt of
+           NONE => (SOME pfx, addr_opt, gv_opt)
+         | SOME _ => error "micro_c_translate: duplicate prefix option")
+    | apply_translate_opt (TranslateAddrTy ty) (prefix_opt, addr_opt, gv_opt) =
+        (case addr_opt of
+           NONE => (prefix_opt, SOME ty, gv_opt)
+         | SOME _ => error "micro_c_translate: duplicate addr option")
+    | apply_translate_opt (TranslateGvTy ty) (prefix_opt, addr_opt, gv_opt) =
+        (case gv_opt of
+           NONE => (prefix_opt, addr_opt, SOME ty)
+         | SOME _ => error "micro_c_translate: duplicate gv option")
+
+  fun collect_translate_opts opts =
+    fold apply_translate_opt opts (NONE, NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_translate\<close>
     "parse C source and generate core monad definitions"
-    (parse_prefix -- Parse.embedded_input >> (fn (prefix_opt, source) => fn lthy =>
+    (Scan.repeat parse_translate_opt -- Parse.embedded_input -- Scan.repeat parse_translate_opt >>
+      (fn ((opts_pre, source), opts_post) => fn lthy =>
       let
+        val (prefix_opt, addr_opt, gv_opt) = collect_translate_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" prefix_opt
+        val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
+        val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
         (* Step 1: Parse the C source using Isabelle/C's parser.
            We use a Theory context so that Root_Ast_Store is updated at the
            theory level, where get_CTranslUnit can retrieve it. *)
@@ -4302,6 +4374,7 @@ val _ =
         (* Step 3: Translate and generate definitions *)
         val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest {functions = NONE, types = NONE}
+        val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
@@ -4320,6 +4393,7 @@ text \<open>
   @{text [display] "micro_c_file prefix: my_ manifest: \<open>path/to/manifest.txt\<close> \<open>path/to/file.c\<close>"}
   @{text [display] "micro_c_file \<open>path/to/file.c\<close> prefix: my_"}
   @{text [display] "micro_c_file \<open>path/to/file.c\<close> manifest: \<open>path/to/manifest.txt\<close>"}
+  @{text [display] "micro_c_file addr: 'addr gv: 'gv \<open>path/to/file.c\<close>"}
 
   Manifest format (plain text):
   @{text [display] "functions:"}
@@ -4330,10 +4404,11 @@ text \<open>
   @{text [display] "  my_enum"}
 
   Notes:
-  \<^item> Option keywords are exactly @{text "prefix:"} and @{text "manifest:"}.
+  \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, @{text "gv:"}, and @{text "manifest:"}.
   \<^item> Options may appear before and/or after the C file argument.
   \<^item> Each option may appear at most once.
   \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
+  \<^item> When omitted, @{text "addr:"} and @{text "gv:"} default to @{text "'addr"} and @{text "'gv"}.
   \<^item> Sections are optional; supported section headers are exactly @{text "functions:"} and @{text "types:"}.
   \<^item> Lines outside a section are rejected.
   \<^item> Leading/trailing whitespace is ignored.
@@ -4348,11 +4423,17 @@ local
   datatype manifest_section = Manifest_None | Manifest_Functions | Manifest_Types
   datatype load_opt =
       LoadPrefix of string
+    | LoadAddrTy of string
+    | LoadGvTy of string
     | LoadManifest of (theory -> Token.file)
   val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
+  val parse_addr_key = Parse.$$$ "addr:" >> K ()
+  val parse_gv_key = Parse.$$$ "gv:" >> K ()
   val parse_manifest_key = Parse.$$$ "manifest:" >> K ()
   val parse_load_opt =
       (parse_prefix_key |-- Parse.name >> LoadPrefix)
+      || (parse_addr_key |-- Parse.typ >> LoadAddrTy)
+      || (parse_gv_key |-- Parse.typ >> LoadGvTy)
       || (parse_manifest_key |-- Resources.parse_file >> LoadManifest)
   val semi = Scan.option \<^keyword>\<open>;\<close>;
 
@@ -4398,16 +4479,24 @@ local
       , types = if null ts then NONE else SOME ts }
     end
 
-  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, manifest_opt) =
+  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
         (case prefix_opt of
-           NONE => (SOME prefix, manifest_opt)
+           NONE => (SOME prefix, addr_opt, gv_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate prefix option")
-    | apply_load_opt (LoadManifest get_file) (prefix_opt, manifest_opt) =
+    | apply_load_opt (LoadAddrTy ty) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
+        (case addr_opt of
+           NONE => (prefix_opt, SOME ty, gv_opt, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate addr option")
+    | apply_load_opt (LoadGvTy ty) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
+        (case gv_opt of
+           NONE => (prefix_opt, addr_opt, SOME ty, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate gv option")
+    | apply_load_opt (LoadManifest get_file) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
         (case manifest_opt of
-           NONE => (prefix_opt, SOME get_file)
+           NONE => (prefix_opt, addr_opt, gv_opt, SOME get_file)
          | SOME _ => error "micro_c_file: duplicate manifest option")
 
-  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE)
+  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE, NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
@@ -4415,8 +4504,10 @@ val _ =
     (Scan.repeat parse_load_opt -- Resources.parse_file -- Scan.repeat parse_load_opt --| semi >>
       (fn ((opts_pre, get_file), opts_post) => fn lthy =>
       let
-        val (prefix_opt, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
+        val (prefix_opt, addr_opt, gv_opt, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" prefix_opt
+        val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
+        val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
         val thy = Proof_Context.theory_of lthy
         val {src_path, lines, digest, pos} : Token.file = get_file thy
 
@@ -4447,6 +4538,7 @@ val _ =
         val tu = get_CTranslUnit thy'
         val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest manifest
+        val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
