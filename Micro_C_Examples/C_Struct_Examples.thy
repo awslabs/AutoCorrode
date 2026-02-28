@@ -5,9 +5,14 @@ theory C_Struct_Examples
     "Micro_Rust_Std_Lib.StdLib_All"
 begin
 
-datatype_record c_point =
-  c_point_x :: c_int
-  c_point_y :: c_int
+micro_c_translate \<open>
+  struct point {
+    int x;
+    int y;
+  };
+\<close>
+
+thm c_point.record_simps
 
 section \<open>C struct verification\<close>
 

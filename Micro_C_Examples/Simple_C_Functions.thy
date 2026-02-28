@@ -728,8 +728,13 @@ end
 
 section \<open>Chained Struct-Array Access Verification\<close>
 
-datatype_record c_poly =
-  c_poly_coeffs :: \<open>c_int list\<close>
+micro_c_translate \<open>
+  struct poly {
+    int coeffs[256];
+  };
+\<close>
+
+thm c_poly.record_simps
 
 locale c_poly_verification_ctx =
     reference reference_types +

@@ -9,7 +9,8 @@ theory C_To_Core_Translation
     "Shallow_Micro_C.C_Numeric_Types"
     "Shallow_Micro_C.C_Sizeof"
   keywords "micro_c_translate" :: thy_decl
-       and "micro_c_file" :: thy_load
+       and "micro_c_file" :: thy_decl
+       and "prefix:" and "manifest:"
 begin
 
 section \<open>C-to-Core Monad Translation Infrastructure\<close>
@@ -83,6 +84,9 @@ structure C_Ast_Utils : sig
   val extract_struct_defs_with_types : c_numeric_type Symtab.table
                                        -> C_Ast.nodeInfo C_Ast.cTranslationUnit
                                        -> (string * (string * c_numeric_type) list) list
+  val extract_struct_record_defs : string -> c_numeric_type Symtab.table
+                                   -> C_Ast.nodeInfo C_Ast.cTranslationUnit
+                                   -> (string * (string * typ option) list) list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
   val type_rank : c_numeric_type -> int
@@ -517,13 +521,11 @@ struct
       val w1 = distinct (op =) (expr_written_vars e1)
       val writes_conflict =
         list_intersects w0 (r1 @ w1) orelse list_intersects w1 (r0 @ w0)
-      val opaque0 = expr_has_opaque_side_effect e0
-      val opaque1 = expr_has_opaque_side_effect e1
-      val opaque_conflict =
-        (opaque0 andalso (expr_has_side_effect e1 orelse not (null r1))) orelse
-        (opaque1 andalso (expr_has_side_effect e0 orelse not (null r0)))
     in
-      writes_conflict orelse opaque_conflict
+      (* Only reject when we can identify a concrete scalar object conflict.
+         Opaque/unknown side effects (e.g., function calls) are not treated as UB
+         by themselves, to avoid rejecting common valid C expressions. *)
+      writes_conflict
     end
 
   (* Walk the C AST and collect variable names that appear on the LHS of
@@ -630,6 +632,53 @@ struct
             | _ => NONE)
           members
 
+  fun cty_to_record_typ _ CBool = SOME @{typ bool}
+    | cty_to_record_typ _ CInt = SOME \<^typ>\<open>c_int\<close>
+    | cty_to_record_typ _ CUInt = SOME \<^typ>\<open>c_uint\<close>
+    | cty_to_record_typ _ CChar = SOME \<^typ>\<open>c_char\<close>
+    | cty_to_record_typ _ CSChar = SOME \<^typ>\<open>c_schar\<close>
+    | cty_to_record_typ _ CShort = SOME \<^typ>\<open>c_short\<close>
+    | cty_to_record_typ _ CUShort = SOME \<^typ>\<open>c_ushort\<close>
+    | cty_to_record_typ _ CLong = SOME \<^typ>\<open>c_long\<close>
+    | cty_to_record_typ _ CULong = SOME \<^typ>\<open>c_ulong\<close>
+    | cty_to_record_typ prefix (CStruct sname) = SOME (Term.Type (prefix ^ sname, []))
+    | cty_to_record_typ _ (CPtr _) = NONE
+    | cty_to_record_typ _ CVoid = NONE
+
+  fun ptr_depth_only derived =
+    List.foldl
+      (fn (d, acc) =>
+        (case d of
+           CPtrDeclr0 _ => acc + 1
+         | _ => acc))
+      0 derived
+
+  fun has_array_derived derived =
+    List.exists (fn CArrDeclr0 _ => true | _ => false) derived
+
+  fun member_record_field_typ prefix base_fty derived =
+    if has_array_derived derived then
+      Option.map HOLogic.listT (cty_to_record_typ prefix base_fty)
+    else if ptr_depth_only derived > 0 then
+      NONE
+    else
+      cty_to_record_typ prefix base_fty
+
+  fun extract_member_record_field_info prefix typedef_tab members =
+        List.mapPartial
+          (fn CDecl0 (field_specs, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
+                let val fname = ident_name ident_node
+                    val base_fty = case resolve_c_type_full typedef_tab field_specs of
+                                     SOME CVoid => CInt
+                                   | SOME ct => ct
+                                   | NONE =>
+                                       (case extract_struct_type_from_specs field_specs of
+                                          SOME sn => CStruct sn
+                                        | NONE => CInt)
+                in SOME (fname, member_record_field_typ prefix base_fty derived) end
+            | _ => NONE)
+          members
+
   fun extract_struct_def_with_types_from_decl typedef_tab (CDecl0 (specs, declrs, _)) =
         let fun find_struct_def [] = NONE
               | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
@@ -652,6 +701,30 @@ struct
   fun extract_struct_defs_with_types typedef_tab (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
       (fn CDeclExt0 decl => extract_struct_def_with_types_from_decl typedef_tab decl
+        | _ => NONE)
+      ext_decls
+
+  fun extract_struct_record_def_from_decl prefix typedef_tab (CDecl0 (specs, declrs, _)) =
+        let fun find_struct_def [] = NONE
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    Some ident, Some members, _, _), _)) :: _) =
+                  SOME (ident_name ident, extract_member_record_field_info prefix typedef_tab members)
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    None, Some members, _, _), _)) :: _) =
+                  if List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
+                  then (case declrs of
+                      [((Some (CDeclr0 (Some td_ident, _, _, _, _)), _), _)] =>
+                        SOME (ident_name td_ident,
+                              extract_member_record_field_info prefix typedef_tab members)
+                    | _ => NONE)
+                  else NONE
+              | find_struct_def (_ :: rest) = find_struct_def rest
+        in find_struct_def specs end
+    | extract_struct_record_def_from_decl _ _ _ = NONE
+
+  fun extract_struct_record_defs prefix typedef_tab (CTranslUnit0 (ext_decls, _)) =
+    List.mapPartial
+      (fn CDeclExt0 decl => extract_struct_record_def_from_decl prefix typedef_tab decl
         | _ => NONE)
       ext_decls
 
@@ -1216,6 +1289,7 @@ text \<open>
 ML \<open>
 structure C_Translate : sig
   val translate_stmt : C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cStatement -> term
+  val set_decl_prefix : string -> unit
   val translate_fundef : (string * C_Ast_Utils.c_numeric_type) list Symtab.table
                          -> int Symtab.table
                          -> C_Ast_Utils.c_numeric_type Symtab.table
@@ -1309,6 +1383,10 @@ struct
      the function body. Used by CReturn0 to insert narrowing casts. *)
   val current_ret_cty : C_Ast_Utils.c_numeric_type option Unsynchronized.ref =
     Unsynchronized.ref NONE
+  val current_decl_prefix : string Unsynchronized.ref =
+    Unsynchronized.ref "c_"
+
+  fun set_decl_prefix pfx = (current_decl_prefix := pfx)
 
   open C_Ast
 
@@ -1408,12 +1486,140 @@ struct
     | determine_struct_type _ _ =
         error "micro_c_translate: struct member access on complex expression not yet supported"
 
-  (* Resolve a struct field accessor/updater constant by name convention.
-     Convention: struct "point" field "x" -> accessor "c_point_x", updater "update_c_point_x" *)
+  (* Resolve a struct field accessor/updater constant by naming convention.
+     Prefix defaults to "c_" and can be overridden via command options. *)
+  fun struct_accessor_name struct_name field_name =
+    !current_decl_prefix ^ struct_name ^ "_" ^ field_name
+
+  fun struct_updater_name struct_name field_name =
+    "update_" ^ struct_accessor_name struct_name field_name
+
+  fun struct_focus_name struct_name field_name =
+    struct_accessor_name struct_name field_name ^ "_focus"
+
   fun resolve_const ctxt name =
     let val (full_name, _) = Term.dest_Const
-          (Proof_Context.read_const {proper = true, strict = false} ctxt name)
+          (Proof_Context.read_const {proper = true, strict = true} ctxt name)
     in Isa_Const (full_name, isa_dummyT) end
+
+  fun try_resolve_const ctxt name =
+    SOME (resolve_const ctxt name) handle ERROR _ => NONE
+
+  fun pick_preferred_const_by_base ctxt pred =
+    let
+      val consts_info = Consts.dest (Proof_Context.consts_of ctxt)
+      val names = map #1 (#constants consts_info)
+      val matches = List.filter pred names
+      fun base n = Long_Name.base_name n
+      fun pref_rank n =
+        let val b = base n in
+          if String.isPrefix (!current_decl_prefix) b then 0
+          else if String.isPrefix "c_" b then 1
+          else 2
+        end
+      fun best [] = NONE
+        | best (n :: ns) =
+            SOME (List.foldl (fn (m, acc) => if pref_rank m < pref_rank acc then m else acc) n ns)
+    in
+      best matches
+    end
+
+  fun resolve_struct_accessor_const ctxt struct_name field_name =
+    let
+      val suffix = struct_name ^ "_" ^ field_name
+      val explicit =
+        [ struct_accessor_name struct_name field_name
+        , (!current_decl_prefix ^ struct_name) ^ "." ^ struct_accessor_name struct_name field_name
+        , struct_name ^ "." ^ struct_accessor_name struct_name field_name
+        ]
+      fun try_explicit [] = NONE
+        | try_explicit (n :: ns) =
+            (case try_resolve_const ctxt n of SOME c => SOME c | NONE => try_explicit ns)
+    in
+      case try_explicit explicit of
+        SOME c => c
+      | NONE =>
+          (case pick_preferred_const_by_base ctxt
+                  (fn full =>
+                    let val b = Long_Name.base_name full in
+                      String.isSuffix suffix b andalso
+                      not (String.isPrefix "update_" b) andalso
+                      not (String.isSuffix "_focus" b)
+                    end) of
+             SOME full => Isa_Const (full, isa_dummyT)
+           | NONE =>
+               error ("micro_c_translate: missing struct field accessor constant: " ^
+                      struct_accessor_name struct_name field_name))
+    end
+
+  fun resolve_struct_updater_const ctxt struct_name field_name =
+    let
+      val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
+      val (accessor_full, _) = Term.dest_Const accessor_const
+      val qualifier = Long_Name.qualifier accessor_full
+      val accessor_base = Long_Name.base_name accessor_full
+      val updater_base = "update_" ^ accessor_base
+      val qualified = if qualifier = "" then updater_base else qualifier ^ "." ^ updater_base
+      val suffix = "update_" ^ struct_name ^ "_" ^ field_name
+    in
+      case try_resolve_const ctxt qualified of
+        SOME c => c
+      | NONE =>
+          (case try_resolve_const ctxt updater_base of
+             SOME c => c
+           | NONE =>
+               (case pick_preferred_const_by_base ctxt
+                       (fn full => String.isSuffix suffix (Long_Name.base_name full)) of
+                  SOME full => Isa_Const (full, isa_dummyT)
+                | NONE =>
+                    error ("micro_c_translate: missing struct field updater constant: " ^
+                           struct_updater_name struct_name field_name)))
+    end
+
+  fun resolve_struct_focus_const ctxt struct_name field_name =
+    let
+      val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
+      val updater_const = resolve_struct_updater_const ctxt struct_name field_name
+      val (accessor_full, _) = Term.dest_Const accessor_const
+      val qualifier = Long_Name.qualifier accessor_full
+      val accessor_base = Long_Name.base_name accessor_full
+      val focus_base = accessor_base ^ "_focus"
+      val record_name = !current_decl_prefix ^ struct_name
+      val candidates =
+        [ if qualifier = "" then focus_base else qualifier ^ "." ^ focus_base
+        , focus_base
+        , struct_focus_name struct_name field_name
+        , record_name ^ "." ^ struct_focus_name struct_name field_name
+        , struct_name ^ "." ^ struct_focus_name struct_name field_name
+        ]
+      fun mk_focus_from_lens () =
+        let
+          val make_lens_const = resolve_const ctxt "make_lens_via_view_modify"
+          val lens_to_focus_raw_const = resolve_const ctxt "lens_to_focus_raw"
+          val abs_focus_const = resolve_const ctxt "Abs_focus"
+          val lens =
+            make_lens_const $ accessor_const $ updater_const
+          val focus_raw = lens_to_focus_raw_const $ lens
+        in
+          abs_focus_const $ focus_raw
+        end
+      fun try_names [] = mk_focus_from_lens ()
+        | try_names (n :: ns) =
+            (resolve_const ctxt n handle ERROR _ => try_names ns)
+    in
+      try_names candidates
+    end
+
+  fun resolve_dereference_const ctxt =
+    (let
+       val (full_name, _) =
+         Term.dest_Const
+           (Proof_Context.read_const {proper = true, strict = false} ctxt "dereference_fun")
+     in
+       Isa_Const (full_name, isa_dummyT)
+     end
+     handle ERROR _ =>
+       Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT))
 
   fun mk_resolved_var_alloc_typed ctxt val_hol_type init_expr =
     let val ref_const =
@@ -1436,10 +1642,7 @@ struct
      Avoids store_dereference_const adhoc overloading issues when type context
      is insufficient (e.g. guard reads in goto, return after guards). *)
   fun mk_resolved_var_read ctxt ref_var =
-    let val deref_const =
-          resolve_const ctxt "dereference_fun"
-          handle ERROR _ =>
-            Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+    let val deref_const = resolve_dereference_const ctxt
         val deref_fn =
           Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
             $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
@@ -1940,9 +2143,8 @@ struct
     | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, true, _), rhs, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val updater_name = "update_c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val updater_const = resolve_const ctxt updater_name
+            val updater_const = resolve_struct_updater_const ctxt struct_name field_name
             val (ptr_expr, _) = translate_expr tctx expr
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                SOME cty => cty
@@ -1984,11 +2186,9 @@ struct
            SOME binop =>
              let val field_name = C_Ast_Utils.ident_name field_ident
                  val struct_name = determine_struct_type tctx expr
-                 val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
-                 val updater_name = "update_c_" ^ struct_name ^ "_" ^ field_name
                  val ctxt = C_Trans_Ctxt.get_ctxt tctx
-                 val accessor_const = resolve_const ctxt accessor_name
-                 val updater_const = resolve_const ctxt updater_name
+                 val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
+                 val updater_const = resolve_struct_updater_const ctxt struct_name field_name
                  val (ptr_term, _) = translate_expr tctx expr
                  val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
                  val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
@@ -2056,15 +2256,10 @@ struct
           CIndex0 (CMember0 (expr, field_ident, true, _), idx_expr, _), rhs, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
-            val updater_name = "update_c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val accessor_const = resolve_const ctxt accessor_name
-            val updater_const = resolve_const ctxt updater_name
-            val deref_const =
-              resolve_const ctxt "dereference_fun"
-              handle ERROR _ =>
-                Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+            val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
+            val updater_const = resolve_struct_updater_const ctxt struct_name field_name
+            val deref_const = resolve_dereference_const ctxt
             val (ptr_expr, _) = translate_expr tctx expr
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
@@ -2422,7 +2617,8 @@ struct
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val func_ref =
               let val (full_name, _) = Term.dest_Const
-                    (Proof_Context.read_const {proper = true, strict = false} ctxt ("c_" ^ fname))
+                    (Proof_Context.read_const {proper = true, strict = false} ctxt
+                      (!current_decl_prefix ^ fname))
               in SOME (Isa_Const (full_name, isa_dummyT)) end
               handle ERROR _ => NONE
             val _ =
@@ -2491,10 +2687,7 @@ struct
                                 C_Ast_Utils.CPtr inner => inner
                               | _ => unsupported "dereference on non-pointer expression")
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val deref_const =
-              resolve_const ctxt "dereference_fun"
-              handle ERROR _ =>
-                Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+            val deref_const = resolve_dereference_const ctxt
             val deref_fn =
               Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                 $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
@@ -2554,13 +2747,9 @@ struct
     | translate_expr tctx (CIndex0 (CMember0 (expr, field_ident, true, _), idx_expr, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val accessor_const = resolve_const ctxt accessor_name
-            val deref_const =
-              resolve_const ctxt "dereference_fun"
-              handle ERROR _ =>
-                Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+            val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
+            val deref_const = resolve_dereference_const ctxt
             val (ptr_expr, _) = translate_expr tctx expr
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
@@ -2611,10 +2800,7 @@ struct
             (* Resolve dereference_fun from locale context to avoid adhoc
                overloading ambiguity; fall back to store_dereference_const
                when outside a reference locale (e.g. smoke tests). *)
-            val deref_const =
-              resolve_const ctxt "dereference_fun"
-              handle ERROR _ =>
-                Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+            val deref_const = resolve_dereference_const ctxt
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val list_var = Isa_Free ("v__list", isa_dummyT)
@@ -2656,9 +2842,8 @@ struct
     | translate_expr tctx (CMember0 (expr, field_ident, true, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val accessor_const = resolve_const ctxt accessor_name
+            val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
             val (ptr_expr, _) = translate_expr tctx expr
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                SOME cty => cty
@@ -2668,9 +2853,8 @@ struct
     | translate_expr tctx (CMember0 (expr, field_ident, false, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val accessor_name = "c_" ^ struct_name ^ "_" ^ field_name
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val accessor_const = resolve_const ctxt accessor_name
+            val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
             val (struct_expr, _) = translate_expr tctx expr
             val v = Isa_Free ("v__struct", isa_dummyT)
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
@@ -2843,8 +3027,7 @@ struct
             (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                SOME cty => cty
              | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
-          val focus_name = "c_" ^ struct_name ^ "_" ^ field_name ^ "_focus"
-          val focus_const = resolve_const (C_Trans_Ctxt.get_ctxt tctx) focus_name
+          val focus_const = resolve_struct_focus_const (C_Trans_Ctxt.get_ctxt tctx) struct_name field_name
           val base_expr =
             if is_ptr then
               let val (ptr_expr, ptr_cty) = translate_expr tctx expr
@@ -2861,9 +3044,18 @@ struct
         end
     | translate_lvalue_location tctx (CIndex0 (arr_expr, idx_expr, _)) =
         let
+          val allow_fallback =
+            (case arr_expr of
+               CMember0 _ => false
+             | _ => true)
+          fun fallback_to_expr msg =
+            String.isSubstring "address-of non-lvalue expression" msg orelse
+            String.isSubstring "address-of by-value parameter" msg
           val (arr_term, arr_cty) =
             (translate_lvalue_location tctx arr_expr
-             handle ERROR _ => translate_expr tctx arr_expr)
+             handle ERROR msg =>
+               if allow_fallback andalso fallback_to_expr msg then translate_expr tctx arr_expr
+               else raise ERROR msg)
           val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
           val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
           val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
@@ -3117,10 +3309,7 @@ struct
                    (* Resolve dereference_fun from locale context to avoid
                       store_dereference_const adhoc overloading issues *)
                    val ctxt = C_Trans_Ctxt.get_ctxt tctx
-                   val deref_const =
-                     resolve_const ctxt "dereference_fun"
-                     handle ERROR _ =>
-                       Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT)
+                   val deref_const = resolve_dereference_const ctxt
                    val deref_fn =
                      Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                        $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
@@ -3733,31 +3922,45 @@ subsection \<open>Definition Generation\<close>
 
 ML \<open>
 structure C_Def_Gen : sig
-  val define_c_function : string -> term -> local_theory -> local_theory
+  type manifest = {functions: string list option, types: string list option}
+  val set_decl_prefix : string -> unit
+  val set_manifest : manifest -> unit
+  val define_c_function : string -> string -> term -> local_theory -> local_theory
   val process_translation_unit : C_Ast.nodeInfo C_Ast.cTranslationUnit
                                  -> local_theory -> local_theory
 end =
 struct
-  fun define_c_function name term lthy =
+  type manifest = {functions: string list option, types: string list option}
+
+  val current_decl_prefix : string Unsynchronized.ref = Unsynchronized.ref "c_"
+  val current_manifest : manifest Unsynchronized.ref =
+    Unsynchronized.ref {functions = NONE, types = NONE}
+
+  fun set_decl_prefix pfx = (current_decl_prefix := pfx)
+  fun set_manifest m = (current_manifest := m)
+
+  fun define_c_function prefix name term lthy =
     let
-      val binding = Binding.name ("c_" ^ name)
+      val full_name = prefix ^ name
+      val binding = Binding.name full_name
       val ((_, (_, _)), lthy') =
         Local_Theory.define
           ((binding, NoSyn),
            ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term))
           lthy
-      val _ = writeln ("Defined: c_" ^ name)
+      val _ = writeln ("Defined: " ^ full_name)
     in lthy' end
 
-  fun define_c_global_value name term lthy =
+  fun define_c_global_value prefix name term lthy =
     let
-      val binding = Binding.name ("c_global_" ^ name)
+      val full_name = prefix ^ "global_" ^ name
+      val binding = Binding.name full_name
       val ((_, (_, _)), lthy') =
         Local_Theory.define
           ((binding, NoSyn),
            ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term))
           lthy
-      val _ = writeln ("Defined: c_global_" ^ name)
+      val _ = writeln ("Defined: " ^ full_name)
     in lthy' end
 
   fun intinf_to_int_checked what n =
@@ -3778,6 +3981,42 @@ struct
   fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
     | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
     | struct_name_of_cty _ = NONE
+
+  fun type_exists ctxt tname =
+    can (Proof_Context.read_type_name {proper = true, strict = true} ctxt) tname
+
+  fun ensure_struct_record prefix (sname, fields) lthy =
+    let
+      val tname = prefix ^ sname
+      val ctxt = Local_Theory.target_of lthy
+    in
+      if type_exists ctxt tname then lthy
+      else
+        let
+          val bad_fields =
+            List.filter (fn (_, ty_opt) => case ty_opt of NONE => true | SOME _ => false) fields
+          val _ =
+            if null bad_fields then ()
+            else
+              error ("micro_c_translate: cannot auto-declare struct " ^ tname ^
+                     " because field type(s) are unsupported: " ^
+                     String.concatWith ", " (List.map #1 bad_fields) ^
+                     ". Please provide an explicit datatype_record declaration.")
+          val record_fields =
+            List.map (fn (fname, SOME ty) => (Binding.name (prefix ^ sname ^ "_" ^ fname), ty)
+                      | (_, NONE) => raise Match) fields
+          val lthy' =
+            Datatype_Records.record
+              (Binding.name tname)
+              Datatype_Records.default_ctr_options
+              []
+              record_fields
+              lthy
+          val _ = writeln ("Declared datatype_record: " ^ tname)
+        in
+          lthy'
+        end
+    end
 
   fun extract_global_consts typedef_tab struct_tab enum_tab
       (C_Ast.CTranslUnit0 (ext_decls, _)) =
@@ -3880,6 +4119,18 @@ struct
 
   fun process_translation_unit tu lthy =
     let
+      val decl_prefix = !current_decl_prefix
+      val {functions = manifest_functions, types = manifest_types} = !current_manifest
+      val _ = C_Translate.set_decl_prefix decl_prefix
+      fun mk_name_filter NONE = NONE
+        | mk_name_filter (SOME xs) =
+            SOME (List.foldl (fn (x, tab) => Symtab.update (x, ()) tab) Symtab.empty xs)
+      val func_filter = mk_name_filter manifest_functions
+      val type_filter = mk_name_filter manifest_types
+      fun keep_func name =
+        (case func_filter of NONE => true | SOME tab => Symtab.defined tab name)
+      fun keep_type name =
+        (case type_filter of NONE => true | SOME tab => Symtab.defined tab name)
       val builtin_typedefs = [
         ("uint8_t",  C_Ast_Utils.CChar),
         ("int8_t",   C_Ast_Utils.CSChar),
@@ -3893,29 +4144,39 @@ struct
       ]
       (* Extract struct definitions to build the struct field registry.
          Use fold/update to allow user typedefs to override builtins. *)
-      val typedef_defs_early = builtin_typedefs @ C_Ast_Utils.extract_typedefs tu
+      val typedef_defs_early =
+        builtin_typedefs @ List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_typedefs tu)
       val typedef_tab_early = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                                 Symtab.empty typedef_defs_early
-      val struct_defs = C_Ast_Utils.extract_struct_defs_with_types typedef_tab_early tu
+      val struct_defs =
+        List.filter (fn (n, _) => keep_type n)
+          (C_Ast_Utils.extract_struct_defs_with_types typedef_tab_early tu)
+      val struct_record_defs =
+        List.filter (fn (n, _) => keep_type n)
+          (C_Ast_Utils.extract_struct_record_defs decl_prefix typedef_tab_early tu)
       val struct_tab = Symtab.make struct_defs
       val _ = List.app (fn (sname, fields) =>
         writeln ("Registered struct: " ^ sname ^ " with fields: " ^
                  String.concatWith ", " (List.map #1 fields))) struct_defs
       (* Extract enum constant definitions *)
-      val enum_defs = C_Ast_Utils.extract_enum_defs tu
+      val enum_defs = List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_enum_defs tu)
       val enum_tab = Symtab.make enum_defs
       val _ = if null enum_defs then () else
         List.app (fn (name, value) =>
           writeln ("Registered enum constant: " ^ name ^ " = " ^
                    Int.toString value)) enum_defs
       (* Extract typedef mappings *)
-      val typedef_defs = builtin_typedefs @ C_Ast_Utils.extract_typedefs tu
+      val typedef_defs =
+        builtin_typedefs @ List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_typedefs tu)
       val typedef_tab = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                           Symtab.empty typedef_defs
       val _ = if null typedef_defs then () else
         List.app (fn (name, _) =>
           writeln ("Registered typedef: " ^ name)) typedef_defs
-      val fundefs = C_Ast_Utils.extract_fundefs tu
+      val fundefs =
+        List.filter
+          (fn C_Ast.CFunDef0 (_, declr, _, _, _) => keep_func (C_Ast_Utils.declr_name declr))
+          (C_Ast_Utils.extract_fundefs tu)
       val _ = List.app (fn C_Ast.CFunDef0 (_, declr, _, _, _) =>
                   let val name = C_Ast_Utils.declr_name declr
                   in if C_Ast_Utils.declr_is_variadic declr then
@@ -3952,7 +4213,8 @@ struct
       fun signatures_from_ext_decl (C_Ast.CDeclExt0 (C_Ast.CDecl0 (specs, declarators, _))) =
             List.mapPartial
               (fn ((C_Ast.Some declr, _), _) =>
-                    if declr_is_function declr then SOME (signature_of_declr specs declr) else NONE
+                    if declr_is_function declr andalso keep_func (C_Ast_Utils.declr_name declr)
+                    then SOME (signature_of_declr specs declr) else NONE
                 | _ => NONE)
               declarators
         | signatures_from_ext_decl _ = []
@@ -3969,15 +4231,19 @@ struct
         (fn ((n, (_, ptys)), tab) => Symtab.update (n, ptys) tab)
         Symtab.empty signatures
       val func_param_types = Unsynchronized.ref func_param_table
+      val lthy =
+        List.foldl (fn (sdef, lthy_acc) => ensure_struct_record decl_prefix sdef lthy_acc)
+          lthy struct_record_defs
       val global_const_inits = extract_global_consts typedef_tab struct_tab enum_tab tu
       val (lthy, global_consts) =
         List.foldl (fn ((gname, init_term, gcty, garr_meta, gstruct), (lthy_acc, acc)) =>
           let
-            val lthy' = define_c_global_value gname init_term lthy_acc
+            val lthy' = define_c_global_value decl_prefix gname init_term lthy_acc
             val ctxt' = Local_Theory.target_of lthy'
             val (full_name, _) =
               Term.dest_Const
-                (Proof_Context.read_const {proper = true, strict = false} ctxt' ("c_global_" ^ gname))
+                (Proof_Context.read_const {proper = true, strict = false} ctxt'
+                  (decl_prefix ^ "global_" ^ gname))
             val gterm = Const (full_name, dummyT)
           in
             (lthy', acc @ [(gname, gterm, gcty, garr_meta, gstruct)])
@@ -3989,7 +4255,7 @@ struct
       List.foldl (fn (fundef, lthy) =>
         let val (name, term) = C_Translate.translate_fundef
               struct_tab enum_tab typedef_tab func_ret_types func_param_types global_consts lthy fundef
-        in define_c_function name term lthy end) lthy fundefs
+        in define_c_function decl_prefix name term lthy end) lthy fundefs
     end
 end
 \<close>
@@ -4001,15 +4267,28 @@ text \<open>
   existing infrastructure including the @{text "Root_Ast_Store"}) and
   generates @{command definition} commands for each function found.
 
-  Usage: @{text [display] "micro_c_translate \<open>void f() { return; }\<close>"}
+  Usage:
+  @{text [display] "micro_c_translate \<open>void f() { return; }\<close>"}
+  @{text [display] "micro_c_translate prefix: my_ \<open>void f() { return; }\<close>"}
+
+  Notes:
+  \<^item> The option keyword is exactly @{text "prefix:"} (including the colon).
+  \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
+  \<^item> Struct declarations in the input are translated to corresponding
+         @{command "datatype_record"} declarations automatically when possible.
 \<close>
 
 ML \<open>
+local
+  val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
+  val parse_prefix = Scan.option (parse_prefix_key |-- Parse.name)
+in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_translate\<close>
     "parse C source and generate core monad definitions"
-    (Parse.embedded_input >> (fn source => fn lthy =>
+    (parse_prefix -- Parse.embedded_input >> (fn (prefix_opt, source) => fn lthy =>
       let
+        val prefix = the_default "c_" prefix_opt
         (* Step 1: Parse the C source using Isabelle/C's parser.
            We use a Theory context so that Root_Ast_Store is updated at the
            theory level, where get_CTranslUnit can retrieve it. *)
@@ -4021,9 +4300,12 @@ val _ =
         val tu = get_CTranslUnit thy'
 
         (* Step 3: Translate and generate definitions *)
+        val _ = C_Def_Gen.set_decl_prefix prefix
+        val _ = C_Def_Gen.set_manifest {functions = NONE, types = NONE}
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
+end
 \<close>
 
 text \<open>
@@ -4032,18 +4314,109 @@ text \<open>
   This enables keeping verified C code in separate @{text ".c"} files,
   identical to upstream sources.
 
-  Usage: @{text [display] "micro_c_file \<open>path/to/file.c\<close>"}
+  Usage:
+  @{text [display] "micro_c_file \<open>path/to/file.c\<close>"}
+  @{text [display] "micro_c_file prefix: my_ \<open>path/to/file.c\<close>"}
+  @{text [display] "micro_c_file prefix: my_ manifest: \<open>path/to/manifest.txt\<close> \<open>path/to/file.c\<close>"}
+  @{text [display] "micro_c_file \<open>path/to/file.c\<close> prefix: my_"}
+  @{text [display] "micro_c_file \<open>path/to/file.c\<close> manifest: \<open>path/to/manifest.txt\<close>"}
+
+  Manifest format (plain text):
+  @{text [display] "functions:"}
+  @{text [display] "  foo"}
+  @{text [display] "  - bar"}
+  @{text [display] "types:"}
+  @{text [display] "  my_struct"}
+  @{text [display] "  my_enum"}
+
+  Notes:
+  \<^item> Option keywords are exactly @{text "prefix:"} and @{text "manifest:"}.
+  \<^item> Options may appear before and/or after the C file argument.
+  \<^item> Each option may appear at most once.
+  \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
+  \<^item> Sections are optional; supported section headers are exactly @{text "functions:"} and @{text "types:"}.
+  \<^item> Lines outside a section are rejected.
+  \<^item> Leading/trailing whitespace is ignored.
+  \<^item> A leading @{text "-"} on an entry is optional and ignored.
+  \<^item> @{text "#"} starts a line comment.
+  \<^item> Struct declarations in the input are translated to corresponding
+         @{command "datatype_record"} declarations automatically when possible.
 \<close>
 
 ML \<open>
 local
+  datatype manifest_section = Manifest_None | Manifest_Functions | Manifest_Types
+  datatype load_opt =
+      LoadPrefix of string
+    | LoadManifest of (theory -> Token.file)
+  val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
+  val parse_manifest_key = Parse.$$$ "manifest:" >> K ()
+  val parse_load_opt =
+      (parse_prefix_key |-- Parse.name >> LoadPrefix)
+      || (parse_manifest_key |-- Resources.parse_file >> LoadManifest)
   val semi = Scan.option \<^keyword>\<open>;\<close>;
+
+  fun trim s = Symbol.trim_blanks s
+
+  fun drop_comment line =
+    (case String.fields (fn c => c = #"#") line of
+       [] => ""
+     | x :: _ => x)
+
+  fun parse_manifest_text text =
+    let
+      fun add_name sec raw (fs, ts) =
+        let val name0 = trim raw
+            val name = if String.isPrefix "-" name0 then trim (String.extract (name0, 1, NONE)) else name0
+        in
+          if name = "" then (fs, ts)
+          else
+            (case sec of
+               Manifest_Functions => (name :: fs, ts)
+             | Manifest_Types => (fs, name :: ts)
+             | Manifest_None =>
+                 error ("micro_c_file: manifest entry outside section (functions:/types:): " ^ raw))
+        end
+
+      fun step (raw, (sec, fs, ts)) =
+        let val line = trim (drop_comment raw)
+        in
+          if line = "" then (sec, fs, ts)
+          else if line = "functions:" then (Manifest_Functions, fs, ts)
+          else if line = "types:" then (Manifest_Types, fs, ts)
+          else
+            let val (fs', ts') = add_name sec line (fs, ts)
+            in (sec, fs', ts') end
+        end
+
+      val (_, rev_fs, rev_ts) =
+        List.foldl step (Manifest_None, [], []) (String.tokens (fn c => c = #"\n" orelse c = #"\r") text)
+      val fs = rev rev_fs
+      val ts = rev rev_ts
+    in
+      { functions = if null fs then NONE else SOME fs
+      , types = if null ts then NONE else SOME ts }
+    end
+
+  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, manifest_opt) =
+        (case prefix_opt of
+           NONE => (SOME prefix, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate prefix option")
+    | apply_load_opt (LoadManifest get_file) (prefix_opt, manifest_opt) =
+        (case manifest_opt of
+           NONE => (prefix_opt, SOME get_file)
+         | SOME _ => error "micro_c_file: duplicate manifest option")
+
+  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
     "load C file and generate core monad definitions"
-    (Resources.parse_file --| semi >> (fn get_file => fn lthy =>
+    (Scan.repeat parse_load_opt -- Resources.parse_file -- Scan.repeat parse_load_opt --| semi >>
+      (fn ((opts_pre, get_file), opts_post) => fn lthy =>
       let
+        val (prefix_opt, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
+        val prefix = the_default "c_" prefix_opt
         val thy = Proof_Context.theory_of lthy
         val {src_path, lines, digest, pos} : Token.file = get_file thy
 
@@ -4056,8 +4429,24 @@ val _ =
         val lthy = Local_Theory.background_theory
                      (Resources.provide (src_path, digest)) lthy
 
+        (* Optional manifest file controlling which functions/types are extracted. *)
+        val (manifest, lthy) =
+          (case manifest_get_file of
+             NONE => ({functions = NONE, types = NONE}, lthy)
+           | SOME get_manifest_file =>
+               let
+                 val {src_path = m_src, lines = m_lines, digest = m_digest, ...} : Token.file =
+                   get_manifest_file thy
+                 val lthy' =
+                   Local_Theory.background_theory (Resources.provide (m_src, m_digest)) lthy
+               in
+                 (parse_manifest_text (cat_lines m_lines), lthy')
+               end)
+
         (* Step 3: Retrieve parsed AST and translate *)
         val tu = get_CTranslUnit thy'
+        val _ = C_Def_Gen.set_decl_prefix prefix
+        val _ = C_Def_Gen.set_manifest manifest
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))

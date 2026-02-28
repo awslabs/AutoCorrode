@@ -15,10 +15,6 @@ void smoke_mem_swap(int *a, int *b) {
 
 thm c_smoke_mem_swap_def
 
-datatype_record c_smoke_mem_point =
-  c_smoke_mem_point_x :: c_int
-  c_smoke_mem_point_y :: c_int
-
 micro_c_translate \<open>
 struct smoke_mem_point {
   int x;
@@ -32,6 +28,7 @@ void smoke_mem_swap_fields(struct smoke_mem_point *p) {
 \<close>
 
 thm c_smoke_mem_swap_fields_def
+thm c_smoke_mem_point.record_simps
 
 micro_c_translate \<open>
 int smoke_mem_read_at(int *arr, int idx) {
@@ -126,9 +123,6 @@ int smoke_mem_addr_of_index(int *arr, unsigned int idx) {
 
 thm c_smoke_mem_addr_of_index_def
 
-datatype_record c_smoke_mem_holder =
-  c_smoke_mem_holder_vec :: c_int list
-
 micro_c_translate \<open>
 struct smoke_mem_holder {
   int vec[4];
@@ -140,6 +134,7 @@ int smoke_mem_addr_of_struct_index(struct smoke_mem_holder *h, unsigned int i) {
 \<close>
 
 thm c_smoke_mem_addr_of_struct_index_def
+thm c_smoke_mem_holder.record_simps
 
 micro_c_translate \<open>
 const int smoke_mem_global_vals[3] = {1, 2, 3};
