@@ -5,6 +5,7 @@ session Micro_Rust_Examples = HOL +
     Separation_Lenses
     Shallow_Micro_Rust
     Shallow_Separation_Logic
+    Shallow_Micro_C
     Micro_Rust_Std_Lib
     Micro_Rust_Runtime
     Micro_Rust_Interfaces
@@ -21,6 +22,7 @@ session Micro_Rust_Examples = HOL +
     Linked_List_Executable_Physical_Memory
     Reference_Examples
     Showcase
+    Byte_Reinterpret_Examples
     MLKEM_Parameters
     MLKEM_Specification
     MLKEM_Zq

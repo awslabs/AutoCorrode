@@ -223,6 +223,44 @@ definition dereference_by_value_raw_fun :: \<open>('a, 'b) gref \<Rightarrow> ('
 
 end
 
+subsection\<open>Raw pointer casts\<close>
+
+text\<open>Cast a raw (untyped) reference to a typed reference by attaching a prism-based focus.
+This is the semantic content of Rust's @{verbatim \<open>ptr as *const T\<close>} and
+@{verbatim \<open>ptr as *mut T\<close>} pointer casts. A raw @{typ \<open>('addr, 'gv) gref\<close>} is promoted
+to a typed @{typ \<open>('addr, 'gv, 'v) ref\<close>} via @{const make_focused} with a prism-derived focus.
+
+The @{text raw_ptr_cast_prism} constant is resolved via adhoc overloading to the appropriate
+prism for the target type in each verification locale.\<close>
+
+consts raw_ptr_cast_prism :: \<open>('gv, 'v) prism\<close>
+
+definition raw_ptr_cast ::
+  \<open>('gv, 'v) prism \<Rightarrow>
+   ('s, ('addr, 'gv) gref, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+   ('s, ('addr, 'gv, 'v) Global_Store.ref, 'c, 'abort, 'i, 'o) expression\<close> where
+  \<open>raw_ptr_cast p e \<equiv> bind e (\<lambda>gref. literal (make_focused gref (prism_to_focus p)))\<close>
+
+abbreviation raw_ptr_cast_u8 ::
+  \<open>('s, ('addr, 'gv) gref, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+   ('s, ('addr, 'gv, 8 word) Global_Store.ref, 'c, 'abort, 'i, 'o) expression\<close> where
+  \<open>raw_ptr_cast_u8 \<equiv> raw_ptr_cast raw_ptr_cast_prism\<close>
+
+abbreviation raw_ptr_cast_u16 ::
+  \<open>('s, ('addr, 'gv) gref, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+   ('s, ('addr, 'gv, 16 word) Global_Store.ref, 'c, 'abort, 'i, 'o) expression\<close> where
+  \<open>raw_ptr_cast_u16 \<equiv> raw_ptr_cast raw_ptr_cast_prism\<close>
+
+abbreviation raw_ptr_cast_u32 ::
+  \<open>('s, ('addr, 'gv) gref, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+   ('s, ('addr, 'gv, 32 word) Global_Store.ref, 'c, 'abort, 'i, 'o) expression\<close> where
+  \<open>raw_ptr_cast_u32 \<equiv> raw_ptr_cast raw_ptr_cast_prism\<close>
+
+abbreviation raw_ptr_cast_u64 ::
+  \<open>('s, ('addr, 'gv) gref, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+   ('s, ('addr, 'gv, 64 word) Global_Store.ref, 'c, 'abort, 'i, 'o) expression\<close> where
+  \<open>raw_ptr_cast_u64 \<equiv> raw_ptr_cast raw_ptr_cast_prism\<close>
+
 (*<*)
 end
 (*>*)

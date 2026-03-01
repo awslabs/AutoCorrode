@@ -7,6 +7,7 @@ theory Micro_Rust_Examples
     Common_Pitfalls
     Crush_Examples
     Pullback_Example
+    Byte_Reinterpret_Examples
     Linked_List
     Linked_List_Executable_Heap
     Linked_List_Executable_Hybrid

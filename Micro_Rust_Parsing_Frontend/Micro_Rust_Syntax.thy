@@ -128,6 +128,27 @@ syntax
     ("(_) as/ i32" [100]1000)
   "_urust_primitive_integral_cast_i64" :: "urust \<Rightarrow> urust"
     ("(_) as/ i64" [100]1000)
+  \<comment>\<open>Raw pointer casts\<close>
+  "_urust_ptr_const_cast_u8" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*const/ u8" [100]1000)
+  "_urust_ptr_const_cast_u16" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*const/ u16" [100]1000)
+  "_urust_ptr_const_cast_u32" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*const/ u32" [100]1000)
+  "_urust_ptr_const_cast_u64" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*const/ u64" [100]1000)
+  "_urust_ptr_const_cast_usize" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*const/ usize" [100]1000)
+  "_urust_ptr_mut_cast_u8" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*mut/ u8" [100]1000)
+  "_urust_ptr_mut_cast_u16" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*mut/ u16" [100]1000)
+  "_urust_ptr_mut_cast_u32" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*mut/ u32" [100]1000)
+  "_urust_ptr_mut_cast_u64" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*mut/ u64" [100]1000)
+  "_urust_ptr_mut_cast_usize" :: "urust \<Rightarrow> urust"
+    ("(_) as/ '*mut/ usize" [100]1000)
   \<comment>\<open>Integral literals at a given type\<close>
   "_urust_numeral_ascription_0_u8" :: "urust"
     ("0'_u8")
@@ -594,6 +615,12 @@ syntax
      (infixr ">>=" 40)
 
 translations
+  \<comment>\<open>Desugar @{verbatim \<open>*mut\<close>} pointer casts to @{verbatim \<open>*const\<close>} (semantically equivalent).\<close>
+  "_urust_ptr_mut_cast_u8 e" => "_urust_ptr_const_cast_u8 e"
+  "_urust_ptr_mut_cast_u16 e" => "_urust_ptr_const_cast_u16 e"
+  "_urust_ptr_mut_cast_u32 e" => "_urust_ptr_const_cast_u32 e"
+  "_urust_ptr_mut_cast_u64 e" => "_urust_ptr_const_cast_u64 e"
+  "_urust_ptr_mut_cast_usize e" => "_urust_ptr_const_cast_usize e"
   "_urust_lhs_as_urust (_urust_lhs_identifier id)" => "_urust_identifier id"
   "_urust_lhs_as_urust (_urust_lhs_parens lhs)" => "_urust_parens (_urust_lhs_as_urust lhs)"
   "_urust_lhs_as_urust (_urust_lhs_deref ex)" => "ex" (* Deref is basically a no-op on a LHS *)

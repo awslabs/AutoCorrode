@@ -80,6 +80,21 @@ term\<open>\<lbrakk> a_value as i32\<rbrakk>\<close>
 term\<open>\<lbrakk> a_value as i64\<rbrakk>\<close>
 end
 
+subsubsection\<open>Raw Pointer Casts\<close>
+
+context
+  fixes raw_buf :: \<open>('addr, 'gv) gref\<close>
+begin
+term\<open>\<lbrakk> raw_buf as *const u8 \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *const u16 \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *const u32 \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *const u64 \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *const usize \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *mut u8 \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *mut u32 \<rbrakk>\<close>
+term\<open>\<lbrakk> raw_buf as *mut u64 \<rbrakk>\<close>
+end
+
 subsubsection\<open>Numeric Ascriptions\<close>
 
 term \<open>\<lbrakk> 0_u8 \<rbrakk>\<close>
