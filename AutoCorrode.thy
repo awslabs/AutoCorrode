@@ -27,6 +27,7 @@ theory AutoCorrode
     "Shallow_Micro_C.C_Abort"
     "Shallow_Micro_C.C_Abort_Rules"
     "Shallow_Micro_C.C_Byte_Encoding"
+    "Shallow_Micro_C.C_Void_Pointer"
     "Shallow_Micro_C.C_Memory_Operations"
     "Shallow_Micro_C.C_Numeric_Types"
     "Shallow_Micro_C.C_Sizeof"
