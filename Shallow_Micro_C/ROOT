@@ -6,6 +6,7 @@ session Shallow_Micro_C = HOL +
     Shallow_Micro_Rust
     Shallow_Separation_Logic
     Byte_Level_Encoding
+    Lenses_And_Other_Optics
   theories
     C_Abort
     C_Abort_Rules
@@ -14,3 +15,4 @@ session Shallow_Micro_C = HOL +
     C_Pointer_Types
     C_Memory_Operations
     C_Arithmetic_Rules
+    C_Byte_Encoding
