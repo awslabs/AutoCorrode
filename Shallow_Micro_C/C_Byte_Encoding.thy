@@ -55,6 +55,11 @@ text \<open>
   The char type composes @{const list_fixlen_prism} with @{const array_single_iso_prism}.
 \<close>
 
+datatype c_endianness = C_LE | C_BE
+
+definition c_endianness_of_bool :: \<open>bool \<Rightarrow> c_endianness\<close> where
+  \<open>c_endianness_of_bool b \<equiv> (if b then C_BE else C_LE)\<close>
+
 subsection \<open>Char (8-bit)\<close>
 
 definition c_char_byte_prism :: \<open>(byte list, c_char) prism\<close> where
@@ -68,32 +73,82 @@ subsection \<open>Short (16-bit)\<close>
 definition c_ushort_byte_prism :: \<open>(byte list, c_ushort) prism\<close> where
   \<open>c_ushort_byte_prism \<equiv> word16_byte_list_prism_le\<close>
 
+definition c_ushort_byte_prism_be :: \<open>(byte list, c_ushort) prism\<close> where
+  \<open>c_ushort_byte_prism_be \<equiv> word16_byte_list_prism_be\<close>
+
 definition c_short_byte_prism :: \<open>(byte list, c_short) prism\<close> where
   \<open>c_short_byte_prism \<equiv> prism_compose word16_byte_list_prism_le word_sword_iso_prism\<close>
+
+definition c_short_byte_prism_be :: \<open>(byte list, c_short) prism\<close> where
+  \<open>c_short_byte_prism_be \<equiv> prism_compose word16_byte_list_prism_be word_sword_iso_prism\<close>
 
 subsection \<open>Int (32-bit)\<close>
 
 definition c_uint_byte_prism :: \<open>(byte list, c_uint) prism\<close> where
   \<open>c_uint_byte_prism \<equiv> word32_byte_list_prism_le\<close>
 
+definition c_uint_byte_prism_be :: \<open>(byte list, c_uint) prism\<close> where
+  \<open>c_uint_byte_prism_be \<equiv> word32_byte_list_prism_be\<close>
+
 definition c_int_byte_prism :: \<open>(byte list, c_int) prism\<close> where
   \<open>c_int_byte_prism \<equiv> prism_compose word32_byte_list_prism_le word_sword_iso_prism\<close>
+
+definition c_int_byte_prism_be :: \<open>(byte list, c_int) prism\<close> where
+  \<open>c_int_byte_prism_be \<equiv> prism_compose word32_byte_list_prism_be word_sword_iso_prism\<close>
 
 subsection \<open>Long (64-bit)\<close>
 
 definition c_ulong_byte_prism :: \<open>(byte list, c_ulong) prism\<close> where
   \<open>c_ulong_byte_prism \<equiv> word64_byte_list_prism_le\<close>
 
+definition c_ulong_byte_prism_be :: \<open>(byte list, c_ulong) prism\<close> where
+  \<open>c_ulong_byte_prism_be \<equiv> word64_byte_list_prism_be\<close>
+
 definition c_long_byte_prism :: \<open>(byte list, c_long) prism\<close> where
   \<open>c_long_byte_prism \<equiv> prism_compose word64_byte_list_prism_le word_sword_iso_prism\<close>
+
+definition c_long_byte_prism_be :: \<open>(byte list, c_long) prism\<close> where
+  \<open>c_long_byte_prism_be \<equiv> prism_compose word64_byte_list_prism_be word_sword_iso_prism\<close>
 
 subsection \<open>128-bit\<close>
 
 definition c_uint128_byte_prism :: \<open>(byte list, c_uint128) prism\<close> where
   \<open>c_uint128_byte_prism \<equiv> word128_byte_list_prism_le\<close>
 
+definition c_uint128_byte_prism_be :: \<open>(byte list, c_uint128) prism\<close> where
+  \<open>c_uint128_byte_prism_be \<equiv> word128_byte_list_prism_be\<close>
+
 definition c_int128_byte_prism :: \<open>(byte list, c_int128) prism\<close> where
   \<open>c_int128_byte_prism \<equiv> prism_compose word128_byte_list_prism_le word_sword_iso_prism\<close>
+
+definition c_int128_byte_prism_be :: \<open>(byte list, c_int128) prism\<close> where
+  \<open>c_int128_byte_prism_be \<equiv> prism_compose word128_byte_list_prism_be word_sword_iso_prism\<close>
+
+subsection \<open>Endianness Selectors\<close>
+
+definition c_ushort_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_ushort) prism\<close> where
+  \<open>c_ushort_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_ushort_byte_prism | C_BE \<Rightarrow> c_ushort_byte_prism_be)\<close>
+
+definition c_short_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_short) prism\<close> where
+  \<open>c_short_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_short_byte_prism | C_BE \<Rightarrow> c_short_byte_prism_be)\<close>
+
+definition c_uint_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_uint) prism\<close> where
+  \<open>c_uint_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_uint_byte_prism | C_BE \<Rightarrow> c_uint_byte_prism_be)\<close>
+
+definition c_int_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_int) prism\<close> where
+  \<open>c_int_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_int_byte_prism | C_BE \<Rightarrow> c_int_byte_prism_be)\<close>
+
+definition c_ulong_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_ulong) prism\<close> where
+  \<open>c_ulong_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_ulong_byte_prism | C_BE \<Rightarrow> c_ulong_byte_prism_be)\<close>
+
+definition c_long_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_long) prism\<close> where
+  \<open>c_long_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_long_byte_prism | C_BE \<Rightarrow> c_long_byte_prism_be)\<close>
+
+definition c_uint128_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_uint128) prism\<close> where
+  \<open>c_uint128_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_uint128_byte_prism | C_BE \<Rightarrow> c_uint128_byte_prism_be)\<close>
+
+definition c_int128_byte_prism_of :: \<open>c_endianness \<Rightarrow> (byte list, c_int128) prism\<close> where
+  \<open>c_int128_byte_prism_of e \<equiv> (case e of C_LE \<Rightarrow> c_int128_byte_prism | C_BE \<Rightarrow> c_int128_byte_prism_be)\<close>
 
 
 section \<open>Validity Proofs\<close>
@@ -104,11 +159,19 @@ declare c_char_byte_prism_def [c_byte_prism_defs]
     and c_ushort_byte_prism_def [c_byte_prism_defs]
     and c_short_byte_prism_def [c_byte_prism_defs]
     and c_uint_byte_prism_def [c_byte_prism_defs]
+    and c_uint_byte_prism_be_def [c_byte_prism_defs]
     and c_int_byte_prism_def [c_byte_prism_defs]
+    and c_int_byte_prism_be_def [c_byte_prism_defs]
     and c_ulong_byte_prism_def [c_byte_prism_defs]
+    and c_ulong_byte_prism_be_def [c_byte_prism_defs]
     and c_long_byte_prism_def [c_byte_prism_defs]
+    and c_long_byte_prism_be_def [c_byte_prism_defs]
     and c_uint128_byte_prism_def [c_byte_prism_defs]
+    and c_uint128_byte_prism_be_def [c_byte_prism_defs]
     and c_int128_byte_prism_def [c_byte_prism_defs]
+    and c_int128_byte_prism_be_def [c_byte_prism_defs]
+    and c_ushort_byte_prism_be_def [c_byte_prism_defs]
+    and c_short_byte_prism_be_def [c_byte_prism_defs]
 
 named_theorems c_byte_prism_validity
 
@@ -126,6 +189,20 @@ lemma c_byte_prism_valid [c_byte_prism_validity]:
   by (auto simp: c_byte_prism_defs
            intro!: prism_compose_valid list_fixlen_prism_valid
                    array_single_iso_prism_valid word_sword_iso_prism_valid
+                   word_byte_array_prism_validity word128_byte_array_prism_validity)
+
+lemma c_byte_prism_valid_be [c_byte_prism_validity]:
+  shows \<open>is_valid_prism c_ushort_byte_prism_be\<close>
+    and \<open>is_valid_prism c_short_byte_prism_be\<close>
+    and \<open>is_valid_prism c_uint_byte_prism_be\<close>
+    and \<open>is_valid_prism c_int_byte_prism_be\<close>
+    and \<open>is_valid_prism c_ulong_byte_prism_be\<close>
+    and \<open>is_valid_prism c_long_byte_prism_be\<close>
+    and \<open>is_valid_prism c_uint128_byte_prism_be\<close>
+    and \<open>is_valid_prism c_int128_byte_prism_be\<close>
+  by (auto simp: c_byte_prism_defs
+           intro!: prism_compose_valid
+                   word_sword_iso_prism_valid
                    word_byte_array_prism_validity word128_byte_array_prism_validity)
 
 section \<open>Embed Length Consistency (sizeof match)\<close>
