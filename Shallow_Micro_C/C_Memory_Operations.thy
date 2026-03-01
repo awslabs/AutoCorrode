@@ -87,10 +87,10 @@ definition c_ptr_ge :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Righ
 
 section \<open>Pointer\<leftrightarrow>Integer Casts\<close>
 
-definition c_ptr_to_uintptr :: \<open>(nat, 'b) gref \<Rightarrow> c_ulong\<close> where
+definition c_ptr_to_uintptr :: \<open>(nat, 'b) gref \<Rightarrow> 'l::len word\<close> where
   \<open>c_ptr_to_uintptr p \<equiv> of_nat (gref_address p)\<close>
 
-definition c_uintptr_to_ptr :: \<open>c_ulong \<Rightarrow> (nat, 'b) gref\<close> where
+definition c_uintptr_to_ptr :: \<open>'l::len word \<Rightarrow> (nat, 'b) gref\<close> where
   \<open>c_uintptr_to_ptr w \<equiv> make_gref (unat w)\<close>
 
 end

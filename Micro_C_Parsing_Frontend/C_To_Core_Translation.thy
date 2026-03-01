@@ -12,7 +12,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_C.C_Void_Pointer"
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
-       and "prefix:" and "manifest:" and "addr:" and "gv:"
+       and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:"
 begin
 
 section \<open>C-to-Core Monad Translation Infrastructure\<close>
@@ -30,6 +30,61 @@ text \<open>
   which takes a C source string and produces definitions in the local theory.
 \<close>
 
+subsection \<open>ABI Profiles\<close>
+
+text \<open>
+  Translation currently supports named ABI profiles (rather than arbitrary ABI formulas),
+  so that type inference and overloaded constants remain stable. The default profile is
+  @{text "lp64-le"}.
+
+  The ABI option affects translation-time C typing (e.g. long/pointer widths and plain
+  char signedness). Byte-level endianness in machine models is selected separately via
+  prism overloading (for example, @{text "c_uint_byte_prism"} vs @{text "c_uint_byte_prism_be"}).
+\<close>
+
+ML \<open>
+structure C_ABI : sig
+  datatype profile = LP64_LE | ILP32_LE | LP64_BE
+  val profile_name : profile -> string
+  val parse_profile : string -> profile
+  val long_bits : profile -> int
+  val pointer_bits : profile -> int
+  val char_is_signed : profile -> bool
+end =
+struct
+  datatype profile = LP64_LE | ILP32_LE | LP64_BE
+
+  fun profile_name LP64_LE = "lp64-le"
+    | profile_name ILP32_LE = "ilp32-le"
+    | profile_name LP64_BE = "lp64-be"
+
+  fun parse_profile s =
+    let
+      val normalized =
+        String.map (fn c => if c = #"_" then #"-" else Char.toLower c) s
+    in
+      (case normalized of
+         "lp64-le" => LP64_LE
+       | "ilp32-le" => ILP32_LE
+       | "lp64-be" => LP64_BE
+       | _ => error ("micro_c_translate: unsupported ABI profile: " ^ s ^
+                     " (supported: lp64-le, ilp32-le, lp64-be)"))
+    end
+
+  fun long_bits LP64_LE = 64
+    | long_bits ILP32_LE = 32
+    | long_bits LP64_BE = 64
+
+  fun pointer_bits LP64_LE = 64
+    | pointer_bits ILP32_LE = 32
+    | pointer_bits LP64_BE = 64
+
+  (* Keep current default behavior for plain char in all built-in profiles for now.
+     This can be split per-profile later if needed. *)
+  fun char_is_signed _ = false
+end
+\<close>
+
 subsection \<open>AST Utilities\<close>
 
 text \<open>Helper functions for extracting information from Isabelle/C's AST nodes.\<close>
@@ -43,10 +98,20 @@ structure C_Ast_Utils : sig
                           | CPtr of c_numeric_type | CVoid
                           | CStruct of string
                           | CUnion of string
+
   val is_signed : c_numeric_type -> bool
   val is_bool : c_numeric_type -> bool
   val is_ptr : c_numeric_type -> bool
   val is_unsigned_int : c_numeric_type -> bool
+  val set_abi_profile : C_ABI.profile -> unit
+  val get_abi_profile : unit -> C_ABI.profile
+  val current_abi_name : unit -> string
+  val pointer_uint_cty : unit -> c_numeric_type
+  val pointer_int_cty : unit -> c_numeric_type
+  val bit_width_of : c_numeric_type -> int option
+  val sizeof_c_type : c_numeric_type -> int
+  val alignof_c_type : c_numeric_type -> int
+  val builtin_typedefs : unit -> (string * c_numeric_type) list
   val hol_type_of : c_numeric_type -> typ
   val type_name_of : c_numeric_type -> string
   val resolve_c_type : C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list -> c_numeric_type option
@@ -121,6 +186,17 @@ struct
                           | CStruct of string
                           | CUnion of string
 
+  val current_abi_profile : C_ABI.profile Unsynchronized.ref =
+    Unsynchronized.ref C_ABI.LP64_LE
+
+  fun set_abi_profile abi = (current_abi_profile := abi)
+  fun get_abi_profile () = !current_abi_profile
+  fun current_abi_name () = C_ABI.profile_name (get_abi_profile ())
+  fun pointer_uint_cty () =
+    if C_ABI.pointer_bits (get_abi_profile ()) = 64 then CULong else CUInt
+  fun pointer_int_cty () =
+    if C_ABI.pointer_bits (get_abi_profile ()) = 64 then CLong else CInt
+
   fun is_signed CInt   = true
     | is_signed CSChar  = true
     | is_signed CShort  = true
@@ -143,6 +219,41 @@ struct
                             andalso not (is_ptr cty) andalso cty <> CVoid
                             andalso (case cty of CStruct _ => false | CUnion _ => false | _ => true)
 
+  fun bit_width_of CChar = SOME 8
+    | bit_width_of CSChar = SOME 8
+    | bit_width_of CShort = SOME 16
+    | bit_width_of CUShort = SOME 16
+    | bit_width_of CInt = SOME 32
+    | bit_width_of CUInt = SOME 32
+    | bit_width_of CLong = SOME (C_ABI.long_bits (get_abi_profile ()))
+    | bit_width_of CULong = SOME (C_ABI.long_bits (get_abi_profile ()))
+    | bit_width_of CLongLong = SOME 64
+    | bit_width_of CULongLong = SOME 64
+    | bit_width_of CInt128 = SOME 128
+    | bit_width_of CUInt128 = SOME 128
+    | bit_width_of (CPtr _) = SOME (C_ABI.pointer_bits (get_abi_profile ()))
+    | bit_width_of _ = NONE
+
+  fun sizeof_c_type cty =
+    (case bit_width_of cty of
+       SOME bits => bits div 8
+     | NONE => error "micro_c_translate: sizeof: unsupported type")
+
+  fun alignof_c_type cty = Int.min (sizeof_c_type cty, 8)
+
+  fun builtin_typedefs () =
+    let
+      val uintptr_cty = pointer_uint_cty ()
+      val intptr_cty = pointer_int_cty ()
+    in
+      [ ("uint8_t", CChar), ("int8_t", CSChar),
+        ("uint16_t", CUShort), ("int16_t", CShort),
+        ("uint32_t", CUInt), ("int32_t", CInt),
+        ("uint64_t", CULongLong), ("int64_t", CLongLong),
+        ("size_t", uintptr_cty), ("uintptr_t", uintptr_cty), ("intptr_t", intptr_cty),
+        ("__int128_t", CInt128), ("__uint128_t", CUInt128) ]
+    end
+
   fun hol_type_of CBool   = @{typ bool}
     | hol_type_of CInt    = \<^typ>\<open>c_int\<close>
     | hol_type_of CUInt   = \<^typ>\<open>c_uint\<close>
@@ -150,9 +261,11 @@ struct
     | hol_type_of CSChar   = \<^typ>\<open>c_schar\<close>
     | hol_type_of CShort  = \<^typ>\<open>c_short\<close>
     | hol_type_of CUShort = \<^typ>\<open>c_ushort\<close>
-    | hol_type_of CLong   = \<^typ>\<open>c_long\<close>
-    | hol_type_of CULong  = \<^typ>\<open>c_ulong\<close>
-    | hol_type_of CLongLong = \<^typ>\<open>c_long\<close>   (* LP64: long long = long = 64-bit *)
+    | hol_type_of CLong   =
+        if C_ABI.long_bits (get_abi_profile ()) = 32 then \<^typ>\<open>c_int\<close> else \<^typ>\<open>c_long\<close>
+    | hol_type_of CULong  =
+        if C_ABI.long_bits (get_abi_profile ()) = 32 then \<^typ>\<open>c_uint\<close> else \<^typ>\<open>c_ulong\<close>
+    | hol_type_of CLongLong = \<^typ>\<open>c_long\<close>
     | hol_type_of CULongLong = \<^typ>\<open>c_ulong\<close>
     | hol_type_of CInt128   = \<^typ>\<open>c_int128\<close>
     | hol_type_of CUInt128  = \<^typ>\<open>c_uint128\<close>
@@ -241,7 +354,7 @@ struct
       else if has_char then
         if has_unsigned then SOME CChar  (* unsigned char = c_char = 8 word *)
         else if has_signed then SOME CSChar
-        else SOME CChar  (* plain char treated as unsigned, matching c_char = 8 word *)
+        else if C_ABI.char_is_signed (get_abi_profile ()) then SOME CSChar else SOME CChar
       else if has_short then
         if has_unsigned then SOME CUShort
         else SOME CShort
@@ -1497,18 +1610,20 @@ struct
        | _ => tm
       end
     else if C_Ast_Utils.is_ptr from_cty then
-      (* pointer -> integer cast: c_ptr_to_uintptr yields c_ulong, then narrow if needed *)
+      (* pointer -> integer cast via ABI uintptr type, then convert as needed *)
       let val v = Free ("v__ptrint", dummyT)
+          val ptr_uint_cty = C_Ast_Utils.pointer_uint_cty ()
           val conv = Const (\<^const_name>\<open>c_ptr_to_uintptr\<close>, dummyT)
           val as_ulong = C_Term_Build.mk_bind tm
                            (Term.lambda v (C_Term_Build.mk_literal (conv $ v)))
-      in if to_cty = C_Ast_Utils.CULong then as_ulong
-         else mk_implicit_cast (as_ulong, C_Ast_Utils.CULong, to_cty)
+      in if to_cty = ptr_uint_cty then as_ulong
+         else mk_implicit_cast (as_ulong, ptr_uint_cty, to_cty)
       end
     else if C_Ast_Utils.is_ptr to_cty then
-      (* integer -> pointer cast: widen to c_ulong then c_uintptr_to_ptr *)
-      let val as_ulong = if from_cty = C_Ast_Utils.CULong then tm
-                         else mk_implicit_cast (tm, from_cty, C_Ast_Utils.CULong)
+      (* integer -> pointer cast: widen/narrow to ABI uintptr then convert *)
+      let val ptr_uint_cty = C_Ast_Utils.pointer_uint_cty ()
+          val as_ulong = if from_cty = ptr_uint_cty then tm
+                         else mk_implicit_cast (tm, from_cty, ptr_uint_cty)
           val v = Free ("v__intptr", dummyT)
           val conv = Const (\<^const_name>\<open>c_uintptr_to_ptr\<close>, dummyT)
       in C_Term_Build.mk_bind as_ulong
@@ -2129,32 +2244,12 @@ struct
       else error ("micro_c_translate: " ^ what ^ " out of ML-int range: " ^ IntInf.toString n)
     end
 
-  fun cty_bit_width C_Ast_Utils.CChar = SOME 8
-    | cty_bit_width C_Ast_Utils.CSChar = SOME 8
-    | cty_bit_width C_Ast_Utils.CShort = SOME 16
-    | cty_bit_width C_Ast_Utils.CUShort = SOME 16
-    | cty_bit_width C_Ast_Utils.CInt = SOME 32
-    | cty_bit_width C_Ast_Utils.CUInt = SOME 32
-    | cty_bit_width C_Ast_Utils.CLong = SOME 64
-    | cty_bit_width C_Ast_Utils.CULong = SOME 64
-    | cty_bit_width C_Ast_Utils.CLongLong = SOME 64
-    | cty_bit_width C_Ast_Utils.CULongLong = SOME 64
-    | cty_bit_width C_Ast_Utils.CInt128 = SOME 128
-    | cty_bit_width C_Ast_Utils.CUInt128 = SOME 128
-    | cty_bit_width _ = NONE
+  val cty_bit_width = C_Ast_Utils.bit_width_of
+  val sizeof_c_type = C_Ast_Utils.sizeof_c_type
+  val alignof_c_type = C_Ast_Utils.alignof_c_type
 
-  (* Byte size of a scalar C type (LP64 model) *)
-  fun sizeof_c_type (C_Ast_Utils.CPtr _) = 8
-    | sizeof_c_type cty =
-        (case cty_bit_width cty of
-           SOME bits => bits div 8
-         | NONE => error ("micro_c_translate: sizeof: unsupported type"))
-
-  (* Alignment of a scalar C type (LP64: min(size, 8)) *)
-  fun alignof_c_type cty = Int.min (sizeof_c_type cty, 8)
-
-  (* Compute struct size with LP64 alignment padding.
-     Each field aligned to min(sizeof(field), 8); total rounded up to max alignment. *)
+  (* Compute struct size with ABI alignment padding.
+     Each field aligned to alignof(field); total rounded up to max alignment. *)
   fun sizeof_struct (fields : (string * C_Ast_Utils.c_numeric_type) list) =
     let fun align_up (offset, alignment) =
             let val rem = offset mod alignment
@@ -2489,7 +2584,7 @@ struct
                                       $ p_var $ q_var $ stride
                     val f = Term.lambda p_var (Term.lambda q_var diff_body)
                 in (C_Term_Build.mk_bindlift2 f lhs' rhs',
-                    C_Ast_Utils.CLong)
+                    C_Ast_Utils.pointer_int_cty ())
                 end
             | _ =>
                 let
@@ -3478,7 +3573,8 @@ struct
                       | NONE => unsupported "sizeof non-numeric type"
                    end
                | _ => unsupported "sizeof non-numeric type")
-            val word_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CULong
+            val size_cty = C_Ast_Utils.pointer_uint_cty ()
+            val word_ty = C_Ast_Utils.hol_type_of size_cty
             val sizeof_term =
               (case cty of
                  C_Ast_Utils.CStruct sn =>
@@ -3489,7 +3585,8 @@ struct
                        val sz = sizeof_struct fields
                    in Isa_Const (\<^const_name>\<open>of_nat\<close>, @{typ nat} --> word_ty) $ HOLogic.mk_nat sz end
                | C_Ast_Utils.CPtr _ =>
-                   Isa_Const (\<^const_name>\<open>of_nat\<close>, @{typ nat} --> word_ty) $ HOLogic.mk_nat 8
+                   let val bytes = C_Ast_Utils.sizeof_c_type cty
+                   in Isa_Const (\<^const_name>\<open>of_nat\<close>, @{typ nat} --> word_ty) $ HOLogic.mk_nat bytes end
                | _ =>
                    let val isa_ty = C_Ast_Utils.hol_type_of cty
                        val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
@@ -3497,7 +3594,7 @@ struct
                        val sizeof_nat = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
                                            itself_ty --> @{typ nat}) $ type_term
                    in Isa_Const (\<^const_name>\<open>of_nat\<close>, @{typ nat} --> word_ty) $ sizeof_nat end)
-        in (C_Term_Build.mk_literal sizeof_term, C_Ast_Utils.CULong) end
+        in (C_Term_Build.mk_literal sizeof_term, size_cty) end
     (* sizeof(expr) *)
     | translate_expr tctx (CSizeofExpr0 (expr, _)) =
         let fun sizeof_nat_term cty =
@@ -3511,7 +3608,8 @@ struct
                            SOME fs => fs
                          | NONE => error ("micro_c_translate: sizeof: unknown struct: " ^ sn))
                   in HOLogic.mk_nat (sizeof_struct fields) end
-              | sizeof_nat_for_cty (C_Ast_Utils.CPtr _) = HOLogic.mk_nat 8
+              | sizeof_nat_for_cty (C_Ast_Utils.CPtr ptr_cty) =
+                  HOLogic.mk_nat (C_Ast_Utils.sizeof_c_type (C_Ast_Utils.CPtr ptr_cty))
               | sizeof_nat_for_cty cty = sizeof_nat_term cty
             val sizeof_nat =
               (case expr of
@@ -3529,10 +3627,11 @@ struct
                | _ =>
                    let val (_, cty) = translate_expr tctx expr
                    in sizeof_nat_for_cty cty end)
-            val word_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CULong
+            val size_cty = C_Ast_Utils.pointer_uint_cty ()
+            val word_ty = C_Ast_Utils.hol_type_of size_cty
             val sizeof_term = Isa_Const (\<^const_name>\<open>of_nat\<close>,
                                 @{typ nat} --> word_ty) $ sizeof_nat
-        in (C_Term_Build.mk_literal sizeof_term, C_Ast_Utils.CULong) end
+        in (C_Term_Build.mk_literal sizeof_term, size_cty) end
     | translate_expr tctx (CAlignofType0 (decl, _)) =
         let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
             val cty =
@@ -3561,10 +3660,11 @@ struct
             val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
             val alignof_nat = Isa_Const (\<^const_name>\<open>c_alignof\<close>,
                                 itself_ty --> @{typ nat}) $ type_term
-            val word_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CULong
+            val size_cty = C_Ast_Utils.pointer_uint_cty ()
+            val word_ty = C_Ast_Utils.hol_type_of size_cty
             val alignof_term = Isa_Const (\<^const_name>\<open>of_nat\<close>,
                                 @{typ nat} --> word_ty) $ alignof_nat
-        in (C_Term_Build.mk_literal alignof_term, C_Ast_Utils.CULong) end
+        in (C_Term_Build.mk_literal alignof_term, size_cty) end
     | translate_expr tctx (CAlignofExpr0 (expr, _)) =
         let val (_, cty) = translate_expr tctx expr
             val isa_ty = C_Ast_Utils.hol_type_of cty
@@ -3572,10 +3672,11 @@ struct
             val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
             val alignof_nat = Isa_Const (\<^const_name>\<open>c_alignof\<close>,
                                 itself_ty --> @{typ nat}) $ type_term
-            val word_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CULong
+            val size_cty = C_Ast_Utils.pointer_uint_cty ()
+            val word_ty = C_Ast_Utils.hol_type_of size_cty
             val alignof_term = Isa_Const (\<^const_name>\<open>of_nat\<close>,
                                 @{typ nat} --> word_ty) $ alignof_nat
-        in (C_Term_Build.mk_literal alignof_term, C_Ast_Utils.CULong) end
+        in (C_Term_Build.mk_literal alignof_term, size_cty) end
     (* Compound literal: (type){init_list} *)
     | translate_expr tctx (CCompoundLit0 (decl, init_list, _)) =
         let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
@@ -4799,6 +4900,7 @@ structure C_Def_Gen : sig
   type manifest = {functions: string list option, types: string list option}
   val set_decl_prefix : string -> unit
   val set_manifest : manifest -> unit
+  val set_abi_profile : C_ABI.profile -> unit
   val set_ref_universe_types : typ -> typ -> unit
   val define_c_function : string -> string -> term -> local_theory -> local_theory
   val process_translation_unit : C_Ast.nodeInfo C_Ast.cTranslationUnit
@@ -4810,6 +4912,8 @@ struct
   val current_decl_prefix : string Unsynchronized.ref = Unsynchronized.ref "c_"
   val current_manifest : manifest Unsynchronized.ref =
     Unsynchronized.ref {functions = NONE, types = NONE}
+  val current_abi_profile : C_ABI.profile Unsynchronized.ref =
+    Unsynchronized.ref C_ABI.LP64_LE
   val current_ref_addr_ty : typ Unsynchronized.ref =
     Unsynchronized.ref (TFree ("'addr", []))
   val current_ref_gv_ty : typ Unsynchronized.ref =
@@ -4817,6 +4921,7 @@ struct
 
   fun set_decl_prefix pfx = (current_decl_prefix := pfx)
   fun set_manifest m = (current_manifest := m)
+  fun set_abi_profile abi = (current_abi_profile := abi)
   fun set_ref_universe_types addr_ty gv_ty =
     (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
 
@@ -4845,6 +4950,44 @@ struct
           lthy
       val _ = writeln ("Defined: " ^ full_name)
     in lthy' end
+
+  fun define_named_value_if_absent full_name term lthy =
+    let
+      val ctxt = Local_Theory.target_of lthy
+      val exists = can (Proof_Context.read_const {proper = true, strict = true} ctxt) full_name
+    in
+      if exists then lthy
+      else
+        let
+          val binding = Binding.name full_name
+          val term' = term |> Syntax.check_term lthy
+          val ((_, (_, _)), lthy') =
+            Local_Theory.define
+              ((binding, NoSyn),
+               ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term'))
+              lthy
+          val _ = writeln ("Defined: " ^ full_name)
+        in lthy' end
+    end
+
+  fun abi_is_big_endian C_ABI.LP64_BE = true
+    | abi_is_big_endian _ = false
+
+  fun mk_bool_term true = @{term True}
+    | mk_bool_term false = @{term False}
+
+  fun define_abi_metadata prefix abi_profile lthy =
+    let
+      val defs = [
+          ("abi_pointer_bits", HOLogic.mk_nat (C_ABI.pointer_bits abi_profile)),
+          ("abi_long_bits", HOLogic.mk_nat (C_ABI.long_bits abi_profile)),
+          ("abi_char_is_signed", mk_bool_term (C_ABI.char_is_signed abi_profile)),
+          ("abi_big_endian", mk_bool_term (abi_is_big_endian abi_profile))
+        ]
+    in
+      List.foldl (fn ((suffix, tm), lthy_acc) =>
+        define_named_value_if_absent (prefix ^ suffix) tm lthy_acc) lthy defs
+    end
 
   fun intinf_to_int_checked what n =
     let
@@ -5008,7 +5151,9 @@ struct
   fun process_translation_unit tu lthy =
     let
       val decl_prefix = !current_decl_prefix
+      val abi_profile = !current_abi_profile
       val {functions = manifest_functions, types = manifest_types} = !current_manifest
+      val _ = C_Ast_Utils.set_abi_profile abi_profile
       val _ = C_Translate.set_decl_prefix decl_prefix
       val _ = C_Translate.set_ref_universe_types (!current_ref_addr_ty) (!current_ref_gv_ty)
       fun mk_name_filter NONE = NONE
@@ -5020,21 +5165,7 @@ struct
         (case func_filter of NONE => true | SOME tab => Symtab.defined tab name)
       fun keep_type name =
         (case type_filter of NONE => true | SOME tab => Symtab.defined tab name)
-      val builtin_typedefs = [
-        ("uint8_t",  C_Ast_Utils.CChar),
-        ("int8_t",   C_Ast_Utils.CSChar),
-        ("uint16_t", C_Ast_Utils.CUShort),
-        ("int16_t",  C_Ast_Utils.CShort),
-        ("uint32_t", C_Ast_Utils.CUInt),
-        ("int32_t",  C_Ast_Utils.CInt),
-        ("uint64_t", C_Ast_Utils.CULong),
-        ("int64_t",  C_Ast_Utils.CLong),
-        ("size_t",   C_Ast_Utils.CULong),
-        ("uintptr_t", C_Ast_Utils.CULong),
-        ("intptr_t",  C_Ast_Utils.CLong),
-        ("__int128_t",  C_Ast_Utils.CInt128),
-        ("__uint128_t", C_Ast_Utils.CUInt128)
-      ]
+      val builtin_typedefs = C_Ast_Utils.builtin_typedefs ()
       (* Extract struct definitions to build the struct field registry.
          Use fold/update to allow user typedefs to override builtins. *)
       val typedef_defs_early =
@@ -5151,6 +5282,11 @@ struct
             (lthy', acc @ [(gname, gterm, gcty, garr_meta, gstruct)])
           end)
         (lthy, []) global_const_inits
+      val lthy =
+        (* Define ABI metadata after type-generation commands (e.g. datatype_record)
+           so locale-target equations from these definitions cannot interfere with
+           datatype package obligations. *)
+        define_abi_metadata decl_prefix abi_profile lthy
     in
       (* Translate and define each function one at a time, so that later
          functions can reference earlier ones via Syntax.check_term. *)
@@ -5172,12 +5308,17 @@ text \<open>
   Usage:
   @{text [display] "micro_c_translate \<open>void f() { return; }\<close>"}
   @{text [display] "micro_c_translate prefix: my_ \<open>void f() { return; }\<close>"}
+  @{text [display] "micro_c_translate abi: lp64-le \<open>void f() { return; }\<close>"}
   @{text [display] "micro_c_translate addr: 'addr gv: 'gv \<open>void f() { return; }\<close>"}
 
   Notes:
-  \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, and @{text "gv:"}.
+  \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, @{text "gv:"}, and @{text "abi:"}.
   \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
+  \<^item> When omitted, @{text "abi:"} defaults to @{text "lp64-le"}.
   \<^item> When omitted, @{text "addr:"} and @{text "gv:"} default to @{text "'addr"} and @{text "'gv"}.
+  \<^item> Each translation unit also defines ABI metadata constants
+         @{text "<prefix>abi_pointer_bits"}, @{text "<prefix>abi_long_bits"},
+         @{text "<prefix>abi_char_is_signed"}, and @{text "<prefix>abi_big_endian"}.
   \<^item> Struct declarations in the input are translated to corresponding
          @{command "datatype_record"} declarations automatically when possible.
 \<close>
@@ -5188,29 +5329,42 @@ local
       TranslatePrefix of string
     | TranslateAddrTy of string
     | TranslateGvTy of string
+    | TranslateAbi of string
+  val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
+  val parse_abi_dash =
+      Scan.one (fn tok => Token.is_kind Token.Sym_Ident tok andalso Token.content_of tok = "-") >> K ()
+  val parse_abi_name =
+      parse_abi_ident -- Scan.repeat (parse_abi_dash |-- parse_abi_ident)
+      >> (fn (h, t) => String.concatWith "-" (h :: t))
   val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
   val parse_addr_key = Parse.$$$ "addr:" >> K ()
   val parse_gv_key = Parse.$$$ "gv:" >> K ()
+  val parse_abi_key = Parse.$$$ "abi:" >> K ()
   val parse_translate_opt =
       (parse_prefix_key |-- Parse.name >> TranslatePrefix)
       || (parse_addr_key |-- Parse.typ >> TranslateAddrTy)
       || (parse_gv_key |-- Parse.typ >> TranslateGvTy)
+      || (parse_abi_key |-- parse_abi_name >> TranslateAbi)
 
-  fun apply_translate_opt (TranslatePrefix pfx) (prefix_opt, addr_opt, gv_opt) =
+  fun apply_translate_opt (TranslatePrefix pfx) (prefix_opt, addr_opt, gv_opt, abi_opt) =
         (case prefix_opt of
-           NONE => (SOME pfx, addr_opt, gv_opt)
+           NONE => (SOME pfx, addr_opt, gv_opt, abi_opt)
          | SOME _ => error "micro_c_translate: duplicate prefix option")
-    | apply_translate_opt (TranslateAddrTy ty) (prefix_opt, addr_opt, gv_opt) =
+    | apply_translate_opt (TranslateAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt) =
         (case addr_opt of
-           NONE => (prefix_opt, SOME ty, gv_opt)
+           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt)
          | SOME _ => error "micro_c_translate: duplicate addr option")
-    | apply_translate_opt (TranslateGvTy ty) (prefix_opt, addr_opt, gv_opt) =
+    | apply_translate_opt (TranslateGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt) =
         (case gv_opt of
-           NONE => (prefix_opt, addr_opt, SOME ty)
+           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt)
          | SOME _ => error "micro_c_translate: duplicate gv option")
+    | apply_translate_opt (TranslateAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt) =
+        (case abi_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name)
+         | SOME _ => error "micro_c_translate: duplicate abi option")
 
   fun collect_translate_opts opts =
-    fold apply_translate_opt opts (NONE, NONE, NONE)
+    fold apply_translate_opt opts (NONE, NONE, NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_translate\<close>
@@ -5218,8 +5372,9 @@ val _ =
     (Scan.repeat parse_translate_opt -- Parse.embedded_input -- Scan.repeat parse_translate_opt >>
       (fn ((opts_pre, source), opts_post) => fn lthy =>
       let
-        val (prefix_opt, addr_opt, gv_opt) = collect_translate_opts (opts_pre @ opts_post)
+        val (prefix_opt, addr_opt, gv_opt, abi_opt) = collect_translate_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" prefix_opt
+        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" abi_opt)
         val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
         val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
         (* Step 1: Parse the C source using Isabelle/C's parser.
@@ -5235,6 +5390,7 @@ val _ =
         (* Step 3: Translate and generate definitions *)
         val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest {functions = NONE, types = NONE}
+        val _ = C_Def_Gen.set_abi_profile abi_profile
         val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
       in
         C_Def_Gen.process_translation_unit tu lthy
@@ -5254,6 +5410,7 @@ text \<open>
   @{text [display] "micro_c_file prefix: my_ manifest: \<open>path/to/manifest.txt\<close> \<open>path/to/file.c\<close>"}
   @{text [display] "micro_c_file \<open>path/to/file.c\<close> prefix: my_"}
   @{text [display] "micro_c_file \<open>path/to/file.c\<close> manifest: \<open>path/to/manifest.txt\<close>"}
+  @{text [display] "micro_c_file abi: ilp32-le \<open>path/to/file.c\<close>"}
   @{text [display] "micro_c_file addr: 'addr gv: 'gv \<open>path/to/file.c\<close>"}
 
   Manifest format (plain text):
@@ -5265,11 +5422,15 @@ text \<open>
   @{text [display] "  my_enum"}
 
   Notes:
-  \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, @{text "gv:"}, and @{text "manifest:"}.
+  \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, @{text "gv:"}, @{text "abi:"}, and @{text "manifest:"}.
   \<^item> Options may appear before and/or after the C file argument.
   \<^item> Each option may appear at most once.
   \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
+  \<^item> When omitted, @{text "abi:"} defaults to @{text "lp64-le"}.
   \<^item> When omitted, @{text "addr:"} and @{text "gv:"} default to @{text "'addr"} and @{text "'gv"}.
+  \<^item> Each translation unit also defines ABI metadata constants
+         @{text "<prefix>abi_pointer_bits"}, @{text "<prefix>abi_long_bits"},
+         @{text "<prefix>abi_char_is_signed"}, and @{text "<prefix>abi_big_endian"}.
   \<^item> Sections are optional; supported section headers are exactly @{text "functions:"} and @{text "types:"}.
   \<^item> Lines outside a section are rejected.
   \<^item> Leading/trailing whitespace is ignored.
@@ -5286,15 +5447,24 @@ local
       LoadPrefix of string
     | LoadAddrTy of string
     | LoadGvTy of string
+    | LoadAbi of string
     | LoadManifest of (theory -> Token.file)
+  val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
+  val parse_abi_dash =
+      Scan.one (fn tok => Token.is_kind Token.Sym_Ident tok andalso Token.content_of tok = "-") >> K ()
+  val parse_abi_name =
+      parse_abi_ident -- Scan.repeat (parse_abi_dash |-- parse_abi_ident)
+      >> (fn (h, t) => String.concatWith "-" (h :: t))
   val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
   val parse_addr_key = Parse.$$$ "addr:" >> K ()
   val parse_gv_key = Parse.$$$ "gv:" >> K ()
+  val parse_abi_key = Parse.$$$ "abi:" >> K ()
   val parse_manifest_key = Parse.$$$ "manifest:" >> K ()
   val parse_load_opt =
       (parse_prefix_key |-- Parse.name >> LoadPrefix)
       || (parse_addr_key |-- Parse.typ >> LoadAddrTy)
       || (parse_gv_key |-- Parse.typ >> LoadGvTy)
+      || (parse_abi_key |-- parse_abi_name >> LoadAbi)
       || (parse_manifest_key |-- Resources.parse_file >> LoadManifest)
   val semi = Scan.option \<^keyword>\<open>;\<close>;
 
@@ -5340,24 +5510,28 @@ local
       , types = if null ts then NONE else SOME ts }
     end
 
-  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
+  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, addr_opt, gv_opt, abi_opt, manifest_opt) =
         (case prefix_opt of
-           NONE => (SOME prefix, addr_opt, gv_opt, manifest_opt)
+           NONE => (SOME prefix, addr_opt, gv_opt, abi_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate prefix option")
-    | apply_load_opt (LoadAddrTy ty) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
+    | apply_load_opt (LoadAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, manifest_opt) =
         (case addr_opt of
-           NONE => (prefix_opt, SOME ty, gv_opt, manifest_opt)
+           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate addr option")
-    | apply_load_opt (LoadGvTy ty) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
+    | apply_load_opt (LoadGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, manifest_opt) =
         (case gv_opt of
-           NONE => (prefix_opt, addr_opt, SOME ty, manifest_opt)
+           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate gv option")
-    | apply_load_opt (LoadManifest get_file) (prefix_opt, addr_opt, gv_opt, manifest_opt) =
+    | apply_load_opt (LoadAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, manifest_opt) =
+        (case abi_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate abi option")
+    | apply_load_opt (LoadManifest get_file) (prefix_opt, addr_opt, gv_opt, abi_opt, manifest_opt) =
         (case manifest_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, SOME get_file)
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME get_file)
          | SOME _ => error "micro_c_file: duplicate manifest option")
 
-  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE, NONE, NONE)
+  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE, NONE, NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
@@ -5365,8 +5539,9 @@ val _ =
     (Scan.repeat parse_load_opt -- Resources.parse_file -- Scan.repeat parse_load_opt --| semi >>
       (fn ((opts_pre, get_file), opts_post) => fn lthy =>
       let
-        val (prefix_opt, addr_opt, gv_opt, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
+        val (prefix_opt, addr_opt, gv_opt, abi_opt, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" prefix_opt
+        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" abi_opt)
         val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
         val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
         val thy = Proof_Context.theory_of lthy
@@ -5399,6 +5574,7 @@ val _ =
         val tu = get_CTranslUnit thy'
         val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest manifest
+        val _ = C_Def_Gen.set_abi_profile abi_profile
         val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
       in
         C_Def_Gen.process_translation_unit tu lthy

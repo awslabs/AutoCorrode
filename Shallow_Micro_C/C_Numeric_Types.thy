@@ -40,7 +40,7 @@ text \<open>
 \<close>
 
 text \<open>
-  C11 signed integer division truncates toward zero. Isabelle/HOL @{const div}
+  C11 signed integer division truncates toward zero. Isabelle/HOL \<open>div\<close>
   on @{typ int} is Euclidean (flooring), so we define helper operations with
   C semantics and use those in signed @{text "/"} and @{text "%"}.
 \<close>
