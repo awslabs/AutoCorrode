@@ -31,6 +31,7 @@ theory AutoCorrode
     "Shallow_Micro_C.C_Memory_Operations"
     "Shallow_Micro_C.C_Numeric_Types"
     "Shallow_Micro_C.C_Sizeof"
+    "Micro_C_Examples.C_ABI_Examples"
     "Micro_C_Examples.Simple_C_Functions"
     "Micro_C_Examples.C_Struct_Examples"
     "Micro_C_Examples.C_Array_Examples"

@@ -13,6 +13,7 @@ session Micro_C_Examples = HOL +
     C_Array_Examples
     C_Bitwise_Examples
     C_While_Examples
+    C_ABI_Examples
     C_Void_Pointer_Examples
     C_Union_Examples
     C_Byte_Refinement
