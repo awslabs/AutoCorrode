@@ -35,6 +35,26 @@ enum IQToolName(val wire: String) {
   case GetSorryPositions extends IQToolName("get_sorry_positions")
   case Explore extends IQToolName("explore")
   case SaveFile extends IQToolName("save_file")
+  // I/R REPL tools
+  case ReplInit extends IQToolName("repl_init")
+  case ReplInitFromSource extends IQToolName("repl_init_from_source")
+  case ReplFork extends IQToolName("repl_fork")
+  case ReplFocus extends IQToolName("repl_focus")
+  case ReplStep extends IQToolName("repl_step")
+  case ReplShow extends IQToolName("repl_show")
+  case ReplState extends IQToolName("repl_state")
+  case ReplText extends IQToolName("repl_text")
+  case ReplEdit extends IQToolName("repl_edit")
+  case ReplReplay extends IQToolName("repl_replay")
+  case ReplTruncate extends IQToolName("repl_truncate")
+  case ReplBack extends IQToolName("repl_back")
+  case ReplMerge extends IQToolName("repl_merge")
+  case ReplRemove extends IQToolName("repl_remove")
+  case ReplList extends IQToolName("repl_list")
+  case ReplSledgehammer extends IQToolName("repl_sledgehammer")
+  case ReplFindTheorems extends IQToolName("repl_find_theorems")
+  case ReplTimeout extends IQToolName("repl_timeout")
+  case ReplRaw extends IQToolName("repl_raw")
 }
 
 object IQToolName {

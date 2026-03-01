@@ -222,7 +222,12 @@ def fork(id: str, state_idx: int) -> str:
 def focus(id: str) -> str:
     return repl.send(f"Ir.focus {ml_str(id)};")
 
-@mcp.tool(description="Apply an Isar command in the current REPL. Examples: 'lemma \"True\"', 'by simp', 'definition ...'. Don't use 'theory' commands — the theory context is set by 'init'.")
+@mcp.tool(description=(
+    "Apply an Isar command in the current REPL. "
+    "Examples: 'lemma \"True\"', 'by simp', 'definition ...'. "
+    "Don't use 'theory' commands — the theory context is set by 'init'. "
+    "IMPORTANT: If a step FAILS (error response), the REPL state is UNCHANGED — "
+    "do NOT call 'back' to undo a failed step."))
 def step(isar_text: str) -> str:
     return repl.send(f"Ir.step {ml_str(isar_text)};")
 
@@ -253,7 +258,7 @@ def replay() -> str:
 def truncate(idx: int) -> str:
     return repl.send(f"Ir.truncate {ml_int(idx)};")
 
-@mcp.tool(description="Revert the last step. Synonym for truncate(-1).")
+@mcp.tool(description="Revert the last SUCCESSFUL step. Synonym for truncate(-1). Only call this after a step that succeeded — failed steps don't change the REPL state.")
 def back() -> str:
     return repl.send("Ir.back ();")
 

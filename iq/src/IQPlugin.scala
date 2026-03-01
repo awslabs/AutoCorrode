@@ -4,7 +4,7 @@
 import isabelle._
 import isabelle.jedit._
 
-import org.gjt.sp.jedit.{EBMessage, EBPlugin}
+import org.gjt.sp.jedit.{EBMessage, EBPlugin, jEdit}
 
 object IQPlugin {
   @volatile private var instance: Option[IQPlugin] = None
@@ -87,6 +87,15 @@ class IQPlugin extends EBPlugin {
   }
 
   override def handleMessage(message: EBMessage): Unit = {
-    // Handle jEdit messages if needed
+    message match {
+      case msg: org.gjt.sp.jedit.msg.ViewUpdate
+        if msg.getWhat == org.gjt.sp.jedit.msg.ViewUpdate.CLOSED
+          && jEdit.getViewCount() == 0 =>
+        // Last window closed — shut down I/R like a full quit
+        IQExploreDockable.shutdown()
+        try { PIDE.session.protocol_command("IR_Repl.stop") }
+        catch { case _: Exception => }
+      case _ =>
+    }
   }
 }

@@ -72,6 +72,37 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147) {
   def initFromDocument(id: String, node: String, commandId: Int): String =
     send(s"Ir.init_from_document ${q(id)} ${q(node)} ${mlInt(commandId)}")
 
+  /** Create a REPL from a source location, resolving to node + command id via IQUtils.
+    *
+    * Supports the same selection modes as I/Q:
+    *   - File + offset: {{{ initFromSourceLocation("r", file="/path/to/Foo.thy", offset=42) }}}
+    *   - File + pattern: {{{ initFromSourceLocation("r", file="Foo.thy", pattern="lemma foo") }}}
+    *
+    * File paths are auto-completed against open documents in Isabelle/jEdit.
+    */
+  def initFromSourceLocation(
+    id: String,
+    file: String,
+    offset: Option[Int] = None,
+    pattern: Option[String] = None
+  ): String = {
+    val resolvedPath = IQUtils.autoCompleteFilePath(file) match {
+      case Right(p) => p
+      case Left(err) => return s"Error: $err"
+    }
+    val (target, oOpt, pOpt) =
+      if (offset.isDefined) (CommandSelectionTarget.FileOffset, offset, None)
+      else if (pattern.isDefined) (CommandSelectionTarget.FilePattern, None, pattern)
+      else return "Error: specify either offset or pattern"
+    IQUtils.resolveCommandSelection(target, Some(resolvedPath), oOpt, pOpt) match {
+      case Right(resolved) =>
+        val node = resolved.command.node_name.node
+        val cmdId = resolved.command.id.toInt
+        initFromDocument(id, node, cmdId)
+      case Left(err) => s"Error: $err"
+    }
+  }
+
   /** Fork a new REPL from the current one at the given state index. */
   def fork(id: String, stateIdx: Int): String =
     send(s"Ir.fork ${q(id)} ${mlInt(stateIdx)}")
@@ -164,15 +195,19 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147) {
       |REPL lifecycle:
       |  init("id", List("thy1"))           Create REPL importing theories
       |  initFromDocument("id", node, cid)  Create REPL from PIDE document state
+      |  initFromSourceLocation("id",       Create REPL from source location:
+      |    file="Foo.thy", offset=42)         by file + character offset, or
+      |    file="Foo.thy",                    by file + unique text pattern
+      |    pattern="lemma foo")
       |  fork("id", stateIdx)               Fork from current REPL at state index
       |  focus("id")                        Switch to REPL
       |  remove("id")                       Delete REPL and sub-REPLs
       |  repls()                            List all REPLs
       |
-      |Stepping:
+      |Stepping (failed steps leave REPL unchanged — don't call back() after a failure):
       |  step("lemma \"True\" by simp")     Execute Isar text as next step
       |  stepFile("/path/to/file")          Execute Isar from file
-      |  back()                             Revert last step
+      |  back()                             Revert last successful step
       |  edit(idx, "new text")              Replace step at index
       |  replay()                           Re-execute stale steps
       |  truncate(idx)                      Keep steps 0..idx

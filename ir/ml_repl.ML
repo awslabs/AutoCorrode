@@ -220,8 +220,7 @@ val _ =
           | _ => error "IR_Repl.start: expected at most one argument (port)")
       in
         case ML_Repl.start port of
-          SOME f => (Output.writeln ("IR_Repl: started on port " ^ string_of_int port);
-                     Future.join f)
+          SOME _ => Output.writeln ("IR_Repl: started on port " ^ string_of_int port)
         | NONE => Output.writeln ("IR_Repl: already running on port " ^ string_of_int port)
       end);
 

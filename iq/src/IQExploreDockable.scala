@@ -16,22 +16,85 @@ import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.gui.{DefaultFocusComponent, HistoryTextField}
 
 object IQExploreDockable {
-  /** Global IRClient instance, set by Start I/R button.
+  /** Global IRClient instance, set by Start I/R button or auto-start.
     * Access from Scala console: {{{ IQExploreDockable.ir.get.help() }}} */
   @volatile var ir: Option[IRClient] = None
   /** Daemon process, killed on plugin stop. */
   @volatile var daemonProcess: Option[Process] = None
+  /** Whether I/R startup has been initiated. */
+  @volatile private var started: Boolean = false
 
-  def shutdown(): Unit = {
+  /** Optional status callback for UI feedback. */
+  @volatile var onStatus: String => Unit = msg => Output.writeln("I/R: " + msg)
+
+  /** Start I/R (ML_Repl + repl.py daemon + IRClient). Idempotent.
+    * Called by the Start I/R button and auto-triggered on first IRClient use. */
+  def ensureStarted(): Unit = synchronized {
+    if (started) return
+    started = true
+
+    import isabelle._
+    import isabelle.jedit._
+
+    // Find repl.py by locating iq/Isar_Explore.thy in the document model
+    val replPyOpt: Option[String] = {
+      val snapshot = PIDE.session.snapshot()
+      snapshot.version.nodes.iterator
+        .map(_._1.node)
+        .find(_.endsWith("iq/Isar_Explore.thy"))
+        .map(p => p.stripSuffix("iq/Isar_Explore.thy") + "ir/repl.py")
+    }
+    replPyOpt match {
+      case None =>
+        onStatus("iq/Isar_Explore.thy not found in document model. " +
+          "Open a theory that imports 'iq' and wait for it to be fully processed.")
+        started = false
+      case Some(replPy) if !new java.io.File(replPy).exists() =>
+        onStatus("ir/repl.py not found at " + replPy)
+        started = false
+      case Some(replPy) =>
+        // Start ML_Repl
+        PIDE.session.protocol_command("IR_Repl.start", XML.string("9146"))
+        onStatus("Sent IR_Repl.start (port 9146)")
+        // Launch repl.py --daemon
+        val pb = new ProcessBuilder("python3", replPy, "--daemon", "--mcp", "--expect-ml")
+        pb.redirectErrorStream(true)
+        daemonProcess = Some(pb.start())
+        onStatus("Started repl.py --daemon --mcp")
+        // Connect IRClient with retries in background
+        new Thread(() => {
+          for (_ <- 1 to 15 if ir.isEmpty) {
+            Thread.sleep(2000)
+            try {
+              val client = new IRClient()
+              client.connect()
+              ir = Some(client)
+            } catch { case _: Exception => }
+          }
+          if (ir.nonEmpty) onStatus("IRClient connected on port 9147")
+          else onStatus("IRClient failed to connect after 30s")
+        }, "IRClient-connect").start()
+    }
+  }
+
+  /** Block until IRClient is connected (up to 30s). */
+  def awaitClient(): Option[IRClient] = {
+    ensureStarted()
+    for (_ <- 1 to 30 if ir.isEmpty) Thread.sleep(1000)
+    ir
+  }
+
+  def shutdown(): Unit = synchronized {
     ir.foreach(_.close())
     ir = None
     daemonProcess.foreach { p =>
-      p.destroy()  // SIGTERM — lets Python run atexit cleanup (kills MCP)
+      p.destroy()
       val _ = try { p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS) }
       catch { case _: Exception => false }
       if (p.isAlive) { val _ = p.destroyForcibly() }
     }
     daemonProcess = None
+    started = false
   }
 }
 
@@ -535,58 +598,14 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   buttonsPanel.add(locateButton)
   buttonsPanel.add(statusLabel)
 
-  private var irClient: Option[IRClient] = None
 
   private val startIRButton = new JButton("Start I/R")
   startIRButton.setToolTipText("Start the I/R TCP REPL server (port 9146)")
   startIRButton.addActionListener(new ActionListener {
     def actionPerformed(e: ActionEvent): Unit = {
-      PIDE.session.protocol_command("IR_Repl.start", XML.string("9146"))
-      appendOutput("Sent IR_Repl.start request (port 9146)")
-
-      // Find ir/repl.py by locating iq/Isar_Explore.thy in the document model
-      val replPyOpt: Option[String] = {
-        val snapshot = PIDE.session.snapshot()
-        snapshot.version.nodes.iterator
-          .map(_._1.node)
-          .find(_.endsWith("iq/Isar_Explore.thy"))
-          .map(p => p.stripSuffix("iq/Isar_Explore.thy") + "ir/repl.py")
-      }
-      replPyOpt match {
-        case Some(replPy) if new java.io.File(replPy).exists() =>
-          val pb = new ProcessBuilder("python3", replPy, "--daemon", "--mcp", "--expect-ml")
-          pb.redirectErrorStream(true)
-          val proc = pb.start()
-          IQExploreDockable.daemonProcess = Some(proc)
-          appendOutput("Started repl.py --daemon --mcp")
-
-          // Connect IRClient with retries
-          new Thread(() => {
-            var connected = false
-            for (attempt <- 1 to 15 if !connected) {
-              Thread.sleep(2000)
-              try {
-                val client = new IRClient()
-                client.connect()
-                irClient = Some(client)
-                IQExploreDockable.ir = Some(client)
-                connected = true
-                javax.swing.SwingUtilities.invokeLater(() =>
-                  appendOutput("IRClient connected to repl.py on port 9147"))
-              } catch {
-                case _: Exception =>
-              }
-            }
-            if (!connected) {
-              javax.swing.SwingUtilities.invokeLater(() =>
-                appendOutput("IRClient: gave up connecting after 30s"))
-            }
-          }, "IRClient-connect").start()
-        case Some(replPy) =>
-          appendOutput("Warning: " + replPy + " not found")
-        case None =>
-          appendOutput("Warning: could not locate iq/Isar_Explore.thy in document model")
-      }
+      IQExploreDockable.onStatus = msg =>
+        javax.swing.SwingUtilities.invokeLater(() => appendOutput(msg))
+      IQExploreDockable.ensureStarted()
     }
   })
   buttonsPanel.add(startIRButton)
