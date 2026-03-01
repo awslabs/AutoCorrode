@@ -759,6 +759,150 @@ lemmas word_byte_array_focus_components =
   word_byte_array_prism_validity[THEN prism_to_focus_components(2), folded word_byte_array_foci_defs]
   word_byte_array_prism_validity[THEN prism_to_focus_components(3), folded word_byte_array_foci_defs]
 
+
+subsection\<open>128-bit word encoding\<close>
+
+text\<open>Following the same pattern as 16/32/64-bit words.\<close>
+
+definition word128_to_byte_list_le :: \<open>128 word \<Rightarrow> byte list\<close> where
+  \<open>word128_to_byte_list_le n \<equiv> nat_to_byte_list_le (unat n) 16\<close>
+
+definition word128_from_byte_list_le :: \<open>byte list \<Rightarrow> 128 word\<close> where
+  \<open>word128_from_byte_list_le bs \<equiv> word_of_nat (byte_list_to_nat_le bs)\<close>
+
+definition word128_to_byte_list_be :: \<open>128 word \<Rightarrow> byte list\<close> where
+  \<open>word128_to_byte_list_be n \<equiv> nat_to_byte_list_be (unat n) 16\<close>
+
+definition word128_from_byte_list_be :: \<open>byte list \<Rightarrow> 128 word\<close> where
+  \<open>word128_from_byte_list_be bs \<equiv> word_of_nat (byte_list_to_nat_be bs)\<close>
+
+lemma word128_from_byte_list_le_unat:
+  assumes \<open>length bs = 16\<close>
+    shows \<open>unat (word_of_nat (byte_list_to_nat_le bs)::128 word) = byte_list_to_nat_le bs\<close>
+  using assms byte_list_to_nat_le_bound[where bs=bs] by (simp add: unat_of_nat)
+
+lemma word128_byte_list_le_bij:
+  shows \<open>word128_from_byte_list_le (word128_to_byte_list_le n) = n\<close> (is ?g1)
+    and \<open>length (word128_to_byte_list_le n) = 16\<close> (is ?g2)
+    and \<open>length bs = 16 \<Longrightarrow> word128_to_byte_list_le (word128_from_byte_list_le bs) = bs\<close>
+proof -
+  show \<open>?g1\<close>
+    by (auto simp add: nat_to_byte_list_le_correct word128_from_byte_list_le_def
+      word128_to_byte_list_le_def)
+next
+  have \<open>unat n < 2^128\<close>
+    using unsigned_less[where 'b=128] by simp
+  then have \<open>length (nat_to_nat_byte_list_le (unat n) 16) = 16\<close>
+    by (intro nat_to_nat_byte_list_le_len) simp
+  then show \<open>?g2\<close>
+    by (simp add: word128_to_byte_list_le_def nat_to_byte_list_le_def)
+next
+  assume \<open>length bs = 16\<close> then show \<open>word128_to_byte_list_le (word128_from_byte_list_le bs) = bs\<close>
+    by (clarsimp simp add: word128_from_byte_list_le_def word128_to_byte_list_le_def
+      word128_from_byte_list_le_unat intro!: byte_list_to_nat_le_correctI)
+qed
+
+lemma word128_to_byte_list_be_le:
+  shows [byte_encoding_be_le]: \<open>word128_to_byte_list_be n = rev (word128_to_byte_list_le n)\<close>
+by (simp add: nat_to_byte_list_be_le word128_to_byte_list_be_def word128_to_byte_list_le_def)
+
+lemma word128_to_byte_list_le_be:
+  shows [byte_encoding_le_be]: \<open>word128_to_byte_list_le n = rev (word128_to_byte_list_be n)\<close>
+by (simp add: nat_to_byte_list_be_le word128_to_byte_list_be_def word128_to_byte_list_le_def)
+
+lemma word128_from_byte_list_be_le:
+  shows [byte_encoding_be_le]: \<open>word128_from_byte_list_be bs = word128_from_byte_list_le (rev bs)\<close>
+by (simp add: byte_list_to_nat_le_be word128_from_byte_list_be_def word128_from_byte_list_le_def)
+
+lemma word128_from_byte_list_le_be:
+  shows [byte_encoding_le_be]: \<open>word128_from_byte_list_le bs = word128_from_byte_list_be (rev bs)\<close>
+by (simp add: byte_list_to_nat_le_be word128_from_byte_list_be_def word128_from_byte_list_le_def)
+
+lemma word128_byte_list_be_bij:
+  shows \<open>word128_from_byte_list_be (word128_to_byte_list_be n) = n\<close>
+    and \<open>length (word128_to_byte_list_be n) = 16\<close>
+    and \<open>length bs = 16 \<Longrightarrow> word128_to_byte_list_be (word128_from_byte_list_be bs) = bs\<close>
+by (auto simp add: word128_byte_list_le_bij byte_encoding_be_le)
+
+lift_definition word128_to_byte_array_le :: \<open>128 word \<Rightarrow> (byte, 16) array\<close> is
+  \<open>brauns1 \<circ> word128_to_byte_list_le\<close>
+by (clarsimp simp add: is_array_def) (metis brauns1_correct size_list word128_byte_list_le_bij)
+
+lift_definition word128_from_byte_array_le :: \<open>(byte, 16) array \<Rightarrow> 128 word\<close> is
+  \<open>word128_from_byte_list_le \<circ> list_fast\<close> .
+
+lift_definition word128_to_byte_array_be :: \<open>128 word \<Rightarrow> (byte, 16) array\<close> is
+  \<open>brauns1 \<circ> word128_to_byte_list_be\<close>
+by (clarsimp simp add: is_array_def) (metis brauns1_correct size_list word128_byte_list_be_bij)
+
+lift_definition word128_from_byte_array_be :: \<open>(byte, 16) array \<Rightarrow> 128 word\<close> is
+  \<open>word128_from_byte_list_be \<circ> list_fast\<close> .
+
+lemma word128_byte_array_le_bij:
+  shows \<open>word128_from_byte_array_le (word128_to_byte_array_le n) = n\<close>
+    and \<open>word128_to_byte_array_le (word128_from_byte_array_le a) = a\<close>
+by (transfer, auto simp add: word128_byte_list_le_bij size_list list_fast_correct brauns1_correct
+  is_array_def)+
+
+lemma word128_byte_array_be_bij:
+  shows \<open>word128_from_byte_array_be (word128_to_byte_array_be n) = n\<close>
+    and \<open>word128_to_byte_array_be (word128_from_byte_array_be a) = a\<close>
+by (transfer, auto simp add: word128_byte_list_be_bij size_list list_fast_correct brauns1_correct
+  is_array_def)+
+
+definition word128_byte_array_iso_prism_be :: \<open>((byte, 16) array, 128 word) prism\<close> where
+  [word_byte_array_iso_prism_defs]: \<open>word128_byte_array_iso_prism_be \<equiv>
+    iso_prism word128_from_byte_array_be word128_to_byte_array_be\<close>
+
+definition word128_byte_array_iso_prism_le :: \<open>((byte, 16) array, 128 word) prism\<close> where
+  [word_byte_array_iso_prism_defs]: \<open>word128_byte_array_iso_prism_le \<equiv>
+    iso_prism word128_from_byte_array_le word128_to_byte_array_le\<close>
+
+lemma word128_byte_array_iso_prism_validity:
+  shows \<open>is_valid_prism word128_byte_array_iso_prism_be\<close>
+    and \<open>is_valid_prism word128_byte_array_iso_prism_le\<close>
+by (auto intro!: iso_prism_valid simp add: word128_byte_array_iso_prism_be_def
+  word128_byte_array_iso_prism_le_def word128_byte_array_be_bij word128_byte_array_le_bij)
+
+definition word128_byte_list_prism_be :: \<open>(byte list, 128 word) prism\<close> where
+  [word_byte_array_prism_defs]: \<open>word128_byte_list_prism_be \<equiv>
+    prism_compose list_fixlen_prism word128_byte_array_iso_prism_be\<close>
+
+definition word128_byte_list_prism_le :: \<open>(byte list, 128 word) prism\<close> where
+  [word_byte_array_prism_defs]: \<open>word128_byte_list_prism_le \<equiv>
+    prism_compose list_fixlen_prism word128_byte_array_iso_prism_le\<close>
+
+lemma word128_byte_array_prism_validity:
+  shows \<open>is_valid_prism word128_byte_list_prism_be\<close>
+    and \<open>is_valid_prism word128_byte_list_prism_le\<close>
+by (auto intro!: prism_compose_valid simp add: word128_byte_list_prism_be_def
+  word128_byte_list_prism_le_def word128_byte_array_iso_prism_validity list_fixlen_prism_valid)
+
+context
+  notes word128_byte_array_prism_validity[simp]
+    and word128_byte_array_iso_prism_validity[simp]
+    and prism_to_focus_raw_valid[simp]
+    and prism_to_focus_raw_components[simp]
+begin
+
+lift_definition word128_byte_list_focus_be :: \<open>(byte list, 128 word) focus\<close> is
+  \<open>prism_to_focus_raw word128_byte_list_prism_be\<close>
+by simp
+
+lift_definition word128_byte_list_focus_le :: \<open>(byte list, 128 word) focus\<close> is
+  \<open>prism_to_focus_raw word128_byte_list_prism_le\<close>
+by simp
+
+lift_definition word128_byte_array_focus_be :: \<open>((byte, 16) array, 128 word) focus\<close> is
+  \<open>prism_to_focus_raw word128_byte_array_iso_prism_be\<close>
+by simp
+
+lift_definition word128_byte_array_focus_le :: \<open>((byte, 16) array, 128 word) focus\<close> is
+  \<open>prism_to_focus_raw word128_byte_array_iso_prism_le\<close>
+by simp
+
+end
+
 (*<*)
 end
 (*>*)

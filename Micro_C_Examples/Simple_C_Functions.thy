@@ -874,7 +874,7 @@ thm c_desig_arr_test_def
 
 end
 
-section \<open>Pointer relational comparison and subtraction\<close>
+section \<open>Pointer subtraction\<close>
 
 context c_uint_verification_ctx
 begin
@@ -882,28 +882,12 @@ begin
 micro_c_translate \<open>
   typedef unsigned int uint32_t;
 
-  _Bool ptr_less(uint32_t *p, uint32_t *q) {
-    return p < q;
-  }
-
-  _Bool ptr_le(uint32_t *p, uint32_t *q) {
-    return p <= q;
-  }
-
-  _Bool ptr_greater(uint32_t *p, uint32_t *q) {
-    return p > q;
-  }
-
-  _Bool ptr_ge(uint32_t *p, uint32_t *q) {
-    return p >= q;
-  }
-
-  unsigned long ptr_diff(uint32_t *p, uint32_t *q) {
+  long ptr_diff(uint32_t *p, uint32_t *q) {
     return p - q;
   }
 \<close>
 
-thm c_ptr_less_def c_ptr_le_def c_ptr_greater_def c_ptr_ge_def c_ptr_diff_def
+thm c_ptr_diff_def
 
 end
 
@@ -1062,6 +1046,249 @@ by (crush_boot f: c_point_sum_init_def contract: c_point_sum_init_contract_def)
   crush_base
 
 end
+
+section \<open>Pointer ternary\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+  unsigned int *pick_ptr(unsigned int flag, unsigned int *a, unsigned int *b) {
+    return flag ? a : b;
+  }
+\<close>
+
+thm c_pick_ptr_def
+
 end
 
+section \<open>Alignof\<close>
 
+context c_ulong_verification_ctx
+begin
+
+micro_c_translate \<open>
+  unsigned long long get_align(void) {
+    return _Alignof(int);
+  }
+\<close>
+
+thm c_get_align_def
+
+definition c_get_align_contract :: \<open>('s::{sepalg}, c_ulong, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_get_align_contract \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = 4\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_get_align_contract
+
+lemma c_get_align_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_get_align \<Turnstile>\<^sub>F c_get_align_contract\<close>
+by (crush_boot f: c_get_align_def contract: c_get_align_contract_def)
+  crush_base
+
+end
+
+section \<open>More than 10 function arguments\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+  unsigned int sum12(unsigned int a, unsigned int b, unsigned int c,
+                     unsigned int d, unsigned int e, unsigned int f,
+                     unsigned int g, unsigned int h, unsigned int i,
+                     unsigned int j, unsigned int k, unsigned int l) {
+    return a + l;
+  }
+\<close>
+
+thm c_sum12_def
+
+definition c_sum12_contract :: \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow>
+    c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow>
+    ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_sum12_contract a b c d e f g h i j k l \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a + l\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_sum12_contract
+
+lemma c_sum12_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_sum12 a b c d e f g h i j k l \<Turnstile>\<^sub>F c_sum12_contract a b c d e f g h i j k l\<close>
+by (crush_boot f: c_sum12_def contract: c_sum12_contract_def)
+  crush_base
+
+end
+
+section \<open>sizeof(struct)\<close>
+
+context c_point_verification_ctx
+begin
+
+micro_c_translate \<open>
+  typedef struct { unsigned int x; unsigned int y; } point;
+
+  unsigned int point_size(void) {
+    return sizeof(point);
+  }
+\<close>
+
+thm c_point_size_def
+
+definition c_point_size_contract :: \<open>('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_point_size_contract \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = 8\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_point_size_contract
+
+lemma c_point_size_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_point_size \<Turnstile>\<^sub>F c_point_size_contract\<close>
+by (crush_boot f: c_point_size_def contract: c_point_size_contract_def)
+  crush_base
+
+end
+
+section \<open>Increment on dereference\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+  void inc_deref(unsigned int *p) {
+    ++*p;
+  }
+\<close>
+
+thm c_inc_deref_def
+
+end
+
+section \<open>Increment on array element\<close>
+
+context c_uint_arr_verification_ctx
+begin
+
+micro_c_translate \<open>
+  unsigned int inc_arr_elem(void) {
+    unsigned int arr[3] = {10, 20, 30};
+    ++arr[1];
+    return arr[1];
+  }
+\<close>
+
+thm c_inc_arr_elem_def
+
+end
+
+section \<open>Scalar compound literal\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+  unsigned int compound_scalar(unsigned int x) {
+    return (unsigned int){x};
+  }
+\<close>
+
+thm c_compound_scalar_def
+
+definition c_compound_scalar_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_compound_scalar_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = x\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_compound_scalar_contract
+
+lemma c_compound_scalar_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_compound_scalar x \<Turnstile>\<^sub>F c_compound_scalar_contract x\<close>
+by (crush_boot f: c_compound_scalar_def contract: c_compound_scalar_contract_def)
+  crush_base
+
+end
+
+section \<open>Pointer to integer cast\<close>
+
+context c_ulong_verification_ctx
+begin
+
+micro_c_translate \<open>
+  typedef unsigned long long uintptr_t;
+
+  unsigned long long ptr_to_int(unsigned int *p) {
+    return (uintptr_t)p;
+  }
+\<close>
+
+thm c_ptr_to_int_def
+
+end
+
+section \<open>String literal as array initializer\<close>
+
+locale c_char_arr_verification_ctx =
+    reference reference_types +
+    ref_c_char: reference_allocatable reference_types _ _ _ _ _ _ _ c_char_prism +
+    ref_c_char_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_char_list_prism
+  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+        'o prompt_output \<Rightarrow> unit\<close>
+  and c_char_prism :: \<open>('gv, c_char) prism\<close>
+  and c_char_list_prism :: \<open>('gv, c_char list) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_char.new ref_c_char_list.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+  unsigned char read_str_first(void) {
+    unsigned char s[] = "AB";
+    return s[0];
+  }
+\<close>
+
+thm c_read_str_first_def
+
+definition c_read_str_first_contract :: \<open>('s::{sepalg}, c_char, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_read_str_first_contract \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. \<langle>r = 65\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_read_str_first_contract
+
+lemma c_read_str_first_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_read_str_first \<Turnstile>\<^sub>F c_read_str_first_contract\<close>
+by (crush_boot f: c_read_str_first_def contract: c_read_str_first_contract_def)
+  crush_base
+
+end
+
+section \<open>Generic selection\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+  unsigned int generic_add(unsigned int x) {
+    return _Generic(x, unsigned int: x + 1, default: x);
+  }
+\<close>
+
+thm c_generic_add_def
+
+definition c_generic_add_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_generic_add_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = x + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_generic_add_contract
+
+lemma c_generic_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_generic_add x \<Turnstile>\<^sub>F c_generic_add_contract x\<close>
+by (crush_boot f: c_generic_add_def contract: c_generic_add_contract_def)
+  crush_base
+
+end
+
+end

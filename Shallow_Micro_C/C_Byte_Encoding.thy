@@ -87,6 +87,15 @@ definition c_ulong_byte_prism :: \<open>(byte list, c_ulong) prism\<close> where
 definition c_long_byte_prism :: \<open>(byte list, c_long) prism\<close> where
   \<open>c_long_byte_prism \<equiv> prism_compose word64_byte_list_prism_le word_sword_iso_prism\<close>
 
+subsection \<open>128-bit\<close>
+
+definition c_uint128_byte_prism :: \<open>(byte list, c_uint128) prism\<close> where
+  \<open>c_uint128_byte_prism \<equiv> word128_byte_list_prism_le\<close>
+
+definition c_int128_byte_prism :: \<open>(byte list, c_int128) prism\<close> where
+  \<open>c_int128_byte_prism \<equiv> prism_compose word128_byte_list_prism_le word_sword_iso_prism\<close>
+
+
 section \<open>Validity Proofs\<close>
 
 named_theorems c_byte_prism_defs
@@ -98,6 +107,8 @@ declare c_char_byte_prism_def [c_byte_prism_defs]
     and c_int_byte_prism_def [c_byte_prism_defs]
     and c_ulong_byte_prism_def [c_byte_prism_defs]
     and c_long_byte_prism_def [c_byte_prism_defs]
+    and c_uint128_byte_prism_def [c_byte_prism_defs]
+    and c_int128_byte_prism_def [c_byte_prism_defs]
 
 named_theorems c_byte_prism_validity
 
@@ -110,10 +121,12 @@ lemma c_byte_prism_valid [c_byte_prism_validity]:
     and \<open>is_valid_prism c_int_byte_prism\<close>
     and \<open>is_valid_prism c_ulong_byte_prism\<close>
     and \<open>is_valid_prism c_long_byte_prism\<close>
+    and \<open>is_valid_prism c_uint128_byte_prism\<close>
+    and \<open>is_valid_prism c_int128_byte_prism\<close>
   by (auto simp: c_byte_prism_defs
            intro!: prism_compose_valid list_fixlen_prism_valid
                    array_single_iso_prism_valid word_sword_iso_prism_valid
-                   word_byte_array_prism_validity)
+                   word_byte_array_prism_validity word128_byte_array_prism_validity)
 
 section \<open>Embed Length Consistency (sizeof match)\<close>
 
@@ -165,6 +178,18 @@ lemma c_long_byte_embed_length:
                 list_fixlen_prism_def list_fixlen_embed_def word64_byte_array_iso_prism_le_def
                 iso_prism_def word_sword_iso_prism_def)
 
+lemma c_uint128_byte_embed_length:
+  shows \<open>length (prism_embed c_uint128_byte_prism v) = 16\<close>
+  by (simp add: c_uint128_byte_prism_def word128_byte_list_prism_le_def prism_compose_def
+                list_fixlen_prism_def list_fixlen_embed_def word128_byte_array_iso_prism_le_def
+                iso_prism_def)
+
+lemma c_int128_byte_embed_length:
+  shows \<open>length (prism_embed c_int128_byte_prism v) = 16\<close>
+  by (simp add: c_int128_byte_prism_def word128_byte_list_prism_le_def prism_compose_def
+                list_fixlen_prism_def list_fixlen_embed_def word128_byte_array_iso_prism_le_def
+                iso_prism_def word_sword_iso_prism_def)
+
 section \<open>Sizeof Consistency\<close>
 
 lemma c_char_sizeof_encoding:
@@ -182,5 +207,13 @@ lemma c_int_sizeof_encoding:
 lemma c_ulong_sizeof_encoding:
   shows \<open>c_sizeof TYPE(c_ulong) = length (prism_embed c_ulong_byte_prism v)\<close>
   by (simp add: c_ulong_byte_embed_length)
+
+lemma c_uint128_sizeof_encoding:
+  shows \<open>c_sizeof TYPE(c_uint128) = length (prism_embed c_uint128_byte_prism v)\<close>
+  by (simp add: c_uint128_byte_embed_length)
+
+lemma c_int128_sizeof_encoding:
+  shows \<open>c_sizeof TYPE(c_int128) = length (prism_embed c_int128_byte_prism v)\<close>
+  by (simp add: c_int128_byte_embed_length)
 
 end

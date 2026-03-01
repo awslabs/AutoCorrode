@@ -88,6 +88,10 @@ lemma c_sizeof_short_val [simp]:
   shows \<open>c_sizeof TYPE(c_short) = 2\<close>
 by (simp add: c_sizeof_short_def)
 
+lemma c_sizeof_ushort_val [simp]:
+  shows \<open>c_sizeof TYPE(c_ushort) = 2\<close>
+by (simp add: c_sizeof_ushort_def)
+
 lemma c_sizeof_int_val [simp]:
   shows \<open>c_sizeof TYPE(c_int) = 4\<close>
 by (simp add: c_sizeof_int_def)
@@ -124,5 +128,114 @@ by (simp add: word_byte_list_le_bij)
 lemma c_sizeof_ulong_encoding:
   shows \<open>c_sizeof TYPE(c_ulong) = length (word64_to_byte_list_le n)\<close>
 by (simp add: word_byte_list_le_bij)
+
+section \<open>C alignof Reasoning\<close>
+
+text \<open>
+  We define @{text "c_alignof"} as an overloaded constant mapping C types
+  to their natural alignment (in bytes), mirroring the C @{text "_Alignof"} operator.
+  LP64 model: alignment = min(sizeof, 8) for scalar types.
+\<close>
+
+consts c_alignof :: \<open>'a itself \<Rightarrow> nat\<close>
+
+overloading
+  c_alignof_char \<equiv> \<open>c_alignof :: c_char itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_char :: \<open>c_char itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_char _ \<equiv> 1\<close>
+end
+
+overloading
+  c_alignof_short \<equiv> \<open>c_alignof :: c_short itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_short :: \<open>c_short itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_short _ \<equiv> 2\<close>
+end
+
+overloading
+  c_alignof_ushort \<equiv> \<open>c_alignof :: c_ushort itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_ushort :: \<open>c_ushort itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_ushort _ \<equiv> 2\<close>
+end
+
+overloading
+  c_alignof_int \<equiv> \<open>c_alignof :: c_int itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_int :: \<open>c_int itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_int _ \<equiv> 4\<close>
+end
+
+overloading
+  c_alignof_uint \<equiv> \<open>c_alignof :: c_uint itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_uint :: \<open>c_uint itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_uint _ \<equiv> 4\<close>
+end
+
+overloading
+  c_alignof_long \<equiv> \<open>c_alignof :: c_long itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_long :: \<open>c_long itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_long _ \<equiv> 8\<close>
+end
+
+overloading
+  c_alignof_ulong \<equiv> \<open>c_alignof :: c_ulong itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_ulong :: \<open>c_ulong itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_ulong _ \<equiv> 8\<close>
+end
+
+overloading
+  c_alignof_int128 \<equiv> \<open>c_alignof :: c_int128 itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_int128 :: \<open>c_int128 itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_int128 _ \<equiv> 16\<close>
+end
+
+overloading
+  c_alignof_uint128 \<equiv> \<open>c_alignof :: c_uint128 itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_uint128 :: \<open>c_uint128 itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_uint128 _ \<equiv> 16\<close>
+end
+
+lemma c_alignof_char_val [simp]:
+  shows \<open>c_alignof TYPE(c_char) = 1\<close>
+by (simp add: c_alignof_char_def)
+
+lemma c_alignof_short_val [simp]:
+  shows \<open>c_alignof TYPE(c_short) = 2\<close>
+by (simp add: c_alignof_short_def)
+
+lemma c_alignof_ushort_val [simp]:
+  shows \<open>c_alignof TYPE(c_ushort) = 2\<close>
+by (simp add: c_alignof_ushort_def)
+
+lemma c_alignof_int_val [simp]:
+  shows \<open>c_alignof TYPE(c_int) = 4\<close>
+by (simp add: c_alignof_int_def)
+
+lemma c_alignof_uint_val [simp]:
+  shows \<open>c_alignof TYPE(c_uint) = 4\<close>
+by (simp add: c_alignof_uint_def)
+
+lemma c_alignof_long_val [simp]:
+  shows \<open>c_alignof TYPE(c_long) = 8\<close>
+by (simp add: c_alignof_long_def)
+
+lemma c_alignof_ulong_val [simp]:
+  shows \<open>c_alignof TYPE(c_ulong) = 8\<close>
+by (simp add: c_alignof_ulong_def)
+
+lemma c_alignof_int128_val [simp]:
+  shows \<open>c_alignof TYPE(c_int128) = 16\<close>
+by (simp add: c_alignof_int128_def)
+
+lemma c_alignof_uint128_val [simp]:
+  shows \<open>c_alignof TYPE(c_uint128) = 16\<close>
+by (simp add: c_alignof_uint128_def)
 
 end

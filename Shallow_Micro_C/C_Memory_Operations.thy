@@ -61,8 +61,15 @@ by (simp add: c_ptr_at_def)
 
 section \<open>C Pointer Subtraction\<close>
 
-definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> nat\<close> where
-  \<open>c_ptr_diff p q stride \<equiv> (gref_address p - gref_address q) div stride\<close>
+text \<open>
+  C pointer subtraction yields a signed element-distance (typically @{typ c_long}
+  in this LP64 model), not an unsigned natural.
+\<close>
+
+definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> c_long\<close> where
+  \<open>c_ptr_diff p q stride \<equiv>
+     word_of_int
+       (c_trunc_div_int (int (gref_address p) - int (gref_address q)) (int stride))\<close>
 
 section \<open>C Pointer Relational Comparisons\<close>
 
@@ -77,5 +84,13 @@ definition c_ptr_greater :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \
 
 definition c_ptr_ge :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> bool\<close> where
   \<open>c_ptr_ge p q \<equiv> gref_address p \<ge> gref_address q\<close>
+
+section \<open>Pointer\<leftrightarrow>Integer Casts\<close>
+
+definition c_ptr_to_uintptr :: \<open>(nat, 'b) gref \<Rightarrow> c_ulong\<close> where
+  \<open>c_ptr_to_uintptr p \<equiv> of_nat (gref_address p)\<close>
+
+definition c_uintptr_to_ptr :: \<open>c_ulong \<Rightarrow> (nat, 'b) gref\<close> where
+  \<open>c_uintptr_to_ptr w \<equiv> make_gref (unat w)\<close>
 
 end

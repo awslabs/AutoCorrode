@@ -114,8 +114,8 @@ lemma wp_c_signed_div [micro_rust_wp_simps]:
     shows \<open>\<W>\<P> \<Gamma> (c_signed_div a b) \<psi> \<rho> \<theta> =
              (if b = 0 then
                 \<theta> (CustomAbort DivisionByZero)
-              else if c_signed_in_range (sint a div sint b) LENGTH('l) then
-                \<psi> (word_of_int (sint a div sint b))
+              else if c_signed_in_range (c_trunc_div_int (sint a) (sint b)) LENGTH('l) then
+                \<psi> (word_of_int (c_trunc_div_int (sint a) (sint b)))
               else
                 \<theta> (CustomAbort SignedOverflow))\<close>
 using assms by (simp add: c_signed_div_def c_signed_overflow_def c_abort_def c_division_by_zero_def
@@ -125,11 +125,11 @@ lemma wp_c_signed_divI [micro_rust_wp_intros]:
     fixes a b :: \<open>'l::{len} sword\<close>
   assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
       and \<open>b \<noteq> 0\<close>
-      and \<open>c_signed_in_range (sint a div sint b) LENGTH('l)\<close>
-      and \<open>\<phi> \<longlongrightarrow> \<psi> (word_of_int (sint a div sint b))\<close>
+      and \<open>c_signed_in_range (c_trunc_div_int (sint a) (sint b)) LENGTH('l)\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi> (word_of_int (c_trunc_div_int (sint a) (sint b)))\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_div a b) \<psi> \<rho> \<theta>\<close>
 proof -
-  from assms have eq: \<open>c_signed_div a b = literal (word_of_int (sint a div sint b))\<close>
+  from assms have eq: \<open>c_signed_div a b = literal (word_of_int (c_trunc_div_int (sint a) (sint b)))\<close>
     by (simp add: c_signed_div_def c_signed_overflow_def c_division_by_zero_def Let_def)
   from assms this show ?thesis
     unfolding eq by (auto intro: wp_literalI simp add: asepconj_simp)
@@ -144,20 +144,23 @@ lemma wp_c_signed_mod [micro_rust_wp_simps]:
     shows \<open>\<W>\<P> \<Gamma> (c_signed_mod a b) \<psi> \<rho> \<theta> =
             (if b = 0 then
                \<theta> (CustomAbort DivisionByZero)
+             else if c_signed_in_range (c_trunc_div_int (sint a) (sint b)) LENGTH('l) then
+               \<psi> (word_of_int (c_trunc_mod_int (sint a) (sint b)))
              else
-               \<psi> (word_of_int (sint a mod sint b)))\<close>
-using assms by (simp add: c_signed_mod_def c_abort_def c_division_by_zero_def Let_def
-  micro_rust_wp_simps asepconj_simp)
+               \<theta> (CustomAbort SignedOverflow))\<close>
+using assms by (simp add: c_signed_mod_def c_signed_overflow_def c_abort_def
+  c_division_by_zero_def Let_def micro_rust_wp_simps asepconj_simp)
 
 lemma wp_c_signed_modI [micro_rust_wp_intros]:
     fixes a b :: \<open>'l::{len} sword\<close>
   assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
       and \<open>b \<noteq> 0\<close>
-      and \<open>\<phi> \<longlongrightarrow> \<psi> (word_of_int (sint a mod sint b))\<close>
+      and \<open>c_signed_in_range (c_trunc_div_int (sint a) (sint b)) LENGTH('l)\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi> (word_of_int (c_trunc_mod_int (sint a) (sint b)))\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_signed_mod a b) \<psi> \<rho> \<theta>\<close>
 proof -
-  from assms have eq: \<open>c_signed_mod a b = literal (word_of_int (sint a mod sint b))\<close>
-    by (simp add: c_signed_mod_def c_division_by_zero_def Let_def)
+  from assms have eq: \<open>c_signed_mod a b = literal (word_of_int (c_trunc_mod_int (sint a) (sint b)))\<close>
+    by (simp add: c_signed_mod_def c_signed_overflow_def c_division_by_zero_def Let_def)
   from this assms show ?thesis
     unfolding eq by (auto intro: wp_literalI simp add: asepconj_simp)
 qed

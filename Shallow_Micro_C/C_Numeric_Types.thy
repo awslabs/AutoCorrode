@@ -39,6 +39,22 @@ text \<open>
   as integers via @{const sint}.
 \<close>
 
+text \<open>
+  C11 signed integer division truncates toward zero. Isabelle/HOL @{const div}
+  on @{typ int} is Euclidean (flooring), so we define helper operations with
+  C semantics and use those in signed @{text "/"} and @{text "%"}.
+\<close>
+
+definition c_trunc_div_int :: \<open>int \<Rightarrow> int \<Rightarrow> int\<close> where
+  \<open>c_trunc_div_int a b \<equiv>
+     if b = 0 then 0
+     else
+       let q = abs a div abs b
+       in if (a < 0) = (b < 0) then q else - q\<close>
+
+definition c_trunc_mod_int :: \<open>int \<Rightarrow> int \<Rightarrow> int\<close> where
+  \<open>c_trunc_mod_int a b \<equiv> a - c_trunc_div_int a b * b\<close>
+
 definition c_signed_add :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_add a b \<equiv>
@@ -72,7 +88,7 @@ definition c_signed_div :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
      if b = 0 then
        c_abort DivisionByZero
      else
-       let result_int = sint a div sint b in
+       let result_int = c_trunc_div_int (sint a) (sint b) in
          if result_int < -(2^(LENGTH('l) - 1)) \<or> result_int \<ge> 2^(LENGTH('l) - 1) then
            c_signed_overflow
          else
@@ -84,7 +100,12 @@ definition c_signed_mod :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
      if b = 0 then
        c_abort DivisionByZero
      else
-       literal (word_of_int (sint a mod sint b))\<close>
+       let q_int = c_trunc_div_int (sint a) (sint b);
+           result_int = c_trunc_mod_int (sint a) (sint b)
+       in if q_int < -(2^(LENGTH('l) - 1)) \<or> q_int \<ge> 2^(LENGTH('l) - 1) then
+            c_signed_overflow
+          else
+            literal (word_of_int result_int)\<close>
 
 section \<open>C unsigned arithmetic (wrapping)\<close>
 

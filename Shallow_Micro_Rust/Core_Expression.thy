@@ -340,6 +340,30 @@ definition deep_compose10 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
                              ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 'b) \<Rightarrow>
                              ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 'c)\<close>
   where [micro_rust_simps]: \<open>deep_compose10 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9))\<close>
+definition deep_compose11 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 'b) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 'c)\<close>
+  where [micro_rust_simps]: \<open>deep_compose11 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10))\<close>
+definition deep_compose12 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 'b) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 'c)\<close>
+  where [micro_rust_simps]: \<open>deep_compose12 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11))\<close>
+definition deep_compose13 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 'b) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 'c)\<close>
+  where [micro_rust_simps]: \<open>deep_compose13 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12))\<close>
+definition deep_compose14 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 'b) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 'c)\<close>
+  where [micro_rust_simps]: \<open>deep_compose14 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13))\<close>
+definition deep_compose15 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> 'b) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> 'c)\<close>
+  where [micro_rust_simps]: \<open>deep_compose15 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14))\<close>
+definition deep_compose16 :: \<open>('b \<Rightarrow> 'c) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> 't15 \<Rightarrow> 'b) \<Rightarrow>
+                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> 't15 \<Rightarrow> 'c)\<close>
+  where [micro_rust_simps]: \<open>deep_compose16 g f \<equiv> \<lambda>t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15. (g (f t0 t1 t2 t3 t4 t5 t6 t7 t8 t9 t10 t11 t12 t13 t14 t15))\<close>
 
 text\<open>A bunch of convenience functions for lifting pure functions to Micro Rust expressions:\<close>
 
@@ -696,6 +720,117 @@ definition bind10
       ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
    \<open>bind10 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9. bind e0 (\<lambda>v0. bind9 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9)\<close>
 
+definition bind11
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> ('s, 'v, 'c, 'abort, 'i, 'o) expression) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>bind11 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9 e10. bind e0 (\<lambda>v0. bind10 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9 e10)\<close>
+
+definition bind12
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> ('s, 'v, 'c, 'abort, 'i, 'o) expression) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>bind12 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11. bind e0 (\<lambda>v0. bind11 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11)\<close>
+
+definition bind13
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> ('s, 'v, 'c, 'abort, 'i, 'o) expression) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>bind13 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12. bind e0 (\<lambda>v0. bind12 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12)\<close>
+
+definition bind14
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> 'arg13 \<Rightarrow> ('s, 'v, 'c, 'abort, 'i, 'o) expression) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg13, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>bind14 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13. bind e0 (\<lambda>v0. bind13 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13)\<close>
+
+definition bind15
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> 'arg13 \<Rightarrow> 'arg14 \<Rightarrow> ('s, 'v, 'c, 'abort, 'i, 'o) expression) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg13, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg14, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>bind15 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14. bind e0 (\<lambda>v0. bind14 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14)\<close>
+
+definition bind16
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> 'arg13 \<Rightarrow> 'arg14 \<Rightarrow> 'arg15 \<Rightarrow> ('s, 'v, 'c, 'abort, 'i, 'o) expression) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg13, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg14, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg15, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>bind16 f e0 \<equiv> \<lambda>e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14 e15. bind e0 (\<lambda>v0. bind15 (f v0) e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14 e15)\<close>
+
 definition bindlift1
    :: \<open>('arg0 \<Rightarrow> 'v) \<Rightarrow>
       ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
@@ -798,6 +933,24 @@ abbreviation call_deep9 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rig
 abbreviation call_deep10 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
                             ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
   \<open>call_deep10 \<equiv> deep_compose10 call\<close>
+abbreviation call_deep11 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
+                            ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
+  \<open>call_deep11 \<equiv> deep_compose11 call\<close>
+abbreviation call_deep12 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
+                            ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
+  \<open>call_deep12 \<equiv> deep_compose12 call\<close>
+abbreviation call_deep13 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
+                            ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
+  \<open>call_deep13 \<equiv> deep_compose13 call\<close>
+abbreviation call_deep14 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
+                            ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
+  \<open>call_deep14 \<equiv> deep_compose14 call\<close>
+abbreviation call_deep15 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
+                            ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
+  \<open>call_deep15 \<equiv> deep_compose15 call\<close>
+abbreviation call_deep16 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> 't15 \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
+                            ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 't14 \<Rightarrow> 't15 \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression)\<close> where
+  \<open>call_deep16 \<equiv> deep_compose16 call\<close>
 
 definition funcall0
    :: \<open>('s, 'b, 'abort, 'i, 'o) function_body \<Rightarrow> ('s, 'b, 'r, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
@@ -907,6 +1060,117 @@ definition funcall10
       ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
       ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
    \<open>funcall10 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 \<equiv> bind10 (call_deep10 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9\<close>
+
+definition funcall11
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>funcall11 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 \<equiv> bind11 (call_deep11 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10\<close>
+
+definition funcall12
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>funcall12 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 \<equiv> bind12 (call_deep12 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11\<close>
+
+definition funcall13
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>funcall13 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 \<equiv> bind13 (call_deep13 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12\<close>
+
+definition funcall14
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> 'arg13 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg13, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>funcall14 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 \<equiv> bind14 (call_deep14 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13\<close>
+
+definition funcall15
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> 'arg13 \<Rightarrow> 'arg14 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg13, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg14, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>funcall15 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14 \<equiv> bind15 (call_deep15 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14\<close>
+
+definition funcall16
+   :: \<open>('arg0 \<Rightarrow> 'arg1 \<Rightarrow> 'arg2 \<Rightarrow> 'arg3 \<Rightarrow> 'arg4 \<Rightarrow> 'arg5 \<Rightarrow> 'arg6 \<Rightarrow> 'arg7 \<Rightarrow> 'arg8 \<Rightarrow> 'arg9 \<Rightarrow> 'arg10 \<Rightarrow> 'arg11 \<Rightarrow> 'arg12 \<Rightarrow> 'arg13 \<Rightarrow> 'arg14 \<Rightarrow> 'arg15 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body) \<Rightarrow>
+      ('s, 'arg0, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg1, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg2, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg3, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg4, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg5, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg6, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg7, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg8, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg9, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg10, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg11, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg12, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg13, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg14, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'arg15, 'c, 'abort, 'i, 'o) expression \<Rightarrow>
+      ('s, 'v, 'c, 'abort, 'i, 'o) expression\<close> where [micro_rust_simps]:
+   \<open>funcall16 f e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14 e15 \<equiv> bind16 (call_deep16 f) e0 e1 e2 e3 e4 e5 e6 e7 e8 e9 e10 e11 e12 e13 e14 e15\<close>
 
 (*<*)
 end
