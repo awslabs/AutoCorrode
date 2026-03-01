@@ -8,6 +8,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_Rust.Rust_Iterator"
     "Shallow_Micro_C.C_Numeric_Types"
     "Shallow_Micro_C.C_Sizeof"
+    "Shallow_Micro_C.C_Memory_Operations"
     "Shallow_Micro_C.C_Void_Pointer"
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
@@ -36,7 +37,9 @@ text \<open>Helper functions for extracting information from Isabelle/C's AST no
 ML \<open>
 structure C_Ast_Utils : sig
   datatype c_numeric_type = CInt | CUInt | CChar | CSChar
-                          | CShort | CUShort | CLong | CULong | CBool
+                          | CShort | CUShort | CLong | CULong
+                          | CLongLong | CULongLong
+                          | CInt128 | CUInt128 | CBool
                           | CPtr of c_numeric_type | CVoid
                           | CStruct of string
                           | CUnion of string
@@ -111,7 +114,9 @@ struct
   (* ----- Resolved C numeric type representation ----- *)
 
   datatype c_numeric_type = CInt | CUInt | CChar | CSChar
-                          | CShort | CUShort | CLong | CULong | CBool
+                          | CShort | CUShort | CLong | CULong
+                          | CLongLong | CULongLong
+                          | CInt128 | CUInt128 | CBool
                           | CPtr of c_numeric_type | CVoid
                           | CStruct of string
                           | CUnion of string
@@ -120,6 +125,8 @@ struct
     | is_signed CSChar  = true
     | is_signed CShort  = true
     | is_signed CLong   = true
+    | is_signed CLongLong = true
+    | is_signed CInt128  = true
     | is_signed (CPtr _) = false
     | is_signed CVoid   = false
     | is_signed (CStruct _) = false
@@ -145,6 +152,10 @@ struct
     | hol_type_of CUShort = \<^typ>\<open>c_ushort\<close>
     | hol_type_of CLong   = \<^typ>\<open>c_long\<close>
     | hol_type_of CULong  = \<^typ>\<open>c_ulong\<close>
+    | hol_type_of CLongLong = \<^typ>\<open>c_long\<close>   (* LP64: long long = long = 64-bit *)
+    | hol_type_of CULongLong = \<^typ>\<open>c_ulong\<close>
+    | hol_type_of CInt128   = \<^typ>\<open>c_int128\<close>
+    | hol_type_of CUInt128  = \<^typ>\<open>c_uint128\<close>
     | hol_type_of (CPtr _) = dummyT  (* pointer types use type inference *)
     | hol_type_of CVoid   = @{typ unit}
     | hol_type_of (CStruct _) = dummyT
@@ -159,6 +170,10 @@ struct
     | type_name_of CUShort = "unsigned short"
     | type_name_of CLong   = "long"
     | type_name_of CULong  = "unsigned long"
+    | type_name_of CLongLong = "long long"
+    | type_name_of CULongLong = "unsigned long long"
+    | type_name_of CInt128   = "__int128"
+    | type_name_of CUInt128  = "unsigned __int128"
     | type_name_of (CPtr cty) = type_name_of cty ^ " *"
     | type_name_of CVoid   = "void"
     | type_name_of (CStruct s) = "struct " ^ s
@@ -170,8 +185,8 @@ struct
     let val is_unsigned = IntInf.andb (bits, 1) <> 0
         val is_long = IntInf.andb (bits, 2) <> 0
         val is_long_long = IntInf.andb (bits, 4) <> 0
-    in if is_long_long then
-         error "micro_c_translate: long long integer literals are not supported; use explicit-sized constants"
+    in if is_long_long andalso is_unsigned then CULongLong
+       else if is_long_long then CLongLong
        else if is_unsigned andalso is_long then CULong
        else if is_long then CLong
        else if is_unsigned then CUInt
@@ -197,29 +212,29 @@ struct
             (sg, us, ch, true, it, lg, vd, st)
         | accumulate (CTypeSpec0 (CIntType0 _)) (sg, us, ch, sh, _, lg, vd, st) =
             (sg, us, ch, sh, true, lg, vd, st)
-        | accumulate (CTypeSpec0 (CLongType0 _)) (sg, us, ch, sh, it, _, vd, st) =
-            (sg, us, ch, sh, it, true, vd, st)
-        | accumulate (CTypeSpec0 (CVoidType0 _)) (sg, us, ch, sh, it, lg, _, st) =
-            (sg, us, ch, sh, it, lg, true, st)
-        | accumulate (CTypeSpec0 (CSUType0 _)) (sg, us, ch, sh, it, lg, vd, _) =
-            (sg, us, ch, sh, it, lg, vd, true)
-        | accumulate (CTypeSpec0 (CEnumType0 _)) (sg, us, ch, sh, _, lg, vd, st) =
-            (sg, us, ch, sh, true, lg, vd, st)  (* enum treated as int *)
+        | accumulate (CTypeSpec0 (CLongType0 _)) (sg, us, ch, sh, it, lc, vd, st) =
+            (sg, us, ch, sh, it, lc + 1, vd, st)  (* count long occurrences *)
+        | accumulate (CTypeSpec0 (CVoidType0 _)) (sg, us, ch, sh, it, lc, _, st) =
+            (sg, us, ch, sh, it, lc, true, st)
+        | accumulate (CTypeSpec0 (CSUType0 _)) (sg, us, ch, sh, it, lc, vd, _) =
+            (sg, us, ch, sh, it, lc, vd, true)
+        | accumulate (CTypeSpec0 (CEnumType0 _)) (sg, us, ch, sh, _, lc, vd, st) =
+            (sg, us, ch, sh, true, lc, vd, st)  (* enum treated as int *)
         | accumulate (CTypeSpec0 (CFloatType0 _)) _ =
             error "micro_c_translate: float type not supported"
         | accumulate (CTypeSpec0 (CDoubleType0 _)) _ =
             error "micro_c_translate: double type not supported"
-        | accumulate (CTypeSpec0 (CInt128Type0 _)) _ =
-            error "micro_c_translate: __int128 type not supported"
+        | accumulate (CTypeSpec0 (CInt128Type0 _)) (sg, us, ch, sh, it, lc, vd, st) =
+            (sg, us, ch, sh, it, 128, vd, st)  (* __int128: use long_count=128 as sentinel *)
         | accumulate (CTypeSpec0 (CComplexType0 _)) _ =
             error "micro_c_translate: _Complex type not supported"
         | accumulate (CTypeSpec0 (CTypeDef0 _)) flags = flags
         | accumulate (CTypeSpec0 _) _ =
             error "micro_c_translate: unsupported type specifier"
         | accumulate _ flags = flags
-      val (has_signed, has_unsigned, has_char, has_short, _, has_long, has_void, has_struct) =
+      val (has_signed, has_unsigned, has_char, has_short, _, long_count, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
-          (false, false, false, false, false, false, false, false) specs
+          (false, false, false, false, false, 0, false, false) specs
     in
       if has_void then SOME CVoid
       else if has_struct then NONE
@@ -230,7 +245,13 @@ struct
       else if has_short then
         if has_unsigned then SOME CUShort
         else SOME CShort
-      else if has_long then
+      else if long_count = 128 then  (* __int128 *)
+        if has_unsigned then SOME CUInt128
+        else SOME CInt128
+      else if long_count >= 2 then  (* long long *)
+        if has_unsigned then SOME CULongLong
+        else SOME CLongLong
+      else if long_count = 1 then
         if has_unsigned then SOME CULong
         else SOME CLong
       else if has_unsigned then SOME CUInt
@@ -667,6 +688,10 @@ struct
     | cty_to_record_typ _ CUShort = SOME \<^typ>\<open>c_ushort\<close>
     | cty_to_record_typ _ CLong = SOME \<^typ>\<open>c_long\<close>
     | cty_to_record_typ _ CULong = SOME \<^typ>\<open>c_ulong\<close>
+    | cty_to_record_typ _ CLongLong = SOME \<^typ>\<open>c_long\<close>
+    | cty_to_record_typ _ CULongLong = SOME \<^typ>\<open>c_ulong\<close>
+    | cty_to_record_typ _ CInt128 = SOME \<^typ>\<open>c_int128\<close>
+    | cty_to_record_typ _ CUInt128 = SOME \<^typ>\<open>c_uint128\<close>
     | cty_to_record_typ prefix (CStruct sname) = SOME (Term.Type (prefix ^ sname, []))
     | cty_to_record_typ _ (CPtr _) = NONE
     | cty_to_record_typ _ CVoid = NONE
@@ -794,8 +819,12 @@ struct
     | type_rank CUShort = 2
     | type_rank CInt    = 3
     | type_rank CUInt   = 3
-    | type_rank CLong   = 4
-    | type_rank CULong  = 4
+    | type_rank CLong     = 4
+    | type_rank CULong   = 4
+    | type_rank CLongLong  = 4
+    | type_rank CULongLong = 4
+    | type_rank CInt128    = 5
+    | type_rank CUInt128   = 5
     | type_rank _       = 3  (* default: int rank *)
 
   (* C11 \<section>6.3.1.1: integer promotion — sub-int types promote to int *)
@@ -1625,6 +1654,9 @@ struct
            | _ => error ("micro_c_translate: field " ^ field_name ^ " of " ^
                          inner_struct ^ " is not a struct/union type")
         end
+    | determine_struct_type tctx (CUnary0 (CIndOp0, inner_expr, _)) =
+        (* *p where p points to a struct — recurse to determine struct type *)
+        determine_struct_type tctx inner_expr
     | determine_struct_type tctx (CIndex0 (inner_expr, _, _)) =
         (* arr[i] where arr is a struct field — the struct type comes from the array expression *)
         determine_struct_type tctx inner_expr
@@ -1920,6 +1952,10 @@ struct
     | cty_bit_width C_Ast_Utils.CUInt = SOME 32
     | cty_bit_width C_Ast_Utils.CLong = SOME 64
     | cty_bit_width C_Ast_Utils.CULong = SOME 64
+    | cty_bit_width C_Ast_Utils.CLongLong = SOME 64
+    | cty_bit_width C_Ast_Utils.CULongLong = SOME 64
+    | cty_bit_width C_Ast_Utils.CInt128 = SOME 128
+    | cty_bit_width C_Ast_Utils.CUInt128 = SOME 128
     | cty_bit_width _ = NONE
 
   fun fits_int_literal_cty cty n =
@@ -2115,7 +2151,11 @@ struct
         in case C_Trans_Ctxt.lookup_var tctx name of
              SOME (C_Trans_Ctxt.Param, var, cty) => (C_Term_Build.mk_literal var, cty)
            | SOME (C_Trans_Ctxt.Local, var, cty) =>
-               (mk_resolved_var_read (C_Trans_Ctxt.get_ctxt tctx) var, cty)
+               (* For local arrays, the ref IS the pointer (array-to-pointer decay).
+                  Return it directly so CIndex0's deref accesses the list correctly. *)
+               if Option.isSome (C_Trans_Ctxt.lookup_array_decl tctx name)
+               then (C_Term_Build.mk_literal var, cty)
+               else (mk_resolved_var_read (C_Trans_Ctxt.get_ctxt tctx) var, cty)
            | NONE =>
                (* Fallback: check global consts, then enum constants *)
                (case C_Trans_Ctxt.lookup_global_const tctx name of
@@ -2221,13 +2261,21 @@ struct
                 else
                   unsupported "pointer comparison with non-pointer operand"
             | (CLeOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                (C_Term_Build.mk_bindlift2
+                  (Isa_Const (\<^const_name>\<open>c_ptr_less\<close>, isa_dummyT)) lhs' rhs',
+                 C_Ast_Utils.CBool)
             | (CLeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                (C_Term_Build.mk_bindlift2
+                  (Isa_Const (\<^const_name>\<open>c_ptr_le\<close>, isa_dummyT)) lhs' rhs',
+                 C_Ast_Utils.CBool)
             | (CGrOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                (C_Term_Build.mk_bindlift2
+                  (Isa_Const (\<^const_name>\<open>c_ptr_greater\<close>, isa_dummyT)) lhs' rhs',
+                 C_Ast_Utils.CBool)
             | (CGeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                (C_Term_Build.mk_bindlift2
+                  (Isa_Const (\<^const_name>\<open>c_ptr_ge\<close>, isa_dummyT)) lhs' rhs',
+                 C_Ast_Utils.CBool)
             | (CLeOp0, C_Ast_Utils.CPtr _, _) =>
                 unsupported "pointer relational comparison with non-pointer operand"
             | (CLeOp0, _, C_Ast_Utils.CPtr _) =>
@@ -2249,8 +2297,20 @@ struct
             | (CAddOp0, _, C_Ast_Utils.CPtr elem_cty) =>
                 (* n + p = p + n *)
                 mk_ptr_add rhs' lhs' lhs_cty elem_cty
-            | (CSubOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer subtraction"
+            | (CSubOp0, C_Ast_Utils.CPtr elem_cty, C_Ast_Utils.CPtr _) =>
+                let val isa_ty = C_Ast_Utils.hol_type_of elem_cty
+                    val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
+                    val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
+                    val stride = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
+                                    itself_ty --> @{typ nat}) $ type_term
+                    val p_var = Isa_Free ("v__lptr", isa_dummyT)
+                    val q_var = Isa_Free ("v__rptr", isa_dummyT)
+                    val diff_body = Isa_Const (\<^const_name>\<open>c_ptr_diff\<close>, isa_dummyT)
+                                      $ p_var $ q_var $ stride
+                    val f = Term.lambda p_var (Term.lambda q_var diff_body)
+                in (C_Term_Build.mk_bindlift2 f lhs' rhs',
+                    C_Ast_Utils.CULong)
+                end
             | _ =>
                 let
                   (* C11 integer promotion and usual arithmetic conversions.
@@ -2286,8 +2346,8 @@ struct
                          else C_Term_Build.mk_bind2 f l r), result_cty)
                 end)
         end
-    (* p->field = rhs : struct/union field write through pointer *)
-    | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, true, _), rhs, _)) =
+    (* p->field = rhs  /  s.field = rhs : struct/union field write *)
+    | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, is_ptr, _), rhs, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
         in if is_union_aggregate struct_name then
@@ -2295,7 +2355,8 @@ struct
           let val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                  SOME cty => cty
                                | NONE => unsupported ("unknown union field type: " ^ struct_name ^ "." ^ field_name))
-              val (ptr_expr, _) = translate_expr tctx expr
+              val ptr_expr = if is_ptr then #1 (translate_expr tctx expr)
+                             else #1 (translate_lvalue_location tctx expr)
               val (rhs', rhs_cty) = translate_expr tctx rhs
               val rhs_cast = mk_implicit_cast (rhs', rhs_cty, field_cty)
               val cast_expr = mk_cast_from_void field_cty ptr_expr
@@ -2322,7 +2383,8 @@ struct
         else
         let val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val updater_const = resolve_struct_updater_const ctxt struct_name field_name
-            val (ptr_expr, _) = translate_expr tctx expr
+            val ptr_expr = if is_ptr then #1 (translate_expr tctx expr)
+                           else #1 (translate_lvalue_location tctx expr)
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                SOME cty => cty
                              | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
@@ -2357,8 +2419,8 @@ struct
         in (assign_term,
             field_cty)
         end end
-    (* p->field op= rhs : compound struct/union field write through pointer *)
-    | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, true, _), rhs, _)) =
+    (* p->field op= rhs  /  s.field op= rhs : compound struct/union field write *)
+    | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, is_ptr, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
            SOME binop =>
              let val field_name = C_Ast_Utils.ident_name field_ident
@@ -2369,7 +2431,8 @@ struct
                  val ctxt = C_Trans_Ctxt.get_ctxt tctx
                  val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
                  val updater_const = resolve_struct_updater_const ctxt struct_name field_name
-                 val (ptr_term, _) = translate_expr tctx expr
+                 val ptr_term = if is_ptr then #1 (translate_expr tctx expr)
+                               else #1 (translate_lvalue_location tctx expr)
                  val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
                  val ptr_var = Isa_Free ("v__ptr", isa_dummyT)
                  val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
@@ -2430,17 +2493,17 @@ struct
                     end
              end
          | NONE => unsupported "unsupported compound operator on struct field")
-    (* p->field[idx] = rhs : struct field array write through pointer.
-       Uses resolved dereference_fun to avoid store_dereference_const adhoc overloading. *)
+    (* p->field[idx] = rhs  /  s.field[idx] = rhs : struct field array write *)
     | translate_expr tctx (CAssign0 (CAssignOp0,
-          CIndex0 (CMember0 (expr, field_ident, true, _), idx_expr, _), rhs, _)) =
+          CIndex0 (CMember0 (expr, field_ident, is_ptr, _), idx_expr, _), rhs, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
             val updater_const = resolve_struct_updater_const ctxt struct_name field_name
             val deref_const = resolve_dereference_const ctxt
-            val (ptr_expr, _) = translate_expr tctx expr
+            val ptr_expr = if is_ptr then #1 (translate_expr tctx expr)
+                           else #1 (translate_lvalue_location tctx expr)
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
@@ -2923,16 +2986,16 @@ struct
                   (Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool}) $ v))),
             C_Ast_Utils.CBool)
         end
-    (* p->field[idx] : struct field (list) read via pointer, then index with nth.
-       AST: CIndex0(CMember0(expr, field, true, _), idx, _)
+    (* p->field[idx]  /  s.field[idx] : struct field (list) read, then index with nth.
        Uses resolved dereference_fun to avoid store_dereference_const adhoc overloading. *)
-    | translate_expr tctx (CIndex0 (CMember0 (expr, field_ident, true, _), idx_expr, _)) =
+    | translate_expr tctx (CIndex0 (CMember0 (expr, field_ident, is_ptr, _), idx_expr, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
             val deref_const = resolve_dereference_const ctxt
-            val (ptr_expr, _) = translate_expr tctx expr
+            val ptr_expr = if is_ptr then #1 (translate_expr tctx expr)
+                           else #1 (translate_lvalue_location tctx expr)
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
@@ -3367,31 +3430,149 @@ struct
                   in (name, init_term, actual_cty, arr_meta) end
               | process_one ((Some declr, Some (CInitList0 (init_list, _))), _) =
                   let val name = C_Ast_Utils.declr_name declr
-                      val _ =
-                        if has_array_declr declr then ()
-                        else unsupported "initializer list for non-array declaration"
                       val ptr_depth = pointer_depth_of_declr declr
                       val actual_cty = C_Ast_Utils.apply_ptr_depth cty ptr_depth
-                      val elem_cty =
-                        if ptr_depth > 0 then C_Ast_Utils.apply_ptr_depth cty (ptr_depth - 1) else cty
-                      val elem_values = List.map
-                        (fn ([], CInitExpr0 (e, _)) => init_scalar_const_term elem_cty e
-                          | _ => unsupported "complex array initializer element") init_list
-                      val declared_size = array_decl_size declr
-                      val zero_value = HOLogic.mk_number (C_Ast_Utils.hol_type_of elem_cty) 0
-                      val padded_values =
-                        case declared_size of
-                          SOME n =>
-                            if List.length elem_values > n
-                            then error "micro_c_translate: too many initializers for array"
-                            else elem_values @ List.tabulate (n - List.length elem_values, fn _ => zero_value)
-                        | NONE => elem_values
-                      val list_term = HOLogic.mk_list (C_Ast_Utils.hol_type_of elem_cty) padded_values
-                      val arr_meta =
-                        (case declared_size of
-                           SOME n => SOME (elem_cty, n)
-                         | NONE => NONE)
-                  in (name, C_Term_Build.mk_literal list_term, actual_cty, arr_meta) end
+                  in if has_array_declr declr then
+                      let val elem_cty =
+                            if ptr_depth > 0 then C_Ast_Utils.apply_ptr_depth cty (ptr_depth - 1) else cty
+                          val elem_type = C_Ast_Utils.hol_type_of elem_cty
+                          (* Resolve position for each element: designators set explicit index,
+                             positional elements use sequential position *)
+                          fun resolve_desig_idx [] pos = pos
+                            | resolve_desig_idx [CArrDesig0 (CConst0 (CIntConst0 (CInteger0 (n, _, _), _)), _)] _ =
+                                intinf_to_int_checked "array designator" n
+                            | resolve_desig_idx _ _ = unsupported "complex designator in array initializer"
+                          fun collect_indices [] _ = []
+                            | collect_indices ((desigs, CInitExpr0 (e, _)) :: rest) pos =
+                                let val idx = resolve_desig_idx desigs pos
+                                in (idx, e) :: collect_indices rest (idx + 1) end
+                            | collect_indices _ _ = unsupported "complex array initializer element"
+                          val indexed_items = collect_indices init_list 0
+                          val has_designators = List.exists (fn (desigs, _) => not (null desigs)) init_list
+                          val declared_size = array_decl_size declr
+                          val arr_size = case declared_size of
+                              SOME n => n
+                            | NONE => List.length indexed_items
+                          val _ = if List.length indexed_items > arr_size andalso not has_designators
+                                  then error "micro_c_translate: too many initializers for array"
+                                  else ()
+                          val _ = List.app (fn (idx, _) =>
+                              if idx < 0 orelse idx >= arr_size
+                              then error ("micro_c_translate: designator index " ^
+                                          Int.toString idx ^ " out of bounds for array of size " ^
+                                          Int.toString arr_size)
+                              else ()) indexed_items
+                          (* Try constant path first *)
+                          val const_results = List.map (fn (idx, e) =>
+                              let val v = (SOME (init_scalar_const_term elem_cty e) handle ERROR _ => NONE)
+                              in (idx, v) end) indexed_items
+                          val all_const = List.all (fn (_, v) => Option.isSome v) const_results
+                          val zero_value = HOLogic.mk_number elem_type 0
+                          val init_term =
+                            if all_const then
+                              (* All-constant: build zero array, fill in designated positions *)
+                              let val base = List.tabulate (arr_size, fn _ => zero_value)
+                                  val filled = List.foldl (fn ((idx, SOME v), arr) =>
+                                        nth_map idx (K v) arr
+                                      | _ => raise Match) base const_results
+                              in C_Term_Build.mk_literal (HOLogic.mk_list elem_type filled) end
+                            else
+                              (* Monadic: evaluate all init values, build array with designators *)
+                              let val init_exprs = List.map (fn (_, e) =>
+                                      let val (raw, raw_cty) = translate_expr tctx e
+                                      in mk_implicit_cast (raw, raw_cty, elem_cty) end) indexed_items
+                                  val n = List.length init_exprs
+                                  val vars = List.tabulate (n,
+                                      fn i => Isa_Free ("v__init_" ^ Int.toString i, isa_dummyT))
+                                  (* Build array: start with zeros, place vars at designated positions *)
+                                  val base = List.tabulate (arr_size, fn _ => zero_value)
+                                  val filled = ListPair.foldl
+                                    (fn ((idx, _), var, arr) => nth_map idx (K var) arr)
+                                    base (indexed_items, vars)
+                                  val result_list = HOLogic.mk_list elem_type filled
+                                  val result = C_Term_Build.mk_literal result_list
+                              in ListPair.foldr
+                                   (fn (expr, var, acc) =>
+                                     C_Term_Build.mk_bind expr (Term.lambda var acc))
+                                   result (init_exprs, vars)
+                              end
+                          val arr_meta =
+                            (case declared_size of
+                               SOME n => SOME (elem_cty, n)
+                             | NONE => NONE)
+                      in (name, init_term, actual_cty, arr_meta) end
+                     else (case actual_cty of
+                        C_Ast_Utils.CStruct struct_name =>
+                          let val fields =
+                                (case C_Trans_Ctxt.get_struct_fields tctx struct_name of
+                                   SOME fs => fs
+                                 | NONE => error ("micro_c_translate: unknown struct: " ^ struct_name))
+                              val num_fields = List.length fields
+                              (* Map each init item to (field_index, expr) *)
+                              fun find_field_index _ [] _ =
+                                    error "micro_c_translate: struct field not found"
+                                | find_field_index fname ((n, _) :: rest) i =
+                                    if n = fname then i
+                                    else find_field_index fname rest (i + 1)
+                              fun resolve_field_desig [] pos = pos
+                                | resolve_field_desig [CMemberDesig0 (ident, _)] _ =
+                                    find_field_index (C_Ast_Utils.ident_name ident) fields 0
+                                | resolve_field_desig _ _ =
+                                    unsupported "complex designator in struct initializer"
+                              fun collect_field_items [] _ = []
+                                | collect_field_items ((desigs, CInitExpr0 (e, _)) :: rest) pos =
+                                    let val idx = resolve_field_desig desigs pos
+                                    in (idx, e) :: collect_field_items rest (idx + 1) end
+                                | collect_field_items _ _ =
+                                    unsupported "complex struct initializer element"
+                              val field_items = collect_field_items init_list 0
+                              (* Try constant path first *)
+                              val const_results = List.map (fn (idx, e) =>
+                                  let val (_, field_cty) = List.nth (fields, idx)
+                                      val v = (SOME (init_scalar_const_term field_cty e)
+                                               handle ERROR _ => NONE)
+                                  in (idx, v) end) field_items
+                              val all_const = List.all (fn (_, v) => Option.isSome v) const_results
+                              val ctxt_inner = C_Trans_Ctxt.get_ctxt tctx
+                              val make_name = "make_" ^ (!current_decl_prefix) ^ struct_name
+                              val make_const =
+                                Proof_Context.read_const {proper = true, strict = false}
+                                  ctxt_inner make_name
+                              fun default_for_field (_, field_cty) =
+                                HOLogic.mk_number (C_Ast_Utils.hol_type_of field_cty) 0
+                              val init_term =
+                                if all_const then
+                                  let val base_vals = List.map default_for_field fields
+                                      val filled = List.foldl (fn ((idx, SOME v), arr) =>
+                                            nth_map idx (K v) arr
+                                          | _ => raise Match) base_vals const_results
+                                      val struct_term = List.foldl (fn (v, acc) => acc $ v)
+                                            make_const filled
+                                  in C_Term_Build.mk_literal struct_term end
+                                else
+                                  let val init_exprs = List.map (fn (idx, e) =>
+                                          let val (_, field_cty) = List.nth (fields, idx)
+                                              val (raw, raw_cty) = translate_expr tctx e
+                                          in mk_implicit_cast (raw, raw_cty, field_cty) end)
+                                        field_items
+                                      val n = List.length init_exprs
+                                      val vars = List.tabulate (n,
+                                          fn i => Isa_Free ("v__sinit_" ^ Int.toString i, isa_dummyT))
+                                      val base_vals = List.map default_for_field fields
+                                      val filled = ListPair.foldl
+                                        (fn ((idx, _), var, arr) => nth_map idx (K var) arr)
+                                        base_vals (field_items, vars)
+                                      val struct_term = List.foldl (fn (v, acc) => acc $ v)
+                                            make_const filled
+                                      val result = C_Term_Build.mk_literal struct_term
+                                  in ListPair.foldr
+                                       (fn (expr, var, acc) =>
+                                         C_Term_Build.mk_bind expr (Term.lambda var acc))
+                                       result (init_exprs, vars)
+                                  end
+                          in (name, init_term, actual_cty, NONE) end
+                      | _ => unsupported "initializer list for non-array, non-struct declaration")
+                  end
               | process_one ((Some declr, None), _) =
                   let val name = C_Ast_Utils.declr_name declr
                       val ptr_depth = pointer_depth_of_declr declr
@@ -4377,7 +4558,9 @@ struct
         ("int32_t",  C_Ast_Utils.CInt),
         ("uint64_t", C_Ast_Utils.CULong),
         ("int64_t",  C_Ast_Utils.CLong),
-        ("size_t",   C_Ast_Utils.CULong)
+        ("size_t",   C_Ast_Utils.CULong),
+        ("__int128_t",  C_Ast_Utils.CInt128),
+        ("__uint128_t", C_Ast_Utils.CUInt128)
       ]
       (* Extract struct definitions to build the struct field registry.
          Use fold/update to allow user typedefs to override builtins. *)

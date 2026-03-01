@@ -64,4 +64,18 @@ section \<open>C Pointer Subtraction\<close>
 definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> nat\<close> where
   \<open>c_ptr_diff p q stride \<equiv> (gref_address p - gref_address q) div stride\<close>
 
+section \<open>C Pointer Relational Comparisons\<close>
+
+definition c_ptr_less :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> bool\<close> where
+  \<open>c_ptr_less p q \<equiv> gref_address p < gref_address q\<close>
+
+definition c_ptr_le :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> bool\<close> where
+  \<open>c_ptr_le p q \<equiv> gref_address p \<le> gref_address q\<close>
+
+definition c_ptr_greater :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> bool\<close> where
+  \<open>c_ptr_greater p q \<equiv> gref_address p > gref_address q\<close>
+
+definition c_ptr_ge :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> bool\<close> where
+  \<open>c_ptr_ge p q \<equiv> gref_address p \<ge> gref_address q\<close>
+
 end

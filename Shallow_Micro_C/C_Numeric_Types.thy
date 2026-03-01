@@ -21,6 +21,8 @@ type_synonym c_int   = \<open>32 sword\<close>
 type_synonym c_uint  = \<open>32 word\<close>
 type_synonym c_long  = \<open>64 sword\<close>
 type_synonym c_ulong = \<open>64 word\<close>
+type_synonym c_int128  = \<open>128 sword\<close>
+type_synonym c_uint128 = \<open>128 word\<close>
 
 section \<open>C signed arithmetic with overflow detection\<close>
 

@@ -804,6 +804,22 @@ lemma c_write_coeff_spec [crush_specs]:
   shows \<open>\<Gamma>; c_write_coeff p i v \<Turnstile>\<^sub>F c_write_coeff_contract p pg pval i v\<close>
 by (crush_boot f: c_write_coeff_def contract: c_write_coeff_contract_def) crush_base
 
+micro_c_translate \<open>
+  struct poly {
+    int coeffs[256];
+  };
+
+  void dot_write_coeff(struct poly *p, unsigned int i, int v) {
+    (*p).coeffs[i] = v;
+  }
+\<close>
+
+thm c_dot_write_coeff_def
+
+lemma c_dot_write_coeff_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_dot_write_coeff p i v \<Turnstile>\<^sub>F c_write_coeff_contract p pg pval i v\<close>
+by (crush_boot f: c_dot_write_coeff_def contract: c_write_coeff_contract_def) crush_base
+
 end
 
 section \<open>Array parameter and local array verification\<close>
@@ -819,6 +835,75 @@ micro_c_translate \<open>
 \<close>
 
 thm c_arr_sum_def
+
+end
+
+section \<open>Non-constant local array initializers\<close>
+
+locale c_uint_arr_verification_ctx =
+    reference reference_types +
+    ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism +
+    ref_c_uint_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_list_prism
+  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+        'o prompt_output \<Rightarrow> unit\<close>
+  and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
+  and c_uint_list_prism :: \<open>('gv, c_uint list) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint.new
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint_list.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+  unsigned int dyn_arr_sum(unsigned int a, unsigned int b) {
+    unsigned int arr[2] = {a, b};
+    return arr[0] + arr[1];
+  }
+\<close>
+
+thm c_dyn_arr_sum_def
+
+micro_c_translate \<open>
+  unsigned int desig_arr_test(void) {
+    unsigned int arr[4] = {[2] = 42, [0] = 10};
+    return arr[0] + arr[2];
+  }
+\<close>
+
+thm c_desig_arr_test_def
+
+end
+
+section \<open>Pointer relational comparison and subtraction\<close>
+
+context c_uint_verification_ctx
+begin
+
+micro_c_translate \<open>
+  typedef unsigned int uint32_t;
+
+  _Bool ptr_less(uint32_t *p, uint32_t *q) {
+    return p < q;
+  }
+
+  _Bool ptr_le(uint32_t *p, uint32_t *q) {
+    return p <= q;
+  }
+
+  _Bool ptr_greater(uint32_t *p, uint32_t *q) {
+    return p > q;
+  }
+
+  _Bool ptr_ge(uint32_t *p, uint32_t *q) {
+    return p >= q;
+  }
+
+  unsigned long ptr_diff(uint32_t *p, uint32_t *q) {
+    return p - q;
+  }
+\<close>
+
+thm c_ptr_less_def c_ptr_le_def c_ptr_greater_def c_ptr_ge_def c_ptr_diff_def
 
 end
 
@@ -859,4 +944,124 @@ lemma c_read_byte_spec [crush_specs]:
 by (crush_boot f: c_read_byte_def contract: c_read_byte_contract_def) crush_base
 
 end
+
+section \<open>Long long type verification\<close>
+
+locale c_ulong_verification_ctx =
+    reference reference_types +
+    ref_c_ulong: reference_allocatable reference_types _ _ _ _ _ _ _ c_ulong_prism
+  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+        'o prompt_output \<Rightarrow> unit\<close>
+  and c_ulong_prism :: \<open>('gv, c_ulong) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_ulong.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+  typedef unsigned long long uint64_ll_t;
+
+  uint64_ll_t long_long_add(uint64_ll_t a, uint64_ll_t b) {
+    return a + b;
+  }
+
+\<close>
+
+thm c_long_long_add_def
+
+definition c_long_long_add_contract :: \<open>c_ulong \<Rightarrow> c_ulong \<Rightarrow> ('s::{sepalg}, c_ulong, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_long_long_add_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_long_long_add_contract
+
+lemma c_long_long_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_long_long_add a b \<Turnstile>\<^sub>F c_long_long_add_contract a b\<close>
+by (crush_boot f: c_long_long_add_def contract: c_long_long_add_contract_def)
+  (crush_base simp add: c_unsigned_add_def)
+
 end
+
+section \<open>128-bit integer type verification\<close>
+
+locale c_uint128_verification_ctx =
+    reference reference_types +
+    ref_c_uint128: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint128_prism
+  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+        'o prompt_output \<Rightarrow> unit\<close>
+  and c_uint128_prism :: \<open>('gv, c_uint128) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint128.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+  typedef unsigned __int128 uint128_t;
+
+  uint128_t int128_add(uint128_t a, uint128_t b) {
+    return a + b;
+  }
+
+\<close>
+
+thm c_int128_add_def
+
+definition c_int128_add_contract :: \<open>c_uint128 \<Rightarrow> c_uint128 \<Rightarrow> ('s::{sepalg}, c_uint128, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_int128_add_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_int128_add_contract
+
+lemma c_int128_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_int128_add a b \<Turnstile>\<^sub>F c_int128_add_contract a b\<close>
+by (crush_boot f: c_int128_add_def contract: c_int128_add_contract_def)
+  (crush_base simp add: c_unsigned_add_def)
+
+end
+
+section \<open>Struct initializer list verification\<close>
+
+micro_c_translate \<open>
+  typedef struct { unsigned int x; unsigned int y; } point;
+\<close>
+
+locale c_point_verification_ctx =
+    reference reference_types +
+    ref_c_point: reference_allocatable reference_types _ _ _ _ _ _ _ c_point_prism
+  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+        'o prompt_output \<Rightarrow> unit\<close>
+  and c_point_prism :: \<open>('gv, c_point) prism\<close>
+begin
+
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_point.new
+adhoc_overloading store_update_const \<rightleftharpoons> update_fun
+
+micro_c_translate \<open>
+  typedef struct { unsigned int x; unsigned int y; } point;
+
+  unsigned int point_sum_init(void) {
+    point p = {.x = 3, .y = 7};
+    return p.x + p.y;
+  }
+\<close>
+
+thm c_point_sum_init_def
+
+definition c_point_sum_init_contract :: \<open>('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_point_sum_init_contract \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. \<langle>r = 10\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_point_sum_init_contract
+
+lemma c_point_sum_init_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_point_sum_init \<Turnstile>\<^sub>F c_point_sum_init_contract\<close>
+by (crush_boot f: c_point_sum_init_def contract: c_point_sum_init_contract_def)
+  crush_base
+
+end
+end
+
+

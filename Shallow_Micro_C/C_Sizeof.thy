@@ -64,6 +64,20 @@ begin
     \<open>c_sizeof_ulong _ \<equiv> 8\<close>
 end
 
+overloading
+  c_sizeof_int128 \<equiv> \<open>c_sizeof :: c_int128 itself \<Rightarrow> nat\<close>
+begin
+  definition c_sizeof_int128 :: \<open>c_int128 itself \<Rightarrow> nat\<close> where
+    \<open>c_sizeof_int128 _ \<equiv> 16\<close>
+end
+
+overloading
+  c_sizeof_uint128 \<equiv> \<open>c_sizeof :: c_uint128 itself \<Rightarrow> nat\<close>
+begin
+  definition c_sizeof_uint128 :: \<open>c_uint128 itself \<Rightarrow> nat\<close> where
+    \<open>c_sizeof_uint128 _ \<equiv> 16\<close>
+end
+
 text \<open>Basic sizeof lemmas.\<close>
 
 lemma c_sizeof_char_val [simp]:
@@ -89,6 +103,14 @@ by (simp add: c_sizeof_long_def)
 lemma c_sizeof_ulong_val [simp]: 
   shows \<open>c_sizeof TYPE(c_ulong) = 8\<close>
 by (simp add: c_sizeof_ulong_def)
+
+lemma c_sizeof_int128_val [simp]:
+  shows \<open>c_sizeof TYPE(c_int128) = 16\<close>
+by (simp add: c_sizeof_int128_def)
+
+lemma c_sizeof_uint128_val [simp]:
+  shows \<open>c_sizeof TYPE(c_uint128) = 16\<close>
+by (simp add: c_sizeof_uint128_def)
 
 text \<open>
   Connection to byte-level encoding: the sizeof value is consistent
