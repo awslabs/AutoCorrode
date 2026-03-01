@@ -39,6 +39,7 @@ structure C_Ast_Utils : sig
                           | CShort | CUShort | CLong | CULong | CBool
                           | CPtr of c_numeric_type | CVoid
                           | CStruct of string
+                          | CUnion of string
   val is_signed : c_numeric_type -> bool
   val is_bool : c_numeric_type -> bool
   val is_ptr : c_numeric_type -> bool
@@ -66,6 +67,16 @@ structure C_Ast_Utils : sig
   val extract_struct_type_from_specs_full : string list
                                             -> C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list
                                             -> string option
+  val extract_union_type_from_specs : C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list
+                                      -> string option
+  val extract_union_type_from_specs_full : string list
+                                           -> C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list
+                                           -> string option
+  val extract_union_type_from_decl_full : string list
+                                          -> C_Ast.nodeInfo C_Ast.cDeclaration -> string option
+  val extract_union_defs_with_types : c_numeric_type Symtab.table
+                                      -> C_Ast.nodeInfo C_Ast.cTranslationUnit
+                                      -> (string * (string * c_numeric_type) list) list
   val extract_struct_defs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                             -> (string * string list) list
   val extract_enum_defs : C_Ast.nodeInfo C_Ast.cTranslationUnit
@@ -103,6 +114,7 @@ struct
                           | CShort | CUShort | CLong | CULong | CBool
                           | CPtr of c_numeric_type | CVoid
                           | CStruct of string
+                          | CUnion of string
 
   fun is_signed CInt   = true
     | is_signed CSChar  = true
@@ -111,6 +123,7 @@ struct
     | is_signed (CPtr _) = false
     | is_signed CVoid   = false
     | is_signed (CStruct _) = false
+    | is_signed (CUnion _) = false
     | is_signed _       = false
 
   fun is_bool CBool = true
@@ -121,7 +134,7 @@ struct
 
   fun is_unsigned_int cty = not (is_signed cty) andalso not (is_bool cty)
                             andalso not (is_ptr cty) andalso cty <> CVoid
-                            andalso (case cty of CStruct _ => false | _ => true)
+                            andalso (case cty of CStruct _ => false | CUnion _ => false | _ => true)
 
   fun hol_type_of CBool   = @{typ bool}
     | hol_type_of CInt    = \<^typ>\<open>c_int\<close>
@@ -135,6 +148,7 @@ struct
     | hol_type_of (CPtr _) = dummyT  (* pointer types use type inference *)
     | hol_type_of CVoid   = @{typ unit}
     | hol_type_of (CStruct _) = dummyT
+    | hol_type_of (CUnion _) = dummyT
 
   fun type_name_of CBool   = "_Bool"
     | type_name_of CInt    = "int"
@@ -148,6 +162,7 @@ struct
     | type_name_of (CPtr cty) = type_name_of cty ^ " *"
     | type_name_of CVoid   = "void"
     | type_name_of (CStruct s) = "struct " ^ s
+    | type_name_of (CUnion s) = "union " ^ s
 
   (* Determine C numeric type from integer literal suffix flags.
      Flags0 of int is a bitfield: bit 0 = unsigned, bit 1 = long, bit 2 = long long. *)
@@ -314,6 +329,19 @@ struct
               | find_struct (_ :: rest) = find_struct rest
         in find_struct specs end
     | extract_struct_type_from_decl_full _ _ = NONE
+
+  (* Like extract_struct_type_from_decl_full, but for unions. *)
+  fun extract_union_type_from_decl_full union_names (CDecl0 (specs, _, _)) =
+        let fun find_union [] = NONE
+              | find_union (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0,
+                    Some ident, _, _, _), _)) :: _) = SOME (ident_name ident)
+              | find_union (CTypeSpec0 (CTypeDef0 (ident, _)) :: _) =
+                    let val n = ident_name ident
+                    in if List.exists (fn s => s = n) union_names
+                       then SOME n else NONE end
+              | find_union (_ :: rest) = find_union rest
+        in find_union specs end
+    | extract_union_type_from_decl_full _ _ = NONE
 
   (* Extract struct definitions (with member lists) from a top-level declaration.
      Returns SOME (struct_name, [field_name, ...]) for struct definitions. *)
@@ -571,6 +599,13 @@ struct
         SOME (ident_name ident)
     | _ => NONE
 
+  (* Extract union type name from declaration specifiers *)
+  fun extract_union_type_from_specs specs =
+    case List.find (fn CTypeSpec0 (CSUType0 _) => true | _ => false) specs of
+      SOME (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0, Some ident, _, _, _), _))) =>
+        SOME (ident_name ident)
+    | _ => NONE
+
   (* Like extract_struct_type_from_specs, but also recognizes typedef names
      that refer to known structs. *)
   fun extract_struct_type_from_specs_full struct_names specs =
@@ -587,6 +622,22 @@ struct
           | _ => NONE
         end
 
+  (* Like extract_union_type_from_specs, but also recognizes typedef names
+     that refer to known unions. *)
+  fun extract_union_type_from_specs_full union_names specs =
+    case extract_union_type_from_specs specs of
+      SOME un => SOME un
+    | NONE =>
+        let val type_specs = List.filter
+              (fn CTypeQual0 _ => false | CStorageSpec0 _ => false | _ => true) specs
+        in case type_specs of
+            [CTypeSpec0 (CTypeDef0 (ident, _))] =>
+              let val n = ident_name ident
+              in if List.exists (fn s => s = n) union_names
+                 then SOME n else NONE end
+          | _ => NONE
+        end
+
   fun extract_member_field_info typedef_tab members =
         List.mapPartial
           (fn CDecl0 (field_specs, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
@@ -597,7 +648,10 @@ struct
                                    | NONE =>
                                        (case extract_struct_type_from_specs field_specs of
                                           SOME sn => CStruct sn
-                                        | NONE => CInt)
+                                        | NONE =>
+                                            (case extract_union_type_from_specs field_specs of
+                                               SOME un => CUnion un
+                                             | NONE => CInt))
                     val ptr_depth = pointer_depth_of_derived derived
                     val fty = apply_ptr_depth base_fty ptr_depth
                 in SOME (fname, fty) end
@@ -616,6 +670,7 @@ struct
     | cty_to_record_typ prefix (CStruct sname) = SOME (Term.Type (prefix ^ sname, []))
     | cty_to_record_typ _ (CPtr _) = NONE
     | cty_to_record_typ _ CVoid = NONE
+    | cty_to_record_typ _ (CUnion _) = NONE
 
   fun ptr_depth_only derived =
     List.foldl
@@ -673,6 +728,32 @@ struct
   fun extract_struct_defs_with_types typedef_tab (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
       (fn CDeclExt0 decl => extract_struct_def_with_types_from_decl typedef_tab decl
+        | _ => NONE)
+      ext_decls
+
+  (* Extract union definitions with field types. Mirrors extract_struct_defs_with_types
+     but matches CUnionTag0 instead of CStructTag0. *)
+  fun extract_union_def_with_types_from_decl typedef_tab (CDecl0 (specs, declrs, _)) =
+        let fun find_union_def [] = NONE
+              | find_union_def (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0,
+                    Some ident, Some members, _, _), _)) :: _) =
+                  SOME (ident_name ident, extract_member_field_info typedef_tab members)
+              | find_union_def (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0,
+                    None, Some members, _, _), _)) :: _) =
+                  if List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
+                  then (case declrs of
+                      [((Some (CDeclr0 (Some td_ident, _, _, _, _)), _), _)] =>
+                        SOME (ident_name td_ident,
+                              extract_member_field_info typedef_tab members)
+                    | _ => NONE)
+                  else NONE
+              | find_union_def (_ :: rest) = find_union_def rest
+        in find_union_def specs end
+    | extract_union_def_with_types_from_decl _ _ = NONE
+
+  fun extract_union_defs_with_types typedef_tab (CTranslUnit0 (ext_decls, _)) =
+    List.mapPartial
+      (fn CDeclExt0 decl => extract_union_def_with_types_from_decl typedef_tab decl
         | _ => NONE)
       ext_decls
 
@@ -1273,6 +1354,8 @@ ML \<open>
 structure C_Translate : sig
   val translate_stmt : C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cStatement -> term
   val set_decl_prefix : string -> unit
+  val set_union_names : string list -> unit
+  val current_union_names : string list Unsynchronized.ref
   val set_ref_universe_types : typ -> typ -> unit
   val translate_fundef : (string * C_Ast_Utils.c_numeric_type) list Symtab.table
                          -> int Symtab.table
@@ -1364,21 +1447,24 @@ struct
            (Term.lambda v (C_Term_Build.mk_two_armed_cond
               (C_Term_Build.mk_literal v) one zero)) end
     else if C_Ast_Utils.is_ptr from_cty andalso C_Ast_Utils.is_ptr to_cty then
-      (case (from_cty, to_cty) of
-         (* T* -> void* : strip focus *)
-         (C_Ast_Utils.CPtr inner, C_Ast_Utils.CPtr C_Ast_Utils.CVoid) =>
-           if inner = C_Ast_Utils.CVoid then tm  (* void* -> void* : no-op *)
-           else
+      let fun is_void_like C_Ast_Utils.CVoid = true
+            | is_void_like (C_Ast_Utils.CUnion _) = true
+            | is_void_like _ = false
+      in case (from_cty, to_cty) of
+         (C_Ast_Utils.CPtr from_inner, C_Ast_Utils.CPtr to_inner) =>
+           if is_void_like from_inner andalso is_void_like to_inner then tm
+           (* untyped -> T* : attach prism focus *)
+           else if is_void_like from_inner then mk_cast_from_void to_inner tm
+           (* T* -> untyped : strip focus *)
+           else if is_void_like to_inner then
              let val v = Free ("v__cast", dummyT)
                  val cast = Const (\<^const_name>\<open>c_cast_to_void\<close>, dummyT)
              in C_Term_Build.mk_bind tm (Term.lambda v (C_Term_Build.mk_literal (cast $ v)))
              end
-       | (* void* -> T* : attach prism focus via adhoc-overloaded prism *)
-         (C_Ast_Utils.CPtr C_Ast_Utils.CVoid, C_Ast_Utils.CPtr inner) =>
-           if inner = C_Ast_Utils.CVoid then tm
-           else mk_cast_from_void inner tm
-       | (* T* -> U* where neither is void: no-op (same as before) *)
-         _ => tm)
+           (* T* -> U* where neither is void/union: no-op *)
+           else tm
+       | _ => tm
+      end
     else if C_Ast_Utils.is_ptr from_cty orelse C_Ast_Utils.is_ptr to_cty then
       error "micro_c_translate: non-pointer/pointer cast not supported"
     else let val cast_const =
@@ -1397,12 +1483,15 @@ struct
     Unsynchronized.ref NONE
   val current_decl_prefix : string Unsynchronized.ref =
     Unsynchronized.ref "c_"
+  val current_union_names : string list Unsynchronized.ref =
+    Unsynchronized.ref []
   val current_ref_addr_ty : typ Unsynchronized.ref =
     Unsynchronized.ref (TFree ("'addr", []))
   val current_ref_gv_ty : typ Unsynchronized.ref =
     Unsynchronized.ref (TFree ("'gv", []))
 
   fun set_decl_prefix pfx = (current_decl_prefix := pfx)
+  fun set_union_names names = current_union_names := names
   fun set_ref_universe_types addr_ty gv_ty =
     (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
 
@@ -1513,6 +1602,10 @@ struct
         else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shr\<close>, isa_dummyT))
     | translate_binop _ _ = unsupported "unsupported binary operator"
 
+  (* Check if a given aggregate name refers to a union (not a struct). *)
+  fun is_union_aggregate name =
+    List.exists (fn n => n = name) (!current_union_names)
+
   (* Determine the C struct type of a variable expression.
      Handles simple variable references and chained member access (p->vec[i].coeffs). *)
   fun determine_struct_type tctx (CVar0 (ident, _)) =
@@ -1527,8 +1620,10 @@ struct
         in case C_Trans_Ctxt.lookup_struct_field_type tctx inner_struct field_name of
              SOME (C_Ast_Utils.CStruct sname) => sname
            | SOME (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) => sname
+           | SOME (C_Ast_Utils.CUnion sname) => sname
+           | SOME (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) => sname
            | _ => error ("micro_c_translate: field " ^ field_name ^ " of " ^
-                         inner_struct ^ " is not a struct type")
+                         inner_struct ^ " is not a struct/union type")
         end
     | determine_struct_type tctx (CIndex0 (inner_expr, _, _)) =
         (* arr[i] where arr is a struct field — the struct type comes from the array expression *)
@@ -1991,6 +2086,8 @@ struct
 
   fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
     | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CUnion sname) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) = SOME sname
     | struct_name_of_cty _ = NONE
 
   fun is_zero_int_const (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) = (n = 0)
@@ -2189,11 +2286,41 @@ struct
                          else C_Term_Build.mk_bind2 f l r), result_cty)
                 end)
         end
-    (* p->field = rhs : struct field write through pointer *)
+    (* p->field = rhs : struct/union field write through pointer *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CMember0 (expr, field_ident, true, _), rhs, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+        in if is_union_aggregate struct_name then
+          (* Union field write: cast to typed ref, then write *)
+          let val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                                 SOME cty => cty
+                               | NONE => unsupported ("unknown union field type: " ^ struct_name ^ "." ^ field_name))
+              val (ptr_expr, _) = translate_expr tctx expr
+              val (rhs', rhs_cty) = translate_expr tctx rhs
+              val rhs_cast = mk_implicit_cast (rhs', rhs_cty, field_cty)
+              val cast_expr = mk_cast_from_void field_cty ptr_expr
+              val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
+              val ref_var = Isa_Free ("v__uref", isa_dummyT)
+              val unseq_lhs_rhs =
+                C_Ast_Utils.expr_has_side_effect expr orelse C_Ast_Utils.expr_has_side_effect rhs
+              val _ =
+                if unseq_lhs_rhs andalso C_Ast_Utils.expr_has_unsequenced_ub_risk expr rhs then
+                  unsupported "potential unsequenced side-effect UB in union-field assignment"
+                else ()
+              val assign_fun =
+                Term.lambda rhs_var (Term.lambda ref_var
+                  (C_Term_Build.mk_sequence
+                    (C_Term_Build.mk_ptr_write
+                      (C_Term_Build.mk_literal ref_var)
+                      (C_Term_Build.mk_literal rhs_var))
+                    (C_Term_Build.mk_literal rhs_var)))
+              val assign_term =
+                (if unseq_lhs_rhs
+                 then C_Term_Build.mk_bind2_unseq assign_fun rhs_cast cast_expr
+                 else C_Term_Build.mk_bind2 assign_fun rhs_cast cast_expr)
+          in (assign_term, field_cty) end
+        else
+        let val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val updater_const = resolve_struct_updater_const ctxt struct_name field_name
             val (ptr_expr, _) = translate_expr tctx expr
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
@@ -2229,13 +2356,16 @@ struct
                else C_Term_Build.mk_bind2 assign_fun rhs_cast ptr_expr)
         in (assign_term,
             field_cty)
-        end
-    (* p->field op= rhs : compound struct field write through pointer *)
+        end end
+    (* p->field op= rhs : compound struct/union field write through pointer *)
     | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, true, _), rhs, _)) =
         (case compound_assign_to_binop asgn_op of
            SOME binop =>
              let val field_name = C_Ast_Utils.ident_name field_ident
                  val struct_name = determine_struct_type tctx expr
+                 val _ = if is_union_aggregate struct_name then
+                           unsupported "compound assignment on union field"
+                         else ()
                  val ctxt = C_Trans_Ctxt.get_ctxt tctx
                  val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
                  val updater_const = resolve_struct_updater_const ctxt struct_name field_name
@@ -2890,21 +3020,37 @@ struct
                C_Ast_Utils.CPtr inner => inner
              | _ => unsupported "indexing non-array expression"))
         end
-    (* p->field : struct field read through pointer *)
+    (* p->field : struct/union field read through pointer *)
     | translate_expr tctx (CMember0 (expr, field_ident, true, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
-            val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
-            val (ptr_expr, _) = translate_expr tctx expr
-            val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
-                               SOME cty => cty
-                             | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
-        in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, field_cty) end
-    (* s.field : direct struct member access via value *)
+        in if is_union_aggregate struct_name then
+          (* Union field read: cast to typed ref, then dereference *)
+          let val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                                 SOME cty => cty
+                               | NONE => unsupported ("unknown union field type: " ^ struct_name ^ "." ^ field_name))
+              val (ptr_expr, _) = translate_expr tctx expr
+              val cast_expr = mk_cast_from_void field_cty ptr_expr
+              val v = Isa_Free ("v__uref", isa_dummyT)
+          in (C_Term_Build.mk_bind cast_expr
+                (Term.lambda v (C_Term_Build.mk_deref (C_Term_Build.mk_literal v))),
+              field_cty) end
+        else
+          let val ctxt = C_Trans_Ctxt.get_ctxt tctx
+              val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
+              val (ptr_expr, _) = translate_expr tctx expr
+              val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
+                                 SOME cty => cty
+                               | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
+          in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, field_cty) end
+        end
+    (* s.field : direct struct/union member access via value *)
     | translate_expr tctx (CMember0 (expr, field_ident, false, _)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
+            val _ = if is_union_aggregate struct_name then
+                      unsupported "direct union member access (use pointer: u->field)"
+                    else ()
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
             val (struct_expr, _) = translate_expr tctx expr
@@ -2974,7 +3120,10 @@ struct
                           | NONE =>
                               (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
                                  SOME sn => SOME (C_Ast_Utils.CStruct sn)
-                               | NONE => NONE))
+                               | NONE =>
+                                   (case C_Ast_Utils.extract_union_type_from_specs_full (!current_union_names) specs of
+                                      SOME un => SOME (C_Ast_Utils.CUnion un)
+                                    | NONE => NONE)))
                        val ptr_depth =
                          List.mapPartial
                            (fn ((Some declr, _), _) => SOME (C_Ast_Utils.pointer_depth_of_declr declr)
@@ -3000,7 +3149,10 @@ struct
                           | NONE =>
                               (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
                                  SOME sn => SOME (C_Ast_Utils.CStruct sn)
-                               | NONE => NONE))
+                               | NONE =>
+                                   (case C_Ast_Utils.extract_union_type_from_specs_full (!current_union_names) specs of
+                                      SOME un => SOME (C_Ast_Utils.CUnion un)
+                                    | NONE => NONE)))
                        val ptr_depth =
                          List.mapPartial
                            (fn ((Some declr, _), _) => SOME (C_Ast_Utils.pointer_depth_of_declr declr)
@@ -3167,7 +3319,10 @@ struct
                | NONE =>
                    (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
                       SOME sn => C_Ast_Utils.CStruct sn
-                    | NONE => C_Ast_Utils.CInt))
+                    | NONE =>
+                        (case C_Ast_Utils.extract_union_type_from_specs_full (!current_union_names) specs of
+                           SOME un => C_Ast_Utils.CUnion un
+                         | NONE => C_Ast_Utils.CInt)))
             fun pointer_depth_of_declr declr = C_Ast_Utils.pointer_depth_of_declr declr
             fun has_array_declr (CDeclr0 (_, derived, _, _, _)) =
                   List.exists (fn CArrDeclr0 _ => true | _ => false) derived
@@ -3916,11 +4071,16 @@ struct
       (* Annotate struct pointer parameters with their struct type.
          Uses _full variant to also recognize typedef'd struct names. *)
       val struct_names = Symtab.keys struct_tab
+      val union_names = !current_union_names
       val tctx = List.foldl (fn (pdecl, ctx) =>
         case (C_Ast_Utils.param_name pdecl,
               C_Ast_Utils.extract_struct_type_from_decl_full struct_names pdecl) of
           (SOME n, SOME sn) => C_Trans_Ctxt.set_struct_type n sn ctx
-        | _ => ctx) tctx param_decls
+        | _ =>
+            (case (C_Ast_Utils.param_name pdecl,
+                   C_Ast_Utils.extract_union_type_from_decl_full union_names pdecl) of
+               (SOME n, SOME un) => C_Trans_Ctxt.set_struct_type n un ctx
+             | _ => ctx)) tctx param_decls
       (* Promote parameters that are assigned in the body to local variables.
          For each promoted parameter, wrap the body with Ref::new(literal param)
          and register the ref as a Local in the context (shadowing the Param). *)
@@ -4051,6 +4211,8 @@ struct
 
   fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
     | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CUnion sname) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) = SOME sname
     | struct_name_of_cty _ = NONE
 
   fun type_exists ctxt tname =
@@ -4134,7 +4296,10 @@ struct
                | NONE =>
                    (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
                       SOME sn => C_Ast_Utils.CStruct sn
-                    | NONE => C_Ast_Utils.CInt))
+                    | NONE =>
+                        (case C_Ast_Utils.extract_union_type_from_specs_full (!C_Translate.current_union_names) specs of
+                           SOME un => C_Ast_Utils.CUnion un
+                         | NONE => C_Ast_Utils.CInt)))
             fun process_one ((C_Ast.Some declr, C_Ast.Some (C_Ast.CInitExpr0 (init, _))), _) =
                   let
                     val name = C_Ast_Utils.declr_name declr
@@ -4226,10 +4391,19 @@ struct
       val struct_record_defs =
         List.filter (fn (n, _) => keep_type n)
           (C_Ast_Utils.extract_struct_record_defs decl_prefix typedef_tab_early tu)
-      val struct_tab = Symtab.make struct_defs
+      val union_defs =
+        List.filter (fn (n, _) => keep_type n)
+          (C_Ast_Utils.extract_union_defs_with_types typedef_tab_early tu)
+      val union_names = List.map #1 union_defs
+      val _ = C_Translate.set_union_names union_names
+      val struct_tab = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
+                         (Symtab.make struct_defs) union_defs
       val _ = List.app (fn (sname, fields) =>
         writeln ("Registered struct: " ^ sname ^ " with fields: " ^
                  String.concatWith ", " (List.map #1 fields))) struct_defs
+      val _ = List.app (fn (uname, fields) =>
+        writeln ("Registered union: " ^ uname ^ " with fields: " ^
+                 String.concatWith ", " (List.map #1 fields))) union_defs
       (* Extract enum constant definitions *)
       val enum_defs = List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_enum_defs tu)
       val enum_tab = Symtab.make enum_defs
