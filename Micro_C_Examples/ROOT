@@ -5,6 +5,7 @@ session Micro_C_Examples = HOL +
     Micro_C_Parsing_Frontend
     Shallow_Micro_C
     Micro_Rust_Std_Lib
+    Micro_Rust_Interfaces
     Crush
   theories
     Simple_C_Functions
@@ -12,3 +13,5 @@ session Micro_C_Examples = HOL +
     C_Array_Examples
     C_Bitwise_Examples
     C_While_Examples
+    C_Void_Pointer_Examples
+    C_Byte_Refinement

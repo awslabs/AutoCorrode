@@ -8,6 +8,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_Rust.Rust_Iterator"
     "Shallow_Micro_C.C_Numeric_Types"
     "Shallow_Micro_C.C_Sizeof"
+    "Shallow_Micro_C.C_Void_Pointer"
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
        and "prefix:" and "manifest:" and "addr:" and "gv:"
@@ -1308,6 +1309,20 @@ struct
      NB: Must be defined before 'open C_Ast' which shadows the term type. *)
   datatype binop_kind = Monadic of term
 
+  (* void* cast helper: generate c_cast_from_void with type-annotated prism.
+     The prism constant c_void_cast_prism_for is adhoc-overloaded; the type annotation
+     on the prism (constraining 'v to the target type) lets Isabelle resolve it.
+     Must be defined before 'open C_Ast' to use Const/Free/dummyT/Type. *)
+  fun mk_cast_from_void target_cty void_ptr_term =
+    let val target_ty = C_Ast_Utils.hol_type_of target_cty
+        val prism_ty = Type (\<^type_name>\<open>prism\<close>, [dummyT, target_ty])
+        val prism_const = Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, prism_ty)
+        val cast_const = Const (\<^const_name>\<open>c_cast_from_void\<close>, dummyT)
+        val v = Free ("v__void_cast", dummyT)
+    in C_Term_Build.mk_bind void_ptr_term
+         (Term.lambda v (C_Term_Build.mk_literal (cast_const $ prism_const $ v)))
+    end
+
   (* C11 implicit integer promotion cast.
      Inserts c_scast or c_ucast when from_cty <> to_cty.
      Cast direction: signed source \<rightarrow> c_scast (sign-extend), unsigned \<rightarrow> c_ucast (zero-extend).
@@ -1349,7 +1364,21 @@ struct
            (Term.lambda v (C_Term_Build.mk_two_armed_cond
               (C_Term_Build.mk_literal v) one zero)) end
     else if C_Ast_Utils.is_ptr from_cty andalso C_Ast_Utils.is_ptr to_cty then
-      tm
+      (case (from_cty, to_cty) of
+         (* T* -> void* : strip focus *)
+         (C_Ast_Utils.CPtr inner, C_Ast_Utils.CPtr C_Ast_Utils.CVoid) =>
+           if inner = C_Ast_Utils.CVoid then tm  (* void* -> void* : no-op *)
+           else
+             let val v = Free ("v__cast", dummyT)
+                 val cast = Const (\<^const_name>\<open>c_cast_to_void\<close>, dummyT)
+             in C_Term_Build.mk_bind tm (Term.lambda v (C_Term_Build.mk_literal (cast $ v)))
+             end
+       | (* void* -> T* : attach prism focus via adhoc-overloaded prism *)
+         (C_Ast_Utils.CPtr C_Ast_Utils.CVoid, C_Ast_Utils.CPtr inner) =>
+           if inner = C_Ast_Utils.CVoid then tm
+           else mk_cast_from_void inner tm
+       | (* T* -> U* where neither is void: no-op (same as before) *)
+         _ => tm)
     else if C_Ast_Utils.is_ptr from_cty orelse C_Ast_Utils.is_ptr to_cty then
       error "micro_c_translate: non-pointer/pointer cast not supported"
     else let val cast_const =
@@ -2705,7 +2734,9 @@ struct
            If the inner expression has CPtr ty, unwrap to ty. *)
         let val (expr', cty) = translate_expr tctx expr
             val result_cty = (case cty of
-                                C_Ast_Utils.CPtr inner => inner
+                                C_Ast_Utils.CPtr C_Ast_Utils.CVoid =>
+                                  unsupported "dereference of void pointer (cast first)"
+                              | C_Ast_Utils.CPtr inner => inner
                               | _ => unsupported "dereference on non-pointer expression")
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val deref_const = resolve_dereference_const ctxt
