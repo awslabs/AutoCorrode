@@ -6,11 +6,8 @@ begin
 
 context c_void_verification_ctx begin
 
-section ‹Union Read›
-
-text ‹
-  @{verbatim ‹int read_union_int(union U *p) { return p->i; }›}
-›
+(* Union Read:
+   int read_union_int(union U *p) { return p->i; } *)
 
 micro_c_translate ‹
   union U {
@@ -38,11 +35,8 @@ lemma c_read_union_int_spec:
 by (crush_boot f: c_read_union_int_def contract: c_read_union_int_contract_def)
   (crush_base simp add: c_cast_from_void_def)
 
-section ‹Union Write›
-
-text ‹
-  @{verbatim ‹void write_union_uint(union U *p, unsigned int val) { p->u = val; }›}
-›
+(* Union Write:
+   void write_union_uint(union U *p, unsigned int val) { p->u = val; } *)
 
 micro_c_translate ‹
   union U {
@@ -70,16 +64,11 @@ lemma c_write_union_uint_spec:
 by (crush_boot f: c_write_union_uint_def contract: c_write_union_uint_contract_def)
   (crush_base simp add: c_cast_from_void_def)
 
-section ‹Union Write then Read›
-
-text ‹
-  @{verbatim ‹
-    int write_read_union(union U *p, int val) {
-      p->i = val;
-      return p->i;
-    }
-  ›}
-›
+(* Union Write then Read:
+   int write_read_union(union U *p, int val) {
+     p->i = val;
+     return p->i;
+   } *)
 
 micro_c_translate ‹
   union U {
@@ -125,8 +114,8 @@ adhoc_overloading store_update_const ⇌ update_fun
 adhoc_overloading c_void_cast_prism_for ⇌ c_int_byte_prism
 adhoc_overloading c_void_cast_prism_for ⇌ c_uint_byte_prism
 
-text ‹Cross-prism extraction: writing as @{type c_int} and reading as @{type c_uint}
-  yields the unsigned reinterpretation of the same bit pattern.›
+(* Cross-prism extraction: writing as c_int and reading as c_uint yields
+   the unsigned reinterpretation of the same bit pattern. *)
 
 lemma byte_prism_type_pun_int_uint:
   shows ‹prism_project c_uint_byte_prism (prism_embed c_int_byte_prism v) = Some (ucast v)›
@@ -134,15 +123,11 @@ using c_uint_byte_prism_valid[unfolded c_uint_byte_prism_def] by (simp add: c_in
   c_uint_byte_prism_def prism_compose_def word_sword_iso_prism_def iso_prism_def is_valid_prism_def
   scast_ucast_down_same)
 
-text ‹
-  @{verbatim ‹
-    unsigned int type_pun(union U *p, int val) {
-      p->i = val;
-      return p->u;
-    }
-  ›}
-  This is the key union use case: writing through one field and reading through another.
-›
+(* unsigned int type_pun(union U *p, int val) {
+     p->i = val;
+     return p->u;
+   }
+   Key union use case: writing through one field and reading through another. *)
 
 micro_c_translate ‹
   union U {
@@ -183,4 +168,3 @@ lemma c_type_pun_spec:
 end
 
 end
-

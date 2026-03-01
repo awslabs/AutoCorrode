@@ -62,11 +62,12 @@ by (simp add: c_ptr_at_def)
 section \<open>C Pointer Subtraction\<close>
 
 text \<open>
-  C pointer subtraction yields a signed element-distance (typically @{typ c_long}
-  in this LP64 model), not an unsigned natural.
+  C pointer subtraction yields a signed element-distance (ptrdiff-like),
+  not an unsigned natural.  We model this polymorphically so the result width
+  is chosen by the surrounding typing context (e.g. ILP32 vs LP64 models).
 \<close>
 
-definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> c_long\<close> where
+definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> 'l::len sword\<close> where
   \<open>c_ptr_diff p q stride \<equiv>
      word_of_int
        (c_trunc_div_int (int (gref_address p) - int (gref_address q)) (int stride))\<close>

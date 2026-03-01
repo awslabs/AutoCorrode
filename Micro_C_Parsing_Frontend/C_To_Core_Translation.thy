@@ -799,8 +799,10 @@ struct
     | cty_to_record_typ _ CSChar = SOME \<^typ>\<open>c_schar\<close>
     | cty_to_record_typ _ CShort = SOME \<^typ>\<open>c_short\<close>
     | cty_to_record_typ _ CUShort = SOME \<^typ>\<open>c_ushort\<close>
-    | cty_to_record_typ _ CLong = SOME \<^typ>\<open>c_long\<close>
-    | cty_to_record_typ _ CULong = SOME \<^typ>\<open>c_ulong\<close>
+    | cty_to_record_typ _ CLong =
+        if C_ABI.long_bits (get_abi_profile ()) = 32 then SOME \<^typ>\<open>c_int\<close> else SOME \<^typ>\<open>c_long\<close>
+    | cty_to_record_typ _ CULong =
+        if C_ABI.long_bits (get_abi_profile ()) = 32 then SOME \<^typ>\<open>c_uint\<close> else SOME \<^typ>\<open>c_ulong\<close>
     | cty_to_record_typ _ CLongLong = SOME \<^typ>\<open>c_long\<close>
     | cty_to_record_typ _ CULongLong = SOME \<^typ>\<open>c_ulong\<close>
     | cty_to_record_typ _ CInt128 = SOME \<^typ>\<open>c_int128\<close>
@@ -5313,6 +5315,7 @@ text \<open>
 
   Notes:
   \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, @{text "gv:"}, and @{text "abi:"}.
+  \<^item> Currently supported @{text "abi:"} values are @{text "lp64-le"}, @{text "ilp32-le"}, and @{text "lp64-be"}.
   \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
   \<^item> When omitted, @{text "abi:"} defaults to @{text "lp64-le"}.
   \<^item> When omitted, @{text "addr:"} and @{text "gv:"} default to @{text "'addr"} and @{text "'gv"}.
@@ -5423,6 +5426,7 @@ text \<open>
 
   Notes:
   \<^item> Option keywords are exactly @{text "prefix:"}, @{text "addr:"}, @{text "gv:"}, @{text "abi:"}, and @{text "manifest:"}.
+  \<^item> Currently supported @{text "abi:"} values are @{text "lp64-le"}, @{text "ilp32-le"}, and @{text "lp64-be"}.
   \<^item> Options may appear before and/or after the C file argument.
   \<^item> Each option may appear at most once.
   \<^item> When omitted, declaration prefix defaults to @{text "c_"}.
