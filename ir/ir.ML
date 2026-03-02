@@ -188,12 +188,7 @@ fun update_repl id r =
 fun exec_text text st =
   let val thy = Toplevel.theory_of st
       val transitions = Outer_Syntax.parse_text thy (fn () => thy) Position.none text
-      fun run (tr, s) =
-        let val old = !Multithreading.parallel_proofs
-            val _ = Multithreading.parallel_proofs := Int.min (2, old)
-            val s' = Toplevel.command_exception false tr s
-            val _ = Multithreading.parallel_proofs := old
-        in s' end
+      fun run (tr, s) = Toplevel.command_exception false tr s
       val secs = Synchronized.value step_timeout
       fun go () = List.foldl (fn (tr, s) => run (tr, s)) st transitions
   in if secs > 0
