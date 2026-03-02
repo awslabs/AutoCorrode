@@ -185,9 +185,20 @@ fun update_repl id r =
   Synchronized.change repl_tab (Symtab.update (id, r));
 
 (* Execute Isar text against a state *)
+(* Execute Isar text against a state.
+
+   Parallel proofs are disabled during evaluation.  Enabling them would
+   require registering a dedicated Execution exec_id so that forked proof
+   tasks can be joined before sending "done".  In a PIDE session, this
+   requires the current global execution_id (from Execution.start), which
+   is not publicly accessible.  In standalone mode (no PIDE), exec_id
+   registration via Execution.running 0 would work.  The join logic in
+   ml_repl.ML (join_my_groups) is retained for future use if this is
+   resolved; it filters Execution.peek 0 by group ancestry to find
+   tasks spawned during a specific eval. *)
 fun exec_text text st =
   let val thy = Toplevel.theory_of st
-      val transitions = Outer_Syntax.parse_text thy (fn () => thy) Position.none text
+      val transitions = Outer_Syntax.parse_text thy (fn () => thy) (Position.thread_data ()) text
       fun run (tr, s) = Toplevel.command_exception false tr s
       val secs = Synchronized.value step_timeout
       fun go () = List.foldl (fn (tr, s) => run (tr, s)) st transitions

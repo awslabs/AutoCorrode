@@ -1,13 +1,15 @@
 (* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT *)
 
-(* Generic TCP line server with PIDE-compatible message framing.
+(* Generic TCP server with PIDE-compatible message framing.
 
-   Listens on a localhost port, accepts one connection at a time.
+   Listens on a localhost port, accepts multiple concurrent connections.
    For each connection, wraps the socket into BinIO streams (following
-   Socket_IO) and passes them to a configurable handler.  Input is
-   read line-by-line; output uses Byte_Message framing via the
-   BinIO.outstream (typically through a Message_Channel).
+   Socket_IO) and passes them to a configurable handler.
+
+   Input uses Byte_Message framing: each message has exactly two chunks,
+   a request identifier and the command string.  Output uses Byte_Message
+   framing via the BinIO.outstream (typically through a Message_Channel).
 
    The handler is a Synchronized var so it can be registered after
    the structure is loaded.  The server knows nothing about ML evaluation,
@@ -15,7 +17,7 @@
 
 signature TCP_HANDLER =
 sig
-  val handler : (string -> BinIO.outstream -> unit) Synchronized.var
+  val handler : ((string * string) -> (string -> Properties.T -> XML.body list -> unit) -> unit) Synchronized.var
   val is_running : unit -> bool
   val start : int -> (unit -> unit)
   val stop : unit -> unit
@@ -24,9 +26,9 @@ end;
 structure Tcp_Handler : TCP_HANDLER =
 struct
 
-val handler : (string -> BinIO.outstream -> unit) Synchronized.var =
+val handler : ((string * string) -> (string -> Properties.T -> XML.body list -> unit) -> unit) Synchronized.var =
   Synchronized.var "Tcp_Handler.handler"
-    (fn _ => fn out => Byte_Message.write_message_string out ["ERROR: no handler registered"]);
+    (fn _ => fn msg => msg Markup.errorN [] [XML.blob ["ERROR: no handler registered"]]);
 
 val server_socket : Socket.passive INetSock.stream_sock option Synchronized.var =
   Synchronized.var "Tcp_Handler.socket" NONE;
@@ -65,26 +67,32 @@ fun make_streams socket =
       BinIO.mkOutstream (BinIO.StreamIO.mkOutstream (wr, IO.BLOCK_BUF));
   in (in_stream, out_stream) end;
 
-(* Serve one client connection. *)
+(* Serve one client connection: read framed messages, dispatch to handler. *)
 fun serve_client socket =
   let
     val (in_stream, out_stream) = make_streams socket
+    val channel = Message_Channel.make out_stream
+    val message = Message_Channel.message channel
     fun loop () =
-      case Byte_Message.read_line in_stream of
+      case Byte_Message.read_message in_stream of
         NONE => ()
-      | SOME line_bytes =>
-          let val line = Bytes.content line_bytes
-          in if line = "" then loop ()
-             else
-               let val h = Synchronized.value handler
-               in h line out_stream; loop () end
+      | SOME [request_id_bytes, command_bytes] =>
+          let val request_id = Bytes.content request_id_bytes
+              val command = Bytes.content command_bytes
+              val h = Synchronized.value handler
+          in ignore (Future.fork (fn () => h (request_id, command) message));
+             loop ()
           end
+      | SOME _ =>
+          (message Markup.errorN [] [XML.blob ["expected exactly 2 chunks (request_id, command)"]];
+           loop ())
   in loop ()
      handle OS.SysErr _ => ()
-          | IO.Io _ => ()
+          | IO.Io _ => ();
+     Message_Channel.shutdown channel
   end;
 
-(* Accept loop: one client at a time until socket is closed. *)
+(* Accept loop: one connection at a time until socket is closed. *)
 fun accept_loop () =
   case Synchronized.value server_socket of
     NONE => ()

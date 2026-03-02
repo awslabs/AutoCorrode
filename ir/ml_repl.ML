@@ -113,14 +113,11 @@ fun install_wrappers () =
 
 (** Eval handler **)
 
-fun eval_handler line out_stream =
+fun eval_handler (request_id, line) message =
   let
     val _ = install_wrappers ()
 
-    (* Create a Message_Channel for this evaluation.  This gives us
-       PIDE-identical framing and a dedicated writer thread. *)
-    val channel = Message_Channel.make out_stream
-    val message = Message_Channel.message channel
+    val pos = Position.file_only request_id
 
     (* Install as the active message function for worker threads. *)
     val _ = Synchronized.change current_message (K message)
@@ -128,54 +125,56 @@ fun eval_handler line out_stream =
     val trimmed = #1 (Substring.splitr Char.isSpace (Substring.full line))
     val has_semi = Substring.isSuffix ";" trimmed
 
-    val _ = if has_semi then ()
-            else message Markup.errorN (Markup.serial_properties 0)
-                   [XML.blob ["command must end with \";\""]];
-
-    (* Debug: hexdump of input line to /tmp/ml_repl_hexdump.log *)
-    (* val _ = let val f = TextIO.openAppend "/tmp/ml_repl_hexdump.log" *)
-    (*             fun hex c = let val n = Char.ord c *)
-    (*                         in (if n < 16 then "0" else "") ^ Int.fmt StringCvt.HEX n end *)
-    (*             fun go i = *)
-    (*               if i >= size line then () *)
-    (*               else let val chunk = String.substring (line, i, Int.min (16, size line - i)) *)
-    (*                        val hexs = String.concatWith " " (map hex (String.explode chunk)) *)
-    (*                        val ascii = String.implode (map (fn c => if Char.ord c >= 32 andalso Char.ord c < 127 then c else #".") (String.explode chunk)) *)
-    (*                    in TextIO.output (f, hexs ^ "  " ^ ascii ^ "\n"); go (i + 16) end *)
-    (*         in TextIO.output (f, "ML_Repl hexdump (" ^ string_of_int (size line) ^ " bytes):\n"); *)
-    (*            go 0; TextIO.closeOut f end *)
-
-    (* Auto-correct double backslashes: replace \\\\ with \\ and warn *)
-    val line =
-      if String.isSubstring "\\\\" line
-      then (message Markup.warningN (Markup.serial_properties 0)
-              [XML.blob ["NOTE: double backslash auto-corrected. Prefer ASCII symbols."]];
-            let fun dedup [] = []
-                  | dedup (#"\\" :: #"\\" :: cs) = #"\\" :: dedup cs
-                  | dedup (c :: cs) = c :: dedup cs
-            in String.implode (dedup (String.explode line)) end)
-      else line
-
     fun do_eval () =
       if Substring.isEmpty trimmed orelse not has_semi
-      then Exn.Res ()
-      else Exn.capture (fn () =>
+      then (Output.error_message "command must end with \";\""; Exn.Res ())
+      else
+        let val line' =
+              if String.isSubstring "\\\\" line
+              then (Output.warning "NOTE: double backslash auto-corrected. Prefer ASCII symbols.";
+                    let fun dedup [] = []
+                          | dedup (#"\\" :: #"\\" :: cs) = #"\\" :: dedup cs
+                          | dedup (c :: cs) = c :: dedup cs
+                    in String.implode (dedup (String.explode line)) end)
+              else line
+        in Exn.capture (fn () =>
              ML_Compiler.eval (ML_Compiler.verbose true ML_Compiler.flags)
-               Position.none (ML_Lex.tokenize line)) ()
+               Position.none (ML_Lex.tokenize line')) ()
+        end
 
     val result =
-      Print_Mode.with_modes [Print_Mode.PIDE] do_eval ()
+      Position.setmp_thread_data pos (fn () =>
+        Print_Mode.with_modes [Print_Mode.PIDE] do_eval ()) ()
 
     val _ = case result of
               Exn.Res _ => ()
             | Exn.Exn exn =>
-                message Markup.errorN (Markup.serial_properties 0)
-                  [XML.blob [Runtime.exn_message exn]]
+                Position.setmp_thread_data pos (fn () =>
+                  Output.error_message (Runtime.exn_message exn)) ()
+
+    (* Join forked tasks spawned during this eval before sending "done".
+       Execution.peek 0 returns all groups under exec_id 0; we filter to
+       those that are descendants of our eval group. *)
+    val _ =
+      let
+        fun strip_parens s =
+              String.implode (List.filter (fn c => c <> #"(" andalso c <> #")") (String.explode s))
+        val eval_gid = "/" ^ (strip_parens (Task_Queue.str_of_groups (Future.the_worker_group ())))
+        fun is_descendant g =
+              String.isSuffix eval_gid (strip_parens (Task_Queue.str_of_groups g))
+        fun join_my_groups () =
+          let val all_groups = Execution.peek 0
+              val my_groups = filter is_descendant all_groups
+              val tasks = Future.snapshot my_groups
+          in if null tasks then ()
+             else (Future.join ((singleton o Future.forks)
+                     {name = "eval_join", group = SOME (Future.new_group NONE),
+                      deps = tasks, pri = 0, interrupts = false} I);
+                   join_my_groups ())
+          end
+      in join_my_groups () end
   in
-    (* Reset message function, then send "done" and shut down the channel. *)
-    Synchronized.change current_message (K (fn _ => fn _ => fn _ => ()));
-    message "done" [] [];
-    Message_Channel.shutdown channel
+    message "done" (Position.properties_of pos) []
   end;
 
 

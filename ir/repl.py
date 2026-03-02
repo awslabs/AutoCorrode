@@ -35,6 +35,7 @@ Usage:
 
 import argparse
 import os
+import queue
 import re
 import select
 import shlex
@@ -536,7 +537,10 @@ class PolyMLProcess:
         if self.port:
             try:
                 s = socket.create_connection(("127.0.0.1", self.port), timeout=2)
-                s.sendall(b"ML_Repl.stop ();\n")
+                rid = b"shutdown"
+                cmd = b"ML_Repl.stop ();"
+                header = f"{len(rid)},{len(cmd)}\n".encode("ascii")
+                s.sendall(header + rid + cmd)
                 s.close()
             except Exception:
                 pass
@@ -621,14 +625,17 @@ class PolyMLConnection:
         body_chunks = chunks[2 + props_length:]
         return kind, props, body_chunks
 
-    def send(self, command):
-        """Send an ML command and return the output as a string.
+    def send_message(self, request_id, command):
+        """Send a framed message: 2 chunks [request_id, command]."""
+        cmd = unicode_to_isabelle(command.strip())
+        rid = request_id.encode("utf-8")
+        cbytes = cmd.encode("utf-8")
+        header = f"{len(rid)},{len(cbytes)}\n".encode("ascii")
+        self.sock.sendall(header + rid + cbytes)
 
-        Reads PIDE-framed messages until a "done" message, concatenates
-        the YXML body text of all non-done messages, and returns it.
-        """
-        line = unicode_to_isabelle(command.strip()) + "\n"
-        self.sock.sendall(line.encode("utf-8"))
+    def send_sync(self, request_id, command):
+        """Send a framed message and collect response until 'done'. Returns body text."""
+        self.send_message(request_id, command)
         parts = []
         while True:
             kind, props, body_chunks = self.read_message()
@@ -636,29 +643,6 @@ class PolyMLConnection:
                 return "\n".join(parts).strip()
             body = "".join(c.decode("utf-8", errors="replace")
                            for c in body_chunks)
-            if body:
-                parts.append(body)
-
-    def send_streaming(self, command, on_message):
-        """Send an ML command, call on_message(kind, props, body) for each message.
-
-        on_message receives:
-          kind: str (e.g. "writeln", "error", "status", "done")
-          props: list of (key, value) tuples
-          body: str (decoded YXML body, may be empty)
-
-        Returns the concatenated body text (same as send()).
-        """
-        line = unicode_to_isabelle(command.strip()) + "\n"
-        self.sock.sendall(line.encode("utf-8"))
-        parts = []
-        while True:
-            kind, props, body_chunks = self.read_message()
-            body = "".join(c.decode("utf-8", errors="replace")
-                           for c in body_chunks)
-            on_message(kind, props, body)
-            if kind == "done":
-                return "\n".join(parts).strip()
             if body:
                 parts.append(body)
 
@@ -676,14 +660,21 @@ class PolyMLConnection:
 
 
 class Server:
-    """TCP server that serializes client commands to the Poly/ML process."""
+    """TCP server that dispatches client commands to the Poly/ML process.
+
+    Uses a central reader thread to demux responses from the single ML_Repl
+    connection by request_id (carried in the 'file' position property).
+    Multiple clients can have commands in flight concurrently.
+    """
 
     def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None):
         self.poly = poly
         self.port = port
         self.host = host
         self.mgmt_output = mgmt_output or print
-        self.lock = threading.Lock()
+        self.write_lock = threading.Lock()  # serialize writes to poly
+        self.response_queues = {}  # request_id -> queue.Queue
+        self.queues_lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind((host, port))
@@ -692,6 +683,79 @@ class Server:
         self.verbose = 0  # 0=off, 1=body, 2=body+headers, 3=body+headers+hex
         self.clients = {}
         self.clients_lock = threading.Lock()
+        self._next_id = 0
+        self._id_lock = threading.Lock()
+        # Start central reader thread
+        self._reader_thread = threading.Thread(
+            target=self._reader_loop, daemon=True)
+        self._reader_thread.start()
+
+    def _alloc_request_id(self):
+        with self._id_lock:
+            rid = f"r{self._next_id}"
+            self._next_id += 1
+            return rid
+
+    def _reader_loop(self):
+        """Central reader: read PIDE messages from poly, dispatch by request_id."""
+        try:
+            while self.running and self.poly.alive():
+                kind, props, body_chunks = self.poly.read_message()
+                props_dict = dict(props)
+                request_id = props_dict.get("file", "")
+                body = "".join(c.decode("utf-8", errors="replace")
+                               for c in body_chunks)
+                self.log_output(f"[ml:{request_id or '?'}]", kind, props, body)
+                with self.queues_lock:
+                    q = self.response_queues.get(request_id)
+                if q is not None:
+                    q.put((kind, props, body))
+                elif request_id != '':
+                    props_str = " ".join(f"{k}={v}" for k, v in props)
+                    tag = f"{kind}" + (f" {props_str}" if props_str else "")
+                    self.log(f"{YELLOW}[reader] dropped [{tag}]{RST}")
+                    if body:
+                        raw = body.encode("utf-8")
+                        for i in range(0, len(raw), 32):
+                            chunk = raw[i:i+32]
+                            hx = " ".join(f"{b:02x}" for b in chunk)
+                            asc = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                            self.log(f"{YELLOW}[reader]   {i:04x}  {hx:<96s} {asc}{RST}")
+                        display = apply_transforms(console_transforms, body)
+                        for ln in display.splitlines():
+                            self.log(f"{YELLOW}[reader]   {ln}{RST}")
+        except (EOFError, OSError):
+            pass
+        # Signal all waiting queues that the connection is dead
+        with self.queues_lock:
+            for q in self.response_queues.values():
+                q.put(("_closed", [], ""))
+
+    def _send_and_collect(self, request_id, command, on_message=None):
+        """Send a command with request_id, collect responses until 'done'.
+
+        Returns the concatenated body text.
+        """
+        q = queue.Queue()
+        with self.queues_lock:
+            self.response_queues[request_id] = q
+        try:
+            with self.write_lock:
+                self.poly.send_message(request_id, command)
+            parts = []
+            while True:
+                kind, props, body = q.get()
+                if kind == "_closed":
+                    raise EOFError("ML_Repl connection closed")
+                if on_message:
+                    on_message(kind, props, body)
+                if kind == "done":
+                    return "\n".join(parts).strip()
+                if body:
+                    parts.append(body)
+        finally:
+            with self.queues_lock:
+                self.response_queues.pop(request_id, None)
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
@@ -805,16 +869,17 @@ class Server:
                     if not logged_connect:
                         self.log(f"{GREEN}[+] {peer} connected ({self.num_clients} total){RST}")
                         logged_connect = True
-                    with self.lock:
-                        if not self.poly.alive():
-                            msg = f"ERR: Poly/ML process terminated\n{SENTINEL}\n"
-                            client.sendall(msg.encode("utf-8"))
-                            self.running = False
-                            return
-                        self.log_input(f"[{peer}]", command)
-                        def on_msg(kind, props, body):
-                            self.log_output(f"[{peer}]", kind, props, body)
-                        raw_output = self.poly.send_streaming(command, on_msg)
+                    request_id = self._alloc_request_id()
+                    if not self.poly.alive():
+                        msg = f"ERR: Poly/ML process terminated\n{SENTINEL}\n"
+                        client.sendall(msg.encode("utf-8"))
+                        self.running = False
+                        return
+                    self.log_input(f"[{peer}]", command)
+                    def on_msg(kind, props, body, _peer=peer):
+                        self.log_output(f"[{_peer}]", kind, props, body)
+                    raw_output = self._send_and_collect(
+                        request_id, command, on_message=on_msg)
                     response = (apply_transforms(tcp_transforms, raw_output) +
                                 "\n" + SENTINEL + "\n").encode("utf-8")
                     client.sendall(response)
@@ -823,7 +888,7 @@ class Server:
                             self.clients[client]["commands"] += 1
                             self.clients[client]["bytes_out"] += len(response)
                             self.clients[client]["last_active"] = time.time()
-        except (ConnectionResetError, BrokenPipeError):
+        except (ConnectionResetError, BrokenPipeError, EOFError):
             pass
         finally:
             with self.clients_lock:
@@ -833,7 +898,6 @@ class Server:
                 peer = info["peer"] if info else "unknown"
                 self.log(f"{RED}[-] {peer} disconnected ({self.num_clients} total){RST}")
             elif info and info.get("bytes_in", 0) > 0:
-                # Received data but no valid command — log for debugging
                 self.log(f"{DIM}[probe] {peer} sent {info['bytes_in']}B, no command{RST}")
 
     def client_info(self):
@@ -1027,22 +1091,23 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
         return False
     command = " ".join(cmd_lines).strip()
     cmd_lines.clear()
-    with server.lock:
-        if not server.poly.alive():
-            out(f"{RED}ERR: Poly/ML process terminated{RST}")
-            return True
-        def on_msg(kind, props, body):
-            if body and strip_yxml(body).strip():
-                out(apply_transforms(console_transforms, body))
-            server.log_output("[this]", kind, props, body)
-        server.log_input("[this]", command)
-        output = server.poly.send_streaming(command, on_msg)
+    if not server.poly.alive():
+        out(f"{RED}ERR: Poly/ML process terminated{RST}")
+        return True
+    request_id = server._alloc_request_id()
+    def on_msg(kind, props, body):
+        if body and strip_yxml(body).strip():
+            out(apply_transforms(console_transforms, body))
+        server.log_output("[this]", kind, props, body)
+    server.log_input("[this]", command)
+    output = server._send_and_collect(request_id, command, on_message=on_msg)
     # Update completer from command output
     if completer:
         if command.startswith("Ir.theories"):
             completer.learn_theories(output)
         elif command.startswith("Ir.load_theory"):
-            refresh = server.poly.send("Ir.theories ();")
+            rid2 = server._alloc_request_id()
+            refresh = server._send_and_collect(rid2, "Ir.theories ();")
             completer.learn_theories(refresh)
         elif command.startswith("Ir.repls"):
             completer.learn_repls(output)
@@ -1346,7 +1411,7 @@ def main():
         try:
             conn = PolyMLConnection(port=port)
             conn.connect()
-            info = conn.send('val _ = writeln (Session.welcome ());')
+            info = conn.send_sync("probe", 'val _ = writeln (Session.welcome ());')
             # Get PID holding the port
             try:
                 pid = subprocess.check_output(
@@ -1358,7 +1423,7 @@ def main():
                 print(f"  {strip_yxml(isabelle_to_unicode(info))}")
             if args.kill_server:
                 try:
-                    conn.send('ML_Repl.stop ();')
+                    conn.send_message("kill", 'ML_Repl.stop ();')
                 except (EOFError, OSError):
                     pass
                 time.sleep(0.5)
@@ -1397,11 +1462,11 @@ def main():
     poly = None  # PolyMLProcess, only if we need to start one
     bash_server = None
     connected = False
-    max_attempts = 60 if (args.daemon or args.expect_ml) else 1
+    max_attempts = 60 if args.expect_ml else 1
     for attempt in range(max_attempts):
         try:
             conn.connect()
-            probe = conn.send('Ir.help ();')
+            probe = conn.send_sync('probe', 'Ir.help ();')
             if "Ir.init" not in probe:
                 raise ConnectionError("Connected but Ir not available")
             connected = True
@@ -1464,7 +1529,7 @@ def main():
                 sys.exit(1)
             try:
                 conn.connect()
-                probe = conn.send('Ir.help ();')
+                probe = conn.send_sync('probe', 'Ir.help ();')
                 if "Ir.init" in probe:
                     break
                 conn.close()
@@ -1557,8 +1622,8 @@ def main():
             pass
     elif args.daemon:
         completer = IrCompleter()
-        with server.lock:
-            completer.learn_theories(server.poly.send("Ir.theories ();"))
+        rid = server._alloc_request_id()
+        completer.learn_theories(server._send_and_collect(rid, "Ir.theories ();"))
         mgmt_sock = MgmtSocketServer(server, args.mgmt_socket, completer=completer)
         mgmt_output = server.mgmt_output  # now points to mgmt_sock.broadcast
         mgmt_output(f"{DIM}Daemon mode. Attach with: repl.py --attach{RST}")
@@ -1591,8 +1656,8 @@ def main():
         histfile = os.path.expanduser("~/.ir_repl_history")
         completer = IrCompleter()
         # Seed completer with loaded theories
-        with server.lock:
-            completer.learn_theories(server.poly.send("Ir.theories ();"))
+        rid = server._alloc_request_id()
+        completer.learn_theories(server._send_and_collect(rid, "Ir.theories ();"))
         session = PromptSession(history=FileHistory(histfile), completer=completer,
                                 complete_while_typing=Always())
         try:
