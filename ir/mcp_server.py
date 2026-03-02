@@ -172,18 +172,18 @@ mcp = FastMCP("I/R REPL",
               "| not \\<or>, ! not \\<forall>, ? not \\<exists>, --> not \\<longrightarrow>, "
               ":: not \\<in>, etc.")
 
-repl = ReplClient()
+repl_client = ReplClient()
 
 @mcp.tool(description="Connect to the I/R REPL server. Call this before using any other tool. Can also reconnect after a dropped connection.")
 def connect(port: int = 9147, host: str = "127.0.0.1") -> str:
-    repl.connect(host, port)
-    return f"Connected to {repl.host}:{repl.port}"
+    repl_client.connect(host, port)
+    return f"Connected to {repl_client.host}:{repl_client.port}"
 
 @mcp.tool(description="Disconnect from the I/R REPL server.")
 def disconnect() -> str:
-    if not repl.connected:
+    if not repl_client.connected:
         return "Already disconnected"
-    repl.disconnect()
+    repl_client.disconnect()
     return "Disconnected"
 
 @mcp.tool(description=(
@@ -199,76 +199,65 @@ def disconnect() -> str:
     "When multiple theories are listed, they are merged so the REPL has access to all of them. "
     "Use `theories` to see what is already loaded in the session."
 ))
-def init(id: str, theories: list[str]) -> str:
+def init(repl: str, theories: list[str]) -> str:
     ml_list = "[" + ", ".join(ml_str(t) for t in theories) + "]"
-    return repl.send(f"Ir.init {ml_str(id)} {ml_list};")
+    return repl_client.send(f"Ir.init {ml_str(repl)} {ml_list};")
 
 @mcp.tool(description=(
     "Create a new REPL session rooted at a specific command in the PIDE document model. "
-    "This allows forking from any Toplevel.state (theory or proof) in a file currently "
-    "open and processed in Isabelle/jEdit. "
-    "Requires the exact node name (as used by PIDE) and the command ID (integer). "
-    "These must be obtained out-of-band from the PIDE document model, e.g. via the I/Q plugin "
-    "(get_command_info or resolve_command_target), since the ML side cannot discover them."
+    "Requires the exact node name and command ID from the PIDE document model."
 ))
-def init_from_document(id: str, node_name: str, command_id: int) -> str:
-    return repl.send(f"Ir.init_from_document {ml_str(id)} {ml_str(node_name)} {ml_int(command_id)};")
+def init_from_document(repl: str, node_name: str, command_id: int) -> str:
+    return repl_client.send(f"Ir.init_from_document {ml_str(repl)} {ml_str(node_name)} {ml_int(command_id)};")
 
-@mcp.tool(description="Fork a sub-REPL from the current REPL at the given state index (0=base, -1=latest).")
-def fork(id: str, state_idx: int) -> str:
-    return repl.send(f"Ir.fork {ml_str(id)} {ml_int(state_idx)};")
-
-@mcp.tool(description="Switch the current REPL to the one with the given id.")
-def focus(id: str) -> str:
-    return repl.send(f"Ir.focus {ml_str(id)};")
+@mcp.tool(description="Fork a sub-REPL from an existing REPL at the given state index (0=base, -1=latest).")
+def fork(repl: str, new_repl: str, state_idx: int) -> str:
+    return repl_client.send(f"Ir.fork {ml_str(repl)} {ml_str(new_repl)} {ml_int(state_idx)};")
 
 @mcp.tool(description=(
-    "Apply an Isar command in the current REPL. "
+    "Apply an Isar command to a REPL. "
     "Examples: 'lemma \"True\"', 'by simp', 'definition ...'. "
     "Don't use 'theory' commands — the theory context is set by 'init'. "
     "IMPORTANT: If a step FAILS (error response), the REPL state is UNCHANGED — "
     "do NOT call 'back' to undo a failed step."))
-def step(isar_text: str) -> str:
-    return repl.send(f"Ir.step {ml_str(isar_text)};")
+def step(repl: str, isar_text: str) -> str:
+    return repl_client.send(f"Ir.step {ml_str(repl)} {ml_str(isar_text)};")
 
-def step_file(path: str) -> str:
-    return repl.send(f"Ir.step_file {ml_str(path)};")
-
-@mcp.tool(description="Show the current REPL: origin, steps, and staleness.")
-def show() -> str:
-    return repl.send("Ir.show ();")
+@mcp.tool(description="Show a REPL: origin, steps, and staleness.")
+def show(repl: str) -> str:
+    return repl_client.send(f"Ir.show {ml_str(repl)};")
 
 @mcp.tool(description="Print the Toplevel.state at the given index (0=base, 1=after step 0, -1=latest).")
-def state(state_idx: int) -> str:
-    return repl.send(f"Ir.state {ml_int(state_idx)};")
+def state(repl: str, state_idx: int) -> str:
+    return repl_client.send(f"Ir.state {ml_str(repl)} {ml_int(state_idx)};")
 
-@mcp.tool(description="Print the concatenated Isar text of all steps in the current REPL.")
-def text() -> str:
-    return repl.send("Ir.text ();")
+@mcp.tool(description="Print the concatenated Isar text of all steps in a REPL.")
+def text(repl: str) -> str:
+    return repl_client.send(f"Ir.text {ml_str(repl)};")
 
 @mcp.tool(description="Replace the step at `idx` with new Isar text. Subsequent steps are replayed if auto_replay is on.")
-def edit(idx: int, isar_text: str) -> str:
-    return repl.send(f"Ir.edit {ml_int(idx)} {ml_str(isar_text)};")
+def edit(repl: str, idx: int, isar_text: str) -> str:
+    return repl_client.send(f"Ir.edit {ml_str(repl)} {ml_int(idx)} {ml_str(isar_text)};")
 
-@mcp.tool(description="Re-execute all stale steps in the current REPL.")
-def replay() -> str:
-    return repl.send("Ir.replay ();")
+@mcp.tool(description="Re-execute all stale steps in a REPL.")
+def replay(repl: str) -> str:
+    return repl_client.send(f"Ir.replay {ml_str(repl)};")
 
 @mcp.tool(description="Discard all steps after the given index. Use negative indices to count from the end: -1 reverts the last step, -2 the last two, etc.")
-def truncate(idx: int) -> str:
-    return repl.send(f"Ir.truncate {ml_int(idx)};")
+def truncate(repl: str, idx: int) -> str:
+    return repl_client.send(f"Ir.truncate {ml_str(repl)} {ml_int(idx)};")
 
-@mcp.tool(description="Revert the last SUCCESSFUL step. Synonym for truncate(-1). Only call this after a step that succeeded — failed steps don't change the REPL state.")
-def back() -> str:
-    return repl.send("Ir.back ();")
+@mcp.tool(description="Revert the last SUCCESSFUL step. Synonym for truncate(-1). Only call after a step that succeeded — failed steps don't change the REPL state.")
+def back(repl: str) -> str:
+    return repl_client.send(f"Ir.back {ml_str(repl)};")
 
-@mcp.tool(description="Merge the current sub-REPL back into its parent.")
-def merge() -> str:
-    return repl.send("Ir.merge ();")
+@mcp.tool(description="Merge a sub-REPL back into its parent.")
+def merge(repl: str) -> str:
+    return repl_client.send(f"Ir.merge {ml_str(repl)};")
 
-@mcp.tool(description="Run Sledgehammer on the current proof state with the given timeout in seconds.")
-def sledgehammer(timeout_secs: int) -> str:
-    return repl.send(f"Ir.sledgehammer {ml_int(timeout_secs)};")
+@mcp.tool(description="Run Sledgehammer on the proof state with the given timeout in seconds.")
+def sledgehammer(repl: str, timeout_secs: int) -> str:
+    return repl_client.send(f"Ir.sledgehammer {ml_str(repl)} {ml_int(timeout_secs)};")
 
 @mcp.tool(description='Search for theorems. Criteria: '
     'name:foo (name pattern, unquoted), intro/elim/dest/solves (goal-based), '
@@ -277,7 +266,7 @@ def sledgehammer(timeout_secs: int) -> str:
     'Name patterns are NOT quoted: name:append. '
     'Prefix with - to negate. '
     'Examples: name:conjI, "_ + _ = _", simp:"True", -name:foo, -"_ + _"')
-def find_theorems(query: str, max_results: int = 40) -> str:
+def find_theorems(repl: str, query: str, max_results: int = 40) -> str:
     q = query.strip()
     # Auto-quote bare term patterns that aren't already quoted or a keyword
     keywords = ("name:", "simp:", "intro", "elim", "dest", "solves")
@@ -290,23 +279,23 @@ def find_theorems(query: str, max_results: int = 40) -> str:
             parts.append(prefix + '"' + c + '"')
         else:
             parts.append(criterion.strip())
-    return repl.send(f"Ir.find_theorems {ml_int(max_results)} {ml_str(' '.join(parts))};")
+    return repl_client.send(f"Ir.find_theorems {ml_str(repl)} {ml_int(max_results)} {ml_str(' '.join(parts))};")
 
 @mcp.tool(description="Set step timeout in seconds (0=unlimited, default 5s).")
 def timeout(secs: int) -> str:
-    return repl.send(f"Ir.timeout {ml_int(secs)};")
+    return repl_client.send(f"Ir.timeout {ml_int(secs)};")
 
 @mcp.tool(description="Remove a REPL and all its sub-REPLs.")
-def remove(id: str) -> str:
-    return repl.send(f"Ir.remove {ml_str(id)};")
+def remove(repl: str) -> str:
+    return repl_client.send(f"Ir.remove {ml_str(repl)};")
 
 @mcp.tool(description="List all REPL sessions.")
 def repls() -> str:
-    return repl.send("Ir.repls ();")
+    return repl_client.send("Ir.repls ();")
 
 @mcp.tool(description="List all loaded Isabelle theories. This includes theories from the initial heap plus any loaded via load_theory.")
 def theories() -> str:
-    return repl.send("Ir.theories ();")
+    return repl_client.send("Ir.theories ();")
 
 @mcp.tool(description=(
     "Load a theory (and its transitive dependencies) by fully qualified name into the Isabelle session. "
@@ -316,39 +305,39 @@ def theories() -> str:
     "In PIDE mode, open theories in jEdit instead and use init_from_document."
 ))
 def load_theory(theory_name: str, verbose: bool = False) -> str:
-    result = repl.send(f"Ir.load_theory {ml_str(theory_name)};")
+    result = repl_client.send(f"Ir.load_theory {ml_str(theory_name)};")
     if verbose:
         return result
     return "\n".join(l for l in result.splitlines() if l.startswith("Loaded theory")) or result
 
 @mcp.tool(description="List command spans of a stored theory. Use negative indices to count from the end.")
 def source(theory_name: str, start: int, stop: int) -> str:
-    return repl.send(f"Ir.source {ml_str(theory_name)} {ml_int(start)} {ml_int(stop)};")
+    return repl_client.send(f"Ir.source {ml_str(theory_name)} {ml_int(start)} {ml_int(stop)};")
 
 @mcp.tool(description="Set verbosity of theory source listings. 0 (default): abbreviated command spans. 1: full command spans.")
 def set_verbosity(level: int) -> str:
     val = "true" if level > 0 else "false"
-    return repl.send(f"Ir.config (fn c => {{color = #color c, show_ignored = #show_ignored c, "
+    return repl_client.send(f"Ir.config (fn c => {{color = #color c, show_ignored = #show_ignored c, "
                      f"full_spans = {val}, show_theory_in_source = #show_theory_in_source c, "
                      f"auto_replay = #auto_replay c}});")
 
 @mcp.tool(description="Enable or disable auto-replay after edits to REPLs. 0: disable, 1: enable (default).")
 def set_auto_replay(enabled: int) -> str:
     val = "true" if enabled > 0 else "false"
-    return repl.send(f"Ir.config (fn c => {{color = #color c, show_ignored = #show_ignored c, "
+    return repl_client.send(f"Ir.config (fn c => {{color = #color c, show_ignored = #show_ignored c, "
                      f"full_spans = #full_spans c, show_theory_in_source = #show_theory_in_source c, "
                      f"auto_replay = {val}}});")
 
 @mcp.tool(description="Show the I/R help text.")
 def help() -> str:
-    return repl.send("Ir.help ();")
+    return repl_client.send("Ir.help ();")
 
 @mcp.tool(description="Send a raw ML expression to the Poly/ML console. Use for anything not covered by other tools. The expression must end with a semicolon.")
 def raw_ml(ml_code: str) -> str:
     code = ml_code.rstrip()
     if not code.endswith(";"):
         code += ";"
-    return repl.send(code)
+    return repl_client.send(code)
 
 # ---------------------------------------------------------------------------
 # Main

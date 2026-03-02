@@ -716,63 +716,82 @@ class IQServer(
     IQToolName.ReplInit -> (params => {
       val p = params.toMap
       for {
-        id <- strParam(p, "id")
+        repl <- strParam(p, "repl")
         theories = p.get("theories") match {
           case Some(l: List[_]) => l.collect { case s: String => s }
           case _ => Nil
         }
-        r <- withIR(_.init(id, theories))
+        r <- withIR(_.init(repl, theories))
       } yield IQToolResult.fromMap(r)
     }),
     IQToolName.ReplInitFromSource -> (params => {
       val p = params.toMap
       for {
-        id <- strParam(p, "id")
+        repl <- strParam(p, "repl")
         file <- strParam(p, "file")
         r <- {
           val offset = optIntParam(p, "offset")
           val pattern = p.get("pattern").collect { case s: String if s.nonEmpty => s }
-          withIR(_.initFromSourceLocation(id, file, offset, pattern))
+          withIR(_.initFromSourceLocation(repl, file, offset, pattern))
         }
       } yield IQToolResult.fromMap(r)
     }),
     IQToolName.ReplFork -> (params => {
       val p = params.toMap
-      for { id <- strParam(p, "id"); idx <- intParam(p, "state_idx"); r <- withIR(_.fork(id, idx)) }
+      for {
+        repl <- strParam(p, "repl")
+        newRepl <- strParam(p, "new_repl")
+        idx <- intParam(p, "state_idx")
+        r <- withIR(_.fork(repl, newRepl, idx))
+      } yield IQToolResult.fromMap(r)
+    }),
+    IQToolName.ReplStep -> (params => {
+      val p = params.toMap
+      for { repl <- strParam(p, "repl"); t <- strParam(p, "isar_text"); r <- withIR(_.step(repl, t)) }
       yield IQToolResult.fromMap(r)
     }),
-    IQToolName.ReplFocus -> (params =>
-      strParam(params.toMap, "id").flatMap(id => withIR(_.focus(id))).map(IQToolResult.fromMap)
+    IQToolName.ReplShow -> (params =>
+      strParam(params.toMap, "repl").flatMap(r => withIR(_.show(r))).map(IQToolResult.fromMap)
     ),
-    IQToolName.ReplStep -> (params =>
-      strParam(params.toMap, "isar_text").flatMap(t => withIR(_.step(t))).map(IQToolResult.fromMap)
+    IQToolName.ReplState -> (params => {
+      val p = params.toMap
+      for { repl <- strParam(p, "repl"); i <- intParam(p, "state_idx"); r <- withIR(_.state(repl, i)) }
+      yield IQToolResult.fromMap(r)
+    }),
+    IQToolName.ReplText -> (params =>
+      strParam(params.toMap, "repl").flatMap(r => withIR(_.text(r))).map(IQToolResult.fromMap)
     ),
-    IQToolName.ReplShow -> (_ => withIR(_.show()).map(IQToolResult.fromMap)),
-    IQToolName.ReplState -> (params =>
-      intParam(params.toMap, "state_idx").flatMap(i => withIR(_.state(i))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplText -> (_ => withIR(_.text()).map(IQToolResult.fromMap)),
     IQToolName.ReplEdit -> (params => {
       val p = params.toMap
-      for { idx <- intParam(p, "idx"); t <- strParam(p, "isar_text"); r <- withIR(_.edit(idx, t)) }
+      for { repl <- strParam(p, "repl"); idx <- intParam(p, "idx"); t <- strParam(p, "isar_text"); r <- withIR(_.edit(repl, idx, t)) }
       yield IQToolResult.fromMap(r)
     }),
-    IQToolName.ReplReplay -> (_ => withIR(_.replay()).map(IQToolResult.fromMap)),
-    IQToolName.ReplTruncate -> (params =>
-      intParam(params.toMap, "idx").flatMap(i => withIR(_.truncate(i))).map(IQToolResult.fromMap)
+    IQToolName.ReplReplay -> (params =>
+      strParam(params.toMap, "repl").flatMap(r => withIR(_.replay(r))).map(IQToolResult.fromMap)
     ),
-    IQToolName.ReplBack -> (_ => withIR(_.back()).map(IQToolResult.fromMap)),
-    IQToolName.ReplMerge -> (_ => withIR(_.merge()).map(IQToolResult.fromMap)),
+    IQToolName.ReplTruncate -> (params => {
+      val p = params.toMap
+      for { repl <- strParam(p, "repl"); i <- intParam(p, "idx"); r <- withIR(_.truncate(repl, i)) }
+      yield IQToolResult.fromMap(r)
+    }),
+    IQToolName.ReplBack -> (params =>
+      strParam(params.toMap, "repl").flatMap(r => withIR(_.back(r))).map(IQToolResult.fromMap)
+    ),
+    IQToolName.ReplMerge -> (params =>
+      strParam(params.toMap, "repl").flatMap(r => withIR(_.merge(r))).map(IQToolResult.fromMap)
+    ),
     IQToolName.ReplRemove -> (params =>
-      strParam(params.toMap, "id").flatMap(id => withIR(_.remove(id))).map(IQToolResult.fromMap)
+      strParam(params.toMap, "repl").flatMap(r => withIR(_.remove(r))).map(IQToolResult.fromMap)
     ),
     IQToolName.ReplList -> (_ => withIR(_.repls()).map(IQToolResult.fromMap)),
-    IQToolName.ReplSledgehammer -> (params =>
-      intParam(params.toMap, "timeout_secs").flatMap(s => withIR(_.sledgehammer(s))).map(IQToolResult.fromMap)
-    ),
+    IQToolName.ReplSledgehammer -> (params => {
+      val p = params.toMap
+      for { repl <- strParam(p, "repl"); s <- intParam(p, "timeout_secs"); r <- withIR(_.sledgehammer(repl, s)) }
+      yield IQToolResult.fromMap(r)
+    }),
     IQToolName.ReplFindTheorems -> (params => {
       val p = params.toMap
-      for { q <- strParam(p, "query"); r <- withIR(_.findTheorems(p.get("max_results").collect { case n: Long => n.toInt }.getOrElse(40), q)) }
+      for { repl <- strParam(p, "repl"); q <- strParam(p, "query"); r <- withIR(_.findTheorems(repl, p.get("max_results").collect { case n: Long => n.toInt }.getOrElse(40), q)) }
       yield IQToolResult.fromMap(r)
     }),
     IQToolName.ReplTimeout -> (params =>
@@ -1870,76 +1889,72 @@ class IQServer(
     def str(desc: String): Map[String, Any] = Map("type" -> "string", "description" -> desc)
     def int(desc: String): Map[String, Any] = Map("type" -> "integer", "description" -> desc)
     val replPrefix = "I/R REPL: "
+    val replParam = "repl" -> str("REPL session identifier")
     List(
       Map("name" -> "repl_init",
-        "description" -> (replPrefix + "Create a new REPL session importing theories. Use repl_init_from_source to start from a specific location in an open file."),
-        "inputSchema" -> schema(Map(
-          "id" -> str("REPL session identifier"),
+        "description" -> (replPrefix + "Create a new REPL session importing theories."),
+        "inputSchema" -> schema(Map(replParam,
           "theories" -> Map("type" -> "array", "items" -> Map("type" -> "string"),
             "description" -> "Theory names to import, e.g. [\"Main\"]")),
-          List("id", "theories"))),
+          List("repl", "theories"))),
       Map("name" -> "repl_init_from_source",
         "description" -> (replPrefix + "Create a REPL from a source location in an open file. Specify file + offset or file + pattern."),
-        "inputSchema" -> schema(Map(
-          "id" -> str("REPL session identifier"),
+        "inputSchema" -> schema(Map(replParam,
           "file" -> str("Theory file path (auto-completed against open files)"),
           "offset" -> int("Character offset in the file (alternative to pattern)"),
           "pattern" -> str("Unique text pattern in the file (alternative to offset)")),
-          List("id", "file"))),
+          List("repl", "file"))),
       Map("name" -> "repl_fork",
-        "description" -> (replPrefix + "Fork a sub-REPL from the current REPL at a given state index (0=base, -1=latest)."),
-        "inputSchema" -> schema(Map(
-          "id" -> str("New REPL identifier"),
+        "description" -> (replPrefix + "Fork a sub-REPL from an existing REPL at a given state index (0=base, -1=latest)."),
+        "inputSchema" -> schema(Map(replParam,
+          "new_repl" -> str("New REPL identifier"),
           "state_idx" -> int("State index to fork from (0=base, -1=latest)")),
-          List("id", "state_idx"))),
-      Map("name" -> "repl_focus",
-        "description" -> (replPrefix + "Switch to a REPL by id."),
-        "inputSchema" -> schema(Map("id" -> str("REPL identifier")), List("id"))),
+          List("repl", "new_repl", "state_idx"))),
       Map("name" -> "repl_step",
-        "description" -> (replPrefix + "Execute Isar text as the next step. Examples: 'lemma \"True\"', 'by simp', 'definition ...'. IMPORTANT: If a step FAILS, the REPL state is UNCHANGED — do NOT call repl_back to undo a failed step."),
-        "inputSchema" -> schema(Map("isar_text" -> str("Isar command text")), List("isar_text"))),
+        "description" -> (replPrefix + "Execute Isar text as the next step. IMPORTANT: If a step FAILS, the REPL state is UNCHANGED — do NOT call repl_back to undo a failed step."),
+        "inputSchema" -> schema(Map(replParam, "isar_text" -> str("Isar command text")), List("repl", "isar_text"))),
       Map("name" -> "repl_show",
-        "description" -> (replPrefix + "Show current REPL: origin, steps, staleness."),
-        "inputSchema" -> schema(Map.empty)),
+        "description" -> (replPrefix + "Show REPL: origin, steps, staleness."),
+        "inputSchema" -> schema(Map(replParam), List("repl"))),
       Map("name" -> "repl_state",
         "description" -> (replPrefix + "Show proof state at a step index (0=base, -1=latest)."),
-        "inputSchema" -> schema(Map("state_idx" -> int("State index")), List("state_idx"))),
+        "inputSchema" -> schema(Map(replParam, "state_idx" -> int("State index")), List("repl", "state_idx"))),
       Map("name" -> "repl_text",
         "description" -> (replPrefix + "Print concatenated Isar text of all steps."),
-        "inputSchema" -> schema(Map.empty)),
+        "inputSchema" -> schema(Map(replParam), List("repl"))),
       Map("name" -> "repl_edit",
         "description" -> (replPrefix + "Replace step at index with new Isar text."),
-        "inputSchema" -> schema(Map(
+        "inputSchema" -> schema(Map(replParam,
           "idx" -> int("Step index to replace"),
           "isar_text" -> str("New Isar text")),
-          List("idx", "isar_text"))),
+          List("repl", "idx", "isar_text"))),
       Map("name" -> "repl_replay",
         "description" -> (replPrefix + "Re-execute all stale steps."),
-        "inputSchema" -> schema(Map.empty)),
+        "inputSchema" -> schema(Map(replParam), List("repl"))),
       Map("name" -> "repl_truncate",
         "description" -> (replPrefix + "Keep steps 0..idx, discard the rest. Use -1 to revert last step."),
-        "inputSchema" -> schema(Map("idx" -> int("Keep steps up to this index")), List("idx"))),
+        "inputSchema" -> schema(Map(replParam, "idx" -> int("Keep steps up to this index")), List("repl", "idx"))),
       Map("name" -> "repl_back",
-        "description" -> (replPrefix + "Revert the last SUCCESSFUL step. Only call after a step that succeeded — failed steps don't change the REPL state."),
-        "inputSchema" -> schema(Map.empty)),
+        "description" -> (replPrefix + "Revert the last SUCCESSFUL step. Failed steps don't change the REPL state."),
+        "inputSchema" -> schema(Map(replParam), List("repl"))),
       Map("name" -> "repl_merge",
-        "description" -> (replPrefix + "Inline current sub-REPL back into its parent."),
-        "inputSchema" -> schema(Map.empty)),
+        "description" -> (replPrefix + "Inline sub-REPL back into its parent."),
+        "inputSchema" -> schema(Map(replParam), List("repl"))),
       Map("name" -> "repl_remove",
         "description" -> (replPrefix + "Delete a REPL and all its sub-REPLs."),
-        "inputSchema" -> schema(Map("id" -> str("REPL identifier")), List("id"))),
+        "inputSchema" -> schema(Map(replParam), List("repl"))),
       Map("name" -> "repl_list",
         "description" -> (replPrefix + "List all REPL sessions."),
         "inputSchema" -> schema(Map.empty)),
       Map("name" -> "repl_sledgehammer",
-        "description" -> (replPrefix + "Run sledgehammer on the current proof goal."),
-        "inputSchema" -> schema(Map("timeout_secs" -> int("Timeout in seconds")), List("timeout_secs"))),
+        "description" -> (replPrefix + "Run sledgehammer on the proof goal."),
+        "inputSchema" -> schema(Map(replParam, "timeout_secs" -> int("Timeout in seconds")), List("repl", "timeout_secs"))),
       Map("name" -> "repl_find_theorems",
-        "description" -> (replPrefix + "Search for theorems. Use name:foo for name patterns, \"term\" for term patterns."),
-        "inputSchema" -> schema(Map(
+        "description" -> (replPrefix + "Search for theorems."),
+        "inputSchema" -> schema(Map(replParam,
           "query" -> str("Search query"),
           "max_results" -> int("Maximum results (default 40)")),
-          List("query"))),
+          List("repl", "query"))),
       Map("name" -> "repl_timeout",
         "description" -> (replPrefix + "Set step timeout in seconds (0=unlimited)."),
         "inputSchema" -> schema(Map("secs" -> int("Timeout in seconds")), List("secs"))),
