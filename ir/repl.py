@@ -1270,13 +1270,55 @@ def attach_mode(sock_path):
     print(f"{DIM}Detached.{RST}")
 
 
+def find_isabelle_installation(isabelle_arg):
+    """Find Isabelle installation path.
+    
+    If isabelle_arg is set, try it (handling both directory and binary paths).
+    Otherwise, try platform-specific default locations.
+    Returns the path to the isabelle executable on success.
+    Raises RuntimeError if no installation is found.
+    """
+    candidates = []
+    
+    if isabelle_arg:
+        expanded = os.path.expanduser(isabelle_arg)
+        # If it's a directory, try common binary locations
+        if os.path.isdir(expanded):
+            candidates.extend([
+                os.path.join(expanded, "bin", "isabelle"),
+                os.path.join(expanded, "isabelle"),
+            ])
+        else:
+            candidates.append(expanded)
+    else:
+        if sys.platform == "darwin":
+            # macOS: try /Applications and user directory
+            candidates.extend([
+                "/Applications/Isabelle2025-2.app/bin/isabelle",
+                os.path.expanduser("~/Isabelle2025-2.app/bin/isabelle"),
+            ])
+        else:
+            # Linux: try home directory
+            candidates.extend([
+                os.path.expanduser("~/Isabelle2025-2/bin/isabelle"),
+            ])
+    
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    
+    raise RuntimeError(
+        f"Isabelle installation not found. Tried: {', '.join(candidates)}"
+    )
+
+
 def main():
     p = argparse.ArgumentParser(description="I/R REPL TCP server")
     p.add_argument("--port", type=int, default=9147)
     p.add_argument("--poly-ml-port", type=int, default=9146,
                    help="Port for ML_Repl inside Poly/ML (default: 9146)")
-    p.add_argument("--isabelle", default=os.path.expanduser(
-        "~/Isabelle2025-2-experimental.app/bin/isabelle"))
+    p.add_argument("--isabelle", default=None,
+                   help="Path to Isabelle executable (auto-detected if not provided)")
     p.add_argument("--session", default="AutoCorrode")
     p.add_argument("--dir", default=None)
     p.add_argument("-v", "--verbose", action="store_true",
@@ -1308,6 +1350,13 @@ def main():
     p.add_argument("--mgmt-socket", default=MGMT_SOCKET_PATH,
                    help=f"Unix socket path for --daemon/--attach (default: {MGMT_SOCKET_PATH})")
     args = p.parse_args()
+
+    # Find Isabelle installation
+    try:
+        args.isabelle = find_isabelle_installation(args.isabelle)
+    except RuntimeError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # --kill-daemon: send /quit to the daemon's mgmt socket
     if args.kill_daemon:

@@ -56,8 +56,10 @@ object IQExploreDockable {
         // Start ML_Repl
         PIDE.session.protocol_command("IR_Repl.start", XML.string("9146"))
         onStatus("Sent IR_Repl.start (port 9146)")
-        // Launch repl.py --daemon
-        val pb = new ProcessBuilder("python3", replPy, "--daemon", "--mcp", "--expect-ml")
+        // Launch repl.py --daemon with current Isabelle home
+        val isabellePath = Path.ISABELLE_HOME.implode
+        val pb = new ProcessBuilder("python3", replPy, "--daemon", "--mcp", "--expect-ml",
+          "--isabelle", isabellePath)
         pb.redirectErrorStream(true)
         daemonProcess = Some(pb.start())
         onStatus("Started repl.py --daemon --mcp")
