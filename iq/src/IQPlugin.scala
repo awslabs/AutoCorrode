@@ -7,6 +7,14 @@ import isabelle.jedit._
 import org.gjt.sp.jedit.{EBMessage, EBPlugin, jEdit}
 
 object IQPlugin {
+  /** System property key used to communicate the actual bound port to other
+    * plugins (e.g. Isabelle Assistant) running in the same JVM. Non-persistent:
+    * cleared on JVM exit and on plugin stop. */
+  val PORT_PROPERTY = "iq.mcp.port"
+
+  private val DEFAULT_PORT = 8765
+  private val MAX_PORT_SCAN = 100
+
   @volatile private var instance: Option[IQPlugin] = None
 
   private def register(plugin: IQPlugin): Unit = {
@@ -44,17 +52,32 @@ class IQPlugin extends EBPlugin {
   }
 
   private def startServer(): Unit = {
-    // Start MCP server
-    try {
-      val securityConfig = buildSecurityConfig()
-      iqServer = Some(new IQServer(port = 8765, securityConfig = securityConfig))
-      iqServer.foreach(_.start())
-      Output.writeln("Isabelle/Q Server started successfully on port 8765")
-    } catch {
-      case ex: Exception =>
-        iqServer = None
-        Output.writeln(s"Failed to start Isabelle/Q Server: ${ex.getMessage}")
-        ex.printStackTrace()
+    val securityConfig = buildSecurityConfig()
+    var tryPort = IQPlugin.DEFAULT_PORT
+    val maxPort = tryPort + IQPlugin.MAX_PORT_SCAN
+    var started = false
+    while (!started && tryPort < maxPort) {
+      try {
+        iqServer = Some(new IQServer(port = tryPort, securityConfig = securityConfig))
+        iqServer.foreach(_.start())
+        System.setProperty(IQPlugin.PORT_PROPERTY, tryPort.toString)
+        started = true
+        Output.writeln(s"Isabelle/Q Server started successfully on port $tryPort")
+      } catch {
+        case _: java.net.BindException =>
+          iqServer = None
+          tryPort += 1
+        case ex: Exception =>
+          iqServer = None
+          Output.writeln(s"Failed to start Isabelle/Q Server: ${ex.getMessage}")
+          ex.printStackTrace()
+          return
+      }
+    }
+    if (!started) {
+      Output.writeln(
+        s"Failed to start Isabelle/Q Server: no free port in range ${IQPlugin.DEFAULT_PORT}–${maxPort - 1}"
+      )
     }
   }
 
@@ -65,6 +88,7 @@ class IQPlugin extends EBPlugin {
     // Stop MCP server
     iqServer.foreach(_.stop())
     iqServer = None
+    System.clearProperty(IQPlugin.PORT_PROPERTY)
 
     // Stop I/R daemon
     IQExploreDockable.shutdown()
