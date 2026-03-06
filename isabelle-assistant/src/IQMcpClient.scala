@@ -29,6 +29,12 @@ object IQMcpClient {
   private val connectTimeoutMs = 250
   private val minSocketTimeoutMs = 1000
 
+  /** Read the I/Q MCP port from the system property set by the I/Q plugin,
+    * falling back to the default if the property is absent or malformed. */
+  private def currentPort: Int =
+    try { System.getProperty("iq.mcp.port", "8765").trim.toInt }
+    catch { case _: NumberFormatException => AssistantConstants.DEFAULT_MCP_PORT }
+
   /** Connection pool for persistent TCP connection to I/Q MCP server.
     * Reuses connections to avoid per-call socket overhead (250ms per connect).
     * Falls back to fresh connection on any I/O error.
@@ -39,12 +45,23 @@ object IQMcpClient {
     @volatile private var connection: Option[(Socket, BufferedReader, PrintWriter)] = None
     @volatile private var lastUsedMs = 0L
     private val keepaliveIntervalMs = 30000L // 30 seconds
+
+    private def connectTo(port: Int, socketTimeout: Int): (Socket, BufferedReader, PrintWriter) = {
+      val s = new Socket()
+      s.connect(new InetSocketAddress(host, port), connectTimeoutMs)
+      s.setSoTimeout(socketTimeout)
+      val r = new BufferedReader(new InputStreamReader(s.getInputStream, StandardCharsets.UTF_8))
+      val w = new PrintWriter(new OutputStreamWriter(s.getOutputStream, StandardCharsets.UTF_8), true)
+      (s, r, w)
+    }
     
     def withConnection[T](timeoutMs: Long)(f: (BufferedReader, PrintWriter) => T): T = {
       lock.lock()
       try {
-        // Check if connection is stale or needs keepalive
+        val port = currentPort
         val now = System.currentTimeMillis()
+
+        // Check if connection is stale or needs keepalive
         if (connection.isDefined && now - lastUsedMs > keepaliveIntervalMs) {
           // Send keepalive ping
           if (!pingExistingConnection()) {
@@ -57,20 +74,7 @@ object IQMcpClient {
         val (socket, reader, writer) = connection match {
           case Some(conn) => conn
           case None =>
-            val newSocket = new Socket()
-            newSocket.connect(
-              new InetSocketAddress(host, AssistantConstants.DEFAULT_MCP_PORT),
-              connectTimeoutMs
-            )
-            newSocket.setSoTimeout(minSocketTimeoutMs)
-            val newReader = new BufferedReader(
-              new InputStreamReader(newSocket.getInputStream, StandardCharsets.UTF_8)
-            )
-            val newWriter = new PrintWriter(
-              new OutputStreamWriter(newSocket.getOutputStream, StandardCharsets.UTF_8),
-              true
-            )
-            val conn = (newSocket, newReader, newWriter)
+            val conn = connectTo(port, minSocketTimeoutMs)
             connection = Some(conn)
             conn
         }
@@ -89,20 +93,7 @@ object IQMcpClient {
             closeQuietly()
             connection = None
             
-            val freshSocket = new Socket()
-            freshSocket.connect(
-              new InetSocketAddress(host, AssistantConstants.DEFAULT_MCP_PORT),
-              connectTimeoutMs
-            )
-            // Apply per-call timeout to retry connection as well
-            freshSocket.setSoTimeout(bounded)
-            val freshReader = new BufferedReader(
-              new InputStreamReader(freshSocket.getInputStream, StandardCharsets.UTF_8)
-            )
-            val freshWriter = new PrintWriter(
-              new OutputStreamWriter(freshSocket.getOutputStream, StandardCharsets.UTF_8),
-              true
-            )
+            val (freshSocket, freshReader, freshWriter) = connectTo(port, bounded)
             connection = Some((freshSocket, freshReader, freshWriter))
             lastUsedMs = System.currentTimeMillis()
             
