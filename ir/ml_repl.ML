@@ -145,13 +145,13 @@ fun eval_handler line out_stream =
     (*         in TextIO.output (f, "ML_Repl hexdump (" ^ string_of_int (size line) ^ " bytes):\n"); *)
     (*            go 0; TextIO.closeOut f end *)
 
-    (* Auto-correct double backslashes: replace \\\\ with \\ and warn *)
+    (* Auto-correct double backslashes in symbol escapes *)
     val line =
-      if String.isSubstring "\\\\" line
+      if String.isSubstring ("\\\\" ^ "<") line
       then (message Markup.warningN (Markup.serial_properties 0)
-              [XML.blob ["NOTE: double backslash auto-corrected. Prefer ASCII symbols."]];
+              [XML.blob ["NOTE: double backslash auto-corrected in symbol escapes. Prefer ASCII symbols."]];
             let fun dedup [] = []
-                  | dedup (#"\\" :: #"\\" :: cs) = #"\\" :: dedup cs
+                  | dedup (#"\\" :: #"\\" :: #"<" :: cs) = #"\\" :: #"<" :: dedup cs
                   | dedup (c :: cs) = c :: dedup cs
             in String.implode (dedup (String.explode line)) end)
       else line
