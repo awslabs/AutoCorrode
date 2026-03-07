@@ -513,7 +513,10 @@ fun load_theory name =
 
 fun find_theorems max_results query =
   let val st = last_state (snd (the_current ()))
-      val ctxt = Toplevel.context_of st
+  in if not (Toplevel.is_theory st orelse Toplevel.is_proof st)
+     then out "Unknown context"
+     else
+  let val ctxt = Toplevel.context_of st
       val opt_goal = try (fn () => #goal (Proof.simple_goal (Toplevel.proof_of st))) ()
       val criteria = Find_Theorems.read_query Position.none query
       val limit = if max_results > 0 then SOME max_results else NONE
@@ -528,7 +531,8 @@ fun find_theorems max_results query =
              (if returned < found
               then " (" ^ string_of_int returned ^ " displayed)" else ""))
       val lines = map (fn t => Pretty.string_of (Find_Theorems.pretty_thm ctxt t)) theorems
-  in out (tally ^ ":\n" ^ String.concatWith "\n" (rev lines)) end;
+  in out (tally ^ ":\n" ^ String.concatWith "\n" (rev lines)) end
+  end;
 
 fun sledgehammer timeout_secs =
   let val st = last_state (snd (the_current ()))
