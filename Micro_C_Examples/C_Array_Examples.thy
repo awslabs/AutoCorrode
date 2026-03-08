@@ -6,9 +6,9 @@ begin
 section \<open>C array verification\<close>
 
 text \<open>
-  This theory demonstrates verification of C array indexing operations.
-  Arrays are modeled as references to @{typ \<open>c_int list\<close>}.
-  Array indexing uses @{const focus_nth} (focus-based access).
+  This theory demonstrates verification of pointer-indexed C array operations.
+  Pointer parameters are modeled as references to the current element, and
+  indexing is expressed via @{const c_ptr_add} over the underlying pointer model.
 \<close>
 
 subsection \<open>Helper Definitions for Array Loop Proofs\<close>
@@ -78,6 +78,12 @@ lemma sint_word_of_nat_Suc_ge_zero:
 
 context c_verification_ctx begin
 
+definition c_int_ref_at :: \<open>('addr, 'gv, c_int) Global_Store.ref \<Rightarrow> c_int \<Rightarrow> ('addr, 'gv, c_int) Global_Store.ref\<close> where
+  \<open>c_int_ref_at arr idx \<equiv>
+    make_focused
+      (c_ptr_shift_signed (unwrap_focused arr) (sint idx) (c_sizeof TYPE(c_int)))
+      (get_focus arr)\<close>
+
 subsection \<open>C Array Functions\<close>
 
 micro_c_translate \<open>
@@ -99,22 +105,39 @@ thm c_write_at_def
 subsection \<open>Read-at Contract and Proof\<close>
 
 text \<open>
-  The contract for @{text read_at}: given a reference to a @{typ \<open>c_int list\<close>}
-  and a valid index, the function returns the element at that index.
-  The @{const c_idx_to_nat} function converts the C integer index to a natural number.
+  The contract for @{text read_at}: given a reference to the current element of an
+  integer array and an index, the function reads the element at that shifted location.
 \<close>
 
-definition c_read_at_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow>
-     'gv \<Rightarrow> c_int list \<Rightarrow> ('s, c_int, 'b) function_contract\<close> where
-  [crush_contracts]: \<open>c_read_at_contract arr idx g vs \<equiv>
-    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star> \<langle>\<not> (sint idx < 0)\<rangle> \<star> \<langle>c_idx_to_nat idx < length vs\<rangle>;
-        post = \<lambda>r. arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star> \<langle>r = vs ! (c_idx_to_nat idx)\<rangle>
+definition c_read_at_contract :: \<open>('addr, 'gv, c_int) Global_Store.ref \<Rightarrow> c_int \<Rightarrow>
+     'gv \<Rightarrow> c_int \<Rightarrow> ('s, c_int, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_read_at_contract arr idx g v \<equiv>
+    let elem_ref = c_int_ref_at arr idx;
+        pre  = elem_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>v;
+        post = \<lambda>r. elem_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> \<langle>r = v\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_read_at_contract
 
 lemma c_read_at_spec:
-  shows \<open>\<Gamma>; c_read_at arr idx \<Turnstile>\<^sub>F c_read_at_contract arr idx g vs\<close>
-by (crush_boot f: c_read_at_def contract: c_read_at_contract_def) crush_base
+  shows \<open>\<Gamma>; c_read_at arr idx \<Turnstile>\<^sub>F c_read_at_contract arr idx g v\<close>
+by (crush_boot f: c_read_at_def contract: c_read_at_contract_def)
+  (crush_base simp add: c_int_ref_at_def)
+
+subsection \<open>Write-at Contract and Proof\<close>
+
+definition c_write_at_contract :: \<open>('addr, 'gv, c_int) Global_Store.ref \<Rightarrow> c_int \<Rightarrow>
+     'gv \<Rightarrow> c_int \<Rightarrow> c_int \<Rightarrow> ('s, unit, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_write_at_contract arr idx g old_v new_v \<equiv>
+    let elem_ref = c_int_ref_at arr idx;
+        pre  = elem_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>old_v;
+        post = \<lambda>_. elem_ref \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. new_v) \<sqdot> (g\<down>old_v)
+     in make_function_contract pre post\<close>
+ucincl_auto c_write_at_contract
+
+lemma c_write_at_spec:
+  shows \<open>\<Gamma>; c_write_at arr idx val \<Turnstile>\<^sub>F c_write_at_contract arr idx g old_v val\<close>
+by (crush_boot f: c_write_at_def contract: c_write_at_contract_def)
+  (crush_base simp add: c_int_ref_at_def)
 
 subsection \<open>Array Fill (memset-style)\<close>
 
@@ -133,33 +156,11 @@ micro_c_translate \<open>
 
 thm c_array_fill_def
 
-definition c_array_fill_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_int \<Rightarrow> c_uint \<Rightarrow>
-     'gv \<Rightarrow> c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
-  \<open>c_array_fill_contract arr val n g vs \<equiv>
-    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> g\<down>vs \<star>
-               \<langle>c_idx_to_nat n \<le> size arr\<rangle> \<star>
-               \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
-               \<langle>c_idx_to_nat n < 2147483648\<rangle> \<star>
-               can_alloc_reference;
-        post = \<lambda>_. (\<Squnion>g'. arr \<mapsto>\<langle>\<top>\<rangle> g'\<down>(list_fill_prefix (c_idx_to_nat n) val vs)) \<star>
-               can_alloc_reference
-     in make_function_contract pre post\<close>
-ucincl_auto c_array_fill_contract
-
-lemma c_array_fill_spec:
-  shows \<open>\<Gamma>; c_array_fill arr val n \<Turnstile>\<^sub>F c_array_fill_contract arr val n g vs\<close>
-  apply (crush_boot f: c_array_fill_def contract: c_array_fill_contract_def)
-  apply crush_base
-  apply (ucincl_discharge\<open>
-      rule_tac
-        INV=\<open>\<lambda>_ i. (\<Squnion> g. arr \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_fill_prefix i val vs))
-                  \<star> \<langle>\<not> sint (word_of_nat i :: c_int) < 0\<rangle>\<close>
-        and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-        and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-      in wp_raw_for_loop_framedI'\<close>)
-  using unat_lt2p[of n] apply (crush_base simp add: list_fill_prefix_step unat_of_nat_eq More_Word.sint_of_nat_ge_zero)
-  apply (metis sint_word_of_nat_Suc_ge_zero not_le)
-  done
+text \<open>
+  @{term c_array_fill_def} is kept as a translation regression for pointer-indexed loop writes.
+  A full whole-array contract now requires a contiguous raw-pointer region predicate, rather than
+  the old list-backed pointer model this theory previously assumed.
+\<close>
 
 subsection \<open>Array Copy (memcpy-style)\<close>
 
@@ -178,37 +179,11 @@ micro_c_translate \<open>
 
 thm c_array_copy_def
 
-definition c_array_copy_contract :: \<open>('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow>
-      ('addr, 'gv, c_int list) Global_Store.ref \<Rightarrow> c_uint \<Rightarrow> 'gv \<Rightarrow> c_int list \<Rightarrow> 'gv \<Rightarrow>
-      c_int list \<Rightarrow> ('s, 'a, 'b) function_contract\<close> where
-  \<open>c_array_copy_contract dst src n gd vd gs vs \<equiv>
-    let pre  = dst \<mapsto>\<langle>\<top>\<rangle> gd\<down>vd \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
-               \<langle>c_idx_to_nat n \<le> size dst\<rangle> \<star>
-               \<langle>c_idx_to_nat n \<le> size src\<rangle> \<star>
-               \<langle>c_idx_to_nat n \<le> length vd\<rangle> \<star>
-               \<langle>c_idx_to_nat n \<le> length vs\<rangle> \<star>
-               \<langle>c_idx_to_nat n < 2147483648\<rangle> \<star>
-               can_alloc_reference;
-        post = \<lambda>_. (\<Squnion> g'. dst \<mapsto>\<langle>\<top>\<rangle> g'\<down>(list_copy_prefix (c_idx_to_nat n) vs vd)) \<star>
-               src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs \<star>
-               can_alloc_reference
-     in make_function_contract pre post\<close>
-ucincl_auto c_array_copy_contract
-
-lemma c_array_copy_spec:
-  shows \<open>\<Gamma>; c_array_copy dst src n \<Turnstile>\<^sub>F c_array_copy_contract dst src n gd vd gs vs\<close>
-  apply (crush_boot f: c_array_copy_def contract: c_array_copy_contract_def)
-  apply crush_base
-  apply (ucincl_discharge\<open>
-      rule_tac
-        INV=\<open>\<lambda>_ i. ((\<Squnion> g. dst \<mapsto>\<langle>\<top>\<rangle> g\<down>(list_copy_prefix i vs vd)) \<star> src \<mapsto>\<langle>\<top>\<rangle> gs\<down>vs)
-                  \<star> \<langle>\<not> sint (word_of_nat i :: c_int) < 0\<rangle>\<close>
-        and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-        and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-      in wp_raw_for_loop_framedI'\<close>)
-  using unat_lt2p[of n] apply (crush_base simp add: list_copy_prefix_step unat_of_nat_eq More_Word.sint_of_nat_ge_zero)
-  apply (metis sint_word_of_nat_Suc_ge_zero not_le)
-  done
+text \<open>
+  @{term c_array_copy_def} is kept as a translation regression for pointer-indexed read/write loops.
+  Proving a semantic copy contract over raw pointers needs the same contiguous-region predicate as
+  @{term c_array_fill_def}.
+\<close>
 
 end
 

@@ -15,6 +15,20 @@ text \<open>
 definition c_ptr_add :: \<open>(nat, 'b) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> (nat, 'b) gref\<close> where
   \<open>c_ptr_add p n stride \<equiv> make_gref (gref_address p + n * stride)\<close>
 
+text \<open>
+  Signed pointer arithmetic uses the signed interpretation of the index word.
+  Negative offsets move the address backwards; for out-of-bounds negative
+  addresses the surrounding C semantics are already undefined, and nat
+  subtraction saturates at zero.
+\<close>
+
+definition c_ptr_shift_signed :: \<open>(nat, 'b) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> (nat, 'b) gref\<close> where
+  \<open>c_ptr_shift_signed p n stride \<equiv>
+     if n < 0 then
+       make_gref (gref_address p - nat (- n) * stride)
+     else
+       make_gref (gref_address p + nat n * stride)\<close>
+
 text \<open>A convenience abbreviation using @{const c_sizeof} for the stride.\<close>
 
 abbreviation c_ptr_add_typed :: \<open>(nat, 'b) gref \<Rightarrow> nat \<Rightarrow> 'v itself \<Rightarrow> (nat, 'b) gref\<close> where
@@ -63,14 +77,13 @@ section \<open>C Pointer Subtraction\<close>
 
 text \<open>
   C pointer subtraction yields a signed element-distance (ptrdiff-like),
-  not an unsigned natural.  We model this polymorphically so the result width
-  is chosen by the surrounding typing context (e.g. ILP32 vs LP64 models).
+  not an unsigned natural.  We expose that semantic distance as a HOL @{typ int}
+  and let the frontend cast it to the ABI-selected C result type.
 \<close>
 
-definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> 'l::len sword\<close> where
+definition c_ptr_diff :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Rightarrow> nat \<Rightarrow> int\<close> where
   \<open>c_ptr_diff p q stride \<equiv>
-     word_of_int
-       (c_trunc_div_int (int (gref_address p) - int (gref_address q)) (int stride))\<close>
+     c_trunc_div_int (int (gref_address p) - int (gref_address q)) (int stride)\<close>
 
 section \<open>C Pointer Relational Comparisons\<close>
 
@@ -88,10 +101,10 @@ definition c_ptr_ge :: \<open>(nat, 'b) gref \<Rightarrow> (nat, 'b) gref \<Righ
 
 section \<open>Pointer\<leftrightarrow>Integer Casts\<close>
 
-definition c_ptr_to_uintptr :: \<open>(nat, 'b) gref \<Rightarrow> 'l::len word\<close> where
-  \<open>c_ptr_to_uintptr p \<equiv> of_nat (gref_address p)\<close>
+definition c_ptr_to_uintptr :: \<open>(nat, 'b) gref \<Rightarrow> int\<close> where
+  \<open>c_ptr_to_uintptr p \<equiv> int (gref_address p)\<close>
 
-definition c_uintptr_to_ptr :: \<open>'l::len word \<Rightarrow> (nat, 'b) gref\<close> where
-  \<open>c_uintptr_to_ptr w \<equiv> make_gref (unat w)\<close>
+definition c_uintptr_to_ptr :: \<open>int \<Rightarrow> (nat, 'b) gref\<close> where
+  \<open>c_uintptr_to_ptr w \<equiv> make_gref (nat w)\<close>
 
 end
