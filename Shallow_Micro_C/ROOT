@@ -17,3 +17,4 @@ session Shallow_Micro_C = HOL +
     C_Arithmetic_Rules
     C_Byte_Encoding
     C_Void_Pointer
+    C_Translation_Model

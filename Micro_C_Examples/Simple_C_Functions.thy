@@ -23,10 +23,50 @@ text \<open>
   This is the same boilerplate as the Rust examples.
 \<close>
 
+locale c_translation_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+
+locale c_base_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
+    reference reference_types
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
+
 locale c_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_int: reference_allocatable reference_types _ _ _ _ _ _ _ c_int_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
       'o prompt_output \<Rightarrow> unit\<close>
   and c_int_prism :: \<open>('gv, c_int) prism\<close>
 begin
@@ -142,11 +182,22 @@ text \<open>
 \<close>
 
 locale c_uint_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism +
     ref_c_uint_ptr: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_ptr_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
   and c_uint_ptr_prism :: \<open>('gv, ('addr, 'gv, c_uint) Global_Store.ref) prism\<close>
 begin
@@ -162,6 +213,18 @@ micro_c_translate \<open>
 \<close>
 
 thm c_u_add_def
+
+micro_c_translate \<open>
+  unsigned int u_call_helper(unsigned int x) {
+    return x;
+  }
+
+  unsigned int u_call_caller(unsigned int a, unsigned int b) {
+    return u_call_helper(a) + u_call_helper(b);
+  }
+\<close>
+
+thm c_u_call_helper_def c_u_call_caller_def
 
 text \<open>
   The contract for @{text u_add}: unsigned addition wraps, so the result is
@@ -592,8 +655,8 @@ by (crush_boot f: c_inc_via_addr_def contract: c_inc_via_addr_contract_def)
 subsection \<open>Pointer arithmetic\<close>
 
 text \<open>
-  Test pointer arithmetic: @{text "*(arr + idx)"} reads the element at offset @{text idx}
-  via @{const focus_focused} and @{const nth_focus}.
+  Test pointer arithmetic: @{text "*(arr + idx)"} reads through the
+  pointer model by shifting the base reference and dereferencing the result.
 \<close>
 
 micro_c_translate \<open>
@@ -604,17 +667,19 @@ micro_c_translate \<open>
 
 thm c_ptr_add_read_def
 
-definition c_ptr_add_read_contract :: \<open>('addr, 'gv, c_uint list) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
-      c_uint list \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
-  [crush_contracts]: \<open>c_ptr_add_read_contract arr ag vs idx \<equiv>
-    let pre  = arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>c_idx_to_nat idx < size arr\<rangle> \<star>
-               \<langle>c_idx_to_nat idx < length vs\<rangle>;
-        post = \<lambda>r. arr \<mapsto>\<langle>\<top>\<rangle> ag\<down>vs \<star> \<langle>r = vs ! c_idx_to_nat idx\<rangle>
+definition c_ptr_add_read_contract :: \<open>('addr, 'gv, c_uint) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
+      c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_ptr_add_read_contract arr ag v idx \<equiv>
+    let elem_ref = make_focused
+                     (c_ptr_add (unwrap_focused arr) (c_idx_to_nat idx) (c_sizeof TYPE(c_uint)))
+                     (get_focus arr);
+        pre  = elem_ref \<mapsto>\<langle>\<top>\<rangle> ag\<down>v;
+        post = \<lambda>r. elem_ref \<mapsto>\<langle>\<top>\<rangle> ag\<down>v \<star> \<langle>r = v\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_ptr_add_read_contract
 
 lemma c_ptr_add_read_spec [crush_specs]:
-  shows \<open>\<Gamma>; c_ptr_add_read arr idx \<Turnstile>\<^sub>F c_ptr_add_read_contract arr ag vs idx\<close>
+  shows \<open>\<Gamma>; c_ptr_add_read arr idx \<Turnstile>\<^sub>F c_ptr_add_read_contract arr ag v idx\<close>
 by (crush_boot f: c_ptr_add_read_def contract: c_ptr_add_read_contract_def) crush_base
 
 subsection \<open>Forward-only goto\<close>
@@ -655,10 +720,21 @@ end
 section \<open>Fixed-width integer type verification (\<^verbatim>\<open>uint16_t\<close>)\<close>
 
 locale c_ushort_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_ushort: reference_allocatable reference_types _ _ _ _ _ _ _ c_ushort_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_ushort_prism :: \<open>('gv, c_ushort) prism\<close>
 begin
 
@@ -737,10 +813,21 @@ micro_c_translate \<open>
 thm c_poly.record_simps
 
 locale c_poly_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_poly: reference_allocatable reference_types _ _ _ _ _ _ _ c_poly_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_poly_prism :: \<open>('gv, c_poly) prism\<close>
 begin
 
@@ -841,11 +928,22 @@ end
 section \<open>Non-constant local array initializers\<close>
 
 locale c_uint_arr_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism +
     ref_c_uint_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_list_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
   and c_uint_list_prism :: \<open>('gv, c_uint list) prism\<close>
 begin
@@ -882,22 +980,33 @@ begin
 micro_c_translate \<open>
   typedef unsigned int uint32_t;
 
-  long ptr_diff(uint32_t *p, uint32_t *q) {
+  long ptr_diff_test(uint32_t *p, uint32_t *q) {
     return p - q;
   }
 \<close>
 
-thm c_ptr_diff_def
+thm c_ptr_diff_test_def
 
 end
 
 section \<open>Byte buffer pointer arithmetic verification\<close>
 
 locale c_char_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_char: reference_allocatable reference_types _ _ _ _ _ _ _ c_char_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_char_prism :: \<open>('gv, c_char) prism\<close>
 begin
 
@@ -914,17 +1023,19 @@ micro_c_translate \<open>
 
 thm c_read_byte_def
 
-definition c_read_byte_contract :: \<open>('addr, 'gv, c_char list) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
-     c_char list \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_char, 'b) function_contract\<close> where
-  [crush_contracts]: \<open>c_read_byte_contract buf bg vs idx \<equiv>
-    let pre  = buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>c_idx_to_nat idx < size buf\<rangle> \<star>
-               \<langle>c_idx_to_nat idx < length vs\<rangle>;
-        post = \<lambda>r. buf \<mapsto>\<langle>\<top>\<rangle> bg\<down>vs \<star> \<langle>r = vs ! c_idx_to_nat idx\<rangle>
+definition c_read_byte_contract :: \<open>('addr, 'gv, c_char) Global_Store.ref \<Rightarrow> 'gv \<Rightarrow>
+     c_char \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_char, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_read_byte_contract buf bg v idx \<equiv>
+    let elem_ref = make_focused
+                     (c_ptr_add (unwrap_focused buf) (c_idx_to_nat idx) (c_sizeof TYPE(c_char)))
+                     (get_focus buf);
+        pre  = elem_ref \<mapsto>\<langle>\<top>\<rangle> bg\<down>v;
+        post = \<lambda>r. elem_ref \<mapsto>\<langle>\<top>\<rangle> bg\<down>v \<star> \<langle>r = v\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_read_byte_contract
 
 lemma c_read_byte_spec [crush_specs]:
-  shows \<open>\<Gamma>; c_read_byte buf idx \<Turnstile>\<^sub>F c_read_byte_contract buf bg vs idx\<close>
+  shows \<open>\<Gamma>; c_read_byte buf idx \<Turnstile>\<^sub>F c_read_byte_contract buf bg v idx\<close>
 by (crush_boot f: c_read_byte_def contract: c_read_byte_contract_def) crush_base
 
 end
@@ -932,10 +1043,21 @@ end
 section \<open>Long long type verification\<close>
 
 locale c_ulong_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_ulong: reference_allocatable reference_types _ _ _ _ _ _ _ c_ulong_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_ulong_prism :: \<open>('gv, c_ulong) prism\<close>
 begin
 
@@ -970,10 +1092,21 @@ end
 section \<open>128-bit integer type verification\<close>
 
 locale c_uint128_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_uint128: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint128_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_uint128_prism :: \<open>('gv, c_uint128) prism\<close>
 begin
 
@@ -1012,10 +1145,21 @@ micro_c_translate \<open>
 \<close>
 
 locale c_point_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_point: reference_allocatable reference_types _ _ _ _ _ _ _ c_point_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_point_prism :: \<open>('gv, c_point) prism\<close>
 begin
 
@@ -1224,21 +1368,43 @@ micro_c_translate \<open>
 
 thm c_ptr_to_int_def
 
+micro_c_translate \<open>
+  typedef unsigned long long uintptr_t;
+
+  unsigned int *int_to_ptr(uintptr_t p) {
+    return (unsigned int *)p;
+  }
+\<close>
+
+thm c_int_to_ptr_def
+
 end
 
 section \<open>String literal as array initializer\<close>
 
 locale c_char_arr_verification_ctx =
+    c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge
+      c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_char: reference_allocatable reference_types _ _ _ _ _ _ _ c_char_prism +
     ref_c_char_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_char_list_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
-        'o prompt_output \<Rightarrow> unit\<close>
+  for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
+  and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
+  and c_ptr_less :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_le :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_greater :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_ge :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> bool\<close>
+  and c_ptr_to_uintptr :: \<open>('addr, 'gv) gref \<Rightarrow> int\<close>
+  and c_uintptr_to_ptr :: \<open>int \<Rightarrow> ('addr, 'gv) gref\<close>
+  and reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
+      'o prompt_output \<Rightarrow> unit\<close>
   and c_char_prism :: \<open>('gv, c_char) prism\<close>
   and c_char_list_prism :: \<open>('gv, c_char list) prism\<close>
 begin
 
-adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_char.new ref_c_char_list.new
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_char.new
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_char_list.new
 adhoc_overloading store_update_const \<rightleftharpoons> update_fun
 
 micro_c_translate \<open>

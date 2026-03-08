@@ -10,6 +10,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_C.C_Sizeof"
     "Shallow_Micro_C.C_Memory_Operations"
     "Shallow_Micro_C.C_Void_Pointer"
+    "Shallow_Micro_C.C_Translation_Model"
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
        and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:" and "abort:"
@@ -104,6 +105,9 @@ structure C_Ast_Utils : sig
   val is_ptr : c_numeric_type -> bool
   val is_unsigned_int : c_numeric_type -> bool
   val set_abi_profile : C_ABI.profile -> unit
+  val set_ref_universe_types : typ -> typ -> unit
+  val set_parametric_struct_names : string list -> unit
+  val set_pure_function_names : string list -> unit
   val get_abi_profile : unit -> C_ABI.profile
   val current_abi_name : unit -> string
   val pointer_uint_cty : unit -> c_numeric_type
@@ -113,6 +117,7 @@ structure C_Ast_Utils : sig
   val alignof_c_type : c_numeric_type -> int
   val builtin_typedefs : unit -> (string * c_numeric_type) list
   val hol_type_of : c_numeric_type -> typ
+  val cty_to_record_typ : string -> c_numeric_type -> typ option
   val type_name_of : c_numeric_type -> string
   val resolve_c_type : C_Ast.nodeInfo C_Ast.cDeclarationSpecifier list -> c_numeric_type option
   val decl_type : C_Ast.nodeInfo C_Ast.cDeclaration -> c_numeric_type option
@@ -161,13 +166,25 @@ structure C_Ast_Utils : sig
   val find_assigned_vars : C_Ast.nodeInfo C_Ast.cStatement -> string list
   val find_goto_targets : C_Ast.nodeInfo C_Ast.cStatement -> string list
   val find_called_functions : C_Ast.nodeInfo C_Ast.cFunctionDef -> string list
+  val find_list_backed_aliases : (string * c_numeric_type) list Symtab.table
+                                 -> string list Symtab.table
+                                 -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string list
+  val find_indexed_base_vars : C_Ast.nodeInfo C_Ast.cFunctionDef -> string list
+  val find_named_calls_with_args :
+      C_Ast.nodeInfo C_Ast.cFunctionDef
+      -> (string * C_Ast.nodeInfo C_Ast.cExpression list) list
+  val fundef_is_pure_with : unit Symtab.table -> C_Ast.nodeInfo C_Ast.cFunctionDef -> bool
 
   val extract_struct_defs_with_types : c_numeric_type Symtab.table
                                        -> C_Ast.nodeInfo C_Ast.cTranslationUnit
                                        -> (string * (string * c_numeric_type) list) list
+  val derive_parametric_struct_names : (string * (string * c_numeric_type) list) list
+                                       -> string list
   val extract_struct_record_defs : string -> c_numeric_type Symtab.table
                                    -> C_Ast.nodeInfo C_Ast.cTranslationUnit
                                    -> (string * (string * typ option) list) list
+  val extract_struct_array_fields : C_Ast.nodeInfo C_Ast.cTranslationUnit
+                                    -> (string * string list) list
   val extract_fundefs : C_Ast.nodeInfo C_Ast.cTranslationUnit
                         -> C_Ast.nodeInfo C_Ast.cFunctionDef list
   val type_rank : c_numeric_type -> int
@@ -190,7 +207,24 @@ struct
   val current_abi_profile : C_ABI.profile Unsynchronized.ref =
     Unsynchronized.ref C_ABI.LP64_LE
 
+  val current_ref_addr_ty : Term.typ Unsynchronized.ref =
+    Unsynchronized.ref (Term.TFree ("'addr", []))
+  val current_ref_gv_ty : Term.typ Unsynchronized.ref =
+    Unsynchronized.ref (Term.TFree ("'gv", []))
+  val current_parametric_struct_names : unit Symtab.table Unsynchronized.ref =
+    Unsynchronized.ref Symtab.empty
+  val current_pure_function_names : unit Symtab.table Unsynchronized.ref =
+    Unsynchronized.ref Symtab.empty
+
   fun set_abi_profile abi = (current_abi_profile := abi)
+  fun set_ref_universe_types (addr_ty: Term.typ) (gv_ty: Term.typ) =
+    (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
+  fun set_parametric_struct_names names =
+    current_parametric_struct_names :=
+      List.foldl (fn (n, tab) => Symtab.update (n, ()) tab) Symtab.empty names
+  fun set_pure_function_names names =
+    current_pure_function_names :=
+      List.foldl (fn (n, tab) => Symtab.update (n, ()) tab) Symtab.empty names
   fun get_abi_profile () = !current_abi_profile
   fun current_abi_name () = C_ABI.profile_name (get_abi_profile ())
   fun pointer_uint_cty () =
@@ -539,30 +573,63 @@ struct
   (* Extract typedef mappings from a translation unit.
      A typedef declaration is CDecl0 with CStorageSpec0 (CTypedef0 _) in specifiers. *)
   fun extract_typedefs (CTranslUnit0 (ext_decls, _)) =
-    let fun is_typedef_spec (CStorageSpec0 (CTypedef0 _)) = true
-          | is_typedef_spec _ = false
-        fun non_storage_spec (CStorageSpec0 _) = false
-          | non_storage_spec _ = true
-        fun extract (CDeclExt0 (CDecl0 (specs, [((Some declr, _), _)], _))) =
-              if List.exists is_typedef_spec specs then
-                let val name = declr_name declr
-                    val type_specs = List.filter non_storage_spec specs
-                    val base_cty =
-                      (case resolve_c_type type_specs of
-                         SOME cty => SOME cty
-                       | NONE =>
-                           (case List.find (fn CTypeSpec0 (CSUType0 _) => true | _ => false) type_specs of
-                              SOME (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0, Some ident, _, _, _), _))) =>
-                                SOME (CStruct (ident_name ident))
-                            | _ => NONE))
-                    val ptr_depth = pointer_depth_of_declr declr
-                in case base_cty of
-                     SOME cty => [(name, apply_ptr_depth cty ptr_depth)]
-                   | NONE => []
-                end
-              else []
-          | extract _ = []
-    in List.concat (List.map extract ext_decls) end
+    let
+      fun is_typedef_spec (CStorageSpec0 (CTypedef0 _)) = true
+        | is_typedef_spec _ = false
+      fun non_storage_spec (CStorageSpec0 _) = false
+        | non_storage_spec _ = true
+
+      fun resolve_with_typedefs typedef_tab specs =
+        let
+          val type_specs = List.filter (fn CTypeSpec0 _ => true | _ => false) specs
+        in
+          case type_specs of
+            [CTypeSpec0 (CTypeDef0 (ident, _))] =>
+              Symtab.lookup typedef_tab (ident_name ident)
+          | _ => resolve_c_type specs
+        end
+
+      fun resolve_typedef_decl typedef_tab specs declr =
+        let
+          val type_specs = List.filter non_storage_spec specs
+          val base_cty =
+            (case resolve_with_typedefs typedef_tab type_specs of
+               SOME cty => SOME cty
+             | NONE =>
+                 (case List.find (fn CTypeSpec0 (CSUType0 _) => true | _ => false) type_specs of
+                    SOME (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0, Some ident, _, _, _), _))) =>
+                      SOME (CStruct (ident_name ident))
+                  | _ =>
+                      (case List.find (fn CTypeSpec0 (CSUType0 _) => true | _ => false) type_specs of
+                         SOME (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0, Some ident, _, _, _), _))) =>
+                           SOME (CUnion (ident_name ident))
+                       | _ => NONE)))
+          val ptr_depth = pointer_depth_of_declr declr
+        in
+          Option.map (fn cty => apply_ptr_depth cty ptr_depth) base_cty
+        end
+
+      fun step (decl, (typedef_tab, acc)) =
+        (case decl of
+           CDeclExt0 (CDecl0 (specs, [((Some declr, _), _)], _)) =>
+             if List.exists is_typedef_spec specs then
+               let
+                 val name = declr_name declr
+               in
+                 (case resolve_typedef_decl typedef_tab specs declr of
+                    SOME cty =>
+                      let val tab' = Symtab.update (name, cty) typedef_tab
+                      in (tab', acc @ [(name, cty)]) end
+                  | NONE => (typedef_tab, acc))
+               end
+             else (typedef_tab, acc)
+         | _ => (typedef_tab, acc))
+
+      val init_tab = Symtab.make (builtin_typedefs ())
+      val (_, typedefs) = List.foldl step (init_tab, []) ext_decls
+    in
+      typedefs
+    end
 
   (* resolve_c_type with typedef resolution: check for CTypeDef0 first,
      then fall back to standard resolve_c_type.
@@ -582,25 +649,96 @@ struct
 
   (* Conservative side-effect analysis for expression-order soundness checks.
      Calls and mutating operators are treated as side-effecting. *)
-  fun expr_has_side_effect (CAssign0 _) = true
-    | expr_has_side_effect (CUnary0 (CPreIncOp0, _, _)) = true
-    | expr_has_side_effect (CUnary0 (CPostIncOp0, _, _)) = true
-    | expr_has_side_effect (CUnary0 (CPreDecOp0, _, _)) = true
-    | expr_has_side_effect (CUnary0 (CPostDecOp0, _, _)) = true
-    | expr_has_side_effect (CCall0 _) = true
-    | expr_has_side_effect (CBinary0 (_, l, r, _)) =
-        expr_has_side_effect l orelse expr_has_side_effect r
-    | expr_has_side_effect (CUnary0 (_, e, _)) = expr_has_side_effect e
-    | expr_has_side_effect (CIndex0 (a, i, _)) =
-        expr_has_side_effect a orelse expr_has_side_effect i
-    | expr_has_side_effect (CMember0 (e, _, _, _)) = expr_has_side_effect e
-    | expr_has_side_effect (CCast0 (_, e, _)) = expr_has_side_effect e
-    | expr_has_side_effect (CComma0 (es, _)) = List.exists expr_has_side_effect es
-    | expr_has_side_effect (CCond0 (c, t, e, _)) =
-        expr_has_side_effect c orelse
-          (case t of Some te => expr_has_side_effect te | None => false) orelse
-          expr_has_side_effect e
-    | expr_has_side_effect _ = false
+  fun named_call_is_pure pure_tab (CVar0 (ident, _)) =
+        Symtab.defined pure_tab (ident_name ident)
+    | named_call_is_pure _ _ = false
+
+  fun expr_has_side_effect_with pure_tab (CAssign0 _) = true
+    | expr_has_side_effect_with pure_tab (CUnary0 (CPreIncOp0, _, _)) = true
+    | expr_has_side_effect_with pure_tab (CUnary0 (CPostIncOp0, _, _)) = true
+    | expr_has_side_effect_with pure_tab (CUnary0 (CPreDecOp0, _, _)) = true
+    | expr_has_side_effect_with pure_tab (CUnary0 (CPostDecOp0, _, _)) = true
+    | expr_has_side_effect_with pure_tab (CCall0 (f, args, _)) =
+        let
+          val sub_effects =
+            expr_has_side_effect_with pure_tab f orelse
+            List.exists (expr_has_side_effect_with pure_tab) args
+        in
+          if named_call_is_pure pure_tab f then sub_effects else true
+        end
+    | expr_has_side_effect_with pure_tab (CBinary0 (_, l, r, _)) =
+        expr_has_side_effect_with pure_tab l orelse expr_has_side_effect_with pure_tab r
+    | expr_has_side_effect_with pure_tab (CUnary0 (_, e, _)) = expr_has_side_effect_with pure_tab e
+    | expr_has_side_effect_with pure_tab (CIndex0 (a, i, _)) =
+        expr_has_side_effect_with pure_tab a orelse expr_has_side_effect_with pure_tab i
+    | expr_has_side_effect_with pure_tab (CMember0 (e, _, _, _)) = expr_has_side_effect_with pure_tab e
+    | expr_has_side_effect_with pure_tab (CCast0 (_, e, _)) = expr_has_side_effect_with pure_tab e
+    | expr_has_side_effect_with pure_tab (CComma0 (es, _)) = List.exists (expr_has_side_effect_with pure_tab) es
+    | expr_has_side_effect_with pure_tab (CCond0 (c, t, e, _)) =
+        expr_has_side_effect_with pure_tab c orelse
+          (case t of Some te => expr_has_side_effect_with pure_tab te | None => false) orelse
+          expr_has_side_effect_with pure_tab e
+    | expr_has_side_effect_with _ _ = false
+
+  fun expr_has_side_effect expr =
+    expr_has_side_effect_with (!current_pure_function_names) expr
+
+  fun init_has_side_effect_with pure_tab (CInitExpr0 (e, _)) =
+        expr_has_side_effect_with pure_tab e
+    | init_has_side_effect_with pure_tab (CInitList0 (inits, _)) =
+        List.exists (fn (_, init) => init_has_side_effect_with pure_tab init) inits
+
+  fun decl_has_side_effect_with pure_tab (CDecl0 (_, declarators, _)) =
+        List.exists
+          (fn ((_, Some init), _) => init_has_side_effect_with pure_tab init
+            | _ => false)
+          declarators
+    | decl_has_side_effect_with _ _ = true
+
+  fun stmt_has_side_effect_with pure_tab (CCompound0 (_, items, _)) =
+        List.exists (item_has_side_effect_with pure_tab) items
+    | stmt_has_side_effect_with pure_tab (CExpr0 (Some e, _)) = expr_has_side_effect_with pure_tab e
+    | stmt_has_side_effect_with _ (CExpr0 (None, _)) = false
+    | stmt_has_side_effect_with pure_tab (CReturn0 (Some e, _)) = expr_has_side_effect_with pure_tab e
+    | stmt_has_side_effect_with _ (CReturn0 (None, _)) = false
+    | stmt_has_side_effect_with pure_tab (CIf0 (c, t, e_opt, _)) =
+        expr_has_side_effect_with pure_tab c orelse
+          stmt_has_side_effect_with pure_tab t orelse
+          (case e_opt of Some e => stmt_has_side_effect_with pure_tab e | None => false)
+    | stmt_has_side_effect_with pure_tab (CWhile0 (c, b, _, _)) =
+        expr_has_side_effect_with pure_tab c orelse stmt_has_side_effect_with pure_tab b
+    | stmt_has_side_effect_with pure_tab (CFor0 (Left init_opt, cond_opt, step_opt, body, _)) =
+        (case init_opt of Some e => expr_has_side_effect_with pure_tab e | None => false) orelse
+        (case cond_opt of Some e => expr_has_side_effect_with pure_tab e | None => false) orelse
+        (case step_opt of Some e => expr_has_side_effect_with pure_tab e | None => false) orelse
+        stmt_has_side_effect_with pure_tab body
+    | stmt_has_side_effect_with pure_tab (CFor0 (Right decl, cond_opt, step_opt, body, _)) =
+        decl_has_side_effect_with pure_tab decl orelse
+        (case cond_opt of Some e => expr_has_side_effect_with pure_tab e | None => false) orelse
+        (case step_opt of Some e => expr_has_side_effect_with pure_tab e | None => false) orelse
+        stmt_has_side_effect_with pure_tab body
+    | stmt_has_side_effect_with pure_tab (CSwitch0 (e, s, _)) =
+        expr_has_side_effect_with pure_tab e orelse stmt_has_side_effect_with pure_tab s
+    | stmt_has_side_effect_with pure_tab (CCase0 (e, s, _)) =
+        expr_has_side_effect_with pure_tab e orelse stmt_has_side_effect_with pure_tab s
+    | stmt_has_side_effect_with pure_tab (CCases0 (e1, e2, s, _)) =
+        expr_has_side_effect_with pure_tab e1 orelse
+        expr_has_side_effect_with pure_tab e2 orelse
+        stmt_has_side_effect_with pure_tab s
+    | stmt_has_side_effect_with pure_tab (CDefault0 (s, _)) = stmt_has_side_effect_with pure_tab s
+    | stmt_has_side_effect_with pure_tab (CLabel0 (_, s, _, _)) = stmt_has_side_effect_with pure_tab s
+    | stmt_has_side_effect_with _ (CBreak0 _) = false
+    | stmt_has_side_effect_with _ (CCont0 _) = false
+    | stmt_has_side_effect_with _ (CGoto0 _) = true
+    | stmt_has_side_effect_with _ (CGotoPtr0 _) = true
+    | stmt_has_side_effect_with _ (CAsm0 _) = true
+
+  and item_has_side_effect_with pure_tab (CBlockStmt0 s) = stmt_has_side_effect_with pure_tab s
+    | item_has_side_effect_with pure_tab (CBlockDecl0 d) = decl_has_side_effect_with pure_tab d
+    | item_has_side_effect_with _ (CNestedFunDef0 _) = true
+
+  fun fundef_is_pure_with pure_tab (CFunDef0 (_, _, _, body, _)) =
+    not (stmt_has_side_effect_with pure_tab body)
 
   fun expr_reads_vars (CVar0 (ident, _)) = [ident_name ident]
     | expr_reads_vars (CAssign0 (_, lhs, rhs, _)) =
@@ -706,6 +844,67 @@ struct
     fun find_assigned_vars stmt = distinct (op =) (fas stmt [])
   end
 
+  local
+    fun writes_if in_loop e acc =
+          if in_loop then expr_written_vars e @ acc else acc
+
+    fun loop_init_writes in_loop (Left (Some e)) acc = writes_if in_loop e acc
+      | loop_init_writes in_loop (Right d) acc = loop_decl_writes in_loop d acc
+      | loop_init_writes _ _ acc = acc
+
+    and loop_decl_writes in_loop (CDecl0 (_, declarators, _)) acc =
+          List.foldl
+            (fn (((_, Some init), _), ac) => loop_initval_writes in_loop init ac
+              | (_, ac) => ac)
+            acc declarators
+      | loop_decl_writes _ _ acc = acc
+
+    and loop_initval_writes in_loop (CInitExpr0 (e, _)) acc = writes_if in_loop e acc
+      | loop_initval_writes in_loop (CInitList0 (inits, _)) acc =
+          List.foldl (fn ((_, init), ac) => loop_initval_writes in_loop init ac) acc inits
+
+    fun loop_item_writes in_loop (CBlockStmt0 s) acc = loop_stmt_writes in_loop s acc
+      | loop_item_writes in_loop (CBlockDecl0 d) acc = loop_decl_writes in_loop d acc
+      | loop_item_writes _ _ acc = acc
+
+    and loop_stmt_writes in_loop (CCompound0 (_, items, _)) acc =
+          List.foldl (fn (it, ac) => loop_item_writes in_loop it ac) acc items
+      | loop_stmt_writes in_loop (CExpr0 (Some e, _)) acc = writes_if in_loop e acc
+      | loop_stmt_writes _ (CExpr0 (None, _)) acc = acc
+      | loop_stmt_writes in_loop (CReturn0 (Some e, _)) acc = writes_if in_loop e acc
+      | loop_stmt_writes _ (CReturn0 (None, _)) acc = acc
+      | loop_stmt_writes in_loop (CIf0 (c, t, e_opt, _)) acc =
+          let
+            val acc = writes_if in_loop c acc
+            val acc = loop_stmt_writes in_loop t acc
+          in
+            (case e_opt of Some e => loop_stmt_writes in_loop e acc | None => acc)
+          end
+      | loop_stmt_writes _ (CWhile0 (c, b, _, _)) acc =
+          let
+            val acc = writes_if true c acc
+            val acc = loop_stmt_writes true b acc
+          in acc end
+      | loop_stmt_writes _ (CFor0 (init, c, s, b, _)) acc =
+          let
+            val acc = loop_init_writes true init acc
+            val acc = (case c of Some e => writes_if true e acc | None => acc)
+            val acc = (case s of Some e => writes_if true e acc | None => acc)
+            val acc = loop_stmt_writes true b acc
+          in acc end
+      | loop_stmt_writes in_loop (CSwitch0 (e, s, _)) acc =
+          loop_stmt_writes in_loop s (writes_if in_loop e acc)
+      | loop_stmt_writes in_loop (CCase0 (e, s, _)) acc =
+          loop_stmt_writes in_loop s (writes_if in_loop e acc)
+      | loop_stmt_writes in_loop (CDefault0 (s, _)) acc =
+          loop_stmt_writes in_loop s acc
+      | loop_stmt_writes in_loop (CLabel0 (_, s, _, _)) acc =
+          loop_stmt_writes in_loop s acc
+      | loop_stmt_writes _ _ acc = acc
+  in
+    fun find_loop_written_vars stmt = distinct (op =) (loop_stmt_writes false stmt [])
+  end
+
   (* Walk the C AST and collect label names targeted by goto statements.
      Used to allocate goto flag references for forward-only goto support. *)
   local
@@ -785,6 +984,355 @@ struct
       distinct (op =) (rev (fc_stmt body []))
   end
 
+  local
+    fun declr_has_array (CDeclr0 (_, derived, _, _, _)) =
+      List.exists (fn CArrDeclr0 _ => true | _ => false) derived
+
+    fun declr_of_decl (CDecl0 (_, declarators, _)) =
+          (case declarators of
+             ((Some declr, _), _) :: _ => SOME declr
+           | _ => NONE)
+      | declr_of_decl _ = NONE
+
+    fun struct_name_of_decl struct_names decl =
+      extract_struct_type_from_decl_full struct_names decl
+
+    fun env_contains env name = Option.isSome (Symtab.lookup env name)
+    fun env_insert name env = Symtab.update (name, ()) env
+
+    fun expr_struct_name struct_env (CVar0 (ident, _)) =
+          Symtab.lookup struct_env (ident_name ident)
+      | expr_struct_name struct_env (CCast0 (_, e, _)) =
+          expr_struct_name struct_env e
+      | expr_struct_name _ _ = NONE
+
+    fun struct_field_is_array_backed array_field_tab struct_name field_name =
+      List.exists (fn fname => fname = field_name)
+        (the_default [] (Symtab.lookup array_field_tab struct_name))
+
+    fun expr_is_list_backed_in_env struct_tab array_field_tab env struct_env (CVar0 (ident, _)) =
+          env_contains env (ident_name ident)
+      | expr_is_list_backed_in_env struct_tab array_field_tab env struct_env (CCast0 (_, e, _)) =
+          expr_is_list_backed_in_env struct_tab array_field_tab env struct_env e
+      | expr_is_list_backed_in_env struct_tab array_field_tab env struct_env (CMember0 (base, field_ident, _, _)) =
+          (case expr_struct_name struct_env base of
+             SOME struct_name =>
+               struct_field_is_array_backed array_field_tab struct_name (ident_name field_ident)
+           | NONE => false)
+      | expr_is_list_backed_in_env _ _ _ _ _ = false
+
+    fun add_decl_struct_bindings struct_names decl struct_env =
+      (case (declr_of_decl decl, struct_name_of_decl struct_names decl) of
+         (SOME declr, SOME sname) =>
+           Symtab.update (declr_name declr, sname) struct_env
+       | _ => struct_env)
+
+    fun add_decl_array_bindings decl env =
+      (case declr_of_decl decl of
+         SOME declr =>
+           if declr_has_array declr then env_insert (declr_name declr) env else env
+       | NONE => env)
+
+    fun alias_names_from_expr struct_tab array_field_tab env struct_env (CAssign0 (_, CVar0 (ident, _), rhs, _)) acc =
+          let
+            val acc' = alias_names_from_expr struct_tab array_field_tab env struct_env rhs acc
+          in
+            if expr_is_list_backed_in_env struct_tab array_field_tab env struct_env rhs then
+              ident_name ident :: acc'
+            else
+              acc'
+          end
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CAssign0 (_, lhs, rhs, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env rhs
+            (alias_names_from_expr struct_tab array_field_tab env struct_env lhs acc)
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CBinary0 (_, l, r, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env r
+            (alias_names_from_expr struct_tab array_field_tab env struct_env l acc)
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CUnary0 (_, e, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e acc
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CIndex0 (a, i, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env i
+            (alias_names_from_expr struct_tab array_field_tab env struct_env a acc)
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CMember0 (e, _, _, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e acc
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CCast0 (_, e, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e acc
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CCall0 (f, args, _)) acc =
+          List.foldl (fn (a, ac) => alias_names_from_expr struct_tab array_field_tab env struct_env a ac)
+            (alias_names_from_expr struct_tab array_field_tab env struct_env f acc) args
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CComma0 (es, _)) acc =
+          List.foldl (fn (e, ac) => alias_names_from_expr struct_tab array_field_tab env struct_env e ac) acc es
+      | alias_names_from_expr struct_tab array_field_tab env struct_env (CCond0 (c, t, e, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e
+            ((case t of Some te => alias_names_from_expr struct_tab array_field_tab env struct_env te | None => I)
+              (alias_names_from_expr struct_tab array_field_tab env struct_env c acc))
+      | alias_names_from_expr _ _ _ _ _ acc = acc
+
+    fun alias_names_from_decl struct_tab array_field_tab env struct_env (CDecl0 (_, declarators, _)) acc =
+          List.foldl
+            (fn (((Some declr, Some (CInitExpr0 (init, _))), _), ac) =>
+                  if expr_is_list_backed_in_env struct_tab array_field_tab env struct_env init then
+                    declr_name declr :: ac
+                  else
+                    ac
+              | (_, ac) => ac)
+            acc declarators
+      | alias_names_from_decl _ _ _ _ _ acc = acc
+
+    fun alias_names_from_item struct_tab array_field_tab env struct_env (CBlockStmt0 stmt) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env stmt acc
+      | alias_names_from_item struct_tab array_field_tab env struct_env (CBlockDecl0 decl) acc =
+          alias_names_from_decl struct_tab array_field_tab env struct_env decl acc
+      | alias_names_from_item _ _ _ _ _ acc = acc
+
+    and alias_names_from_stmt struct_tab array_field_tab env struct_env (CCompound0 (_, items, _)) acc =
+          List.foldl (fn (item, ac) => alias_names_from_item struct_tab array_field_tab env struct_env item ac) acc items
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CExpr0 (Some e, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e acc
+      | alias_names_from_stmt _ _ _ _ (CExpr0 (None, _)) acc = acc
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CReturn0 (Some e, _)) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e acc
+      | alias_names_from_stmt _ _ _ _ (CReturn0 (None, _)) acc = acc
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CIf0 (c, t, e_opt, _)) acc =
+          (case e_opt of
+             Some e => alias_names_from_stmt struct_tab array_field_tab env struct_env e
+           | None => I)
+            (alias_names_from_stmt struct_tab array_field_tab env struct_env t
+              (alias_names_from_expr struct_tab array_field_tab env struct_env c acc))
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CWhile0 (c, b, _, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env b
+            (alias_names_from_expr struct_tab array_field_tab env struct_env c acc)
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CFor0 (Left (Some i), c, s, b, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env b
+            (opt_alias_expr struct_tab array_field_tab env struct_env s
+              (opt_alias_expr struct_tab array_field_tab env struct_env c
+                (alias_names_from_expr struct_tab array_field_tab env struct_env i acc)))
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CFor0 (Left None, c, s, b, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env b
+            (opt_alias_expr struct_tab array_field_tab env struct_env s
+              (opt_alias_expr struct_tab array_field_tab env struct_env c acc))
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CFor0 (Right d, c, s, b, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env b
+            (opt_alias_expr struct_tab array_field_tab env struct_env s
+              (opt_alias_expr struct_tab array_field_tab env struct_env c
+                (alias_names_from_decl struct_tab array_field_tab env struct_env d acc)))
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CSwitch0 (e, s, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env s
+            (alias_names_from_expr struct_tab array_field_tab env struct_env e acc)
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CCase0 (e, s, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env s
+            (alias_names_from_expr struct_tab array_field_tab env struct_env e acc)
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CDefault0 (s, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env s acc
+      | alias_names_from_stmt struct_tab array_field_tab env struct_env (CLabel0 (_, s, _, _)) acc =
+          alias_names_from_stmt struct_tab array_field_tab env struct_env s acc
+      | alias_names_from_stmt _ _ _ _ _ acc = acc
+
+    and opt_alias_expr struct_tab array_field_tab env struct_env (Some e) acc =
+          alias_names_from_expr struct_tab array_field_tab env struct_env e acc
+      | opt_alias_expr _ _ _ _ None acc = acc
+
+    fun indexed_base_vars_expr (CIndex0 (CVar0 (ident, _), idx, _)) acc =
+          indexed_base_vars_expr idx (ident_name ident :: acc)
+      | indexed_base_vars_expr (CUnary0 (CIndOp0, CVar0 (ident, _), _)) acc =
+          ident_name ident :: acc
+      | indexed_base_vars_expr (CAssign0 (_, lhs, rhs, _)) acc =
+          indexed_base_vars_expr rhs (indexed_base_vars_expr lhs acc)
+      | indexed_base_vars_expr (CBinary0 (_, l, r, _)) acc =
+          indexed_base_vars_expr r (indexed_base_vars_expr l acc)
+      | indexed_base_vars_expr (CUnary0 (_, e, _)) acc =
+          indexed_base_vars_expr e acc
+      | indexed_base_vars_expr (CIndex0 (a, i, _)) acc =
+          indexed_base_vars_expr i (indexed_base_vars_expr a acc)
+      | indexed_base_vars_expr (CMember0 (e, _, _, _)) acc =
+          indexed_base_vars_expr e acc
+      | indexed_base_vars_expr (CCast0 (_, e, _)) acc =
+          indexed_base_vars_expr e acc
+      | indexed_base_vars_expr (CCall0 (f, args, _)) acc =
+          List.foldl (fn (a, ac) => indexed_base_vars_expr a ac)
+            (indexed_base_vars_expr f acc) args
+      | indexed_base_vars_expr (CComma0 (es, _)) acc =
+          List.foldl (fn (e, ac) => indexed_base_vars_expr e ac) acc es
+      | indexed_base_vars_expr (CCond0 (c, t, e, _)) acc =
+          indexed_base_vars_expr e
+            ((case t of Some te => indexed_base_vars_expr te | None => I)
+              (indexed_base_vars_expr c acc))
+      | indexed_base_vars_expr _ acc = acc
+
+    fun indexed_base_vars_stmt (CCompound0 (_, items, _)) acc =
+          List.foldl
+            (fn (CBlockStmt0 stmt, ac) => indexed_base_vars_stmt stmt ac
+              | (CBlockDecl0 (CDecl0 (_, declarators, _)), ac) =>
+                  List.foldl
+                    (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => indexed_base_vars_expr e ac'
+                      | (_, ac') => ac')
+                    ac declarators
+              | (_, ac) => ac)
+            acc items
+      | indexed_base_vars_stmt (CExpr0 (Some e, _)) acc = indexed_base_vars_expr e acc
+      | indexed_base_vars_stmt (CReturn0 (Some e, _)) acc = indexed_base_vars_expr e acc
+      | indexed_base_vars_stmt (CIf0 (c, t, e_opt, _)) acc =
+          (case e_opt of Some e => indexed_base_vars_stmt e | None => I)
+            (indexed_base_vars_stmt t (indexed_base_vars_expr c acc))
+      | indexed_base_vars_stmt (CWhile0 (c, b, _, _)) acc =
+          indexed_base_vars_stmt b (indexed_base_vars_expr c acc)
+      | indexed_base_vars_stmt (CFor0 (Left (Some i), c, s, b, _)) acc =
+          indexed_base_vars_stmt b
+            (opt_index_expr s (opt_index_expr c (indexed_base_vars_expr i acc)))
+      | indexed_base_vars_stmt (CFor0 (Left None, c, s, b, _)) acc =
+          indexed_base_vars_stmt b (opt_index_expr s (opt_index_expr c acc))
+      | indexed_base_vars_stmt (CFor0 (Right d, c, s, b, _)) acc =
+          let
+            val acc' =
+              (case d of
+                 CDecl0 (_, declarators, _) =>
+                   List.foldl
+                     (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => indexed_base_vars_expr e ac'
+                       | (_, ac') => ac')
+                     acc declarators
+               | _ => acc)
+          in
+            indexed_base_vars_stmt b (opt_index_expr s (opt_index_expr c acc'))
+          end
+      | indexed_base_vars_stmt (CSwitch0 (e, s, _)) acc =
+          indexed_base_vars_stmt s (indexed_base_vars_expr e acc)
+      | indexed_base_vars_stmt (CCase0 (e, s, _)) acc =
+          indexed_base_vars_stmt s (indexed_base_vars_expr e acc)
+      | indexed_base_vars_stmt (CDefault0 (s, _)) acc =
+          indexed_base_vars_stmt s acc
+      | indexed_base_vars_stmt (CLabel0 (_, s, _, _)) acc =
+          indexed_base_vars_stmt s acc
+      | indexed_base_vars_stmt _ acc = acc
+
+    and opt_index_expr (Some e) acc = indexed_base_vars_expr e acc
+      | opt_index_expr None acc = acc
+
+    fun named_calls_expr (CCall0 (CVar0 (ident, _), args, _)) acc =
+          List.foldl (fn (a, ac) => named_calls_expr a ac)
+            ((ident_name ident, args) :: acc) args
+      | named_calls_expr (CCall0 (f, args, _)) acc =
+          List.foldl (fn (a, ac) => named_calls_expr a ac)
+            (named_calls_expr f acc) args
+      | named_calls_expr (CAssign0 (_, lhs, rhs, _)) acc =
+          named_calls_expr rhs (named_calls_expr lhs acc)
+      | named_calls_expr (CBinary0 (_, l, r, _)) acc =
+          named_calls_expr r (named_calls_expr l acc)
+      | named_calls_expr (CUnary0 (_, e, _)) acc =
+          named_calls_expr e acc
+      | named_calls_expr (CIndex0 (a, i, _)) acc =
+          named_calls_expr i (named_calls_expr a acc)
+      | named_calls_expr (CMember0 (e, _, _, _)) acc =
+          named_calls_expr e acc
+      | named_calls_expr (CCast0 (_, e, _)) acc =
+          named_calls_expr e acc
+      | named_calls_expr (CComma0 (es, _)) acc =
+          List.foldl (fn (e, ac) => named_calls_expr e ac) acc es
+      | named_calls_expr (CCond0 (c, t, e, _)) acc =
+          named_calls_expr e
+            ((case t of Some te => named_calls_expr te | None => I)
+              (named_calls_expr c acc))
+      | named_calls_expr _ acc = acc
+
+    fun named_calls_stmt (CCompound0 (_, items, _)) acc =
+          List.foldl
+            (fn (CBlockStmt0 stmt, ac) => named_calls_stmt stmt ac
+              | (CBlockDecl0 (CDecl0 (_, declarators, _)), ac) =>
+                  List.foldl
+                    (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => named_calls_expr e ac'
+                      | (_, ac') => ac')
+                    ac declarators
+              | (_, ac) => ac)
+            acc items
+      | named_calls_stmt (CExpr0 (Some e, _)) acc = named_calls_expr e acc
+      | named_calls_stmt (CReturn0 (Some e, _)) acc = named_calls_expr e acc
+      | named_calls_stmt (CIf0 (c, t, e_opt, _)) acc =
+          (case e_opt of Some e => named_calls_stmt e | None => I)
+            (named_calls_stmt t (named_calls_expr c acc))
+      | named_calls_stmt (CWhile0 (c, b, _, _)) acc =
+          named_calls_stmt b (named_calls_expr c acc)
+      | named_calls_stmt (CFor0 (Left (Some i), c, s, b, _)) acc =
+          named_calls_stmt b (opt_call_expr s (opt_call_expr c (named_calls_expr i acc)))
+      | named_calls_stmt (CFor0 (Left None, c, s, b, _)) acc =
+          named_calls_stmt b (opt_call_expr s (opt_call_expr c acc))
+      | named_calls_stmt (CFor0 (Right d, c, s, b, _)) acc =
+          let
+            val acc' =
+              (case d of
+                 CDecl0 (_, declarators, _) =>
+                   List.foldl
+                     (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => named_calls_expr e ac'
+                       | (_, ac') => ac')
+                     acc declarators
+               | _ => acc)
+          in
+            named_calls_stmt b (opt_call_expr s (opt_call_expr c acc'))
+          end
+      | named_calls_stmt (CSwitch0 (e, s, _)) acc =
+          named_calls_stmt s (named_calls_expr e acc)
+      | named_calls_stmt (CCase0 (e, s, _)) acc =
+          named_calls_stmt s (named_calls_expr e acc)
+      | named_calls_stmt (CDefault0 (s, _)) acc =
+          named_calls_stmt s acc
+      | named_calls_stmt (CLabel0 (_, s, _, _)) acc =
+          named_calls_stmt s acc
+      | named_calls_stmt _ acc = acc
+
+    and opt_call_expr (Some e) acc = named_calls_expr e acc
+      | opt_call_expr None acc = acc
+  in
+    fun find_list_backed_aliases struct_tab array_field_tab (CFunDef0 (_, declr, _, body, _)) =
+      let
+        val struct_names = Symtab.keys struct_tab
+        val param_decls = extract_param_decls declr
+        val struct_env =
+          List.foldl (fn (pdecl, env) =>
+            case (declr_of_decl pdecl, struct_name_of_decl struct_names pdecl) of
+              (SOME pdeclr, SOME sname) =>
+                Symtab.update (declr_name pdeclr, sname) env
+            | _ => env) Symtab.empty param_decls
+        val env0 =
+          List.foldl (fn (pdecl, env) =>
+            case declr_of_decl pdecl of
+              SOME pdeclr =>
+                if declr_has_array pdeclr then env_insert (declr_name pdeclr) env else env
+            | NONE => env) Symtab.empty param_decls
+        fun add_local_arrays_stmt (CCompound0 (_, items, _)) env =
+              List.foldl
+                (fn (CBlockStmt0 stmt, ea) => add_local_arrays_stmt stmt ea
+                  | (CBlockDecl0 decl, ea) => add_decl_array_bindings decl ea
+                  | (_, ea) => ea)
+                env items
+          | add_local_arrays_stmt (CIf0 (_, t, e_opt, _)) env =
+              (case e_opt of Some e => add_local_arrays_stmt e | None => I) (add_local_arrays_stmt t env)
+          | add_local_arrays_stmt (CWhile0 (_, b, _, _)) env = add_local_arrays_stmt b env
+          | add_local_arrays_stmt (CFor0 (Right d, _, _, b, _)) env =
+              add_local_arrays_stmt b (add_decl_array_bindings d env)
+          | add_local_arrays_stmt (CFor0 (_, _, _, b, _)) env = add_local_arrays_stmt b env
+          | add_local_arrays_stmt (CSwitch0 (_, s, _)) env = add_local_arrays_stmt s env
+          | add_local_arrays_stmt (CCase0 (_, s, _)) env = add_local_arrays_stmt s env
+          | add_local_arrays_stmt (CDefault0 (s, _)) env = add_local_arrays_stmt s env
+          | add_local_arrays_stmt (CLabel0 (_, s, _, _)) env = add_local_arrays_stmt s env
+          | add_local_arrays_stmt _ env = env
+        val env0 = add_local_arrays_stmt body env0
+        fun iterate env =
+          let
+            val added =
+              distinct (op =) (alias_names_from_stmt struct_tab array_field_tab env struct_env body [])
+            val env' = List.foldl (fn (name, ea) => env_insert name ea) env added
+          in
+            if Symtab.dest env' = Symtab.dest env then env else iterate env'
+          end
+      in
+        Symtab.keys (iterate env0)
+      end
+
+    fun find_indexed_base_vars (CFunDef0 (_, _, _, body, _)) =
+      distinct (op =) (indexed_base_vars_stmt body [])
+
+    fun find_named_calls_with_args (CFunDef0 (_, _, _, body, _)) =
+      rev (named_calls_stmt body [])
+  end
+
 
   (* Extract struct definitions with field types from a top-level declaration.
      Returns SOME (struct_name, [(field_name, field_type)]) for struct definitions.
@@ -855,6 +1403,17 @@ struct
             | _ => NONE)
           members
 
+  fun raw_gref_typ () =
+    Term.Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+
+  fun focused_ref_typ pointee_ty =
+    Term.Type (\<^type_name>\<open>focused\<close>, [raw_gref_typ (), !current_ref_gv_ty, pointee_ty])
+
+  fun struct_record_typ prefix sname =
+    if Symtab.defined (!current_parametric_struct_names) sname
+    then Term.Type (prefix ^ sname, [!current_ref_addr_ty, !current_ref_gv_ty])
+    else Term.Type (prefix ^ sname, [])
+
   fun cty_to_record_typ _ CBool = SOME @{typ bool}
     | cty_to_record_typ _ CInt = SOME \<^typ>\<open>c_int\<close>
     | cty_to_record_typ _ CUInt = SOME \<^typ>\<open>c_uint\<close>
@@ -870,8 +1429,14 @@ struct
     | cty_to_record_typ _ CULongLong = SOME \<^typ>\<open>c_ulong\<close>
     | cty_to_record_typ _ CInt128 = SOME \<^typ>\<open>c_int128\<close>
     | cty_to_record_typ _ CUInt128 = SOME \<^typ>\<open>c_uint128\<close>
-    | cty_to_record_typ prefix (CStruct sname) = SOME (Term.Type (prefix ^ sname, []))
-    | cty_to_record_typ _ (CPtr _) = NONE
+    | cty_to_record_typ prefix (CStruct sname) = SOME (struct_record_typ prefix sname)
+    | cty_to_record_typ _ (CPtr CChar) = SOME (HOLogic.listT \<^typ>\<open>c_char\<close>)
+    | cty_to_record_typ _ (CPtr CVoid) = SOME (raw_gref_typ ())
+    | cty_to_record_typ _ (CPtr (CUnion _)) = SOME (raw_gref_typ ())
+    | cty_to_record_typ prefix (CPtr cty) =
+        (case cty_to_record_typ prefix cty of
+           SOME inner => SOME (focused_ref_typ inner)
+         | NONE => SOME (raw_gref_typ ()))
     | cty_to_record_typ _ CVoid = NONE
     | cty_to_record_typ _ (CUnion _) = NONE
 
@@ -890,7 +1455,7 @@ struct
     if has_array_derived derived then
       Option.map HOLogic.listT (cty_to_record_typ prefix base_fty)
     else if ptr_depth_only derived > 0 then
-      NONE
+      cty_to_record_typ prefix (apply_ptr_depth base_fty (ptr_depth_only derived))
     else
       cty_to_record_typ prefix base_fty
 
@@ -933,6 +1498,31 @@ struct
       (fn CDeclExt0 decl => extract_struct_def_with_types_from_decl typedef_tab decl
         | _ => NONE)
       ext_decls
+
+  fun cty_needs_parametric_struct parametric_structs (CPtr _) = true
+    | cty_needs_parametric_struct parametric_structs (CStruct sname) =
+        Symtab.defined parametric_structs sname
+    | cty_needs_parametric_struct parametric_structs (CUnion sname) =
+        Symtab.defined parametric_structs sname
+    | cty_needs_parametric_struct _ _ = false
+
+  fun derive_parametric_struct_names struct_defs =
+    let
+      fun step acc =
+        List.foldl
+          (fn ((sname, fields), tab) =>
+            if List.exists (fn (_, fty) => cty_needs_parametric_struct acc fty) fields
+            then Symtab.update (sname, ()) tab
+            else tab)
+          acc
+          struct_defs
+      fun loop acc =
+        let val next = step acc
+        in if Symtab.dest next = Symtab.dest acc then acc else loop next end
+      val final = loop Symtab.empty
+    in
+      List.map #1 (Symtab.dest final)
+    end
 
   (* Extract union definitions with field types. Mirrors extract_struct_defs_with_types
      but matches CUnionTag0 instead of CStructTag0. *)
@@ -981,6 +1571,37 @@ struct
   fun extract_struct_record_defs prefix typedef_tab (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
       (fn CDeclExt0 decl => extract_struct_record_def_from_decl prefix typedef_tab decl
+        | _ => NONE)
+      ext_decls
+
+  fun extract_member_array_field_names members =
+        List.mapPartial
+          (fn CDecl0 (_, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
+                if List.exists (fn CArrDeclr0 _ => true | _ => false) derived
+                then SOME (ident_name ident_node) else NONE
+            | _ => NONE)
+          members
+
+  fun extract_struct_array_fields_from_decl (CDecl0 (specs, declrs, _)) =
+        let fun find_struct_def [] = NONE
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    Some ident, Some members, _, _), _)) :: _) =
+                  SOME (ident_name ident, extract_member_array_field_names members)
+              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                    None, Some members, _, _), _)) :: _) =
+                  if List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
+                  then (case declrs of
+                      [((Some (CDeclr0 (Some td_ident, _, _, _, _)), _), _)] =>
+                        SOME (ident_name td_ident, extract_member_array_field_names members)
+                    | _ => NONE)
+                  else NONE
+              | find_struct_def (_ :: rest) = find_struct_def rest
+        in find_struct_def specs end
+    | extract_struct_array_fields_from_decl _ = NONE
+
+  fun extract_struct_array_fields (CTranslUnit0 (ext_decls, _)) =
+    List.mapPartial
+      (fn CDeclExt0 decl => extract_struct_array_fields_from_decl decl
         | _ => NONE)
       ext_decls
 
@@ -1036,7 +1657,7 @@ text \<open>
 
 ML \<open>
 structure C_Trans_Ctxt : sig
-  datatype var_kind = Param | Local  (* Param = by-value, Local = mutable reference *)
+  datatype var_kind = Param | ParamListPtr | Local | LocalPtr  (* Param = by-value, ParamListPtr = by-value list-backed pointer alias, Local = mutable reference, LocalPtr = mutable raw-pointer reference *)
   type t
   val make : Proof.context -> (string * C_Ast_Utils.c_numeric_type) list Symtab.table
              -> int Symtab.table -> C_Ast_Utils.c_numeric_type Symtab.table
@@ -1076,7 +1697,7 @@ structure C_Trans_Ctxt : sig
   val set_active_goto_labels : string list -> t -> t
 end =
 struct
-  datatype var_kind = Param | Local
+  datatype var_kind = Param | ParamListPtr | Local | LocalPtr
   type t = {
     ctxt : Proof.context,
     vars : (var_kind * term * C_Ast_Utils.c_numeric_type) Symtab.table,
@@ -1383,8 +2004,8 @@ struct
 
   (* literal n, typed according to the given c_numeric_type *)
   fun mk_literal_num cty n =
-    let val T = C_Ast_Utils.hol_type_of cty
-    in Const (\<^const_name>\<open>literal\<close>, T --> dummyT) $ HOLogic.mk_number T n end
+    let val ty = C_Ast_Utils.hol_type_of cty
+    in Const (\<^const_name>\<open>literal\<close>, ty --> dummyT) $ HOLogic.mk_number ty n end
 
   (* literal n, where n is a C integer constant.
      Uses dummyT so Isabelle infers the correct word type from context
@@ -1561,15 +2182,19 @@ text \<open>
 
 ML \<open>
 structure C_Translate : sig
+  type pointer_model = {ptr_add: string option, ptr_shift_signed: string option, ptr_diff: string option}
   val translate_stmt : C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cStatement -> term
   val set_decl_prefix : string -> unit
   val set_union_names : string list -> unit
   val current_union_names : string list Unsynchronized.ref
   val set_ref_universe_types : typ -> typ -> unit
   val set_ref_abort_type : typ option -> unit
+  val set_pointer_model : pointer_model -> unit
   val strip_isa_fun_type : typ -> typ list
-  val defined_func_consts : string Symtab.table Unsynchronized.ref
+  val defined_func_consts : term Symtab.table Unsynchronized.ref
   val defined_func_fuels : int Symtab.table Unsynchronized.ref
+  val current_list_backed_param_modes : bool list Symtab.table Unsynchronized.ref
+  val current_struct_array_fields : string list Symtab.table Unsynchronized.ref
   val translate_fundef : (string * C_Ast_Utils.c_numeric_type) list Symtab.table
                          -> int Symtab.table
                          -> C_Ast_Utils.c_numeric_type Symtab.table
@@ -1581,6 +2206,8 @@ structure C_Translate : sig
                          -> C_Ast.nodeInfo C_Ast.cFunctionDef -> string * term
 end =
 struct
+  type pointer_model = {ptr_add: string option, ptr_shift_signed: string option, ptr_diff: string option}
+
   (* Save Isabelle term constructors before C_Ast shadows them *)
   val Isa_Const = Const
   val Isa_Free = Free
@@ -1591,12 +2218,20 @@ struct
   (* Table mapping fixed-variable names to qualified const names.
      Populated by C_Def_Gen.define_c_function using target_morphism
      (the standard Isabelle mechanism from specification.ML:269). *)
-  val defined_func_consts : string Symtab.table Unsynchronized.ref =
+  val defined_func_consts : term Symtab.table Unsynchronized.ref =
     Unsynchronized.ref Symtab.empty
 
   (* Table mapping function names to their fuel parameter count.
      Populated by translate_fundef after abstracting while_fuel variables. *)
   val defined_func_fuels : int Symtab.table Unsynchronized.ref =
+    Unsynchronized.ref Symtab.empty
+
+  (* Per-translation-unit hint for parameters that should be translated as
+     list-backed pointer aliases rather than raw pointers. *)
+  val current_list_backed_param_modes : bool list Symtab.table Unsynchronized.ref =
+    Unsynchronized.ref Symtab.empty
+
+  val current_struct_array_fields : string list Symtab.table Unsynchronized.ref =
     Unsynchronized.ref Symtab.empty
 
   (* Generate a fresh variable name not occurring free in the given terms *)
@@ -1610,6 +2245,167 @@ struct
     (case fastype_of tm of
        Type (_, _ :: vty :: _) => vty
      | _ => isa_dummyT)
+
+  (* Translation-time ambient context shared across expression/function
+     translation. These must be declared before pointer-cast helpers that use
+     the reference universe and expression side-type information. *)
+  val current_ret_cty : C_Ast_Utils.c_numeric_type option Unsynchronized.ref =
+    Unsynchronized.ref NONE
+  val current_decl_prefix : string Unsynchronized.ref =
+    Unsynchronized.ref "c_"
+  val current_union_names : string list Unsynchronized.ref =
+    Unsynchronized.ref []
+  val current_loop_written_vars : string list Unsynchronized.ref =
+    Unsynchronized.ref []
+  val current_ref_addr_ty : typ Unsynchronized.ref =
+    Unsynchronized.ref (TFree ("'addr", []))
+  val current_ref_gv_ty : typ Unsynchronized.ref =
+    Unsynchronized.ref (TFree ("'gv", []))
+  val current_ref_expr_constraint : typ option Unsynchronized.ref =
+    Unsynchronized.ref NONE
+  val current_pointer_model : pointer_model Unsynchronized.ref =
+    Unsynchronized.ref {ptr_add = SOME "c_ptr_add", ptr_shift_signed = SOME "c_ptr_shift_signed", ptr_diff = SOME "c_ptr_diff"}
+  val current_visible_ctxt : Proof.context option Unsynchronized.ref =
+    Unsynchronized.ref NONE
+
+  fun uses_raw_pointer_model () = true
+
+  fun require_current_visible_ctxt () =
+    (case !current_visible_ctxt of
+       SOME ctxt => ctxt
+     | NONE => error "micro_c_translate: missing translation proof context")
+
+  fun resolve_required_current_visible_const short_name =
+    let val ctxt = require_current_visible_ctxt ()
+    in
+      case try (Syntax.check_term ctxt) (Free (short_name, dummyT)) of
+        SOME tm => tm
+      | NONE => error ("micro_c_translate: missing required visible constant: " ^ short_name)
+    end
+
+  fun constrain_expr_side_types tm =
+    (case !current_ref_expr_constraint of
+       SOME (Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty])) =>
+         let
+           val value_ty = expr_value_type tm
+           val target_ty = Type (ename, [state_ty, value_ty, resid_ty, abort_ty, in_ty, out_ty])
+         in Type.constraint target_ty tm end
+     | _ => tm)
+
+  fun constrain_expr_value_type value_ty tm =
+    (case !current_ref_expr_constraint of
+       SOME (Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty])) =>
+         let val target_ty = Type (ename, [state_ty, value_ty, resid_ty, abort_ty, in_ty, out_ty])
+         in Type.constraint target_ty tm end
+     | _ => tm)
+
+  fun constrain_known_expr_value_type value_ty tm =
+    (case fastype_of tm of
+       Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty]) =>
+         let val target_ty = Type (ename, [state_ty, value_ty, resid_ty, abort_ty, in_ty, out_ty])
+         in Type.constraint target_ty tm end
+     | _ => constrain_expr_value_type value_ty tm)
+
+  fun expr_value_ty_of_cty cty =
+    (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) cty of
+       SOME ty => ty
+     | NONE => C_Ast_Utils.hol_type_of cty)
+
+  fun constrain_expr_cty cty tm =
+    let val value_ty = expr_value_ty_of_cty cty
+    in
+      if value_ty = isa_dummyT then constrain_expr_side_types tm
+      else constrain_expr_side_types (constrain_expr_value_type value_ty tm)
+    end
+
+  fun expr_type_with_value value_ty =
+    (case !current_ref_expr_constraint of
+       SOME (Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty])) =>
+         SOME (Type (ename, [state_ty, value_ty, resid_ty, abort_ty, in_ty, out_ty]))
+     | _ => NONE)
+
+  fun function_body_type_with_value value_ty =
+    (case !current_ref_expr_constraint of
+       SOME (Type (_, [state_ty, _, _, abort_ty, in_ty, out_ty])) =>
+         SOME (Type (\<^type_name>\<open>function_body\<close>, [state_ty, value_ty, abort_ty, in_ty, out_ty]))
+     | _ => NONE)
+
+  fun expr_type_from_tm value_ty tm =
+    (case fastype_of tm of
+       Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty]) =>
+         SOME (Type (ename, [state_ty, value_ty, resid_ty, abort_ty, in_ty, out_ty]))
+     | _ => expr_type_with_value value_ty)
+
+  fun function_body_type_from_tm value_ty tm =
+    (case fastype_of tm of
+       Type (_, [state_ty, _, _, abort_ty, in_ty, out_ty]) =>
+         SOME (Type (\<^type_name>\<open>function_body\<close>, [state_ty, value_ty, abort_ty, in_ty, out_ty]))
+     | _ => function_body_type_with_value value_ty)
+
+  fun constrain_expr_arrow arg_ty value_ty tm =
+    (case expr_type_with_value value_ty of
+       SOME expr_ty => Type.constraint (arg_ty --> expr_ty) tm
+     | NONE => tm)
+
+  fun constrain_expr_arrow_from_tm arg_ty value_ty side_tm tm =
+    (case expr_type_from_tm value_ty side_tm of
+       SOME expr_ty => Type.constraint (arg_ty --> expr_ty) tm
+     | NONE => tm)
+
+  fun constrain_function_body_arrow arg_ty value_ty tm =
+    (case function_body_type_with_value value_ty of
+       SOME body_ty => Type.constraint (arg_ty --> body_ty) tm
+     | NONE => tm)
+
+  fun constrain_function_body_arrow_from_tm arg_ty value_ty side_tm tm =
+    (case function_body_type_from_tm value_ty side_tm of
+       SOME body_ty => Type.constraint (arg_ty --> body_ty) tm
+     | NONE => tm)
+
+  fun local_ref_value_ty value_ty =
+    Isa_Type (\<^type_name>\<open>focused\<close>,
+      [Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty]),
+       !current_ref_gv_ty, value_ty])
+
+  fun mk_typed_funcall1_from_tm arg_tm res_value_ty fn_tm =
+    (case fastype_of arg_tm of
+       Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty]) =>
+         let
+           val arg_ty = expr_value_type arg_tm
+           val body_ty = Type (\<^type_name>\<open>function_body\<close>, [state_ty, res_value_ty, abort_ty, in_ty, out_ty])
+           val res_expr_ty = Type (ename, [state_ty, res_value_ty, resid_ty, abort_ty, in_ty, out_ty])
+           val funcall1_ty = Isa_Type (\<^type_name>\<open>fun\<close>,
+             [Isa_Type (\<^type_name>\<open>fun\<close>, [arg_ty, body_ty]),
+              Isa_Type (\<^type_name>\<open>fun\<close>, [fastype_of arg_tm, res_expr_ty])])
+         in
+           Isa_Const (\<^const_name>\<open>funcall1\<close>, funcall1_ty)
+             $ Type.constraint (arg_ty --> body_ty) fn_tm
+             $ arg_tm
+         end
+     | _ => C_Term_Build.mk_funcall fn_tm [arg_tm])
+
+  fun mk_typed_call_deep1_from_tm arg_tm res_value_ty fn_tm =
+    (case fastype_of arg_tm of
+       Type (ename, [state_ty, _, resid_ty, abort_ty, in_ty, out_ty]) =>
+         let
+           val arg_ty = expr_value_type arg_tm
+           val body_ty = Type (\<^type_name>\<open>function_body\<close>, [state_ty, res_value_ty, abort_ty, in_ty, out_ty])
+           val res_expr_ty = Type (ename, [state_ty, res_value_ty, resid_ty, abort_ty, in_ty, out_ty])
+           val call_ty = Isa_Type (\<^type_name>\<open>fun\<close>, [body_ty, res_expr_ty])
+           val deep_compose1_ty = Isa_Type (\<^type_name>\<open>fun\<close>,
+             [call_ty,
+              Isa_Type (\<^type_name>\<open>fun\<close>,
+                [Isa_Type (\<^type_name>\<open>fun\<close>, [arg_ty, body_ty]),
+                 Isa_Type (\<^type_name>\<open>fun\<close>, [arg_ty, res_expr_ty])])])
+         in
+           Isa_Const (\<^const_name>\<open>deep_compose1\<close>, deep_compose1_ty)
+             $ Isa_Const (\<^const_name>\<open>call\<close>, call_ty)
+             $ Type.constraint (arg_ty --> body_ty) fn_tm
+         end
+     | _ =>
+         Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+           $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+           $ fn_tm)
 
   fun cty_of_hol_type T =
     if T = @{typ bool} then SOME C_Ast_Utils.CBool
@@ -1634,13 +2430,103 @@ struct
      Must be defined before 'open C_Ast' to use Const/Free/dummyT/Type. *)
   fun mk_cast_from_void target_cty void_ptr_term =
     let val target_ty = C_Ast_Utils.hol_type_of target_cty
-        val prism_ty = Type (\<^type_name>\<open>prism\<close>, [dummyT, target_ty])
+        val prism_ty = Type (\<^type_name>\<open>prism\<close>, [!current_ref_gv_ty, target_ty])
         val prism_const = Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, prism_ty)
         val cast_const = Const (\<^const_name>\<open>c_cast_from_void\<close>, dummyT)
         val v = Free ("v__void_cast", dummyT)
-    in C_Term_Build.mk_bind void_ptr_term
-         (Term.lambda v (C_Term_Build.mk_literal (cast_const $ prism_const $ v)))
+        val cast_expr =
+          C_Term_Build.mk_bind void_ptr_term
+            (Term.lambda v (C_Term_Build.mk_literal (cast_const $ prism_const $ v)))
+        val cast_value_ty =
+          (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) (C_Ast_Utils.CPtr target_cty) of
+             SOME ty => ty
+           | NONE => Type (\<^type_name>\<open>focused\<close>, [dummyT, dummyT, target_ty]))
+    in constrain_expr_side_types (constrain_expr_value_type cast_value_ty cast_expr)
     end
+
+  fun mk_cast_from_void_in _ target_cty void_ptr_term =
+    mk_cast_from_void target_cty void_ptr_term
+
+  fun typed_ref_ty_of_cty cty =
+    (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) (C_Ast_Utils.CPtr cty) of
+       SOME ty => ty
+     | NONE => isa_dummyT)
+
+  (* Untyped void* cast helper: keep prism target type polymorphic so later
+     context (e.g. indexing vs scalar dereference) can resolve it. *)
+  fun mk_cast_from_void_untyped void_ptr_term =
+    let val cast_const = Const (\<^const_name>\<open>c_cast_from_void\<close>, dummyT)
+        val prism_const = Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, dummyT)
+        val v = Free ("v__void_cast", dummyT)
+    in constrain_expr_side_types
+         (C_Term_Build.mk_bind void_ptr_term
+           (Term.lambda v (C_Term_Build.mk_literal (cast_const $ prism_const $ v)))) end
+
+  fun scalar_pointer_value_hol_ty (C_Ast_Utils.CPtr inner) =
+        let
+          val inner_ty =
+            (case inner of
+               C_Ast_Utils.CBool => SOME @{typ bool}
+             | C_Ast_Utils.CInt => SOME \<^typ>\<open>c_int\<close>
+             | C_Ast_Utils.CUInt => SOME \<^typ>\<open>c_uint\<close>
+             | C_Ast_Utils.CShort => SOME \<^typ>\<open>c_short\<close>
+             | C_Ast_Utils.CUShort => SOME \<^typ>\<open>c_ushort\<close>
+             | C_Ast_Utils.CLong => SOME (C_Ast_Utils.hol_type_of C_Ast_Utils.CLong)
+             | C_Ast_Utils.CULong => SOME (C_Ast_Utils.hol_type_of C_Ast_Utils.CULong)
+             | C_Ast_Utils.CLongLong => SOME \<^typ>\<open>c_long\<close>
+             | C_Ast_Utils.CULongLong => SOME \<^typ>\<open>c_ulong\<close>
+             | C_Ast_Utils.CInt128 => SOME \<^typ>\<open>c_int128\<close>
+             | C_Ast_Utils.CUInt128 => SOME \<^typ>\<open>c_uint128\<close>
+             | _ => NONE)
+          val gref_ty =
+            Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+        in
+          Option.map
+            (fn ty => Isa_Type (\<^type_name>\<open>focused\<close>, [gref_ty, !current_ref_gv_ty, ty]))
+            inner_ty
+        end
+    | scalar_pointer_value_hol_ty _ = NONE
+
+  fun pointer_expr_value_hol_ty cty =
+        let
+          val gref_ty =
+            Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+          fun mk_focused ty =
+            Isa_Type (\<^type_name>\<open>focused\<close>, [gref_ty, !current_ref_gv_ty, ty])
+        in
+          case cty of
+            C_Ast_Utils.CPtr C_Ast_Utils.CVoid => SOME gref_ty
+          | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) => SOME gref_ty
+          | C_Ast_Utils.CPtr C_Ast_Utils.CChar =>
+              if uses_raw_pointer_model () then
+                SOME (mk_focused \<^typ>\<open>c_char\<close>)
+              else
+                SOME (mk_focused (HOLogic.listT \<^typ>\<open>c_char\<close>))
+          | _ =>
+              (case scalar_pointer_value_hol_ty cty of
+                 SOME ty => SOME ty
+               | NONE =>
+                   (case cty of
+                      C_Ast_Utils.CPtr inner =>
+                        (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) inner of
+                           SOME inner_ty => SOME (mk_focused inner_ty)
+                         | NONE => SOME gref_ty)
+                   | _ => NONE))
+        end
+
+  fun list_backed_pointer_value_hol_ty (C_Ast_Utils.CPtr inner) =
+        let
+          val gref_ty =
+            Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+          val elem_ty =
+            (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) inner of
+               SOME ty => ty
+             | NONE => C_Ast_Utils.hol_type_of inner)
+        in
+          if elem_ty = isa_dummyT then NONE
+          else SOME (Isa_Type (\<^type_name>\<open>focused\<close>, [gref_ty, !current_ref_gv_ty, HOLogic.listT elem_ty]))
+        end
+    | list_backed_pointer_value_hol_ty _ = NONE
 
   (* C11 implicit integer promotion cast.
      Inserts c_scast or c_ucast when from_cty <> to_cty.
@@ -1653,7 +2539,8 @@ struct
       val to_ty = C_Ast_Utils.hol_type_of to_cty
     in
     if from_cty = to_cty then
-      if tm_ty <> isa_dummyT andalso tm_ty = to_ty then tm
+      if C_Ast_Utils.is_ptr from_cty then tm
+      else if tm_ty <> isa_dummyT andalso tm_ty = to_ty then tm
       else
         let
           val v = Isa_Free ("v__idcast", to_ty)
@@ -1664,15 +2551,27 @@ struct
     else if C_Ast_Utils.is_bool to_cty then
       (* scalar -> _Bool : compare against zero *)
       if C_Ast_Utils.is_ptr from_cty then
-        let val v = Isa_Free ("v__promo", isa_dummyT)
-            val addr_term =
-              Isa_Const (\<^const_name>\<open>address\<close>, isa_dummyT --> isa_dummyT) $ v
-            val neq_zero =
-              Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool})
-                $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool})
-                     $ addr_term
-                     $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
-        in C_Term_Build.mk_bind tm (Term.lambda v (C_Term_Build.mk_literal neq_zero)) end
+        let val vty = expr_value_type tm
+        in
+          if (case vty of Type (\<^type_name>\<open>List.list\<close>, [_]) => true | _ => false)
+          then
+            let val v = Isa_Free ("v__promo", vty)
+                val nil_term = Const (\<^const_name>\<open>Nil\<close>, vty)
+                val neq_nil =
+                  Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool})
+                    $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, vty --> vty --> @{typ bool}) $ v $ nil_term)
+            in C_Term_Build.mk_bind tm (Term.lambda v (C_Term_Build.mk_literal neq_nil)) end
+          else
+            let val v = Isa_Free ("v__promo", isa_dummyT)
+                val addr_term =
+                  Isa_Const (\<^const_name>\<open>address\<close>, isa_dummyT --> isa_dummyT) $ v
+                val neq_zero =
+                  Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool})
+                    $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool})
+                         $ addr_term
+                         $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+            in C_Term_Build.mk_bind tm (Term.lambda v (C_Term_Build.mk_literal neq_zero)) end
+        end
       else
         let val from_ty = if C_Ast_Utils.is_bool from_cty
                           then @{typ bool}
@@ -1705,36 +2604,122 @@ struct
          (C_Ast_Utils.CPtr from_inner, C_Ast_Utils.CPtr to_inner) =>
            if is_void_like from_inner andalso is_void_like to_inner then tm
            (* untyped -> T* : attach prism focus *)
-           else if is_void_like from_inner then mk_cast_from_void to_inner tm
+           else if is_void_like from_inner then
+             (case to_inner of
+                C_Ast_Utils.CStruct _ => mk_cast_from_void to_inner tm
+              | C_Ast_Utils.CUnion _ => mk_cast_from_void to_inner tm
+              | _ =>
+                  let val cast_term = mk_cast_from_void_untyped tm
+                      val target_ty =
+                        (case pointer_expr_value_hol_ty to_cty of
+                           SOME ty => ty
+                         | NONE => isa_dummyT)
+                  in if target_ty = isa_dummyT then cast_term
+                     else constrain_expr_value_type target_ty cast_term
+                  end)
            (* T* -> untyped : strip focus *)
            else if is_void_like to_inner then
-             let val v = Free ("v__cast", dummyT)
+             let val source_ptr_ty =
+                   (case pointer_expr_value_hol_ty from_cty of
+                      SOME ty => ty
+                    | NONE => isa_dummyT)
+                 val tm' =
+                   if source_ptr_ty = isa_dummyT then tm
+                   else constrain_expr_value_type source_ptr_ty tm
+                 val from_ty = expr_value_type tm'
+                 val v = Isa_Free ("v__cast", if from_ty = isa_dummyT then isa_dummyT else from_ty)
                  val cast = Const (\<^const_name>\<open>c_cast_to_void\<close>, dummyT)
-             in C_Term_Build.mk_bind tm (Term.lambda v (C_Term_Build.mk_literal (cast $ v)))
+                 val void_ptr_ty =
+                   (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) to_cty of
+                      SOME ty => ty
+                    | NONE => isa_dummyT)
+                 val cast_term =
+                   C_Term_Build.mk_bind tm' (Term.lambda v (C_Term_Build.mk_literal (cast $ v)))
+             in if void_ptr_ty = isa_dummyT then cast_term
+                else constrain_expr_value_type void_ptr_ty cast_term
              end
-           (* T* -> U* where neither is void/union: no-op *)
-           else tm
+           (* T* -> U* where neither is void/union:
+              reinterpret through void* so the resulting focused reference
+              carries U's prism (byte-level view), rather than leaving the
+              term at type T* while only changing the tracked C type. *)
+           else if from_inner = to_inner then tm
+           else
+             let val tm' =
+                   (case scalar_pointer_value_hol_ty from_cty of
+                      SOME ptr_ty => constrain_expr_value_type ptr_ty tm
+                    | NONE => tm)
+                 val v = Free ("v__cast", dummyT)
+                 val cast = Const (\<^const_name>\<open>c_cast_to_void\<close>, dummyT)
+                 val as_void = C_Term_Build.mk_bind tm' (Term.lambda v (C_Term_Build.mk_literal (cast $ v)))
+             in mk_cast_from_void_untyped as_void end
        | _ => tm
       end
     else if C_Ast_Utils.is_ptr from_cty then
-      (* pointer -> integer cast via ABI uintptr type, then convert as needed *)
-      let val v = Free ("v__ptrint", dummyT)
+      (* pointer -> integer cast via semantic uintptr value, then convert as needed *)
+      let val ctxt = require_current_visible_ctxt ()
+          val tm =
+            (case pointer_expr_value_hol_ty from_cty of
+               SOME ty => constrain_expr_value_type ty tm
+             | NONE => tm)
+          val ptr_ty = expr_value_type tm
+          val v = Free ("v__ptrint", if ptr_ty = isa_dummyT then isa_dummyT else ptr_ty)
+          val raw_uint_v = Free ("v__uintptr", @{typ int})
           val ptr_uint_cty = C_Ast_Utils.pointer_uint_cty ()
-          val conv = Const (\<^const_name>\<open>c_ptr_to_uintptr\<close>, dummyT)
-          val as_ulong = C_Term_Build.mk_bind tm
-                           (Term.lambda v (C_Term_Build.mk_literal (conv $ v)))
-      in if to_cty = ptr_uint_cty then as_ulong
-         else mk_implicit_cast (as_ulong, ptr_uint_cty, to_cty)
+          val ptr_uint_ty = C_Ast_Utils.hol_type_of ptr_uint_cty
+          val conv = resolve_required_current_visible_const "c_ptr_to_uintptr"
+          val raw_ptr_ty =
+            Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+          val raw_v =
+            (case fastype_of v of
+               Term.Type (name, _) =>
+                 if name = \<^type_name>\<open>focused\<close>
+                 then Isa_Const (\<^const_name>\<open>unwrap_focused\<close>, isa_dummyT --> raw_ptr_ty) $ v
+                 else v
+             | _ => v)
+          val as_uintptr =
+            C_Term_Build.mk_bind tm
+              (Term.lambda v
+                (C_Term_Build.mk_bind
+                  (C_Term_Build.mk_literal (conv $ raw_v))
+                  (Term.lambda raw_uint_v
+                    (C_Term_Build.mk_literal
+                      (Isa_Const (\<^const_name>\<open>of_int\<close>, @{typ int} --> ptr_uint_ty) $ raw_uint_v)))))
+          val as_uintptr = constrain_expr_value_type ptr_uint_ty as_uintptr
+      in if to_cty = ptr_uint_cty then as_uintptr
+         else mk_implicit_cast (as_uintptr, ptr_uint_cty, to_cty)
       end
     else if C_Ast_Utils.is_ptr to_cty then
-      (* integer -> pointer cast: widen/narrow to ABI uintptr then convert *)
+      (* integer -> pointer cast: widen/narrow to ABI uintptr, build a raw pointer,
+         then attach the target pointer view for non-void pointees. *)
       let val ptr_uint_cty = C_Ast_Utils.pointer_uint_cty ()
-          val as_ulong = if from_cty = ptr_uint_cty then tm
-                         else mk_implicit_cast (tm, from_cty, ptr_uint_cty)
-          val v = Free ("v__intptr", dummyT)
-          val conv = Const (\<^const_name>\<open>c_uintptr_to_ptr\<close>, dummyT)
-      in C_Term_Build.mk_bind as_ulong
-           (Term.lambda v (C_Term_Build.mk_literal (conv $ v)))
+          val ptr_uint_ty = C_Ast_Utils.hol_type_of ptr_uint_cty
+          val as_uintptr = if from_cty = ptr_uint_cty then tm
+                           else mk_implicit_cast (tm, from_cty, ptr_uint_cty)
+          val v = Free ("v__intptr", ptr_uint_ty)
+          val conv = resolve_required_current_visible_const "c_uintptr_to_ptr"
+          val raw_ptr_term =
+            C_Term_Build.mk_bind as_uintptr
+              (Term.lambda v
+                (C_Term_Build.mk_literal
+                  (conv $
+                     (Isa_Const (\<^const_name>\<open>of_nat\<close>, @{typ nat} --> @{typ int})
+                        $ (C_Term_Build.mk_unat v)))))
+      in
+        case to_cty of
+          C_Ast_Utils.CPtr to_inner =>
+            let
+              fun is_void_like C_Ast_Utils.CVoid = true
+                | is_void_like (C_Ast_Utils.CUnion _) = true
+                | is_void_like _ = false
+            in
+              if is_void_like to_inner then
+                (case pointer_expr_value_hol_ty to_cty of
+                   SOME ty => constrain_expr_value_type ty raw_ptr_term
+                 | NONE => raw_ptr_term)
+              else
+                mk_cast_from_void to_inner raw_ptr_term
+            end
+        | _ => raw_ptr_term
       end
     else let val cast_const =
                if C_Ast_Utils.is_signed from_cty
@@ -1745,27 +2730,12 @@ struct
              val from_ty =
                let val explicit = C_Ast_Utils.hol_type_of from_cty
                in if tm_ty <> isa_dummyT then tm_ty else explicit end
+             val to_ty = C_Ast_Utils.hol_type_of to_cty
              val v = Isa_Free ("v__promo", from_ty)
-         in C_Term_Build.mk_bind tm (Term.lambda v (cast_const $ v)) end
+         in constrain_expr_side_types
+              (constrain_expr_value_type to_ty
+                 (C_Term_Build.mk_bind tm (Term.lambda v (cast_const $ v)))) end
     end
-
-  (* Current function's return type, set by translate_fundef before translating
-     the function body. Used by CReturn0 to insert narrowing casts. *)
-  val current_ret_cty : C_Ast_Utils.c_numeric_type option Unsynchronized.ref =
-    Unsynchronized.ref NONE
-  val current_decl_prefix : string Unsynchronized.ref =
-    Unsynchronized.ref "c_"
-  val current_union_names : string list Unsynchronized.ref =
-    Unsynchronized.ref []
-  val current_ref_addr_ty : typ Unsynchronized.ref =
-    Unsynchronized.ref (TFree ("'addr", []))
-  val current_ref_gv_ty : typ Unsynchronized.ref =
-    Unsynchronized.ref (TFree ("'gv", []))
-  (* Full expression type constraint: constrains state/abort/prompt positions
-     so type inference doesn't leave them as unconstrained TFrees.
-     Built by micro_c_file handler from locale's reference_types parameter. *)
-  val current_ref_expr_constraint : typ option Unsynchronized.ref =
-    Unsynchronized.ref NONE
 
   fun strip_isa_fun_type (Type ("fun", [A, B])) = A :: strip_isa_fun_type B
     | strip_isa_fun_type _ = []
@@ -1775,6 +2745,7 @@ struct
   fun set_ref_universe_types addr_ty gv_ty =
     (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
   fun set_ref_abort_type abort_opt = (current_ref_expr_constraint := abort_opt)
+  fun set_pointer_model model = (current_pointer_model := model)
 
 
   open C_Ast
@@ -1806,40 +2777,43 @@ struct
 
   fun resolve_visible_const_term ctxt short_name =
     let
+      fun const_or_free x =
+        (case Symtab.lookup (!defined_func_consts) x of
+           SOME tm => SOME tm
+         | NONE =>
+             let
+               val c_opt = Variable.lookup_const ctxt x
+             in
+               case c_opt of
+                 SOME c =>
+                   ((let val _ = Consts.type_scheme (Proof_Context.consts_of ctxt) c
+                     in SOME (Isa_Const (c, isa_dummyT)) end)
+                    handle TYPE _ => SOME (Isa_Free (x, isa_dummyT)))
+               | NONE => SOME (Isa_Free (x, isa_dummyT))
+             end)
+      val fixed_result =
+        (case Variable.lookup_fixed ctxt short_name of
+           SOME x => const_or_free x
+         | NONE => NONE)
       val direct =
         SOME (Proof_Context.read_const {proper = true, strict = false} ctxt short_name)
         handle ERROR _ => NONE
       val result =
-        case direct of
-          SOME (Term.Const (n, _)) => SOME (Isa_Const (n, isa_dummyT))
-        | SOME (Term.Free (x, _)) =>
-            (* In locale context, read_const returns Free for locally-fixed
-               variables.  Look up the qualified const name — first from our
-               table (populated via target_morphism after each define), then
-               via Variable.lookup_const (for locale parameters).  Use
-               Consts.type_scheme to get the polymorphic type with TVars. *)
-            let
-              val c_opt =
-                (case Symtab.lookup (!defined_func_consts) x of
-                   SOME c => SOME c
-                 | NONE => Variable.lookup_const ctxt x)
-            in
-              (case c_opt of
-                 SOME c =>
-                   ((let val _ = Consts.type_scheme (Proof_Context.consts_of ctxt) c
-                     in SOME (Isa_Const (c, isa_dummyT)) end)
-                    handle TYPE _ => NONE)
-               | NONE => NONE)
-            end
-        | _ =>
-            let
-              val full_name = Proof_Context.intern_const ctxt short_name
-              val thy = Proof_Context.theory_of ctxt
-            in
-              if can (Sign.the_const_type thy) full_name
-              then SOME (Isa_Const (full_name, isa_dummyT))
-              else NONE
-            end
+        case fixed_result of
+          SOME t => SOME t
+        | NONE =>
+          (case direct of
+             SOME (Term.Const (n, _)) => SOME (Isa_Const (n, isa_dummyT))
+           | SOME (Term.Free (x, _)) => const_or_free x
+           | _ =>
+               let
+                 val full_name = Proof_Context.intern_const ctxt short_name
+                 val thy = Proof_Context.theory_of ctxt
+               in
+                 if can (Sign.the_const_type thy) full_name
+                 then SOME (Isa_Const (full_name, isa_dummyT))
+                 else NONE
+               end)
     in result end
 
   fun mk_flag_ref_type tctx =
@@ -1926,8 +2900,38 @@ struct
   fun is_union_aggregate name =
     List.exists (fn n => n = name) (!current_union_names)
 
-  (* Determine the C struct type of a variable expression.
-     Handles simple variable references and chained member access (p->vec[i].coeffs). *)
+  fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CUnion sname) = SOME sname
+    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) = SOME sname
+    | struct_name_of_cty _ = NONE
+
+  fun cty_of_decl_for_struct tctx (CDecl0 (specs, declrs, _)) =
+        let
+          val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
+          val struct_names = C_Trans_Ctxt.get_struct_names tctx
+          val base_cty =
+            (case C_Ast_Utils.resolve_c_type_full typedef_tab specs of
+               SOME ct => SOME ct
+             | NONE =>
+                 (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
+                    SOME sn => SOME (C_Ast_Utils.CStruct sn)
+                  | NONE =>
+                      (case C_Ast_Utils.extract_union_type_from_specs_full (!current_union_names) specs of
+                         SOME un => SOME (C_Ast_Utils.CUnion un)
+                       | NONE => NONE)))
+          val ptr_depth =
+            List.mapPartial
+              (fn ((Some declr, _), _) => SOME (C_Ast_Utils.pointer_depth_of_declr declr)
+                | _ => NONE) declrs
+            |> (fn d :: _ => d | [] => 0)
+        in
+          Option.map (fn ct => C_Ast_Utils.apply_ptr_depth ct ptr_depth) base_cty
+        end
+    | cty_of_decl_for_struct _ _ = NONE
+
+  (* Determine the C struct type of an expression used as a member-access base.
+     Handles casts and expression wrappers around variables/member chains. *)
   fun determine_struct_type tctx (CVar0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
         in case C_Trans_Ctxt.get_struct_type tctx name of
@@ -1951,6 +2955,20 @@ struct
     | determine_struct_type tctx (CIndex0 (inner_expr, _, _)) =
         (* arr[i] where arr is a struct field — the struct type comes from the array expression *)
         determine_struct_type tctx inner_expr
+    | determine_struct_type tctx (CCast0 (decl, inner_expr, _)) =
+        (case cty_of_decl_for_struct tctx decl of
+           SOME cty =>
+             (case struct_name_of_cty cty of
+                SOME sname => sname
+              | NONE => determine_struct_type tctx inner_expr)
+         | NONE => determine_struct_type tctx inner_expr)
+    | determine_struct_type tctx (CCond0 (_, Some then_expr, else_expr, _)) =
+        (determine_struct_type tctx then_expr
+         handle ERROR _ => determine_struct_type tctx else_expr)
+    | determine_struct_type tctx (CComma0 (exprs, _)) =
+        (case List.rev exprs of
+           e :: _ => determine_struct_type tctx e
+         | [] => error "micro_c_translate: empty comma expression")
     | determine_struct_type _ _ =
         error "micro_c_translate: struct member access on complex expression not yet supported"
 
@@ -2089,26 +3107,131 @@ struct
      handle ERROR _ =>
        Isa_Const (\<^const_name>\<open>store_dereference_const\<close>, isa_dummyT))
 
+  fun resolve_required_visible_const ctxt short_name =
+    (case resolve_visible_const_term ctxt short_name of
+       SOME tm => tm
+     | NONE => error ("micro_c_translate: missing required interface constant: " ^ short_name))
+
+  fun resolve_pointer_model_const ctxt label opt_name default_name =
+    (case opt_name of
+       SOME name => resolve_required_visible_const ctxt name
+     | NONE => resolve_required_visible_const ctxt default_name)
+
+  fun resolve_ptr_add_const ctxt =
+    resolve_pointer_model_const ctxt "ptr_add:" (#ptr_add (!current_pointer_model)) "c_ptr_add"
+
+  fun resolve_ptr_shift_signed_const ctxt =
+    resolve_pointer_model_const ctxt "ptr_shift_signed:" (#ptr_shift_signed (!current_pointer_model)) "c_ptr_shift_signed"
+
+  fun resolve_ptr_diff_const ctxt =
+    resolve_pointer_model_const ctxt "ptr_diff:" (#ptr_diff (!current_pointer_model)) "c_ptr_diff"
+
+  fun resolve_ptr_to_uintptr_const ctxt =
+    resolve_required_visible_const ctxt "c_ptr_to_uintptr"
+
+  fun resolve_uintptr_to_ptr_const ctxt =
+    resolve_required_visible_const ctxt "c_uintptr_to_ptr"
+
   fun mk_resolved_var_alloc_typed ctxt val_hol_type init_expr =
     let val ref_const =
-          (resolve_const ctxt "store_reference_const"
-           handle ERROR _ =>
-             if val_hol_type = isa_dummyT
-             then Isa_Const (\<^const_name>\<open>store_reference_const\<close>, isa_dummyT)
-             else Isa_Const (\<^const_name>\<open>store_reference_const\<close>, val_hol_type --> isa_dummyT))
+          (case resolve_visible_const_term ctxt "store_reference_const" of
+             SOME tm => tm
+           | NONE =>
+               (if val_hol_type = isa_dummyT
+                then Isa_Const (\<^const_name>\<open>store_reference_const\<close>, isa_dummyT)
+                else Isa_Const (\<^const_name>\<open>store_reference_const\<close>, val_hol_type --> isa_dummyT)))
+        val init_expr = constrain_expr_side_types init_expr
+        val arg_ty =
+          if val_hol_type = isa_dummyT then expr_value_type init_expr else val_hol_type
+        val res_value_ty =
+          if arg_ty = isa_dummyT then isa_dummyT else local_ref_value_ty arg_ty
         val ref_const =
-          if val_hol_type = isa_dummyT then ref_const
-          else
-            let val (full_name, _) = Term.dest_Const ref_const
-            in Isa_Const (full_name, val_hol_type --> isa_dummyT) end
-    in C_Term_Build.mk_funcall ref_const [init_expr] end
+          if arg_ty = isa_dummyT then ref_const
+          else constrain_function_body_arrow_from_tm arg_ty res_value_ty init_expr ref_const
+    in constrain_expr_side_types (mk_typed_funcall1_from_tm init_expr res_value_ty ref_const) end
 
   fun mk_resolved_var_alloc ctxt init_expr =
     mk_resolved_var_alloc_typed ctxt isa_dummyT init_expr
 
+  fun raw_ptr_local_gref_typ () =
+    Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+
+  fun supports_raw_ptr_local_refs ctxt =
+    let
+      val raw_ptr_ty = raw_ptr_local_gref_typ ()
+      val uninit = Isa_Const (\<^const_name>\<open>c_uninitialized\<close>, raw_ptr_ty)
+      val probe = mk_resolved_var_alloc_typed ctxt raw_ptr_ty (C_Term_Build.mk_literal uninit)
+      val _ = Syntax.check_term ctxt probe
+    in true end
+    handle ERROR _ => false
+         | TYPE _ => false
+
+  fun is_uninitialized_literal tm =
+    (case Term.strip_comb tm of
+       (hd, [arg]) =>
+         (case (try Term.dest_Const hd, try Term.dest_Const arg) of
+            (SOME (n1, _), SOME (n2, _)) =>
+              n1 = \<^const_name>\<open>Core_Expression.literal\<close> andalso
+              n2 = \<^const_name>\<open>c_uninitialized\<close>
+          | _ => false)
+     | _ => false)
+
+  fun expr_value_ty_is_list_backed_ptr tm =
+    (case expr_value_type tm of
+       Term.Type (fname, [_, _, Term.Type (lname, [_])]) =>
+         Long_Name.base_name fname = "focused" andalso Long_Name.base_name lname = "list"
+     | Term.Type (lname, [_]) => Long_Name.base_name lname = "list"
+     | _ => false)
+
+  fun prefer_pointer_alias_storage alias_list_backed init_term =
+    is_uninitialized_literal init_term orelse alias_list_backed orelse expr_value_ty_is_list_backed_ptr init_term
+
+  fun pointer_alias_kind alias_list_backed =
+    if alias_list_backed then C_Trans_Ctxt.ParamListPtr
+    else C_Trans_Ctxt.Param
+
+  fun pointer_alias_var_ty tctx alias_list_backed cty init_term =
+    let
+      val init_ty = expr_value_type init_term
+      val fallback_ty =
+        (case if alias_list_backed then list_backed_pointer_value_hol_ty cty
+               else pointer_expr_value_hol_ty cty of
+           SOME ty => ty
+         | NONE => expr_value_ty_of_cty cty)
+      val ty =
+        if is_uninitialized_literal init_term orelse init_ty = isa_dummyT
+        then fallback_ty
+        else init_ty
+    in normalize_ref_universe_type tctx ty end
+
   (* Variable read: delegates to mk_var_read. *)
   fun mk_resolved_var_read _ ref_var =
-    C_Term_Build.mk_var_read ref_var
+    constrain_expr_side_types (C_Term_Build.mk_var_read ref_var)
+
+  fun mk_literal_value_read var =
+    let
+      val tm = C_Term_Build.mk_literal var
+      val value_ty = fastype_of var
+    in
+      if value_ty = isa_dummyT then constrain_expr_side_types tm
+      else constrain_known_expr_value_type value_ty tm
+    end
+
+  fun mk_resolved_deref_expr ctxt result_cty ptr_expr =
+    let
+      val ptr_expr = constrain_expr_side_types ptr_expr
+      val deref_const = resolve_dereference_const ctxt
+      val result_ty = expr_value_ty_of_cty result_cty
+      val deref_fn =
+        if result_ty = isa_dummyT then
+          Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+            $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+            $ deref_const
+        else mk_typed_call_deep1_from_tm ptr_expr result_ty deref_const
+    in constrain_expr_cty result_cty
+         (Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+            $ ptr_expr $ deref_fn)
+    end
 
   fun mk_pair_eval unseq ltm rtm lvar rvar body =
     if unseq then
@@ -2142,6 +3265,137 @@ struct
       else guarded_upper
     end
 
+  fun struct_field_is_array_backed struct_name field_name =
+        List.exists (fn fname => fname = field_name)
+          (the_default [] (Symtab.lookup (!current_struct_array_fields) struct_name))
+
+  fun expr_is_list_backed_array tctx (CVar0 (ident, _)) =
+        let val name = C_Ast_Utils.ident_name ident
+        in
+          Option.isSome (C_Trans_Ctxt.lookup_array_decl tctx name) orelse
+          (case C_Trans_Ctxt.lookup_var tctx name of
+             SOME (C_Trans_Ctxt.ParamListPtr, _, _) => true
+           | _ => false)
+        end
+    | expr_is_list_backed_array tctx (CMember0 (expr, field_ident, _, _)) =
+        ((let
+            val struct_name = determine_struct_type tctx expr
+            val field_name = C_Ast_Utils.ident_name field_ident
+          in
+            struct_field_is_array_backed struct_name field_name
+          end) handle ERROR _ => false)
+    | expr_is_list_backed_array _ _ = false
+
+  fun use_raw_pointer_indexing tctx arr_expr =
+    uses_raw_pointer_model () andalso not (expr_is_list_backed_array tctx arr_expr)
+
+  fun is_nonnegative_int_const (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) = (n >= 0)
+    | is_nonnegative_int_const _ = false
+
+  fun pointer_arith_result_ty elem_cty =
+    let
+      val gref_ty = Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+    in
+      case elem_cty of
+        C_Ast_Utils.CVoid => gref_ty
+      | C_Ast_Utils.CUnion _ => gref_ty
+      | _ =>
+          (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) elem_cty of
+             SOME inner_ty => Isa_Type (\<^type_name>\<open>focused\<close>, [gref_ty, !current_ref_gv_ty, inner_ty])
+           | NONE => gref_ty)
+    end
+
+  fun mk_ptr_shifted_term ctxt ptr_var idx_var idx_p_cty elem_cty prefer_unsigned_add =
+    let
+      val stride_tm = HOLogic.mk_number @{typ nat} (C_Ast_Utils.sizeof_c_type elem_cty)
+      val ptr_ty = fastype_of ptr_var
+      val is_focused =
+        (case ptr_ty of
+           Term.Type (name, _) => name = \<^type_name>\<open>focused\<close>
+         | _ => false)
+      val raw_ptr =
+        if is_focused then
+          Isa_Const (\<^const_name>\<open>unwrap_focused\<close>, isa_dummyT --> isa_dummyT) $ ptr_var
+        else ptr_var
+      val signed_idx =
+        Isa_Const (\<^const_name>\<open>signed\<close>, isa_dummyT --> @{typ int}) $ idx_var
+      val shifted_raw =
+        if C_Ast_Utils.is_signed idx_p_cty andalso not prefer_unsigned_add then
+          resolve_ptr_shift_signed_const ctxt $ raw_ptr $ signed_idx $ stride_tm
+        else
+          resolve_ptr_add_const ctxt $ raw_ptr $ (C_Term_Build.mk_unat idx_var) $ stride_tm
+    in
+      if is_focused then
+        Isa_Const (\<^const_name>\<open>make_focused\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+          $ shifted_raw
+          $ (Isa_Const (\<^const_name>\<open>get_focus\<close>, isa_dummyT --> isa_dummyT) $ ptr_var)
+      else shifted_raw
+    end
+
+  fun mk_raw_ptr_loc_expr ctxt unseq_operands ptr_term idx_term idx_cty elem_cty prefer_unsigned_add =
+    let
+      val ptr_ty0 = expr_value_type ptr_term
+      val ptr_ty = if ptr_ty0 = isa_dummyT then pointer_arith_result_ty elem_cty else ptr_ty0
+      val p_var = Isa_Free ("v__ptr", ptr_ty)
+      val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
+      val idx_p_term = mk_implicit_cast (idx_term, idx_cty, idx_p_cty)
+      val idx_var_ty =
+        let val ty = expr_value_type idx_p_term
+        in if ty = isa_dummyT then C_Ast_Utils.hol_type_of idx_p_cty else ty end
+      val i_var = Isa_Free ("v__idx", idx_var_ty)
+      val shifted = mk_ptr_shifted_term ctxt p_var i_var idx_p_cty elem_cty prefer_unsigned_add
+    in
+      mk_pair_eval unseq_operands ptr_term idx_p_term p_var i_var (C_Term_Build.mk_literal shifted)
+    end
+
+  fun raw_struct_field_offset tctx struct_name field_name =
+    (case C_Trans_Ctxt.get_struct_fields tctx struct_name of
+       SOME fields =>
+         let
+           fun align_up_local (offset, alignment) =
+             let val rem = offset mod alignment
+             in if rem = 0 then offset else offset + (alignment - rem) end
+           fun field_offset [] _ _ =
+                 error ("micro_c_translate: unknown struct field in layout: " ^ field_name)
+             | field_offset ((name, field_cty) :: rest) offset max_align =
+                 let
+                   val field_size = C_Ast_Utils.sizeof_c_type field_cty
+                   val field_align = C_Ast_Utils.alignof_c_type field_cty
+                   val aligned_offset = align_up_local (offset, field_align)
+                 in
+                   if name = field_name then aligned_offset
+                   else field_offset rest (aligned_offset + field_size) (Int.max (max_align, field_align))
+                 end
+         in
+           field_offset fields 0 1
+         end
+     | NONE => error ("micro_c_translate: unknown struct for field offset: " ^ struct_name))
+
+  fun mk_raw_struct_field_ptr_expr tctx struct_name field_name raw_ptr_expr =
+    let
+      val ctxt = C_Trans_Ctxt.get_ctxt tctx
+      val offset = raw_struct_field_offset tctx struct_name field_name
+      val raw_ptr_ty = Term.Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+      val ptr_ty0 = expr_value_type raw_ptr_expr
+      val ptr_ty = if ptr_ty0 = isa_dummyT then raw_ptr_ty else ptr_ty0
+      val ptr_var = Isa_Free ("v__base_ptr", ptr_ty)
+      val shifted =
+        resolve_ptr_add_const ctxt $ ptr_var $ HOLogic.mk_nat offset $ HOLogic.mk_nat 1
+    in
+      constrain_expr_side_types
+        (constrain_expr_value_type raw_ptr_ty
+          (C_Term_Build.mk_bind raw_ptr_expr
+            (Term.lambda ptr_var (C_Term_Build.mk_literal shifted))))
+    end
+
+  fun mk_raw_struct_field_loc_expr tctx struct_name field_name field_cty raw_ptr_expr =
+    let
+      val ctxt = C_Trans_Ctxt.get_ctxt tctx
+      val field_ptr = mk_raw_struct_field_ptr_expr tctx struct_name field_name raw_ptr_expr
+    in
+      mk_cast_from_void_in ctxt field_cty field_ptr
+    end
+
   (* Helper for pre/post increment/decrement.
      is_inc: true for increment, false for decrement
      is_pre: true for pre (return new), false for post (return old)
@@ -2151,35 +3405,92 @@ struct
         let val name = C_Ast_Utils.ident_name ident
         in case C_Trans_Ctxt.lookup_var tctx name of
              SOME (C_Trans_Ctxt.Local, ref_var, cty) =>
-               let val old_var = Isa_Free ("v__old", isa_dummyT)
-                   val new_var = Isa_Free ("v__new", isa_dummyT)
-                   val arith_cty = C_Ast_Utils.integer_promote cty
-                   val one = C_Term_Build.mk_literal_num arith_cty 1
-                   val arith_const =
-                     if is_inc then
-                       (if C_Ast_Utils.is_signed arith_cty
-                        then Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT)
-                        else Isa_Const (\<^const_name>\<open>c_unsigned_add\<close>, isa_dummyT))
-                     else
-                       (if C_Ast_Utils.is_signed arith_cty
-                        then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
-                        else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT))
-                   val read = C_Term_Build.mk_var_read ref_var
-                   val old_promoted =
-                     mk_implicit_cast (C_Term_Build.mk_literal old_var, cty, arith_cty)
-                   val add = C_Term_Build.mk_bind2 arith_const
-                               old_promoted one
-                   val new_assigned =
-                     mk_implicit_cast (C_Term_Build.mk_literal new_var, arith_cty, cty)
-                   val write = C_Term_Build.mk_var_write ref_var
-                                 new_assigned
-                   val return_term =
-                     if is_pre then new_assigned else C_Term_Build.mk_literal old_var
-               in (C_Term_Build.mk_bind read (Term.lambda old_var
-                    (C_Term_Build.mk_bind add (Term.lambda new_var
-                      (C_Term_Build.mk_sequence write
-                        return_term)))), cty) end
+               (case cty of
+                  C_Ast_Utils.CPtr inner =>
+                    let
+                      val read = C_Term_Build.mk_var_read ref_var
+                      val old_var = Isa_Free ("v__old_ptr", isa_dummyT)
+                      val idx_cty = if is_inc then C_Ast_Utils.CUInt else C_Ast_Utils.CInt
+                      val idx_ty = C_Ast_Utils.hol_type_of idx_cty
+                      val idx_term = HOLogic.mk_number idx_ty (if is_inc then 1 else ~1)
+                      val shifted =
+                        mk_ptr_shifted_term (C_Trans_Ctxt.get_ctxt tctx)
+                          old_var idx_term idx_cty inner is_inc
+                      val shifted_expr = C_Term_Build.mk_literal shifted
+                      val write = C_Term_Build.mk_var_write ref_var shifted_expr
+                      val return_term =
+                        if is_pre then shifted_expr else C_Term_Build.mk_literal old_var
+                    in
+                      (C_Term_Build.mk_bind read (Term.lambda old_var
+                         (C_Term_Build.mk_sequence write return_term)), cty)
+                    end
+                | _ =>
+                    let val old_var = Isa_Free ("v__old", isa_dummyT)
+                        val new_var = Isa_Free ("v__new", isa_dummyT)
+                        val arith_cty = C_Ast_Utils.integer_promote cty
+                        val one = C_Term_Build.mk_literal_num arith_cty 1
+                        val arith_const =
+                          if is_inc then
+                            (if C_Ast_Utils.is_signed arith_cty
+                             then Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT)
+                             else Isa_Const (\<^const_name>\<open>c_unsigned_add\<close>, isa_dummyT))
+                          else
+                            (if C_Ast_Utils.is_signed arith_cty
+                             then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
+                             else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT))
+                        val read = C_Term_Build.mk_var_read ref_var
+                        val old_promoted =
+                          mk_implicit_cast (C_Term_Build.mk_literal old_var, cty, arith_cty)
+                        val add = C_Term_Build.mk_bind2 arith_const
+                                    old_promoted one
+                        val new_assigned =
+                          mk_implicit_cast (C_Term_Build.mk_literal new_var, arith_cty, cty)
+                        val write = C_Term_Build.mk_var_write ref_var
+                                      new_assigned
+                        val return_term =
+                          if is_pre then new_assigned else C_Term_Build.mk_literal old_var
+                    in (C_Term_Build.mk_bind read (Term.lambda old_var
+                         (C_Term_Build.mk_bind add (Term.lambda new_var
+                           (C_Term_Build.mk_sequence write
+                             return_term)))), cty) end)
+           | SOME (C_Trans_Ctxt.LocalPtr, ref_var, cty) =>
+               (case cty of
+                  C_Ast_Utils.CPtr inner =>
+                    let
+                      val old_raw = C_Term_Build.mk_var_read ref_var
+                      val old_var = Isa_Free ("v__old_ptr", raw_ptr_local_gref_typ ())
+                      val typed_old =
+                        (case inner of
+                           C_Ast_Utils.CVoid => old_var
+                         | C_Ast_Utils.CUnion _ => old_var
+                         | _ =>
+                             let
+                               val target_ty = C_Ast_Utils.hol_type_of inner
+                               val prism_ty = Isa_Type (\<^type_name>\<open>prism\<close>, [!current_ref_gv_ty, target_ty])
+                               val prism_const = Isa_Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, prism_ty)
+                               val cast_const = Isa_Const (\<^const_name>\<open>c_cast_from_void\<close>, isa_dummyT)
+                             in
+                               cast_const $ prism_const $ old_var
+                             end)
+                      val idx_cty = if is_inc then C_Ast_Utils.CUInt else C_Ast_Utils.CInt
+                      val idx_ty = C_Ast_Utils.hol_type_of idx_cty
+                      val idx_term = HOLogic.mk_number idx_ty (if is_inc then 1 else ~1)
+                      val shifted = mk_ptr_shifted_term (C_Trans_Ctxt.get_ctxt tctx) typed_old idx_term idx_cty inner is_inc
+                      val shifted_expr = C_Term_Build.mk_literal shifted
+                      val shifted_raw = mk_implicit_cast (shifted_expr, cty, C_Ast_Utils.CPtr C_Ast_Utils.CVoid)
+                      val new_raw = Isa_Free ("v__new_ptr", raw_ptr_local_gref_typ ())
+                      val return_term =
+                        if is_pre then shifted_expr else C_Term_Build.mk_literal old_var
+                    in (C_Term_Build.mk_bind old_raw (Term.lambda old_var
+                         (C_Term_Build.mk_bind shifted_raw (Term.lambda new_raw
+                           (C_Term_Build.mk_sequence
+                             (C_Term_Build.mk_var_write ref_var (C_Term_Build.mk_literal new_raw))
+                             return_term)))), cty)
+                    end
+                | _ => error ("micro_c_translate: internal error: non-pointer LocalPtr: " ^ name))
            | SOME (C_Trans_Ctxt.Param, _, _) =>
+               error ("micro_c_translate: cannot increment/decrement parameter: " ^ name)
+           | SOME (C_Trans_Ctxt.ParamListPtr, _, _) =>
                error ("micro_c_translate: cannot increment/decrement parameter: " ^ name)
            | NONE =>
                (case C_Trans_Ctxt.lookup_global_const tctx name of
@@ -2279,6 +3590,8 @@ struct
     (* inc/dec array element via arr[i] *)
     | translate_inc_dec expr_fn _ tctx is_inc is_pre (CIndex0 (arr_expr, idx_expr, _)) =
         let val (arr_term, arr_cty) = expr_fn tctx arr_expr
+            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            val deref_const = resolve_dereference_const ctxt
             val (idx_term_raw, idx_cty) = expr_fn tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
@@ -2299,6 +3612,13 @@ struct
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val loc_var = Isa_Free ("v__loc", isa_dummyT)
+            val list_var = Isa_Free ("v__arr_vals", isa_dummyT)
+            val deref_expr =
+              Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
+                $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                     $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                     $ deref_const)
             val old_var = Isa_Free ("v__old", isa_dummyT)
             val new_var = Isa_Free ("v__new", isa_dummyT)
             val unseq_operands =
@@ -2307,7 +3627,13 @@ struct
             val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
             val loc_expr =
               mk_pair_eval unseq_operands arr_term idx_term a_var i_var
-                (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+                (let
+                  val list_ty =
+                    (case C_Ast_Utils.hol_type_of elem_cty of
+                       t => if t = isa_dummyT then isa_dummyT else Isa_Type (\<^type_name>\<open>list\<close>, [t]))
+                  val list_var = Isa_Free ("v__arr_vals", list_ty)
+                in C_Term_Build.mk_bind deref_expr
+                     (Term.lambda list_var (mk_index_guard idx_p_cty i_var list_var (C_Term_Build.mk_literal focused))) end)
             val old_promoted =
               mk_implicit_cast (C_Term_Build.mk_literal old_var, elem_cty, arith_cty)
             val add = C_Term_Build.mk_bind2 arith_const old_promoted one
@@ -2396,21 +3722,36 @@ struct
   val sizeof_c_type = C_Ast_Utils.sizeof_c_type
   val alignof_c_type = C_Ast_Utils.alignof_c_type
 
-  (* Compute struct size with ABI alignment padding.
+  fun align_up (offset, alignment) =
+    let val rem = offset mod alignment
+    in if rem = 0 then offset else offset + (alignment - rem) end
+
+  (* Compute struct layout with ABI alignment padding.
      Each field aligned to alignof(field); total rounded up to max alignment. *)
-  fun sizeof_struct (fields : (string * C_Ast_Utils.c_numeric_type) list) =
-    let fun align_up (offset, alignment) =
-            let val rem = offset mod alignment
-            in if rem = 0 then offset else offset + (alignment - rem) end
-        val (total_size, max_align) =
-          List.foldl (fn ((_, field_cty), (offset, max_a)) =>
-            let val field_size = sizeof_c_type field_cty
-                val field_align = alignof_c_type field_cty
-                val aligned_offset = align_up (offset, field_align)
-            in (aligned_offset + field_size, Int.max (max_a, field_align)) end)
-          (0, 1) fields
-        val final_size = if max_align > 0 then align_up (total_size, max_align) else total_size
-    in final_size end
+  fun struct_layout (fields : (string * C_Ast_Utils.c_numeric_type) list) =
+    let
+      val (total_size, max_align, rev_layout) =
+        List.foldl (fn ((field_name, field_cty), (offset, max_a, acc)) =>
+          let
+            val field_size = sizeof_c_type field_cty
+            val field_align = alignof_c_type field_cty
+            val aligned_offset = align_up (offset, field_align)
+          in
+            (aligned_offset + field_size, Int.max (max_a, field_align),
+             (field_name, aligned_offset, field_cty) :: acc)
+          end)
+          (0, 1, []) fields
+      val final_size = if max_align > 0 then align_up (total_size, max_align) else total_size
+    in
+      (rev rev_layout, final_size)
+    end
+
+  fun sizeof_struct fields = #2 (struct_layout fields)
+
+  fun struct_field_offset (fields : (string * C_Ast_Utils.c_numeric_type) list) field_name =
+    (case List.find (fn (name, _, _) => name = field_name) (#1 (struct_layout fields)) of
+       SOME (_, offset, _) => offset
+     | NONE => error ("micro_c_translate: unknown struct field in layout: " ^ field_name))
 
   fun fits_int_literal_cty cty n =
     case cty_bit_width cty of
@@ -2428,30 +3769,47 @@ struct
             0 <= n andalso n < two_pow
         end
 
-  fun choose_int_literal_type n flags =
+  fun int_literal_candidates repr (Flags0 bits) =
     let
-      val unsuffixed =
-        (case flags of
-           Flags0 bits => IntInf.andb (bits, 7) = 0)
+      val is_unsigned = IntInf.andb (bits, 1) <> 0
+      val is_long = IntInf.andb (bits, 2) <> 0
+      val is_long_long = IntInf.andb (bits, 4) <> 0
+      val non_decimal =
+        (case repr of DecRepr0 => false | HexRepr0 => true | OctalRepr0 => true)
     in
-      (case C_Ast_Utils.int_literal_type flags of
-         C_Ast_Utils.CInt =>
-           if fits_int_literal_cty C_Ast_Utils.CInt n then C_Ast_Utils.CInt
-           else if unsuffixed then
-             unsupported "unsuffixed integer literal beyond int range is not supported; add an explicit U/L suffix"
-           else if fits_int_literal_cty C_Ast_Utils.CLong n then C_Ast_Utils.CLong
-           else unsupported "integer literal out of supported signed range"
-       | C_Ast_Utils.CUInt =>
-           if fits_int_literal_cty C_Ast_Utils.CUInt n then C_Ast_Utils.CUInt
-           else if fits_int_literal_cty C_Ast_Utils.CULong n then C_Ast_Utils.CULong
-           else unsupported "integer literal out of supported unsigned range"
-       | C_Ast_Utils.CLong =>
-           if fits_int_literal_cty C_Ast_Utils.CLong n then C_Ast_Utils.CLong
-           else unsupported "integer literal out of supported long range"
-       | C_Ast_Utils.CULong =>
-           if fits_int_literal_cty C_Ast_Utils.CULong n then C_Ast_Utils.CULong
-           else unsupported "integer literal out of supported unsigned long range"
-       | cty => cty)
+      case (is_unsigned, is_long, is_long_long, non_decimal) of
+        (false, false, false, false) =>
+          [C_Ast_Utils.CInt, C_Ast_Utils.CLong, C_Ast_Utils.CLongLong]
+      | (false, false, false, true) =>
+          [C_Ast_Utils.CInt, C_Ast_Utils.CUInt,
+           C_Ast_Utils.CLong, C_Ast_Utils.CULong,
+           C_Ast_Utils.CLongLong, C_Ast_Utils.CULongLong]
+      | (true, false, false, _) =>
+          [C_Ast_Utils.CUInt, C_Ast_Utils.CULong, C_Ast_Utils.CULongLong]
+      | (false, true, false, false) =>
+          [C_Ast_Utils.CLong, C_Ast_Utils.CLongLong]
+      | (false, true, false, true) =>
+          [C_Ast_Utils.CLong, C_Ast_Utils.CULong,
+           C_Ast_Utils.CLongLong, C_Ast_Utils.CULongLong]
+      | (true, true, false, _) =>
+          [C_Ast_Utils.CULong, C_Ast_Utils.CULongLong]
+      | (false, false, true, false) =>
+          [C_Ast_Utils.CLongLong]
+      | (false, false, true, true) =>
+          [C_Ast_Utils.CLongLong, C_Ast_Utils.CULongLong]
+      | (true, false, true, _) =>
+          [C_Ast_Utils.CULongLong]
+      | _ => unsupported "unsupported integer literal suffix combination"
+    end
+
+  fun choose_int_literal_type n repr flags =
+    let
+      fun first_fit [] =
+            unsupported ("integer literal out of supported range: " ^ IntInf.toString n)
+        | first_fit (cty :: rest) =
+            if fits_int_literal_cty cty n then cty else first_fit rest
+    in
+      first_fit (int_literal_candidates repr flags)
     end
 
 
@@ -2572,15 +3930,16 @@ struct
   (* translate_expr returns (term * c_numeric_type).
      The type tracks the C type of the expression for binary operator dispatch.
      CInt is used as default when the actual type is unknown/irrelevant. *)
-  fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, flags), _))) =
-        let val cty = choose_int_literal_type n flags
+  fun translate_expr _ (CConst0 (CIntConst0 (CInteger0 (n, repr, flags), _))) =
+        let val cty = choose_int_literal_type n repr flags
             val n_int = intinf_to_int_checked "integer literal" n
         in (C_Term_Build.mk_literal_num cty n_int, cty)
         end
     | translate_expr tctx (CVar0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
         in case C_Trans_Ctxt.lookup_var tctx name of
-             SOME (C_Trans_Ctxt.Param, var, cty) => (C_Term_Build.mk_literal var, cty)
+             SOME (C_Trans_Ctxt.Param, var, cty) => (mk_literal_value_read var, cty)
+           | SOME (C_Trans_Ctxt.ParamListPtr, var, cty) => (mk_literal_value_read var, cty)
            | SOME (C_Trans_Ctxt.Local, var, cty) =>
                (* For local arrays, the ref IS the pointer (array-to-pointer decay).
                   Return it directly so CIndex0's deref accesses the list correctly.
@@ -2589,17 +3948,23 @@ struct
                if Option.isSome (C_Trans_Ctxt.lookup_array_decl tctx name)
                then (C_Term_Build.mk_literal var, cty)
                else (C_Term_Build.mk_var_read var, cty)
+           | SOME (C_Trans_Ctxt.LocalPtr, var, cty) =>
+               (mk_implicit_cast (C_Term_Build.mk_var_read var, C_Ast_Utils.CPtr C_Ast_Utils.CVoid, cty), cty)
            | NONE =>
                (* Fallback: check global consts, then enum constants *)
                (case C_Trans_Ctxt.lookup_global_const tctx name of
-                  SOME (tm, cty) => (C_Term_Build.mk_literal tm, cty)
+                  SOME (tm, cty) =>
+                    (case C_Trans_Ctxt.lookup_array_decl tctx name of
+                       SOME (elem_cty, _) => (C_Term_Build.mk_literal tm, C_Ast_Utils.CPtr elem_cty)
+                     | NONE => (C_Term_Build.mk_literal tm, cty))
                 | NONE =>
                (case C_Trans_Ctxt.lookup_enum_const tctx name of
                   SOME value => (C_Term_Build.mk_literal_int value, C_Ast_Utils.CInt)
                 | NONE => error ("micro_c_translate: undefined variable: " ^ name)))
         end
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
-        let val (lhs', lhs_cty) = translate_expr tctx lhs
+        let val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            val (lhs', lhs_cty) = translate_expr tctx lhs
             val (rhs', rhs_cty) = translate_expr tctx rhs
             val unseq_operands =
               C_Ast_Utils.expr_has_side_effect lhs orelse C_Ast_Utils.expr_has_side_effect rhs
@@ -2608,17 +3973,35 @@ struct
                 unsupported "potential unsequenced side-effect UB in binary expression"
               else ()
             fun to_bool (tm, cty) = mk_implicit_cast (tm, cty, C_Ast_Utils.CBool)
-            fun mk_ptr_add ptr_term idx_term idx_cty elem_cty =
-              let val p_var = Isa_Free ("v__ptr", isa_dummyT)
+            fun mk_list_ptr_add ptr_term idx_term idx_cty elem_cty =
+              let val ptr_ty = expr_value_type ptr_term
+                  val p_var = Isa_Free ("v__ptr", if ptr_ty = isa_dummyT then isa_dummyT else ptr_ty)
                   val i_var = Isa_Free ("v__idx", isa_dummyT)
                   val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
                   val idx_p_term = mk_implicit_cast (idx_term, idx_cty, idx_p_cty)
                   val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) p_var
                   val focused_lit = C_Term_Build.mk_literal focused
-                  val guarded = mk_index_guard idx_p_cty i_var p_var focused_lit
+                  val list_ty =
+                    (case C_Ast_Utils.hol_type_of elem_cty of
+                       t => if t = isa_dummyT then isa_dummyT
+                            else Isa_Type (\<^type_name>\<open>list\<close>, [t]))
+                  val list_var = Isa_Free ("v__ptr_vals", list_ty)
+                  val deref_const = resolve_dereference_const ctxt
+                  val deref_expr =
+                    Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                      $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ p_var)
+                      $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                           $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                           $ deref_const)
+                  val guarded =
+                    C_Term_Build.mk_bind deref_expr
+                      (Term.lambda list_var (mk_index_guard idx_p_cty i_var list_var focused_lit))
               in (mk_pair_eval unseq_operands ptr_term idx_p_term p_var i_var guarded,
                   C_Ast_Utils.CPtr elem_cty)
               end
+            fun mk_raw_ptr_add ptr_term idx_term idx_cty elem_cty prefer_unsigned_add =
+              (mk_raw_ptr_loc_expr ctxt unseq_operands ptr_term idx_term idx_cty elem_cty prefer_unsigned_add,
+               C_Ast_Utils.CPtr elem_cty)
         in
         case binop of
           (* C logical operators short-circuit and return _Bool *)
@@ -2718,22 +4101,62 @@ struct
             | (CGeqOp0, _, C_Ast_Utils.CPtr _) =>
                 unsupported "pointer relational comparison with non-pointer operand"
             | (CAddOp0, C_Ast_Utils.CPtr elem_cty, _) =>
-                mk_ptr_add lhs' rhs' rhs_cty elem_cty
+                if uses_raw_pointer_model () andalso not (expr_is_list_backed_array tctx lhs) then
+                  mk_raw_ptr_add lhs' rhs' rhs_cty elem_cty (is_nonnegative_int_const rhs)
+                else
+                  mk_list_ptr_add lhs' rhs' rhs_cty elem_cty
             | (CAddOp0, _, C_Ast_Utils.CPtr elem_cty) =>
                 (* n + p = p + n *)
-                mk_ptr_add rhs' lhs' lhs_cty elem_cty
+                if uses_raw_pointer_model () andalso not (expr_is_list_backed_array tctx rhs) then
+                  mk_raw_ptr_add rhs' lhs' lhs_cty elem_cty (is_nonnegative_int_const lhs)
+                else
+                  mk_list_ptr_add rhs' lhs' lhs_cty elem_cty
             | (CSubOp0, C_Ast_Utils.CPtr elem_cty, C_Ast_Utils.CPtr _) =>
                 let val isa_ty = C_Ast_Utils.hol_type_of elem_cty
                     val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
                     val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
                     val stride = Isa_Const (\<^const_name>\<open>c_sizeof\<close>,
                                     itself_ty --> @{typ nat}) $ type_term
-                    val p_var = Isa_Free ("v__lptr", isa_dummyT)
-                    val q_var = Isa_Free ("v__rptr", isa_dummyT)
-                    val diff_body = Isa_Const (\<^const_name>\<open>c_ptr_diff\<close>, isa_dummyT)
-                                      $ p_var $ q_var $ stride
-                    val f = Term.lambda p_var (Term.lambda q_var diff_body)
-                in (C_Term_Build.mk_bindlift2 f lhs' rhs',
+                    val lhs' =
+                      (case pointer_expr_value_hol_ty lhs_cty of
+                         SOME ty => constrain_expr_value_type ty lhs'
+                       | NONE => lhs')
+                    val rhs' =
+                      (case pointer_expr_value_hol_ty rhs_cty of
+                         SOME ty => constrain_expr_value_type ty rhs'
+                       | NONE => rhs')
+                    val lhs_ptr_ty = expr_value_type lhs'
+                    val rhs_ptr_ty = expr_value_type rhs'
+                    val diff_raw_ty = @{typ int}
+                    val diff_value_ty = C_Ast_Utils.hol_type_of (C_Ast_Utils.pointer_int_cty ())
+                    val p_var = Isa_Free ("v__lptr", lhs_ptr_ty)
+                    val q_var = Isa_Free ("v__rptr", rhs_ptr_ty)
+                    val raw_ptr_ty =
+                      Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+                    fun raw_ptr_of ptr_ty ptr_var =
+                      (case ptr_ty of
+                         Term.Type (name, _) =>
+                           if name = \<^type_name>\<open>focused\<close>
+                           then Isa_Const (\<^const_name>\<open>unwrap_focused\<close>, isa_dummyT --> raw_ptr_ty) $ ptr_var
+                           else ptr_var
+                       | _ => ptr_var)
+                    val p_raw = raw_ptr_of lhs_ptr_ty p_var
+                    val q_raw = raw_ptr_of rhs_ptr_ty q_var
+                    val diff_const =
+                      Type.constraint (raw_ptr_ty --> raw_ptr_ty --> @{typ nat} --> diff_raw_ty)
+                        (if uses_raw_pointer_model () then resolve_ptr_diff_const ctxt
+                         else Isa_Const (\<^const_name>\<open>c_ptr_diff\<close>, isa_dummyT))
+                    val diff_body =
+                      Isa_Const (\<^const_name>\<open>of_int\<close>, diff_raw_ty --> diff_value_ty)
+                        $ (diff_const $ p_raw $ q_raw $ stride)
+                    val f = Type.constraint (lhs_ptr_ty --> rhs_ptr_ty --> diff_value_ty)
+                              (Term.lambda p_var (Term.lambda q_var diff_body))
+                    val diff_expr0 = C_Term_Build.mk_bindlift2 f lhs' rhs'
+                    val diff_expr =
+                      (case expr_type_from_tm diff_value_ty lhs' of
+                         SOME ty => Type.constraint ty diff_expr0
+                       | NONE => constrain_known_expr_value_type diff_value_ty diff_expr0)
+                in (constrain_expr_side_types diff_expr,
                     C_Ast_Utils.pointer_int_cty ())
                 end
             | _ =>
@@ -2784,9 +4207,9 @@ struct
                              else #1 (translate_lvalue_location tctx expr)
               val (rhs', rhs_cty) = translate_expr tctx rhs
               val rhs_cast = mk_implicit_cast (rhs', rhs_cty, field_cty)
-              val cast_expr = mk_cast_from_void field_cty ptr_expr
+              val cast_expr = mk_cast_from_void_in (C_Trans_Ctxt.get_ctxt tctx) field_cty ptr_expr
               val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
-              val ref_var = Isa_Free ("v__uref", isa_dummyT)
+              val ref_var = Isa_Free ("v__uref", typed_ref_ty_of_cty field_cty)
               val unseq_lhs_rhs =
                 C_Ast_Utils.expr_has_side_effect expr orelse C_Ast_Utils.expr_has_side_effect rhs
               val _ =
@@ -2808,8 +4231,19 @@ struct
         else
         let val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val updater_const = resolve_struct_updater_const ctxt struct_name field_name
-            val ptr_expr = if is_ptr then #1 (translate_expr tctx expr)
-                           else #1 (translate_lvalue_location tctx expr)
+            val (ptr_expr, ptr_is_raw) =
+              if is_ptr then
+                (case expr of
+                   CCast0 (_, inner_expr, _) =>
+                     let val (inner_ptr, inner_cty) = translate_expr tctx inner_expr
+                     in case inner_cty of
+                          C_Ast_Utils.CPtr C_Ast_Utils.CVoid => (inner_ptr, true)
+                        | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) => (inner_ptr, true)
+                        | _ => (#1 (translate_expr tctx expr), false)
+                     end
+                 | _ => (#1 (translate_expr tctx expr), false))
+              else
+                (#1 (translate_lvalue_location tctx expr), false)
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                SOME cty => cty
                              | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
@@ -2827,22 +4261,40 @@ struct
               if unseq_lhs_rhs andalso C_Ast_Utils.expr_has_unsequenced_ub_risk expr rhs then
                 unsupported "potential unsequenced side-effect UB in struct-field assignment"
               else ()
-            val assign_fun =
-              Term.lambda rhs_var (Term.lambda ptr_var
-                (C_Term_Build.mk_bind
-                  (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
-                  (Term.lambda struct_var
-                    (C_Term_Build.mk_sequence
-                      (C_Term_Build.mk_ptr_write
-                        (C_Term_Build.mk_literal ptr_var)
-                        (C_Term_Build.mk_literal updated_struct))
-                      (C_Term_Build.mk_literal rhs_var)))))
-            val assign_term =
-              (if unseq_lhs_rhs
-               then C_Term_Build.mk_bind2_unseq assign_fun rhs_cast ptr_expr
-               else C_Term_Build.mk_bind2 assign_fun rhs_cast ptr_expr)
-        in (assign_term,
-            field_cty)
+        in
+          if ptr_is_raw then
+            let
+              val field_loc_expr = mk_raw_struct_field_loc_expr tctx struct_name field_name field_cty ptr_expr
+              val ref_var = Isa_Free ("v__field_ref", typed_ref_ty_of_cty field_cty)
+              val assign_fun =
+                Term.lambda rhs_var (Term.lambda ref_var
+                  (C_Term_Build.mk_sequence
+                    (C_Term_Build.mk_ptr_write
+                      (C_Term_Build.mk_literal ref_var)
+                      (C_Term_Build.mk_literal rhs_var))
+                    (C_Term_Build.mk_literal rhs_var)))
+              val assign_term =
+                (if unseq_lhs_rhs
+                 then C_Term_Build.mk_bind2_unseq assign_fun rhs_cast field_loc_expr
+                 else C_Term_Build.mk_bind2 assign_fun rhs_cast field_loc_expr)
+            in (assign_term, field_cty) end
+          else
+            let
+              val assign_fun =
+                Term.lambda rhs_var (Term.lambda ptr_var
+                  (C_Term_Build.mk_bind
+                    (C_Term_Build.mk_deref (C_Term_Build.mk_literal ptr_var))
+                    (Term.lambda struct_var
+                      (C_Term_Build.mk_sequence
+                        (C_Term_Build.mk_ptr_write
+                          (C_Term_Build.mk_literal ptr_var)
+                          (C_Term_Build.mk_literal updated_struct))
+                        (C_Term_Build.mk_literal rhs_var)))))
+              val assign_term =
+                (if unseq_lhs_rhs
+                 then C_Term_Build.mk_bind2_unseq assign_fun rhs_cast ptr_expr
+                 else C_Term_Build.mk_bind2 assign_fun rhs_cast ptr_expr)
+            in (assign_term, field_cty) end
         end end
     (* p->field op= rhs  /  s.field op= rhs : compound struct/union field write *)
     | translate_expr tctx (CAssign0 (asgn_op, CMember0 (expr, field_ident, is_ptr, _), rhs, _)) =
@@ -2853,8 +4305,19 @@ struct
                  val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                     SOME cty => cty
                                   | NONE => unsupported ("unknown field type: " ^ struct_name ^ "." ^ field_name))
-                 val ptr_term = if is_ptr then #1 (translate_expr tctx expr)
-                               else #1 (translate_lvalue_location tctx expr)
+                 val (ptr_term, ptr_is_raw) =
+                   if is_ptr then
+                     (case expr of
+                        CCast0 (_, inner_expr, _) =>
+                          let val (inner_ptr, inner_cty) = translate_expr tctx inner_expr
+                          in case inner_cty of
+                               C_Ast_Utils.CPtr C_Ast_Utils.CVoid => (inner_ptr, true)
+                             | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) => (inner_ptr, true)
+                             | _ => (#1 (translate_expr tctx expr), false)
+                          end
+                      | _ => (#1 (translate_expr tctx expr), false))
+                   else
+                     (#1 (translate_lvalue_location tctx expr), false)
                  val (rhs_term_raw, rhs_cty) = translate_expr tctx rhs
                  val op_cty = compound_op_cty field_cty rhs_cty binop
                  val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
@@ -2871,8 +4334,8 @@ struct
                case translate_binop op_cty binop of
                   Monadic f =>
                     let
-                      val ref_var = Isa_Free ("v__uref", isa_dummyT)
-                      val cast_expr = mk_cast_from_void field_cty ptr_term
+                      val ref_var = Isa_Free ("v__uref", typed_ref_ty_of_cty field_cty)
+                      val cast_expr = mk_cast_from_void_in (C_Trans_Ctxt.get_ctxt tctx) field_cty ptr_term
                       val combine_rhs_ref =
                         if unseq_lhs_rhs then C_Term_Build.mk_bind2_unseq else C_Term_Build.mk_bind2
                       val assign_fun =
@@ -2905,6 +4368,47 @@ struct
                                       end))
                                end))))
                       val assign_term = combine_rhs_ref assign_fun rhs_term_raw cast_expr
+                    in
+                      (assign_term, field_cty)
+                    end
+             else if ptr_is_raw then
+               case translate_binop op_cty binop of
+                  Monadic f =>
+                    let
+                      val ref_var = Isa_Free ("v__field_ref", typed_ref_ty_of_cty field_cty)
+                      val field_loc_expr = mk_raw_struct_field_loc_expr tctx struct_name field_name field_cty ptr_term
+                      val combine_rhs_ref =
+                        if unseq_lhs_rhs then C_Term_Build.mk_bind2_unseq else C_Term_Build.mk_bind2
+                      val assign_fun =
+                        Term.lambda rhs_var (Term.lambda ref_var
+                          (C_Term_Build.mk_bind
+                            (C_Term_Build.mk_deref (C_Term_Build.mk_literal ref_var))
+                            (Term.lambda old_var
+                              (let
+                                 val (_, old_prom, rhs_prom) =
+                                   prepare_compound_operands
+                                     field_cty
+                                     (C_Term_Build.mk_literal rhs_var)
+                                     rhs_cty
+                                     binop
+                                     (C_Term_Build.mk_literal old_var)
+                               in
+                                 C_Term_Build.mk_bind
+                                   (C_Term_Build.mk_bind2 f old_prom rhs_prom)
+                                   (Term.lambda new_var
+                                     (let
+                                        val new_assigned =
+                                          mk_implicit_cast
+                                            (C_Term_Build.mk_literal new_var, op_cty, field_cty)
+                                      in
+                                        C_Term_Build.mk_sequence
+                                          (C_Term_Build.mk_ptr_write
+                                            (C_Term_Build.mk_literal ref_var)
+                                            new_assigned)
+                                          new_assigned
+                                      end))
+                               end))))
+                      val assign_term = combine_rhs_ref assign_fun rhs_term_raw field_loc_expr
                     in
                       (assign_term, field_cty)
                     end
@@ -3020,6 +4524,8 @@ struct
     (* arr[idx] = rhs : array element write via focus *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CIndex0 (arr_expr, idx_expr, _), rhs, _)) =
         let val (arr_term, arr_cty) = translate_expr tctx arr_expr
+            val ctxt = C_Trans_Ctxt.get_ctxt tctx
+            val deref_const = resolve_dereference_const ctxt
             val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
             val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
             val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
@@ -3027,15 +4533,18 @@ struct
             val elem_cty = (case arr_cty of
                               C_Ast_Utils.CPtr inner => inner
                             | _ => unsupported "indexing non-array expression")
-            (* Type-annotate v_var with the element HOL type to constrain
-               focus/store_update operations and resolve type variables
-               (e.g. TYPE('a)) for raw pointer parameters. *)
             val elem_hol_ty =
               let val t = C_Ast_Utils.hol_type_of elem_cty
               in if t = isa_dummyT then isa_dummyT else t end
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val v_var = Isa_Free ("v__rhs", elem_hol_ty)
+            val deref_expr =
+              Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
+                $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                     $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                     $ deref_const)
             val loc_var = Isa_Free ("v__loc", isa_dummyT)
             val arr_has_effect = C_Ast_Utils.expr_has_side_effect arr_expr
             val idx_has_effect = C_Ast_Utils.expr_has_side_effect idx_expr
@@ -3059,11 +4568,23 @@ struct
               then
                 unsupported "potential unsequenced side-effect UB in indexed assignment"
               else ()
-            val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
             val rhs_term = mk_implicit_cast (rhs_term_raw, rhs_cty, elem_cty)
             val loc_expr =
-              mk_pair_eval unseq_lhs arr_term idx_term a_var i_var
-                (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+              if use_raw_pointer_indexing tctx arr_expr then
+                mk_raw_ptr_loc_expr ctxt unseq_lhs arr_term idx_term_raw idx_cty elem_cty (is_nonnegative_int_const idx_expr)
+              else
+                let
+                  val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
+                in
+                  mk_pair_eval unseq_lhs arr_term idx_term a_var i_var
+                    (let
+                      val list_ty =
+                        (case C_Ast_Utils.hol_type_of elem_cty of
+                           t => if t = isa_dummyT then isa_dummyT else Isa_Type (\<^type_name>\<open>list\<close>, [t]))
+                      val list_var = Isa_Free ("v__arr_vals", list_ty)
+                    in C_Term_Build.mk_bind deref_expr
+                         (Term.lambda list_var (mk_index_guard idx_p_cty i_var list_var (C_Term_Build.mk_literal focused))) end)
+                end
             val write_fun =
               Term.lambda v_var (Term.lambda loc_var
                 (C_Term_Build.mk_sequence
@@ -3082,6 +4603,8 @@ struct
         (case compound_assign_to_binop asgn_op of
            SOME binop =>
              let val (arr_term, arr_cty) = translate_expr tctx arr_expr
+                 val ctxt = C_Trans_Ctxt.get_ctxt tctx
+                 val deref_const = resolve_dereference_const ctxt
                  val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
                  val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
                  val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
@@ -3089,6 +4612,13 @@ struct
                  val a_var = Isa_Free ("v__arr", isa_dummyT)
                  val i_var = Isa_Free ("v__idx", isa_dummyT)
                  val loc_var = Isa_Free ("v__loc", isa_dummyT)
+                 val list_var = Isa_Free ("v__arr_vals", isa_dummyT)
+                 val deref_expr =
+                   Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                     $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
+                     $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                          $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                          $ deref_const)
                  val old_var = Isa_Free ("v__old", isa_dummyT)
                  val rhs_var = Isa_Free ("v__rhs", isa_dummyT)
                  val new_var = Isa_Free ("v__new", isa_dummyT)
@@ -3121,8 +4651,17 @@ struct
                                  | _ => unsupported "indexing non-array expression")
                  val op_cty = compound_op_cty elem_cty rhs_cty binop
                  val loc_expr =
-                   mk_pair_eval unseq_lhs arr_term idx_term a_var i_var
-                     (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+                   if use_raw_pointer_indexing tctx arr_expr then
+                     mk_raw_ptr_loc_expr ctxt unseq_lhs arr_term idx_term_raw idx_cty elem_cty (is_nonnegative_int_const idx_expr)
+                   else
+                     mk_pair_eval unseq_lhs arr_term idx_term a_var i_var
+                       (let
+                         val list_ty =
+                           (case C_Ast_Utils.hol_type_of elem_cty of
+                              t => if t = isa_dummyT then isa_dummyT else Isa_Type (\<^type_name>\<open>list\<close>, [t]))
+                         val list_var = Isa_Free ("v__arr_vals", list_ty)
+                       in C_Term_Build.mk_bind deref_expr
+                            (Term.lambda list_var (mk_index_guard idx_p_cty i_var list_var (C_Term_Build.mk_literal focused))) end)
              in case translate_binop op_cty binop of
                   Monadic f =>
                     let
@@ -3174,6 +4713,15 @@ struct
                      (C_Term_Build.mk_sequence
                        (C_Term_Build.mk_var_write var (C_Term_Build.mk_literal rhs_var))
                        (C_Term_Build.mk_literal rhs_var))),
+                   cty)
+               end
+           | SOME (C_Trans_Ctxt.LocalPtr, var, cty) =>
+               let val rhs_cast = mk_implicit_cast (rhs', rhs_cty, cty)
+                   val rhs_raw = mk_implicit_cast (rhs_cast, cty, C_Ast_Utils.CPtr C_Ast_Utils.CVoid)
+               in (C_Term_Build.mk_bind rhs_raw (Term.lambda rhs_var
+                     (C_Term_Build.mk_sequence
+                       (C_Term_Build.mk_var_write var (C_Term_Build.mk_literal rhs_var))
+                       rhs_cast)),
                    cty)
                end
            | SOME (C_Trans_Ctxt.Param, _, _) =>
@@ -3361,6 +4909,7 @@ struct
               (case param_ctys of
                  SOME tys => cast_args arg_terms_typed tys
                | NONE => List.map #1 arg_terms_typed)
+              |> List.map constrain_expr_side_types
             val argc = List.length arg_terms
             (* For arity > 2 with side-effecting arguments: funcallN sequences
                evaluation left-to-right via bindN, which is a valid ordering for
@@ -3400,15 +4949,37 @@ struct
                     values, not monadic expressions, so they must be applied
                     directly rather than passed through funcallN. *)
                  val fref_fueled = List.foldl (fn (a, f) => f $ a) fref fuel_args
+                 val ret_value_ty =
+                   (case C_Trans_Ctxt.lookup_func_return_type tctx fname of
+                      SOME C_Ast_Utils.CVoid => @{typ unit}
+                    | SOME rcty =>
+                        (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) rcty of
+                           SOME ty => ty
+                         | NONE => isa_dummyT)
+                    | NONE => isa_dummyT)
+                 val fref_called =
+                   if argc = 0 then fref_fueled
+                   else
+                     let
+                       val arg_tys = List.map expr_value_type arg_terms
+                       val fn_ty = Library.foldr (fn (a_ty, acc_ty) => a_ty --> acc_ty)
+                         (arg_tys, isa_dummyT)
+                     in
+                       Type.constraint fn_ty fref_fueled
+                     end
                  val call_term =
                    if argc = 2 andalso any_arg_effect then
                      let val call2 =
                            Isa_Const (\<^const_name>\<open>deep_compose2\<close>, dummyT --> dummyT --> dummyT)
                              $ Isa_Const (\<^const_name>\<open>call\<close>, dummyT --> dummyT)
-                             $ fref_fueled
+                             $ fref_called
                      in C_Term_Build.mk_bind2_unseq call2 (List.nth (arg_terms, 0)) (List.nth (arg_terms, 1)) end
                    else
-                     C_Term_Build.mk_funcall fref_fueled arg_terms
+                     C_Term_Build.mk_funcall fref_called arg_terms
+                 val call_term =
+                   if ret_value_ty = isa_dummyT then call_term
+                   else constrain_known_expr_value_type ret_value_ty call_term
+                 val call_term = constrain_expr_side_types call_term
                  val ret_cty =
                    (case C_Trans_Ctxt.lookup_func_return_type tctx fname of
                       SOME cty => cty
@@ -3436,14 +5007,7 @@ struct
                               | C_Ast_Utils.CPtr inner => inner
                               | _ => unsupported "dereference on non-pointer expression")
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val deref_const = resolve_dereference_const ctxt
-            val deref_fn =
-              Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
-                $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
-                $ deref_const
-        in (Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
-              $ expr' $ deref_fn,
-            result_cty) end
+        in (mk_resolved_deref_expr ctxt result_cty expr', result_cty) end
     | translate_expr tctx (CUnary0 (CCompOp0, expr, _)) =
         (* ~x : bitwise complement — C11: operand undergoes integer promotion *)
         let val (expr', cty) = translate_expr tctx expr
@@ -3523,7 +5087,10 @@ struct
                      $ deref_const)
             val elem_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                               SOME (C_Ast_Utils.CPtr inner) => inner
-                            | _ => unsupported "indexing non-array struct field")
+                            | SOME inner =>
+                                if struct_field_is_array_backed struct_name field_name then inner
+                                else unsupported "indexing non-array struct field"
+                            | NONE => unsupported "indexing unknown struct field")
             val value_term = C_Term_Build.mk_literal nth_term
             val value_term = mk_index_guard idx_p_cty i_var list_val value_term
         in (mk_pair_eval unseq_index ptr_expr idx_term ptr_var i_var
@@ -3546,16 +5113,13 @@ struct
                 unsupported "potential unsequenced side-effect UB in indexed access"
               else ()
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            (* Resolve dereference_fun from locale context to avoid adhoc
-               overloading ambiguity; fall back to store_dereference_const
-               when outside a reference locale (e.g. smoke tests). *)
             val deref_const = resolve_dereference_const ctxt
+            val elem_cty =
+              (case arr_cty of
+                 C_Ast_Utils.CPtr inner => inner
+               | _ => unsupported "indexing non-array expression")
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
-            (* Type-annotate list_var when the array element type is known.
-               This constrains pointer dereference resolution, avoiding
-               unconstrained type variables (e.g. TYPE('a)) in definitions
-               that operate on raw pointer parameters like int16_t r[256]. *)
             val list_elem_ty =
               (case arr_cty of
                  C_Ast_Utils.CPtr inner =>
@@ -3566,8 +5130,6 @@ struct
             val list_var = Isa_Free ("v__list", list_elem_ty)
             val nth_term = Isa_Const (\<^const_name>\<open>nth\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                              $ list_var $ (C_Term_Build.mk_unat i_var)
-            (* bind (literal a) (deep_compose1 call dereference_fun) — same structure
-               as mk_deref but with the resolved constant *)
             val deref_expr =
               Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                 $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
@@ -3583,78 +5145,127 @@ struct
                | _ => false)
             val value_term = C_Term_Build.mk_literal nth_term
             val value_term = mk_index_guard idx_p_cty i_var list_var value_term
-        in (mk_pair_eval unseq_index arr_term idx_term a_var i_var
-              (if arr_is_global_const then
-                 let
-                   val direct_nth =
-                     Isa_Const (\<^const_name>\<open>nth\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
-                       $ a_var $ (C_Term_Build.mk_unat i_var)
-                   val direct_term = C_Term_Build.mk_literal direct_nth
-                   val direct_term = mk_index_guard idx_p_cty i_var a_var direct_term
-                 in direct_term end
-               else
-                 C_Term_Build.mk_bind deref_expr (Term.lambda list_var value_term)),
-            (case arr_cty of
-               C_Ast_Utils.CPtr inner => inner
-             | _ => unsupported "indexing non-array expression"))
+        in
+          if use_raw_pointer_indexing tctx arr_expr then
+            let
+              val loc_expr = mk_raw_ptr_loc_expr ctxt unseq_index arr_term idx_term_raw idx_cty elem_cty (is_nonnegative_int_const idx_expr)
+              val deref_loc =
+                Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                  $ loc_expr
+                  $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                       $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                       $ deref_const)
+            in
+              (deref_loc, elem_cty)
+            end
+          else
+            (mk_pair_eval unseq_index arr_term idx_term a_var i_var
+               (if arr_is_global_const then
+                  let
+                    val direct_nth =
+                      Isa_Const (\<^const_name>\<open>nth\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                        $ a_var $ (C_Term_Build.mk_unat i_var)
+                    val direct_term = C_Term_Build.mk_literal direct_nth
+                    val direct_term = mk_index_guard idx_p_cty i_var a_var direct_term
+                  in direct_term end
+                else
+                  C_Term_Build.mk_bind deref_expr (Term.lambda list_var value_term)),
+             elem_cty)
         end
     (* p->field : struct/union field access through pointer.
        For unions: cast to typed ref, then dereference.
        For array fields (CPtr inner): array-to-pointer decay — create a focused
        reference to the field rather than reading the value.
        For scalar fields: dereference and read the value. *)
-    | translate_expr tctx (CMember0 (expr, field_ident, true, _)) =
+    | translate_expr tctx (CMember0 (expr, field_ident, true, ni)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
-            val (ptr_expr, _) = translate_expr tctx expr
+            val (ptr_expr, ptr_cty, ptr_is_raw) =
+              (case expr of
+                 CCast0 (_, inner_expr, _) =>
+                   let val (inner_ptr, inner_cty) = translate_expr tctx inner_expr
+                   in case inner_cty of
+                        C_Ast_Utils.CPtr C_Ast_Utils.CVoid => (inner_ptr, inner_cty, true)
+                      | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) => (inner_ptr, inner_cty, true)
+                      | _ => let val (ptr_expr, ptr_cty) = translate_expr tctx expr
+                             in (ptr_expr, ptr_cty, false) end
+                   end
+               | _ => let val (ptr_expr, ptr_cty) = translate_expr tctx expr
+                      in (ptr_expr, ptr_cty, false) end)
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                SOME cty => cty
                              | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
-        in if is_union_aggregate struct_name then
+            val array_backed_field = struct_field_is_array_backed struct_name field_name
+        in if array_backed_field andalso not (is_union_aggregate struct_name) then
+          let val (loc_expr, _) = translate_lvalue_location tctx (CMember0 (expr, field_ident, true, ni))
+          in (constrain_expr_side_types loc_expr, C_Ast_Utils.CPtr field_cty) end
+        else if is_union_aggregate struct_name then
           (* Union field read: cast to typed ref, then dereference *)
-          let val cast_expr = mk_cast_from_void field_cty ptr_expr
-              val v = Isa_Free ("v__uref", isa_dummyT)
+          let val cast_expr = mk_cast_from_void_in ctxt field_cty ptr_expr
+              val v = Isa_Free ("v__uref", typed_ref_ty_of_cty field_cty)
           in (C_Term_Build.mk_bind cast_expr
-                (Term.lambda v (C_Term_Build.mk_deref (C_Term_Build.mk_literal v))),
+                (Term.lambda v (mk_resolved_deref_expr ctxt field_cty (C_Term_Build.mk_literal v))),
               field_cty) end
-        else case field_cty of
-             C_Ast_Utils.CPtr _ =>
-               (* Array field: array-to-pointer decay — create a focused reference
-                  to the array within the struct, rather than reading its value *)
-               let val focus_const = resolve_struct_focus_const ctxt struct_name field_name
-                   val base_var = Isa_Free ("v__base_loc", isa_dummyT)
-                   val focused = C_Term_Build.mk_focus_field focus_const base_var
-               in (C_Term_Build.mk_bind ptr_expr (Term.lambda base_var (C_Term_Build.mk_literal focused)),
-                   field_cty)
-               end
-           | _ =>
-               (* Scalar field: dereference and read the value *)
-               let val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
-               in (C_Term_Build.mk_struct_field_read accessor_const ptr_expr, field_cty) end
+        else if ptr_is_raw then
+          let
+            val loc_expr = mk_raw_struct_field_loc_expr tctx struct_name field_name field_cty ptr_expr
+            val loc_ty = expr_value_type loc_expr
+            val loc_var = Isa_Free ("v__field_loc", if loc_ty = isa_dummyT then isa_dummyT else loc_ty)
+          in case field_cty of
+               C_Ast_Utils.CPtr _ => (constrain_expr_side_types loc_expr, field_cty)
+             | _ => (C_Term_Build.mk_bind loc_expr
+                      (Term.lambda loc_var (mk_resolved_deref_expr ctxt field_cty (C_Term_Build.mk_literal loc_var))),
+                     field_cty)
+          end
+        else
+          let
+            val _ = (case ptr_cty of
+                       C_Ast_Utils.CPtr _ => ()
+                     | _ => unsupported "member access through non-pointer expression")
+            val focus_const = resolve_struct_focus_const ctxt struct_name field_name
+            val base_ty = expr_value_type ptr_expr
+            val base_var = Isa_Free ("v__base_loc", if base_ty = isa_dummyT then isa_dummyT else base_ty)
+            val focused = C_Term_Build.mk_focus_field focus_const base_var
+            val loc_expr =
+              C_Term_Build.mk_bind ptr_expr (Term.lambda base_var (C_Term_Build.mk_literal focused))
+            val loc_ty = expr_value_type loc_expr
+            val loc_var = Isa_Free ("v__field_loc", if loc_ty = isa_dummyT then isa_dummyT else loc_ty)
+          in case field_cty of
+               C_Ast_Utils.CPtr _ => (constrain_expr_side_types loc_expr, field_cty)
+             | _ => (C_Term_Build.mk_bind loc_expr
+                      (Term.lambda loc_var (mk_resolved_deref_expr ctxt field_cty (C_Term_Build.mk_literal loc_var))),
+                     field_cty)
+          end
         end
     (* s.field : direct struct/union member access via value *)
-    | translate_expr tctx (CMember0 (expr, field_ident, false, _)) =
+    | translate_expr tctx (CMember0 (expr, field_ident, false, ni)) =
         let val field_name = C_Ast_Utils.ident_name field_ident
             val struct_name = determine_struct_type tctx expr
             val field_cty = (case C_Trans_Ctxt.lookup_struct_field_type tctx struct_name field_name of
                                SOME cty => cty
                              | NONE => unsupported ("unknown field type: " ^ struct_name ^ "." ^ field_name))
-        in if is_union_aggregate struct_name then
+            val array_backed_field = struct_field_is_array_backed struct_name field_name
+        in if array_backed_field andalso not (is_union_aggregate struct_name) then
+          let val (loc_expr, _) = translate_lvalue_location tctx (CMember0 (expr, field_ident, false, ni))
+          in (constrain_expr_side_types loc_expr, C_Ast_Utils.CPtr field_cty) end
+        else if is_union_aggregate struct_name then
           (* Union: get lvalue location of s, cast void ref to typed ref, deref *)
           let val (loc_expr, _) = translate_lvalue_location tctx expr
-              val cast_expr = mk_cast_from_void field_cty loc_expr
-              val v = Isa_Free ("v__uref", isa_dummyT)
+              val cast_expr = mk_cast_from_void_in (C_Trans_Ctxt.get_ctxt tctx) field_cty loc_expr
+              val v = Isa_Free ("v__uref", typed_ref_ty_of_cty field_cty)
           in (C_Term_Build.mk_bind cast_expr
-                (Term.lambda v (C_Term_Build.mk_deref (C_Term_Build.mk_literal v))),
+                (Term.lambda v (mk_resolved_deref_expr (C_Trans_Ctxt.get_ctxt tctx) field_cty
+                                  (C_Term_Build.mk_literal v))),
               field_cty) end
         else
           let val ctxt = C_Trans_Ctxt.get_ctxt tctx
               val accessor_const = resolve_struct_accessor_const ctxt struct_name field_name
               val (struct_expr, _) = translate_expr tctx expr
               val v = Isa_Free ("v__struct", isa_dummyT)
-          in (C_Term_Build.mk_bind struct_expr
-                (Term.lambda v (C_Term_Build.mk_literal (accessor_const $ v))),
+          in (constrain_expr_cty field_cty
+                (C_Term_Build.mk_bind struct_expr
+                  (Term.lambda v (C_Term_Build.mk_literal (accessor_const $ v)))),
               field_cty) end
         end
     | translate_expr tctx (CCond0 (cond, Some then_expr, else_expr, _)) =
@@ -3949,12 +5560,16 @@ struct
         in case C_Trans_Ctxt.lookup_var tctx name of
              SOME (C_Trans_Ctxt.Local, ref_var, cty) =>
                (C_Term_Build.mk_literal ref_var, C_Ast_Utils.CPtr cty)
+           | SOME (C_Trans_Ctxt.LocalPtr, _, _) =>
+               unsupported ("address-of pointer local variable not supported: " ^ name)
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                unsupported ("address-of by-value parameter: " ^ name)
            | NONE =>
                (case C_Trans_Ctxt.lookup_global_const tctx name of
-                  SOME _ =>
-                    unsupported ("address-of global const without reference storage not supported: " ^ name)
+                  SOME (tm, _) =>
+                    (case C_Trans_Ctxt.lookup_array_decl tctx name of
+                       SOME (elem_cty, _) => (C_Term_Build.mk_literal tm, C_Ast_Utils.CPtr elem_cty)
+                     | NONE => unsupported ("address-of global const without reference storage not supported: " ^ name))
                 | NONE =>
                     error ("micro_c_translate: undefined variable: " ^ name))
         end
@@ -3973,19 +5588,39 @@ struct
                SOME cty => cty
              | NONE => unsupported ("unknown struct field type: " ^ struct_name ^ "." ^ field_name))
           val focus_const = resolve_struct_focus_const (C_Trans_Ctxt.get_ctxt tctx) struct_name field_name
-          val base_expr =
+          val (base_expr, base_is_raw) =
             if is_ptr then
-              let val (ptr_expr, ptr_cty) = translate_expr tctx expr
+              let val (ptr_expr, ptr_cty) =
+                    (case expr of
+                       CCast0 (_, inner_expr, _) =>
+                         let val (inner_ptr, inner_cty) = translate_expr tctx inner_expr
+                         in case inner_cty of
+                              C_Ast_Utils.CPtr C_Ast_Utils.CVoid => (inner_ptr, inner_cty)
+                            | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) => (inner_ptr, inner_cty)
+                            | _ => translate_expr tctx expr
+                         end
+                     | _ => translate_expr tctx expr)
               in case ptr_cty of
-                   C_Ast_Utils.CPtr _ => ptr_expr
+                   C_Ast_Utils.CPtr C_Ast_Utils.CVoid => (ptr_expr, true)
+                 | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) => (ptr_expr, true)
+                 | C_Ast_Utils.CPtr _ => (ptr_expr, false)
                  | _ => unsupported "member access through non-pointer expression"
               end
             else
-              #1 (translate_lvalue_location tctx expr)
-          val base_var = Isa_Free ("v__base_loc", isa_dummyT)
-          val focused = C_Term_Build.mk_focus_field focus_const base_var
-        in (C_Term_Build.mk_bind base_expr (Term.lambda base_var (C_Term_Build.mk_literal focused)),
-            C_Ast_Utils.CPtr field_cty)
+              (#1 (translate_lvalue_location tctx expr), false)
+        in
+          if base_is_raw then
+            (mk_raw_struct_field_loc_expr tctx struct_name field_name field_cty base_expr,
+             C_Ast_Utils.CPtr field_cty)
+          else
+            let
+              val base_ty = expr_value_type base_expr
+              val base_var = Isa_Free ("v__base_loc", if base_ty = isa_dummyT then isa_dummyT else base_ty)
+              val focused = C_Term_Build.mk_focus_field focus_const base_var
+            in
+              (C_Term_Build.mk_bind base_expr (Term.lambda base_var (C_Term_Build.mk_literal focused)),
+               C_Ast_Utils.CPtr field_cty)
+            end
         end
     | translate_lvalue_location tctx (CIndex0 (arr_expr, idx_expr, _)) =
         let
@@ -4002,6 +5637,8 @@ struct
                if allow_fallback andalso fallback_to_expr msg then translate_expr tctx arr_expr
                else raise ERROR msg)
           val (idx_term_raw, idx_cty) = translate_expr tctx idx_expr
+          val ctxt = C_Trans_Ctxt.get_ctxt tctx
+          val deref_const = resolve_dereference_const ctxt
           val idx_p_cty = C_Ast_Utils.integer_promote idx_cty
           val idx_term = mk_implicit_cast (idx_term_raw, idx_cty, idx_p_cty)
           val arr_is_global_const =
@@ -4022,14 +5659,36 @@ struct
             else ()
           val a_var = Isa_Free ("v__arr_loc", isa_dummyT)
           val i_var = Isa_Free ("v__idx", isa_dummyT)
-          val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
+          val deref_expr =
+            Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+              $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
+              $ (Isa_Const (\<^const_name>\<open>deep_compose1\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                   $ Isa_Const (\<^const_name>\<open>call\<close>, isa_dummyT --> isa_dummyT)
+                   $ deref_const)
           val elem_cty =
             (case arr_cty of
                C_Ast_Utils.CPtr inner => inner
              | _ => unsupported "indexing non-array expression")
           val loc_expr =
-            mk_pair_eval unseq_index arr_term idx_term a_var i_var
-              (mk_index_guard idx_p_cty i_var a_var (C_Term_Build.mk_literal focused))
+            if use_raw_pointer_indexing tctx arr_expr then
+              mk_raw_ptr_loc_expr ctxt unseq_index arr_term idx_term_raw idx_cty elem_cty (is_nonnegative_int_const idx_expr)
+            else
+              let
+                val focused = C_Term_Build.mk_focus_nth (C_Term_Build.mk_unat i_var) a_var
+                val list_var =
+                  let
+                    val list_ty =
+                      (case C_Ast_Utils.hol_type_of elem_cty of
+                         t => if t = isa_dummyT then isa_dummyT
+                              else Isa_Type (\<^type_name>\<open>list\<close>, [t]))
+                  in Isa_Free ("v__arr_vals", list_ty) end
+              in
+                mk_pair_eval unseq_index arr_term idx_term a_var i_var
+                  (C_Term_Build.mk_bind deref_expr
+                     (Term.lambda list_var
+                       (mk_index_guard idx_p_cty i_var list_var
+                         (C_Term_Build.mk_literal focused))))
+              end
         in (loc_expr, C_Ast_Utils.CPtr elem_cty) end
     | translate_lvalue_location _ _ =
         unsupported "address-of non-lvalue expression"
@@ -4047,7 +5706,7 @@ struct
     in mk_implicit_cast (cond_term, cond_cty, C_Ast_Utils.CBool)
     end
 
-  (* Extract variable declarations as a list of (name, init_term, cty, array_meta) tuples.
+  (* Extract variable declarations as a list of (name, init_term, cty, array_meta, list_backed_ptr_alias) tuples.
      Handles multiple declarators in a single CDecl0.
      For pointer declarators (e.g. int *p = &x), the returned cty is CPtr base_cty. *)
   fun translate_decl tctx (CDecl0 (specs, declarators, _)) =
@@ -4130,7 +5789,7 @@ struct
                               | NONE => with_null
                             val list_term =
                               C_Term_Build.mk_literal (HOLogic.mk_list elem_type padded)
-                        in (name, list_term, actual_cty, SOME (elem_cty, arr_size)) end
+                        in (name, list_term, actual_cty, SOME (elem_cty, arr_size), false) end
                     | _ =>
                         let val (init_raw, init_cty) = translate_expr tctx init
                             val init_term = mk_implicit_cast (init_raw, init_cty, actual_cty)
@@ -4141,7 +5800,9 @@ struct
                                    then SOME (C_Ast_Utils.apply_ptr_depth cty (ptr_depth - 1), n)
                                    else NONE
                                | NONE => NONE)
-                        in (name, init_term, actual_cty, arr_meta) end
+                            val alias_list_backed =
+                              C_Ast_Utils.is_ptr actual_cty andalso expr_is_list_backed_array tctx init
+                        in (name, init_term, actual_cty, arr_meta, alias_list_backed) end
                   end
               | process_one ((Some declr, Some (CInitList0 (init_list, _))), _) =
                   let val name = C_Ast_Utils.declr_name declr
@@ -4215,7 +5876,7 @@ struct
                             (case declared_size of
                                SOME n => SOME (elem_cty, n)
                              | NONE => NONE)
-                      in (name, init_term, actual_cty, arr_meta) end
+                      in (name, init_term, actual_cty, arr_meta, false) end
                      else (case actual_cty of
                         C_Ast_Utils.CStruct struct_name =>
                           let val fields =
@@ -4356,7 +6017,7 @@ struct
                                          C_Term_Build.mk_bind expr (Term.lambda var acc))
                                        result (init_exprs, vars)
                                   end
-                          in (name, init_term, actual_cty, NONE) end
+                          in (name, init_term, actual_cty, NONE, false) end
                       | _ => unsupported "initializer list for non-array, non-struct declaration")
                   end
               | process_one ((Some declr, None), _) =
@@ -4371,7 +6032,7 @@ struct
                              then SOME (C_Ast_Utils.apply_ptr_depth cty (ptr_depth - 1), n)
                              else NONE
                          | NONE => NONE)
-                  in (name, C_Term_Build.mk_literal uninit, actual_cty, arr_meta) end
+                  in (name, C_Term_Build.mk_literal uninit, actual_cty, arr_meta, false) end
               | process_one _ = unsupported "complex declarator"
         in List.map process_one declarators end
     | translate_decl _ _ = unsupported "complex declaration"
@@ -4419,42 +6080,50 @@ struct
     | translate_compound_items tctx (CBlockDecl0 decl :: rest) =
         let val decls = translate_decl tctx decl
             fun fold_decls [] tctx' = translate_compound_items tctx' rest
-              | fold_decls ((name, init_term, cty, arr_meta) :: ds) tctx' =
+              | fold_decls ((name, init_term, cty, arr_meta, alias_list_backed) :: ds) tctx' =
                   if C_Ast_Utils.is_ptr cty andalso not (Option.isSome arr_meta) then
-                    (* Pointer-typed (non-array) local variable: bind as a simple value
-                       (Param) instead of allocating a mutable reference via
-                       store_reference_const.  Pointer values are focused references
-                       which typically lack prisms.
-                       Note: local arrays (arr_meta = SOME _) must still be allocated as
-                       references so that CIndex0 can dereference them correctly.
-                       in the machine model. They are bound directly and can be rebound
-                       via pointer alias assignment handling below. *)
-                    let val var = Isa_Free (name, isa_dummyT)
-                        val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Param var cty tctx'
-                        val tctx'' = (case struct_name_of_cty cty of
-                                        SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
-                                      | NONE => tctx'')
-                        val tctx'' = (case arr_meta of
-                                        SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
-                                      | NONE => tctx'')
-                        (* Check if the init term is c_uninitialized (polymorphic type 'a).
-                           For uninitialized pointer declarations, skip the binding entirely
-                           to avoid introducing an unconstrained type variable. The pointer
-                           alias assignment handler will create the actual binding. *)
-                        val is_uninit =
-                          (case Term.strip_comb init_term of
-                             (hd, [arg]) =>
-                               (case (try Term.dest_Const hd, try Term.dest_Const arg) of
-                                  (SOME (n1, _), SOME (n2, _)) =>
-                                    n1 = \<^const_name>\<open>Core_Expression.literal\<close> andalso
-                                    n2 = \<^const_name>\<open>c_uninitialized\<close>
-                                | _ => false)
-                           | _ => false)
-                    in if is_uninit then
-                         fold_decls ds tctx''
-                       else
-                         C_Term_Build.mk_bind init_term
-                           (Term.lambda var (fold_decls ds tctx''))
+                    let
+                        val ctxt' = C_Trans_Ctxt.get_ctxt tctx'
+                        val supports_raw_ptr = supports_raw_ptr_local_refs ctxt'
+                        val force_mutable_ptr =
+                          List.exists (fn v => v = name) (!current_loop_written_vars)
+                    in
+                      if supports_raw_ptr andalso
+                         (force_mutable_ptr orelse not (prefer_pointer_alias_storage alias_list_backed init_term)) then
+                        let
+                          val raw_ptr_ty = raw_ptr_local_gref_typ ()
+                          val stored_init =
+                            if is_uninitialized_literal init_term then init_term
+                            else mk_implicit_cast (init_term, cty, C_Ast_Utils.CPtr C_Ast_Utils.CVoid)
+                          val alloc_expr =
+                            mk_resolved_var_alloc_typed ctxt' raw_ptr_ty stored_init
+                          val var = mk_typed_ref_var tctx' name alloc_expr
+                          val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.LocalPtr var cty tctx'
+                          val tctx'' = (case struct_name_of_cty cty of
+                                          SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
+                                        | NONE => tctx'')
+                          val tctx'' = (case arr_meta of
+                                          SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
+                                        | NONE => tctx'')
+                        in C_Term_Build.mk_bind alloc_expr
+                             (Term.lambda var (fold_decls ds tctx'')) end
+                      else
+                        let
+                            val var = Isa_Free (name, pointer_alias_var_ty tctx' alias_list_backed cty init_term)
+                            val kind = pointer_alias_kind alias_list_backed
+                            val tctx'' = C_Trans_Ctxt.add_var name kind var cty tctx'
+                            val tctx'' = (case struct_name_of_cty cty of
+                                            SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
+                                          | NONE => tctx'')
+                            val tctx'' = (case arr_meta of
+                                            SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
+                                          | NONE => tctx'')
+                        in if is_uninitialized_literal init_term then
+                             fold_decls ds tctx''
+                           else
+                             C_Term_Build.mk_bind init_term
+                               (Term.lambda var (fold_decls ds tctx''))
+                        end
                     end
                   else
                   let val val_type =
@@ -4502,11 +6171,18 @@ struct
                  CExpr0 (Some (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)), _) =>
                    let val name = C_Ast_Utils.ident_name ident
                    in case C_Trans_Ctxt.lookup_var tctx name of
-                        SOME (C_Trans_Ctxt.Param, _, cty) =>
-                          if C_Ast_Utils.is_ptr cty then
+                        SOME (kind0, _, cty) =>
+                          if C_Ast_Utils.is_ptr cty andalso
+                             (case kind0 of
+                                C_Trans_Ctxt.Param => true
+                              | C_Trans_Ctxt.ParamListPtr => true
+                              | _ => false)
+                          then
                             let val (rhs_term, _) = translate_expr tctx rhs
-                                val var = Isa_Free (name, isa_dummyT)
-                                val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Param var cty tctx
+                                val rhs_list_backed = expr_is_list_backed_array tctx rhs
+                                val var = Isa_Free (name, pointer_alias_var_ty tctx rhs_list_backed cty rhs_term)
+                                val kind = pointer_alias_kind rhs_list_backed
+                                val tctx' = C_Trans_Ctxt.add_var name kind var cty tctx
                             in SOME (C_Term_Build.mk_bind rhs_term
                                  (Term.lambda var (translate_compound_items tctx' rest)))
                             end
@@ -4673,6 +6349,44 @@ struct
                     (case step_opt of
                        Some s => C_Term_Build.mk_sequence (expr_term tctx' s) C_Term_Build.mk_literal_unit
                      | None => C_Term_Build.mk_literal_unit)
+              fun expr_writes_name name (CAssign0 (_, CVar0 (ident, _), rhs, _)) =
+                    C_Ast_Utils.ident_name ident = name orelse expr_writes_name name rhs
+                | expr_writes_name name (CAssign0 (_, lhs, rhs, _)) =
+                    expr_writes_name name lhs orelse expr_writes_name name rhs
+                | expr_writes_name name (CUnary0 (CPreIncOp0, CVar0 (ident, _), _)) =
+                    C_Ast_Utils.ident_name ident = name
+                | expr_writes_name name (CUnary0 (CPostIncOp0, CVar0 (ident, _), _)) =
+                    C_Ast_Utils.ident_name ident = name
+                | expr_writes_name name (CUnary0 (CPreDecOp0, CVar0 (ident, _), _)) =
+                    C_Ast_Utils.ident_name ident = name
+                | expr_writes_name name (CUnary0 (CPostDecOp0, CVar0 (ident, _), _)) =
+                    C_Ast_Utils.ident_name ident = name
+                | expr_writes_name name (CBinary0 (_, l, r, _)) =
+                    expr_writes_name name l orelse expr_writes_name name r
+                | expr_writes_name name (CUnary0 (_, e, _)) =
+                    expr_writes_name name e
+                | expr_writes_name name (CIndex0 (a, i, _)) =
+                    expr_writes_name name a orelse expr_writes_name name i
+                | expr_writes_name name (CMember0 (e, _, _, _)) =
+                    expr_writes_name name e
+                | expr_writes_name name (CCast0 (_, e, _)) =
+                    expr_writes_name name e
+                | expr_writes_name name (CCall0 (f, args, _)) =
+                    expr_writes_name name f orelse List.exists (expr_writes_name name) args
+                | expr_writes_name name (CComma0 (es, _)) =
+                    List.exists (expr_writes_name name) es
+                | expr_writes_name name (CCond0 (c, t, e, _)) =
+                    expr_writes_name name c orelse
+                    (case t of Some te => expr_writes_name name te | None => false) orelse
+                    expr_writes_name name e
+                | expr_writes_name _ _ = false
+              fun loop_var_written_in_step name =
+                    (case step_opt of
+                       Some s => expr_writes_name name s
+                     | None => false)
+              fun loop_var_needs_mutable_storage name =
+                    loop_var_written_in_step name orelse
+                    List.exists (fn n => n = name) (C_Ast_Utils.find_assigned_vars body)
               fun build_while tctx' =
                 let val has_brk = contains_break body
                     val has_cont = contains_continue body
@@ -4766,29 +6480,149 @@ struct
             in
               case init_part of
                 Left init_expr_opt =>
-                  let val init_term = case init_expr_opt of
-                            Some e => expr_term tctx e
-                          | None => C_Term_Build.mk_literal_unit
-                  in C_Term_Build.mk_sequence init_term (build_while tctx) end
+                  (case init_expr_opt of
+                     Some (assign_expr as CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =>
+                       let
+                         val name = C_Ast_Utils.ident_name ident
+                       in case C_Trans_Ctxt.lookup_var tctx name of
+                            SOME (kind0, _, cty) =>
+                              if C_Ast_Utils.is_ptr cty andalso
+                                 (case kind0 of
+                                    C_Trans_Ctxt.Param => true
+                                  | C_Trans_Ctxt.ParamListPtr => true
+                                  | _ => false)
+                              then
+                                let
+                                  val (rhs_term, rhs_cty) = translate_expr tctx rhs
+                                  val mutable_ptr = loop_var_needs_mutable_storage name
+                                  val rhs_list_backed = expr_is_list_backed_array tctx rhs
+                                  val init_term =
+                                    if mutable_ptr then
+                                      let
+                                        val rhs_cast = mk_implicit_cast (rhs_term, rhs_cty, cty)
+                                      in
+                                        if supports_raw_ptr_local_refs (C_Trans_Ctxt.get_ctxt tctx)
+                                        then
+                                          let
+                                            val rhs_raw =
+                                              mk_implicit_cast (rhs_cast, cty, C_Ast_Utils.CPtr C_Ast_Utils.CVoid)
+                                            val alloc_expr =
+                                              mk_resolved_var_alloc_typed
+                                                (C_Trans_Ctxt.get_ctxt tctx)
+                                                (raw_ptr_local_gref_typ ()) rhs_raw
+                                            val var = mk_typed_ref_var tctx name alloc_expr
+                                            val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.LocalPtr var cty tctx
+                                            val tctx' = (case struct_name_of_cty cty of
+                                                           SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx'
+                                                         | NONE => tctx')
+                                          in
+                                            C_Term_Build.mk_bind alloc_expr
+                                              (Term.lambda var (build_while tctx'))
+                                          end
+                                        else
+                                          let
+                                            val val_type =
+                                              let val ty = expr_value_type rhs_cast
+                                              in if ty = isa_dummyT then expr_value_type rhs_term else ty end
+                                            val alloc_expr =
+                                              mk_resolved_var_alloc_typed
+                                                (C_Trans_Ctxt.get_ctxt tctx) val_type rhs_cast
+                                            val var = mk_typed_ref_var tctx name alloc_expr
+                                            val tctx' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx
+                                            val tctx' = (case struct_name_of_cty cty of
+                                                           SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx'
+                                                         | NONE => tctx')
+                                          in
+                                            C_Term_Build.mk_bind alloc_expr
+                                              (Term.lambda var (build_while tctx'))
+                                          end
+                                      end
+                                    else
+                                      let
+                                        val var = Isa_Free (name, pointer_alias_var_ty tctx rhs_list_backed cty rhs_term)
+                                        val kind = pointer_alias_kind rhs_list_backed
+                                        val tctx' = C_Trans_Ctxt.add_var name kind var cty tctx
+                                      in
+                                        C_Term_Build.mk_bind rhs_term
+                                          (Term.lambda var (build_while tctx'))
+                                      end
+                                in
+                                  init_term
+                                end
+                              else
+                                let
+                                  val init_term = expr_term tctx assign_expr
+                                in
+                                  C_Term_Build.mk_sequence init_term (build_while tctx)
+                                end
+                          | _ =>
+                              let
+                                val init_term = expr_term tctx assign_expr
+                              in
+                                C_Term_Build.mk_sequence init_term (build_while tctx)
+                              end
+                       end
+                   | Some e =>
+                       let val init_term = expr_term tctx e
+                       in C_Term_Build.mk_sequence init_term (build_while tctx) end
+                   | None => build_while tctx)
               | Right init_decl =>
                   let val decls = translate_decl tctx init_decl
                       fun fold_decls [] tctx' = build_while tctx'
-                        | fold_decls ((name, init, cty, arr_meta) :: ds) tctx' =
-                            let val val_type =
-                                  let val ty = C_Ast_Utils.hol_type_of cty
-                                  in if ty = isa_dummyT then expr_value_type init else ty end
-                                val alloc_expr =
-                                  mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt tctx') val_type init
-                                val var = mk_typed_ref_var tctx' name alloc_expr
-                                val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
-                                val tctx'' = (case struct_name_of_cty cty of
-                                                SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
-                                              | NONE => tctx'')
-                                val tctx'' = (case arr_meta of
-                                                SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
-                                              | NONE => tctx'')
-                            in C_Term_Build.mk_bind alloc_expr
-                                 (Term.lambda var (fold_decls ds tctx'')) end
+                        | fold_decls ((name, init, cty, arr_meta, alias_list_backed) :: ds) tctx' =
+                            if C_Ast_Utils.is_ptr cty andalso not (Option.isSome arr_meta) then
+                              if supports_raw_ptr_local_refs (C_Trans_Ctxt.get_ctxt tctx') andalso
+                                 not (prefer_pointer_alias_storage alias_list_backed init) then
+                                let
+                                  val raw_ptr_ty = raw_ptr_local_gref_typ ()
+                                  val stored_init =
+                                    if is_uninitialized_literal init then init
+                                    else mk_implicit_cast (init, cty, C_Ast_Utils.CPtr C_Ast_Utils.CVoid)
+                                  val alloc_expr =
+                                    mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt tctx') raw_ptr_ty stored_init
+                                  val var = mk_typed_ref_var tctx' name alloc_expr
+                                  val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.LocalPtr var cty tctx'
+                                  val tctx'' = (case struct_name_of_cty cty of
+                                                  SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
+                                                | NONE => tctx'')
+                                  val tctx'' = (case arr_meta of
+                                                  SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
+                                                | NONE => tctx'')
+                                in C_Term_Build.mk_bind alloc_expr
+                                     (Term.lambda var (fold_decls ds tctx'')) end
+                              else
+                                let
+                                  val var = Isa_Free (name, pointer_alias_var_ty tctx' alias_list_backed cty init)
+                                  val kind = pointer_alias_kind alias_list_backed
+                                  val tctx'' = C_Trans_Ctxt.add_var name kind var cty tctx'
+                                  val tctx'' = (case struct_name_of_cty cty of
+                                                  SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
+                                                | NONE => tctx'')
+                                  val tctx'' = (case arr_meta of
+                                                  SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
+                                                | NONE => tctx'')
+                                in if is_uninitialized_literal init then
+                                     fold_decls ds tctx''
+                                   else
+                                     C_Term_Build.mk_bind init
+                                       (Term.lambda var (fold_decls ds tctx''))
+                                end
+                            else
+                              let val val_type =
+                                    let val ty = C_Ast_Utils.hol_type_of cty
+                                    in if ty = isa_dummyT then expr_value_type init else ty end
+                                  val alloc_expr =
+                                    mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt tctx') val_type init
+                                  val var = mk_typed_ref_var tctx' name alloc_expr
+                                  val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
+                                  val tctx'' = (case struct_name_of_cty cty of
+                                                  SOME sn => C_Trans_Ctxt.set_struct_type name sn tctx''
+                                                | NONE => tctx'')
+                                  val tctx'' = (case arr_meta of
+                                                  SOME (elem_cty, n) => C_Trans_Ctxt.set_array_decl name elem_cty n tctx''
+                                                | NONE => tctx'')
+                              in C_Term_Build.mk_bind alloc_expr
+                                   (Term.lambda var (fold_decls ds tctx'')) end
                   in fold_decls decls tctx end
             end
         in
@@ -5040,9 +6874,89 @@ struct
     | translate_stmt _ _ =
         unsupported "statement"
 
+  local
+    fun expr_writes_in_loop (CAssign0 (_, CVar0 (ident, _), rhs, _)) acc =
+          expr_writes_in_loop rhs (C_Ast_Utils.ident_name ident :: acc)
+      | expr_writes_in_loop (CAssign0 (_, lhs, rhs, _)) acc =
+          expr_writes_in_loop rhs (expr_writes_in_loop lhs acc)
+      | expr_writes_in_loop (CUnary0 (CPreIncOp0, CVar0 (ident, _), _)) acc =
+          C_Ast_Utils.ident_name ident :: acc
+      | expr_writes_in_loop (CUnary0 (CPostIncOp0, CVar0 (ident, _), _)) acc =
+          C_Ast_Utils.ident_name ident :: acc
+      | expr_writes_in_loop (CUnary0 (CPreDecOp0, CVar0 (ident, _), _)) acc =
+          C_Ast_Utils.ident_name ident :: acc
+      | expr_writes_in_loop (CUnary0 (CPostDecOp0, CVar0 (ident, _), _)) acc =
+          C_Ast_Utils.ident_name ident :: acc
+      | expr_writes_in_loop (CBinary0 (_, l, r, _)) acc =
+          expr_writes_in_loop r (expr_writes_in_loop l acc)
+      | expr_writes_in_loop (CUnary0 (_, e, _)) acc = expr_writes_in_loop e acc
+      | expr_writes_in_loop (CIndex0 (a, i, _)) acc =
+          expr_writes_in_loop i (expr_writes_in_loop a acc)
+      | expr_writes_in_loop (CMember0 (e, _, _, _)) acc = expr_writes_in_loop e acc
+      | expr_writes_in_loop (CCast0 (_, e, _)) acc = expr_writes_in_loop e acc
+      | expr_writes_in_loop (CCall0 (f, args, _)) acc =
+          List.foldl (fn (a, ac) => expr_writes_in_loop a ac) (expr_writes_in_loop f acc) args
+      | expr_writes_in_loop (CComma0 (es, _)) acc =
+          List.foldl (fn (e, ac) => expr_writes_in_loop e ac) acc es
+      | expr_writes_in_loop (CCond0 (c, t, e, _)) acc =
+          expr_writes_in_loop e
+            ((case t of Some te => expr_writes_in_loop te | None => I)
+              (expr_writes_in_loop c acc))
+      | expr_writes_in_loop _ acc = acc
+
+    fun loop_decl_writes (CDecl0 (_, declarators, _)) acc =
+          List.foldl
+            (fn (((_, Some (CInitExpr0 (e, _))), _), ac) => expr_writes_in_loop e ac
+              | (((_, Some (CInitList0 (inits, _))), _), ac) =>
+                  List.foldl (fn ((_, init), ac') =>
+                      (case init of
+                         CInitExpr0 (e, _) => expr_writes_in_loop e ac'
+                       | CInitList0 _ => ac'))
+                    ac inits
+              | (_, ac) => ac)
+            acc declarators
+      | loop_decl_writes _ acc = acc
+
+    fun loop_item_writes (CBlockStmt0 s) acc = loop_stmt_writes s acc
+      | loop_item_writes (CBlockDecl0 d) acc = loop_decl_writes d acc
+      | loop_item_writes _ acc = acc
+
+    and loop_stmt_writes (CCompound0 (_, items, _)) acc =
+          List.foldl (fn (it, ac) => loop_item_writes it ac) acc items
+      | loop_stmt_writes (CExpr0 (Some e, _)) acc = expr_writes_in_loop e acc
+      | loop_stmt_writes (CReturn0 (Some e, _)) acc = expr_writes_in_loop e acc
+      | loop_stmt_writes (CIf0 (c, t, e_opt, _)) acc =
+          let
+            val acc = expr_writes_in_loop c acc
+            val acc = loop_stmt_writes t acc
+          in case e_opt of Some e => loop_stmt_writes e acc | None => acc end
+      | loop_stmt_writes (CWhile0 (c, b, _, _)) acc =
+          loop_stmt_writes b (expr_writes_in_loop c acc)
+      | loop_stmt_writes (CFor0 (init, c, s, b, _)) acc =
+          let
+            val acc =
+              (case init of
+                 Left (Some e) => expr_writes_in_loop e acc
+               | Right d => loop_decl_writes d acc
+               | _ => acc)
+            val acc = (case c of Some e => expr_writes_in_loop e acc | None => acc)
+            val acc = (case s of Some e => expr_writes_in_loop e acc | None => acc)
+          in loop_stmt_writes b acc end
+      | loop_stmt_writes (CSwitch0 (e, s, _)) acc =
+          loop_stmt_writes s (expr_writes_in_loop e acc)
+      | loop_stmt_writes (CCase0 (e, s, _)) acc =
+          loop_stmt_writes s (expr_writes_in_loop e acc)
+      | loop_stmt_writes (CDefault0 (s, _)) acc = loop_stmt_writes s acc
+      | loop_stmt_writes (CLabel0 (_, s, _, _)) acc = loop_stmt_writes s acc
+      | loop_stmt_writes _ acc = acc
+  in
+    fun find_loop_written_vars_local stmt = distinct (op =) (loop_stmt_writes stmt [])
+  end
+
   fun translate_fundef struct_tab enum_tab typedef_tab func_ret_types func_param_types global_consts ctxt
       (CFunDef0 (specs, declr, _, body, _)) =
     let
+      val _ = current_visible_ctxt := SOME ctxt
       val name = C_Ast_Utils.declr_name declr
       val _ =
         if C_Ast_Utils.declr_is_variadic declr then
@@ -5057,14 +6971,24 @@ struct
       val _ = func_ret_types := Symtab.update (name, ret_cty) (! func_ret_types)
       val param_names = C_Ast_Utils.extract_params declr
       val param_decls = C_Ast_Utils.extract_param_decls declr
+      val struct_names = Symtab.keys struct_tab
+      val union_names = !current_union_names
       (* Extract parameter types and pointer-ness from declarations.
          Use resolve_c_type_full so that typedef'd types (e.g. uint32) resolve
          correctly to their underlying C type for signed/unsigned dispatch. *)
       val param_info = List.map (fn pdecl =>
-        let val cty = case pdecl of
+        let
+            val cty = case pdecl of
                         CDecl0 (specs, _, _) =>
                           (case C_Ast_Utils.resolve_c_type_full typedef_tab specs of
-                             SOME t => t | NONE => C_Ast_Utils.CInt)
+                             SOME t => t
+                           | NONE =>
+                               (case C_Ast_Utils.extract_struct_type_from_decl_full struct_names pdecl of
+                                  SOME sn => C_Ast_Utils.CStruct sn
+                                | NONE =>
+                                    (case C_Ast_Utils.extract_union_type_from_decl_full union_names pdecl of
+                                       SOME un => C_Ast_Utils.CUnion un
+                                     | NONE => C_Ast_Utils.CInt)))
                       | _ => C_Ast_Utils.CInt
             val ptr_depth = C_Ast_Utils.pointer_depth_of_decl pdecl
             val reg_cty = C_Ast_Utils.apply_ptr_depth cty ptr_depth
@@ -5073,15 +6997,48 @@ struct
       val param_name_info = ListPair.zipEq (param_names, param_info)
         handle ListPair.UnequalLengths =>
           List.map (fn n => (n, C_Ast_Utils.CInt)) param_names
+      val param_list_backed_modes =
+        (case Symtab.lookup (!current_list_backed_param_modes) name of
+           SOME modes =>
+             if List.length modes = List.length param_name_info then modes
+             else List.map (K false) param_name_info
+         | NONE => List.map (K false) param_name_info)
       (* Create free variables for each parameter.
-         Pointer params use dummyT (Isabelle infers reference types).
-         Non-pointer params get explicit types for signed/unsigned dispatch. *)
-      val param_vars = List.map (fn (n, cty) =>
-        let val hol_ty = if C_Ast_Utils.is_ptr cty then isa_dummyT else C_Ast_Utils.hol_type_of cty
-        in (n, Isa_Free (n, hol_ty), cty) end) param_name_info
-      (* Add parameters to the translation context as Param (by-value) *)
+         List-backed decay parameters must stay concretely list-backed so helper
+         extraction keeps working; other pointers remain inference-driven except
+         raw void/union pointers, which need a stable representation. *)
+      fun param_value_hol_ty list_backed cty =
+        if list_backed then
+          (case list_backed_pointer_value_hol_ty cty of
+             SOME ty => ty
+           | NONE => isa_dummyT)
+        else
+          (case cty of
+             C_Ast_Utils.CPtr C_Ast_Utils.CVoid =>
+               (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) cty of
+                  SOME ty => ty
+                | NONE => isa_dummyT)
+           | C_Ast_Utils.CPtr (C_Ast_Utils.CUnion _) =>
+               (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) cty of
+                  SOME ty => ty
+                | NONE => isa_dummyT)
+           | _ =>
+               if C_Ast_Utils.is_ptr cty then isa_dummyT else C_Ast_Utils.hol_type_of cty)
+      val param_vars =
+        ListPair.mapEq (fn ((n, cty), list_backed) =>
+          let val hol_ty = param_value_hol_ty list_backed cty
+          in (n, Isa_Free (n, hol_ty), cty, list_backed) end)
+          (param_name_info, param_list_backed_modes)
+        handle ListPair.UnequalLengths =>
+          List.map (fn (n, cty) =>
+            let val hol_ty = param_value_hol_ty false cty
+            in (n, Isa_Free (n, hol_ty), cty, false) end) param_name_info
+      (* Add parameters to the translation context as Param/ParamListPtr. *)
       val tctx = List.foldl
-        (fn ((n, v, cty), ctx) => C_Trans_Ctxt.add_var n C_Trans_Ctxt.Param v cty ctx)
+        (fn ((n, v, cty, list_backed), ctx) =>
+            C_Trans_Ctxt.add_var n
+              (if list_backed then C_Trans_Ctxt.ParamListPtr else C_Trans_Ctxt.Param)
+              v cty ctx)
         (C_Trans_Ctxt.make ctxt struct_tab enum_tab typedef_tab func_ret_types func_param_types
           (!current_ref_addr_ty) (!current_ref_gv_ty)) param_vars
       val tctx = List.foldl (fn ((gname, gterm, gcty, garr_meta, gstruct), ctx) =>
@@ -5097,8 +7054,6 @@ struct
                   tctx global_consts
       (* Annotate struct pointer parameters with their struct type.
          Uses _full variant to also recognize typedef'd struct names. *)
-      val struct_names = Symtab.keys struct_tab
-      val union_names = !current_union_names
       val tctx = List.foldl (fn (pdecl, ctx) =>
         case (C_Ast_Utils.param_name pdecl,
               C_Ast_Utils.extract_struct_type_from_decl_full struct_names pdecl) of
@@ -5112,17 +7067,33 @@ struct
          For each promoted parameter, wrap the body with Ref::new(literal param)
          and register the ref as a Local in the context (shadowing the Param). *)
       val assigned_names = C_Ast_Utils.find_assigned_vars body
-      val promoted_params = List.filter (fn (n, _, _) =>
+      val _ = current_loop_written_vars := find_loop_written_vars_local body
+      val promoted_params = List.filter (fn (n, _, _, _) =>
         List.exists (fn a => a = n) assigned_names) param_vars
       val (tctx, promoted_bindings) = List.foldl
-        (fn ((n, orig_var, cty), (ctx, binds)) =>
+        (fn ((n, orig_var, cty, list_backed), (ctx, binds)) =>
           let
-              val val_type = C_Ast_Utils.hol_type_of cty
-              val alloc_expr =
-                mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt ctx) val_type
-                  (C_Term_Build.mk_literal orig_var)
+              val use_raw_ptr =
+                C_Ast_Utils.is_ptr cty andalso
+                supports_raw_ptr_local_refs (C_Trans_Ctxt.get_ctxt ctx) andalso
+                not list_backed
+              val (kind, alloc_expr) =
+                if use_raw_ptr then
+                  (C_Trans_Ctxt.LocalPtr,
+                   mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt ctx) (raw_ptr_local_gref_typ ())
+                     (mk_implicit_cast (C_Term_Build.mk_literal orig_var, cty, C_Ast_Utils.CPtr C_Ast_Utils.CVoid)))
+                else
+                  let
+                    val val_type =
+                      let val ty = fastype_of orig_var
+                      in if ty = isa_dummyT then C_Ast_Utils.hol_type_of cty else ty end
+                  in
+                    (C_Trans_Ctxt.Local,
+                     mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt ctx) val_type
+                       (C_Term_Build.mk_literal orig_var))
+                  end
               val ref_var = mk_typed_ref_var ctx (n ^ "_ref") alloc_expr
-              val ctx' = C_Trans_Ctxt.add_var n C_Trans_Ctxt.Local ref_var cty ctx
+              val ctx' = C_Trans_Ctxt.add_var n kind ref_var cty ctx
           in (ctx', binds @ [(ref_var, alloc_expr)]) end)
         (tctx, []) promoted_params
       (* Allocate goto flag references for forward-only goto support.
@@ -5157,10 +7128,17 @@ struct
         (case !current_ref_expr_constraint of
            NONE => body_term
          | SOME expr_ty => Type.constraint expr_ty body_term)
+      val body_term =
+        (case ret_cty of
+           C_Ast_Utils.CVoid => constrain_known_expr_value_type @{typ unit} body_term
+         | _ =>
+             (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) ret_cty of
+                SOME ty => constrain_known_expr_value_type ty body_term
+              | NONE => body_term))
       val fn_term = C_Term_Build.mk_function_body body_term
       (* Wrap in lambdas for each parameter *)
       val fn_term = List.foldr
-        (fn ((_, v, _), t) => Term.lambda v t)
+        (fn ((_, v, _, _), t) => Term.lambda v t)
         fn_term param_vars
       (* Abstract while-loop fuel variables as additional parameters *)
       val fuel_frees = Isa_add_frees fn_term []
@@ -5173,6 +7151,14 @@ struct
                  writeln ("  fuel params: " ^ Int.toString fuel_count))
               else ()
       val fn_term = List.foldr (fn (v, t) => Term.lambda v t) fn_term fuel_frees
+      fun mk_fun_ty (arg_ty, res_ty) = Isa_Type (\<^type_name>\<open>fun\<close>, [arg_ty, res_ty])
+      val fn_term =
+        let
+          val all_arg_tys =
+            List.map fastype_of fuel_frees @
+            List.map (fn (_, v, _, _) => fastype_of v) param_vars
+          val fn_sig_ty = List.foldr mk_fun_ty (fastype_of (C_Term_Build.mk_function_body body_term)) all_arg_tys
+        in Type.constraint fn_sig_ty fn_term end
       val fn_term' = Syntax.check_term ctxt fn_term
     in
       (name, fn_term')
@@ -5190,6 +7176,7 @@ structure C_Def_Gen : sig
   val set_abi_profile : C_ABI.profile -> unit
   val set_ref_universe_types : typ -> typ -> unit
   val set_ref_abort_type : typ option -> unit
+  val set_pointer_model : C_Translate.pointer_model -> unit
   val define_c_function : string -> string -> term -> local_theory -> local_theory
   val process_translation_unit : C_Ast.nodeInfo C_Ast.cTranslationUnit
                                  -> local_theory -> local_theory
@@ -5206,14 +7193,21 @@ struct
     Unsynchronized.ref (TFree ("'addr", []))
   val current_ref_gv_ty : typ Unsynchronized.ref =
     Unsynchronized.ref (TFree ("'gv", []))
+  val current_pointer_model : C_Translate.pointer_model Unsynchronized.ref =
+    Unsynchronized.ref {ptr_add = SOME "c_ptr_add", ptr_shift_signed = SOME "c_ptr_shift_signed", ptr_diff = SOME "c_ptr_diff"}
 
   fun set_decl_prefix pfx = (current_decl_prefix := pfx)
   fun set_manifest m = (current_manifest := m)
   fun set_abi_profile abi = (current_abi_profile := abi)
   fun set_ref_universe_types addr_ty gv_ty =
-    (current_ref_addr_ty := addr_ty; current_ref_gv_ty := gv_ty)
+    (current_ref_addr_ty := addr_ty;
+     current_ref_gv_ty := gv_ty;
+     C_Ast_Utils.set_ref_universe_types addr_ty gv_ty)
   fun set_ref_abort_type expr_constraint_opt =
     (C_Translate.set_ref_abort_type expr_constraint_opt)
+  fun set_pointer_model model =
+    (current_pointer_model := model;
+     C_Translate.set_pointer_model model)
 
   fun define_c_function prefix name term lthy =
     let
@@ -5225,16 +7219,20 @@ struct
           ((binding, NoSyn),
            ((Thm.def_binding binding, @{attributes [micro_rust_simps]}), term'))
           lthy
-      (* Use target_morphism (cf. specification.ML:269) to convert the
-         locale Free back to its qualified Const.  The morphism result is
-         Const(c,U) $ param1 $ param2 $ ..., so extract with head_of. *)
+      val morphed_lhs = Morphism.term (Local_Theory.target_morphism lthy') lhs_term
+      val (registered_term, head_desc) =
+        let
+          val (head, args) = Term.strip_comb morphed_lhs
+        in
+          case head of
+            Term.Const (c, _) =>
+              (Term.list_comb (Const (c, dummyT), args), "const: " ^ c)
+          | _ => (morphed_lhs, "registered term")
+        end
       val _ =
-        (case Term.head_of (Morphism.term (Local_Theory.target_morphism lthy') lhs_term) of
-           Term.Const (c, _) =>
-             (C_Translate.defined_func_consts :=
-                Symtab.update (full_name, c) (! C_Translate.defined_func_consts);
-              writeln ("Defined: " ^ full_name ^ " (const: " ^ c ^ ")"))
-         | _ => writeln ("Defined: " ^ full_name ^ " (no const mapping)"))
+        (C_Translate.defined_func_consts :=
+           Symtab.update (full_name, registered_term) (! C_Translate.defined_func_consts);
+         writeln ("Defined: " ^ full_name ^ " (" ^ head_desc ^ ")"))
     in lthy' end
 
   fun define_c_global_value prefix name term lthy =
@@ -5253,9 +7251,10 @@ struct
   fun define_named_value_if_absent full_name term lthy =
     let
       val ctxt = Local_Theory.target_of lthy
-      val exists = can (Proof_Context.read_const {proper = true, strict = true} ctxt) full_name
+      val exists_const = can (Proof_Context.read_const {proper = true, strict = true} ctxt) full_name
+      val exists_fixed = is_some (Variable.lookup_fixed ctxt full_name)
     in
-      if exists then lthy
+      if exists_const orelse exists_fixed then lthy
       else
         let
           val binding = Binding.name full_name
@@ -5332,11 +7331,27 @@ struct
           val record_fields =
             List.map (fn (fname, SOME ty) => (Binding.name (prefix ^ sname ^ "_" ^ fname), ty)
                       | (_, NONE) => raise Match) fields
+          val tfrees =
+            record_fields
+            |> List.foldl (fn ((_, ty), acc) => Term.add_tfreesT ty acc) []
+            |> distinct (op =)
+          val tfree_subst =
+            tfrees
+            |> map_index (fn (i, (n, sort)) =>
+                 ((n, sort), Term.TFree ("'ac" ^ Int.toString i, sort)))
+          fun subst_tfree (n, sort) =
+            case List.find (fn ((n', s'), _) => n = n' andalso sort = s') tfree_subst of
+              SOME (_, t) => t
+            | NONE => Term.TFree (n, sort)
+          fun subst_ty ty = Term.map_atyps (fn Term.TFree ns => subst_tfree ns | t => t) ty
+          val record_fields = List.map (fn (b, ty) => (b, subst_ty ty)) record_fields
+          val tyargs =
+            List.map (fn (_, t as Term.TFree (_, sort)) => (NONE, (t, sort))) tfree_subst
           val lthy' =
             Datatype_Records.record
               (Binding.name tname)
               Datatype_Records.default_ctr_options
-              []
+              tyargs
               record_fields
               lthy
           val _ = writeln ("Declared datatype_record: " ^ tname)
@@ -5345,12 +7360,28 @@ struct
         end
     end
 
-  fun extract_global_consts typedef_tab struct_tab enum_tab
+  fun extract_global_consts typedef_tab struct_tab enum_tab ctxt
       (C_Ast.CTranslUnit0 (ext_decls, _)) =
     let
       val struct_names = Symtab.keys struct_tab
+      fun resolve_make_const sname =
+        let
+          val raw =
+            Proof_Context.read_const {proper = true, strict = false} ctxt
+              ("make_" ^ !current_decl_prefix ^ sname)
+        in
+          (case raw of
+             Const (n, _) => Const (n, dummyT)
+           | Free (x, _) =>
+               (case Variable.lookup_const ctxt x of
+                  SOME c => Const (c, dummyT)
+                | NONE => Free (x, dummyT))
+           | _ => raw)
+        end
       fun has_const_qual specs =
         List.exists (fn C_Ast.CTypeQual0 (C_Ast.CConstQual0 _) => true | _ => false) specs
+      fun has_static_storage specs =
+        List.exists (fn C_Ast.CStorageSpec0 (C_Ast.CStatic0 _) => true | _ => false) specs
       fun has_array_declr (C_Ast.CDeclr0 (_, derived, _, _, _)) =
             List.exists (fn C_Ast.CArrDeclr0 _ => true | _ => false) derived
       fun array_decl_size (C_Ast.CDeclr0 (_, derived, _, _, _)) =
@@ -5381,12 +7412,80 @@ struct
             init_scalar_const_value e
         | init_scalar_const_value _ =
             error "micro_c_translate: non-constant global initializer element"
-      fun init_scalar_const_term target_cty expr =
+      fun default_const_term (C_Ast_Utils.CBool) = Const (\<^const_name>\<open>False\<close>, @{typ bool})
+        | default_const_term (C_Ast_Utils.CPtr _) =
+            Const (\<^const_name>\<open>c_uninitialized\<close>, dummyT)
+        | default_const_term (C_Ast_Utils.CStruct sname) =
+            let
+              val fields =
+                (case Symtab.lookup struct_tab sname of
+                   SOME fs => fs
+                 | NONE => error ("micro_c_translate: unknown struct in global initializer: " ^ sname))
+              val make_const = resolve_make_const sname
+              val field_vals = List.map (fn (_, field_cty) => default_const_term field_cty) fields
+            in
+              List.foldl (fn (v, acc) => acc $ v) make_const field_vals
+            end
+        | default_const_term cty =
+            HOLogic.mk_number (C_Ast_Utils.hol_type_of cty) 0
+      fun init_expr_const_term (C_Ast_Utils.CPtr _) _ =
+            Const (\<^const_name>\<open>c_uninitialized\<close>, dummyT)
+        | init_expr_const_term target_cty (C_Ast.CConst0 (C_Ast.CStrConst0 (C_Ast.CString0 (abr_str, _), _))) =
+            (case target_cty of
+               _ =>
+                 error "micro_c_translate: string literal initializer requires char pointer target")
+        | init_expr_const_term target_cty expr =
             HOLogic.mk_number (C_Ast_Utils.hol_type_of target_cty)
               (intinf_to_int_checked "global initializer literal"
                 (init_scalar_const_value expr))
+      fun init_struct_const_term sname init_list =
+            let
+              val fields =
+                (case Symtab.lookup struct_tab sname of
+                   SOME fs => fs
+                 | NONE => error ("micro_c_translate: unknown struct in global initializer: " ^ sname))
+              fun find_field_index _ [] _ =
+                    error "micro_c_translate: struct field not found in global initializer"
+                | find_field_index fname ((n, _) :: rest) i =
+                    if n = fname then i else find_field_index fname rest (i + 1)
+              fun resolve_field_desig [] pos = pos
+                | resolve_field_desig [C_Ast.CMemberDesig0 (ident, _)] _ =
+                    find_field_index (C_Ast_Utils.ident_name ident) fields 0
+                | resolve_field_desig _ _ =
+                    error "micro_c_translate: complex designator in global struct initializer"
+              fun collect_field_items [] _ = []
+                | collect_field_items ((desigs, init_item) :: rest) pos =
+                    let val idx = resolve_field_desig desigs pos
+                    in (idx, init_item) :: collect_field_items rest (idx + 1) end
+              val field_items = collect_field_items init_list 0
+              val _ = List.app (fn (idx, _) =>
+                        if idx < 0 orelse idx >= List.length fields
+                        then error "micro_c_translate: struct designator index out of bounds in global initializer"
+                        else ()) field_items
+              val base_vals = List.map (fn (_, field_cty) => default_const_term field_cty) fields
+              val filled =
+                List.foldl
+                  (fn ((idx, init_item), acc) =>
+                    let
+                      val (_, field_cty) = List.nth (fields, idx)
+                      val v = init_value_term field_cty init_item
+                    in
+                      nth_map idx (K v) acc
+                    end)
+                  base_vals
+                  field_items
+              val make_const = resolve_make_const sname
+            in
+              List.foldl (fn (v, acc) => acc $ v) make_const filled
+            end
+      and init_value_term target_cty (C_Ast.CInitExpr0 (expr, _)) =
+            init_expr_const_term target_cty expr
+        | init_value_term (C_Ast_Utils.CStruct sname) (C_Ast.CInitList0 (init_list, _)) =
+            init_struct_const_term sname init_list
+        | init_value_term _ _ =
+            error "micro_c_translate: unsupported non-constant global initializer shape"
       fun process_decl specs declarators =
-        if not (has_const_qual specs) then []
+        if not (has_const_qual specs orelse has_static_storage specs) then []
         else
           let
             val base_cty =
@@ -5405,7 +7504,7 @@ struct
                     val name = C_Ast_Utils.declr_name declr
                     val ptr_depth = C_Ast_Utils.pointer_depth_of_declr declr
                     val actual_cty = C_Ast_Utils.apply_ptr_depth base_cty ptr_depth
-                    val init_term = init_scalar_const_term actual_cty init
+                    val init_term = init_expr_const_term actual_cty init
                     val arr_meta =
                       (case array_decl_size declr of
                          SOME n =>
@@ -5424,23 +7523,39 @@ struct
                     val actual_cty = C_Ast_Utils.apply_ptr_depth base_cty ptr_depth
                     val elem_cty =
                       if ptr_depth > 0 then C_Ast_Utils.apply_ptr_depth base_cty (ptr_depth - 1) else base_cty
-                    val elem_values = List.map
-                      (fn ([], C_Ast.CInitExpr0 (e, _)) => init_scalar_const_term elem_cty e
-                        | _ => error "micro_c_translate: complex global array initializer element") init_list
+                    fun resolve_desig_idx [] pos = pos
+                      | resolve_desig_idx [C_Ast.CArrDesig0 (C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (n, _, _), _)), _)] _ =
+                          intinf_to_int_checked "global array designator" n
+                      | resolve_desig_idx _ _ =
+                          error "micro_c_translate: complex designator in global array initializer"
+                    fun collect_indices [] _ = []
+                      | collect_indices ((desigs, init_item) :: rest) pos =
+                          let val idx = resolve_desig_idx desigs pos
+                          in (idx, init_item) :: collect_indices rest (idx + 1) end
+                    val indexed_items = collect_indices init_list 0
                     val declared_size = array_decl_size declr
-                    val zero_value = HOLogic.mk_number (C_Ast_Utils.hol_type_of elem_cty) 0
-                    val padded_values =
+                    val arr_size =
                       case declared_size of
-                        SOME n =>
-                          if List.length elem_values > n
-                          then error "micro_c_translate: too many initializers for global array"
-                          else elem_values @ List.tabulate (n - List.length elem_values, fn _ => zero_value)
-                      | NONE => elem_values
-                    val list_term = HOLogic.mk_list (C_Ast_Utils.hol_type_of elem_cty) padded_values
+                        SOME n => n
+                      | NONE =>
+                          List.foldl (fn ((idx, _), acc) => Int.max (acc, idx + 1)) 0 indexed_items
+                    val _ = List.app (fn (idx, _) =>
+                              if idx < 0 orelse idx >= arr_size
+                              then error ("micro_c_translate: designator index " ^
+                                          Int.toString idx ^ " out of bounds for global array of size " ^
+                                          Int.toString arr_size)
+                              else ()) indexed_items
+                    val zero_value = default_const_term elem_cty
+                    val base_values = List.tabulate (arr_size, fn _ => zero_value)
+                    val filled_values =
+                      List.foldl
+                        (fn ((idx, init_item), acc) =>
+                          nth_map idx (K (init_value_term elem_cty init_item)) acc)
+                        base_values
+                        indexed_items
+                    val list_term = HOLogic.mk_list (C_Ast_Utils.hol_type_of elem_cty) filled_values
                     val arr_meta =
-                      (case declared_size of
-                         SOME n => SOME (elem_cty, n)
-                       | NONE => NONE)
+                      SOME (elem_cty, arr_size)
                   in SOME (name, list_term, actual_cty, arr_meta, struct_name_of_cty actual_cty) end
               | process_one ((C_Ast.Some _, C_Ast.None), _) = NONE
               | process_one _ =
@@ -5455,6 +7570,10 @@ struct
 
   fun process_translation_unit tu lthy =
     let
+      val _ = C_Translate.defined_func_consts := Symtab.empty
+      val _ = C_Translate.defined_func_fuels := Symtab.empty
+      val _ = C_Translate.current_list_backed_param_modes := Symtab.empty
+      val _ = C_Translate.current_struct_array_fields := Symtab.empty
       val decl_prefix = !current_decl_prefix
       val abi_profile = !current_abi_profile
       val {functions = manifest_functions, types = manifest_types} = !current_manifest
@@ -5474,15 +7593,22 @@ struct
       (* Extract struct definitions to build the struct field registry.
          Use fold/update to allow user typedefs to override builtins. *)
       val typedef_defs_early =
-        builtin_typedefs @ List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_typedefs tu)
+        builtin_typedefs @ C_Ast_Utils.extract_typedefs tu
       val typedef_tab_early = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                                 Symtab.empty typedef_defs_early
       val struct_defs =
         List.filter (fn (n, _) => keep_type n)
           (C_Ast_Utils.extract_struct_defs_with_types typedef_tab_early tu)
+      val parametric_struct_names =
+        C_Ast_Utils.derive_parametric_struct_names struct_defs
+      val _ = C_Ast_Utils.set_ref_universe_types (!current_ref_addr_ty) (!current_ref_gv_ty)
+      val _ = C_Ast_Utils.set_parametric_struct_names parametric_struct_names
       val struct_record_defs =
         List.filter (fn (n, _) => keep_type n)
           (C_Ast_Utils.extract_struct_record_defs decl_prefix typedef_tab_early tu)
+      val struct_array_field_tab =
+        Symtab.make (List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_struct_array_fields tu))
+      val _ = C_Translate.current_struct_array_fields := struct_array_field_tab
       val union_defs =
         List.filter (fn (n, _) => keep_type n)
           (C_Ast_Utils.extract_union_defs_with_types typedef_tab_early tu)
@@ -5505,7 +7631,7 @@ struct
                    Int.toString value)) enum_defs
       (* Extract typedef mappings *)
       val typedef_defs =
-        builtin_typedefs @ List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_typedefs tu)
+        builtin_typedefs @ C_Ast_Utils.extract_typedefs tu
       val typedef_tab = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
                           Symtab.empty typedef_defs
       val _ = if null typedef_defs then () else
@@ -5601,6 +7727,24 @@ struct
                        error ("micro_c_translate: unsupported C construct: variadic function definition: " ^ name)
                      else ()
                   end) fundefs
+      fun refine_pure_functions pure_tab =
+        let
+          val pure_tab' =
+            List.foldl
+              (fn (fdef, tab) =>
+                let val name = fundef_name fdef
+                in
+                  if C_Ast_Utils.fundef_is_pure_with pure_tab fdef then
+                    Symtab.update (name, ()) tab
+                  else tab
+                end)
+              Symtab.empty fundefs_raw
+        in
+          if Symtab.dest pure_tab' = Symtab.dest pure_tab then pure_tab
+          else refine_pure_functions pure_tab'
+        end
+      val pure_fun_tab = refine_pure_functions fun_name_tab
+      val _ = C_Ast_Utils.set_pure_function_names (Symtab.keys pure_fun_tab)
       val signatures = decl_signatures @ List.map fundef_signature fundefs
       val func_ret_table = List.foldl
         (fn ((n, (rty, _)), tab) => Symtab.update (n, rty) tab)
@@ -5610,10 +7754,112 @@ struct
         (fn ((n, (_, ptys)), tab) => Symtab.update (n, ptys) tab)
         Symtab.empty signatures
       val func_param_types = Unsynchronized.ref func_param_table
+      val all_struct_names = Symtab.keys struct_tab
+      fun has_static_storage specs =
+        List.exists (fn C_Ast.CStorageSpec0 (C_Ast.CStatic0 _) => true | _ => false) specs
+      fun param_declr_of_decl (C_Ast.CDecl0 (_, declarators, _)) =
+            (case declarators of
+               ((C_Ast.Some declr, _), _) :: _ => SOME declr
+             | _ => NONE)
+        | param_declr_of_decl _ = NONE
+      fun param_decl_has_array pdecl =
+        (case param_declr_of_decl pdecl of
+           SOME (C_Ast.CDeclr0 (_, derived, _, _, _)) =>
+             List.exists (fn C_Ast.CArrDeclr0 _ => true | _ => false) derived
+         | NONE => false)
+      val list_backed_alias_envs =
+        List.foldl
+          (fn (fdef, tab) =>
+            Symtab.update (fundef_name fdef, C_Ast_Utils.find_list_backed_aliases struct_tab struct_array_field_tab fdef) tab)
+          Symtab.empty fundefs_raw
+      val caller_struct_envs =
+        List.foldl
+          (fn (C_Ast.CFunDef0 (_, declr, _, _, _), tab) =>
+            let
+              val fname = C_Ast_Utils.declr_name declr
+              val pdecls = C_Ast_Utils.extract_param_decls declr
+              val struct_env =
+                List.foldl
+                  (fn (pdecl, env) =>
+                    case (param_declr_of_decl pdecl,
+                          C_Ast_Utils.extract_struct_type_from_decl_full all_struct_names pdecl) of
+                      (SOME pdeclr, SOME sname) =>
+                        Symtab.update (C_Ast_Utils.declr_name pdeclr, sname) env
+                    | _ =>
+                        (case (param_declr_of_decl pdecl,
+                               C_Ast_Utils.extract_union_type_from_decl_full union_names pdecl) of
+                           (SOME pdeclr, SOME uname) =>
+                             Symtab.update (C_Ast_Utils.declr_name pdeclr, uname) env
+                         | _ => env))
+                  Symtab.empty pdecls
+            in
+              Symtab.update (fname, struct_env) tab
+            end)
+          Symtab.empty fundefs_raw
+      val call_sites =
+        List.concat
+          (List.map
+            (fn fdef =>
+              let
+                val caller = fundef_name fdef
+                val caller_aliases = the_default [] (Symtab.lookup list_backed_alias_envs caller)
+                val caller_struct_env = the_default Symtab.empty (Symtab.lookup caller_struct_envs caller)
+              in
+                List.map (fn (callee, args) => (caller_aliases, caller_struct_env, callee, args))
+                  (C_Ast_Utils.find_named_calls_with_args fdef)
+              end)
+            fundefs_raw)
+      fun arg_is_list_backed caller_aliases caller_struct_env arg =
+        (case arg of
+           C_Ast.CVar0 (ident, _) =>
+             List.exists (fn n => n = C_Ast_Utils.ident_name ident) caller_aliases
+         | C_Ast.CMember0 (base, field_ident, _, _) =>
+             let
+               fun expr_struct_name (C_Ast.CVar0 (ident, _)) =
+                     Symtab.lookup caller_struct_env (C_Ast_Utils.ident_name ident)
+                 | expr_struct_name (C_Ast.CCast0 (_, e, _)) = expr_struct_name e
+                 | expr_struct_name _ = NONE
+             in
+               (case expr_struct_name base of
+                  SOME struct_name =>
+                    List.exists (fn fname => fname = C_Ast_Utils.ident_name field_ident)
+                      (the_default [] (Symtab.lookup struct_array_field_tab struct_name))
+                | NONE => false)
+             end
+         | _ => false)
+      val list_backed_param_modes =
+        List.foldl
+          (fn (fdef as C_Ast.CFunDef0 (specs, declr, _, _, _), tab) =>
+            let
+              val fname = fundef_name fdef
+              val indexed_names = C_Ast_Utils.find_indexed_base_vars fdef
+              val pdecls = C_Ast_Utils.extract_param_decls declr
+              fun mode_for_param (i, pdecl) =
+                let
+                  val pname = the_default "" (C_Ast_Utils.param_name pdecl)
+                  val p_cty = param_cty_of_decl pdecl
+                  val relevant_calls =
+                    List.filter (fn (_, _, callee, args) => callee = fname andalso i < List.length args) call_sites
+                in
+                  if param_decl_has_array pdecl then true
+                  else if not (C_Ast_Utils.is_ptr p_cty) then false
+                  else if not (has_static_storage specs) then false
+                  else if not (List.exists (fn n => n = pname) indexed_names) then false
+                  else not (null relevant_calls) andalso
+                    List.all (fn (caller_aliases, caller_struct_env, _, args) =>
+                      arg_is_list_backed caller_aliases caller_struct_env (List.nth (args, i))) relevant_calls
+                end
+              val modes = map_index mode_for_param pdecls
+            in
+              Symtab.update (fname, modes) tab
+            end)
+          Symtab.empty fundefs_raw
+      val _ = C_Translate.current_list_backed_param_modes := list_backed_param_modes
       val lthy =
         List.foldl (fn (sdef, lthy_acc) => ensure_struct_record decl_prefix sdef lthy_acc)
           lthy struct_record_defs
-      val global_const_inits = extract_global_consts typedef_tab struct_tab enum_tab tu
+      val global_const_inits =
+        extract_global_consts typedef_tab struct_tab enum_tab (Local_Theory.target_of lthy) tu
       val (lthy, global_consts) =
         List.foldl (fn ((gname, init_term, gcty, garr_meta, gstruct), (lthy_acc, acc)) =>
           let
@@ -5678,6 +7924,9 @@ local
     | TranslateGvTy of string
     | TranslateAbi of string
     | TranslateAbortTy of string
+    | TranslatePtrAdd of string
+    | TranslatePtrShiftSigned of string
+    | TranslatePtrDiff of string
   val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
   val parse_abi_dash =
       Scan.one (fn tok => Token.is_kind Token.Sym_Ident tok andalso Token.content_of tok = "-") >> K ()
@@ -5689,36 +7938,54 @@ local
   val parse_gv_key = Parse.$$$ "gv:" >> K ()
   val parse_abi_key = Parse.$$$ "abi:" >> K ()
   val parse_abort_key = Parse.$$$ "abort:" >> K ()
+  val parse_ptr_add_key = Parse.$$$ "ptr_add:" >> K ()
+  val parse_ptr_shift_signed_key = Parse.$$$ "ptr_shift_signed:" >> K ()
+  val parse_ptr_diff_key = Parse.$$$ "ptr_diff:" >> K ()
   val parse_translate_opt =
       (parse_prefix_key |-- Parse.name >> TranslatePrefix)
       || (parse_addr_key |-- Parse.typ >> TranslateAddrTy)
       || (parse_gv_key |-- Parse.typ >> TranslateGvTy)
       || (parse_abi_key |-- parse_abi_name >> TranslateAbi)
       || (parse_abort_key |-- Parse.typ >> TranslateAbortTy)
+      || (parse_ptr_add_key |-- Parse.name >> TranslatePtrAdd)
+      || (parse_ptr_shift_signed_key |-- Parse.name >> TranslatePtrShiftSigned)
+      || (parse_ptr_diff_key |-- Parse.name >> TranslatePtrDiff)
 
-  fun apply_translate_opt (TranslatePrefix pfx) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt) =
+  fun apply_translate_opt (TranslatePrefix pfx) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
         (case prefix_opt of
-           NONE => (SOME pfx, addr_opt, gv_opt, abi_opt, abort_opt)
+           NONE => (SOME pfx, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
          | SOME _ => error "micro_c_translate: duplicate prefix option")
-    | apply_translate_opt (TranslateAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt) =
+    | apply_translate_opt (TranslateAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
         (case addr_opt of
-           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, abort_opt)
+           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
          | SOME _ => error "micro_c_translate: duplicate addr option")
-    | apply_translate_opt (TranslateGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt) =
+    | apply_translate_opt (TranslateGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
         (case gv_opt of
-           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, abort_opt)
+           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
          | SOME _ => error "micro_c_translate: duplicate gv option")
-    | apply_translate_opt (TranslateAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt) =
+    | apply_translate_opt (TranslateAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
         (case abi_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, abort_opt)
+           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
          | SOME _ => error "micro_c_translate: duplicate abi option")
-    | apply_translate_opt (TranslateAbortTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt) =
+    | apply_translate_opt (TranslateAbortTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
         (case abort_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME ty)
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME ty, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
          | SOME _ => error "micro_c_translate: duplicate abort option")
+    | apply_translate_opt (TranslatePtrAdd name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
+        (case ptr_add_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, SOME name, ptr_shift_signed_opt, ptr_diff_opt)
+         | SOME _ => error "micro_c_translate: duplicate ptr_add option")
+    | apply_translate_opt (TranslatePtrShiftSigned name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
+        (case ptr_shift_signed_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, SOME name, ptr_diff_opt)
+         | SOME _ => error "micro_c_translate: duplicate ptr_shift_signed option")
+    | apply_translate_opt (TranslatePtrDiff name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
+        (case ptr_diff_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, SOME name)
+         | SOME _ => error "micro_c_translate: duplicate ptr_diff option")
 
   fun collect_translate_opts opts =
-    fold apply_translate_opt opts (NONE, NONE, NONE, NONE, NONE)
+    fold apply_translate_opt opts (NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_translate\<close>
@@ -5726,33 +7993,41 @@ val _ =
     (Scan.repeat parse_translate_opt -- Parse.embedded_input -- Scan.repeat parse_translate_opt >>
       (fn ((opts_pre, source), opts_post) => fn lthy =>
       let
-        val (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt) = collect_translate_opts (opts_pre @ opts_post)
+        val (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
+          collect_translate_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" prefix_opt
         val abi_profile = C_ABI.parse_profile (the_default "lp64-le" abi_opt)
         val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
         val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
         val abort_ty_opt = Option.map (Syntax.read_typ lthy) abort_opt
+        fun require_visible_const_name name =
+          (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
+             SOME _ => name
+           | NONE => error ("micro_c_translate: missing required pointer-model constant: " ^ name))
+        val pointer_model =
+          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" ptr_add_opt))
+          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" ptr_shift_signed_opt))
+          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" ptr_diff_opt))
+          }
         (* Build expression type constraint from abort type + locale's reference_types.
            This constrains state/abort/prompt positions so that type inference doesn't
            leave them as unconstrained TFrees that can't unify across functions. *)
         val expr_constraint =
-          (case abort_ty_opt of
-             NONE => NONE
-           | SOME abort_ty =>
-               let
-                 val ref_args =
-                   (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
-                      SOME (Free (_, ref_ty)) =>
-                        C_Translate.strip_isa_fun_type ref_ty
-                    | _ => [])
-                 val (state_ty, prompt_in_ty, prompt_out_ty) =
-                   (case ref_args of
-                      [s, _, _, _, i, o] => (s, i, o)
-                    | _ => (dummyT, dummyT, dummyT))
-               in
-                 SOME (Type (\<^type_name>\<open>expression\<close>,
-                   [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
-               end)
+          let
+            val abort_ty = the_default @{typ c_abort} abort_ty_opt
+            val ref_args =
+              (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
+                 SOME (Free (_, ref_ty)) =>
+                   C_Translate.strip_isa_fun_type ref_ty
+               | _ => [])
+            val (state_ty, prompt_in_ty, prompt_out_ty) =
+              (case ref_args of
+                 [s, _, _, _, i, o] => (s, i, o)
+               | _ => (dummyT, dummyT, dummyT))
+          in
+            SOME (Type (\<^type_name>\<open>expression\<close>,
+              [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
+          end
         (* Step 1: Parse the C source using Isabelle/C's parser.
            We use a Theory context so that Root_Ast_Store is updated at the
            theory level, where get_CTranslUnit can retrieve it. *)
@@ -5769,6 +8044,7 @@ val _ =
         val _ = C_Def_Gen.set_abi_profile abi_profile
         val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
         val _ = C_Def_Gen.set_ref_abort_type expr_constraint
+        val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
@@ -5827,6 +8103,9 @@ local
     | LoadGvTy of string
     | LoadAbi of string
     | LoadAbortTy of string
+    | LoadPtrAdd of string
+    | LoadPtrShiftSigned of string
+    | LoadPtrDiff of string
     | LoadManifest of (theory -> Token.file)
   val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
   val parse_abi_dash =
@@ -5839,6 +8118,9 @@ local
   val parse_gv_key = Parse.$$$ "gv:" >> K ()
   val parse_abi_key = Parse.$$$ "abi:" >> K ()
   val parse_abort_key = Parse.$$$ "abort:" >> K ()
+  val parse_ptr_add_key = Parse.$$$ "ptr_add:" >> K ()
+  val parse_ptr_shift_signed_key = Parse.$$$ "ptr_shift_signed:" >> K ()
+  val parse_ptr_diff_key = Parse.$$$ "ptr_diff:" >> K ()
   val parse_manifest_key = Parse.$$$ "manifest:" >> K ()
   val parse_load_opt =
       (parse_prefix_key |-- Parse.name >> LoadPrefix)
@@ -5846,6 +8128,9 @@ local
       || (parse_gv_key |-- Parse.typ >> LoadGvTy)
       || (parse_abi_key |-- parse_abi_name >> LoadAbi)
       || (parse_abort_key |-- Parse.typ >> LoadAbortTy)
+      || (parse_ptr_add_key |-- Parse.name >> LoadPtrAdd)
+      || (parse_ptr_shift_signed_key |-- Parse.name >> LoadPtrShiftSigned)
+      || (parse_ptr_diff_key |-- Parse.name >> LoadPtrDiff)
       || (parse_manifest_key |-- Resources.parse_file >> LoadManifest)
   val semi = Scan.option \<^keyword>\<open>;\<close>;
 
@@ -5891,32 +8176,44 @@ local
       , types = if null ts then NONE else SOME ts }
     end
 
-  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt) =
+  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
         (case prefix_opt of
-           NONE => (SOME prefix, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt)
+           NONE => (SOME prefix, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate prefix option")
-    | apply_load_opt (LoadAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt) =
+    | apply_load_opt (LoadAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
         (case addr_opt of
-           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, abort_opt, manifest_opt)
+           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate addr option")
-    | apply_load_opt (LoadGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt) =
+    | apply_load_opt (LoadGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
         (case gv_opt of
-           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, abort_opt, manifest_opt)
+           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate gv option")
-    | apply_load_opt (LoadAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt) =
+    | apply_load_opt (LoadAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
         (case abi_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, abort_opt, manifest_opt)
+           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate abi option")
-    | apply_load_opt (LoadAbortTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt) =
+    | apply_load_opt (LoadAbortTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
         (case abort_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME ty, manifest_opt)
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME ty, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
          | SOME _ => error "micro_c_file: duplicate abort option")
-    | apply_load_opt (LoadManifest get_file) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_opt) =
+    | apply_load_opt (LoadPtrAdd name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
+        (case ptr_add_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, SOME name, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate ptr_add option")
+    | apply_load_opt (LoadPtrShiftSigned name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
+        (case ptr_shift_signed_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, SOME name, ptr_diff_opt, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate ptr_shift_signed option")
+    | apply_load_opt (LoadPtrDiff name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
+        (case ptr_diff_opt of
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, SOME name, manifest_opt)
+         | SOME _ => error "micro_c_file: duplicate ptr_diff option")
+    | apply_load_opt (LoadManifest get_file) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
         (case manifest_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, SOME get_file)
+           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, SOME get_file)
          | SOME _ => error "micro_c_file: duplicate manifest option")
 
-  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE, NONE, NONE, NONE, NONE)
+  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE)
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
@@ -5924,31 +8221,39 @@ val _ =
     (Scan.repeat parse_load_opt -- Resources.parse_file -- Scan.repeat parse_load_opt --| semi >>
       (fn ((opts_pre, get_file), opts_post) => fn lthy =>
       let
-        val (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
+        val (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_get_file) =
+          collect_load_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" prefix_opt
         val abi_profile = C_ABI.parse_profile (the_default "lp64-le" abi_opt)
         val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
         val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
         val abort_ty_opt = Option.map (Syntax.read_typ lthy) abort_opt
+        fun require_visible_const_name name =
+          (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
+             SOME _ => name
+           | NONE => error ("micro_c_file: missing required pointer-model constant: " ^ name))
+        val pointer_model =
+          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" ptr_add_opt))
+          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" ptr_shift_signed_opt))
+          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" ptr_diff_opt))
+          }
         (* Build expression type constraint from abort type + locale's reference_types *)
         val expr_constraint =
-          (case abort_ty_opt of
-             NONE => NONE
-           | SOME abort_ty =>
-               let
-                 val ref_args =
-                   (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
-                      SOME (Free (_, ref_ty)) =>
-                        C_Translate.strip_isa_fun_type ref_ty
-                    | _ => [])
-                 val (state_ty, prompt_in_ty, prompt_out_ty) =
-                   (case ref_args of
-                      [s, _, _, _, i, o] => (s, i, o)
-                    | _ => (dummyT, dummyT, dummyT))
-               in
-                 SOME (Type (\<^type_name>\<open>expression\<close>,
-                   [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
-               end)
+          let
+            val abort_ty = the_default @{typ c_abort} abort_ty_opt
+            val ref_args =
+              (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
+                 SOME (Free (_, ref_ty)) =>
+                   C_Translate.strip_isa_fun_type ref_ty
+               | _ => [])
+            val (state_ty, prompt_in_ty, prompt_out_ty) =
+              (case ref_args of
+                 [s, _, _, _, i, o] => (s, i, o)
+               | _ => (dummyT, dummyT, dummyT))
+          in
+            SOME (Type (\<^type_name>\<open>expression\<close>,
+              [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
+          end
         val thy = Proof_Context.theory_of lthy
         val {src_path, lines, digest, pos} : Token.file = get_file thy
 
@@ -5993,6 +8298,7 @@ val _ =
         val _ = C_Def_Gen.set_abi_profile abi_profile
         val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
         val _ = C_Def_Gen.set_ref_abort_type expr_constraint
+        val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
