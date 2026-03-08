@@ -18,7 +18,7 @@ locale c_void_verification_ctx =
     reference reference_types +
     ref_c_int: reference_allocatable reference_types _ _ _ _ _ _ _ c_int_prism +
     ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism
-  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow>
+  for reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> c_abort \<Rightarrow> 'i prompt \<Rightarrow>
       'o prompt_output \<Rightarrow> unit\<close>
   and c_int_prism :: \<open>('gv, c_int) prism\<close>
   and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
@@ -41,14 +41,14 @@ text \<open>
 
 definition c_read_via_void ::
   \<open>('addr, 'gv) gref \<Rightarrow>
-   ('s, c_int, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+   ('s, c_int, c_abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>c_read_via_void p \<equiv> FunctionBody
      (bind (literal (c_cast_from_void c_int_prism p))
        (deep_compose1 call dereference_fun))\<close>
 
 definition c_read_via_void_contract ::
   \<open>('addr, 'gv) gref \<Rightarrow> 'gv \<Rightarrow> c_int \<Rightarrow>
-   ('s, c_int, 'abort) function_contract\<close> where
+   ('s, c_int, c_abort) function_contract\<close> where
   \<open>c_read_via_void_contract p g v \<equiv>
     let typed_p = c_cast_from_void c_int_prism p;
         pre     = typed_p \<mapsto>\<langle>\<top>\<rangle> g\<down>v;
@@ -70,14 +70,14 @@ text \<open>
 
 definition c_write_via_void ::
   \<open>('addr, 'gv) gref \<Rightarrow> c_uint \<Rightarrow>
-   ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+   ('s, unit, c_abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>c_write_via_void p v \<equiv> FunctionBody
      (bind (literal (c_cast_from_void c_uint_prism p))
        (\<lambda>up. call (update_fun up v)))\<close>
 
 definition c_write_via_void_contract ::
   \<open>('addr, 'gv) gref \<Rightarrow> 'gv \<Rightarrow> c_uint \<Rightarrow> c_uint \<Rightarrow>
-   ('s, unit, 'abort) function_contract\<close> where
+   ('s, unit, c_abort) function_contract\<close> where
   \<open>c_write_via_void_contract p g old_v new_v \<equiv>
     let typed_p = c_cast_from_void c_uint_prism p;
         pre     = typed_p \<mapsto>\<langle>\<top>\<rangle> g\<down>old_v;
@@ -108,7 +108,7 @@ micro_c_translate \<open>
 
 definition c_read_via_void_e2e_contract ::
   \<open>('addr, 'gv) gref \<Rightarrow> 'gv \<Rightarrow> c_int \<Rightarrow>
-   ('s, c_int, 'abort) function_contract\<close> where
+   ('s, c_int, c_abort) function_contract\<close> where
   \<open>c_read_via_void_e2e_contract p g v \<equiv>
     let typed_p = c_cast_from_void c_int_prism p;
         pre     = typed_p \<mapsto>\<langle>\<top>\<rangle> g\<down>v;
