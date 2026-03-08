@@ -4259,7 +4259,7 @@ end"""
     ).flatMap { selection =>
       resolveTargetSelection(selection).map { resolved =>
         val command = resolved.command
-        val snapshot = PIDE.session.snapshot()
+        val snapshot = PIDE.session.snapshot(node_name = command.node_name)
         val node = snapshot.get_node(command.node_name)
         val filePath = command.node_name.node
         if (node == null) {
@@ -4386,7 +4386,7 @@ end"""
 
         getFileContentAndModel(filePath) match {
           case (Some(content), Some(model)) =>
-            val snapshot = Document_Model.snapshot(model)
+            val snapshot = GUI_Thread.now { Document_Model.snapshot(model) }
             val node = snapshot.get_node(model.node_name)
             if (node == null || node.commands.isEmpty) {
               Right(

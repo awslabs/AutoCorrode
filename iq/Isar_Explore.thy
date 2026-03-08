@@ -116,6 +116,9 @@ fun run_quickcheck state =
 
 (* Get relevant facts using MePo relevance filter *)
 fun run_print_context state =
+  if not (Toplevel.is_theory state orelse Toplevel.is_proof state)
+  then "Unknown context"
+  else
   let
     val ctxt = Toplevel.context_of state
 
@@ -153,6 +156,9 @@ fun run_print_context state =
 
 (* Fetch definitions for a list of entity names (from PIDE markup) *)
 fun get_defs state names =
+  if not (Toplevel.is_theory state orelse Toplevel.is_proof state)
+  then "Unknown context"
+  else
   let
     val ctxt = Toplevel.context_of state
 
@@ -239,6 +245,9 @@ val _ = register {name = "isar_explore", pri = Task_Queue.urgent_pri}
                   val depth = the_default 10 (Int.fromString (nth args 2 handle Subscript => "10"))
               in run_simp_trace state method timeout depth end
             else
+              if not (Toplevel.is_theory state orelse Toplevel.is_proof state)
+              then "Unknown context"
+              else
               let
                 val st = isar_explore exec_id instance isar_text state
                 val state_text = Pretty.string_of (Pretty.chunks (Toplevel.pretty_state st))
