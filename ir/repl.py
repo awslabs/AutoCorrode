@@ -246,6 +246,7 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
 PROMPT = "Poly/ML> "
 PROMPT_RE = re.compile(re.escape(PROMPT) + r"$", re.MULTILINE)
 SENTINEL = "<<DONE>>"
+REPL_DEFAULT_PORT = 9147
 
 
 def _load_symbols(isabelle_bin):
@@ -702,13 +703,20 @@ class Server:
 
     def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None):
         self.poly = poly
-        self.port = port
         self.host = host
         self.mgmt_output = mgmt_output or print
         self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind((host, port))
+        if port == 0:
+            # Try default port first; fall back to OS-assigned.
+            try:
+                self.sock.bind((host, REPL_DEFAULT_PORT))
+            except OSError:
+                self.sock.bind((host, 0))
+        else:
+            self.sock.bind((host, port))
+        self.port = self.sock.getsockname()[1]
         self.sock.listen(8)
         self.running = True
         self.verbose = 0  # 0=off, 1=body, 2=body+headers, 3=body+headers+hex
@@ -1336,7 +1344,9 @@ def find_isabelle_installation(isabelle_arg):
 
 def main():
     p = argparse.ArgumentParser(description="I/R REPL TCP server")
-    p.add_argument("--port", type=int, default=9147)
+    p.add_argument("--port", type=int, default=0,
+                   help=f"TCP port for repl.py server (default: try {REPL_DEFAULT_PORT}, "
+                        f"then any free port)")
     p.add_argument("--poly-ml-port", type=int, default=0,
                    help="Port for ML_Repl inside Poly/ML (default: 0 = OS picks a free port)")
     p.add_argument("--isabelle", default=None,
@@ -1582,7 +1592,7 @@ def main():
     accept_thread.start()
 
     mgmt_output(f"{GREEN}● REPL ready.{RST} Waiting for connections on "
-                f"{BOLD}{args.host}:{args.port}{RST}")
+                f"{BOLD}{args.host}:{server.port}{RST}")
 
     mcp_proc = None
     if args.mcp:

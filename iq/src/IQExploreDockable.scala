@@ -85,18 +85,44 @@ object IQExploreDockable {
         val cmdLine = pb.command().toArray.mkString(" ")
         daemonProcess = Some(pb.start())
         onStatus("Executing: " + cmdLine)
-        // Connect IRClient with retries in background
+        // Read repl.py stdout to learn its TCP port, then connect IRClient
         new Thread(() => {
-          for (_ <- 1 to 15 if ir.isEmpty) {
-            Thread.sleep(2000)
-            try {
-              val client = new IRClient()
-              client.connect()
-              ir = Some(client)
-            } catch { case _: Exception => }
+          def stripAnsi(s: String): String = s.replaceAll("\u001b\\[[0-9;]*m", "")
+
+          val proc = daemonProcess.get
+          val reader = new java.io.BufferedReader(
+            new java.io.InputStreamReader(proc.getInputStream))
+          val portPattern = """Waiting for connections on \S+:(\d+)""".r
+          var replPort: Option[Int] = None
+          var line: String = null
+          var eof = false
+          while (replPort.isEmpty && !eof) {
+            line = reader.readLine()
+            if (line == null) {
+              eof = true
+              onStatus("repl.py: EOF on stdout")
+            } else {
+              val clean = stripAnsi(line)
+              onStatus("repl.py: " + clean)
+              portPattern.findFirstMatchIn(clean).foreach(m =>
+                replPort = Some(m.group(1).toInt))
+            }
           }
-          if (ir.nonEmpty) onStatus("IRClient connected on port 9147")
-          else onStatus("IRClient failed to connect after 30s")
+          replPort match {
+            case Some(port) =>
+              onStatus("repl.py listening on port " + port)
+              try {
+                val client = new IRClient(port = port)
+                client.connect()
+                ir = Some(client)
+                onStatus("IRClient connected on port " + port)
+              } catch {
+                case e: Exception =>
+                  onStatus("IRClient failed to connect: " + e.getMessage)
+              }
+            case None =>
+              onStatus("repl.py did not report port")
+          }
         }, "IRClient-connect").start()
     }
   }
