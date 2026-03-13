@@ -187,16 +187,16 @@ val ir_pri = ~1;
 
 fun start port =
   if Tcp_Handler.is_running () then
-    (Output.information ("IR_Repl: server already running on port " ^ string_of_int port);
+    (Output.information ("IR_Repl: server already running");
      NONE)
   else
   let
-    val accept_loop = Tcp_Handler.start port
+    val (actual_port, accept_loop) = Tcp_Handler.start port
     val ir_group = Future.new_group NONE
     val _ = Synchronized.change server_group_id (K (Task_Queue.group_id ir_group))
     val _ = Synchronized.change Tcp_Handler.handler (K eval_handler)
   in
-    SOME ((singleton o Future.forks)
+    SOME (actual_port, (singleton o Future.forks)
       {name = "ml_repl_accept", group = SOME ir_group,
        deps = [], pri = ir_pri, interrupts = true}
       accept_loop)
@@ -209,19 +209,27 @@ fun stop () =
 end;
 
 (* PIDE protocol command for starting I/R from jEdit *)
+
+fun report_port port =
+  Output.protocol_message
+    [Markup.function "IR_Repl.port", ("port", Value.print_int port)] [];
+
 val _ =
   Protocol_Command.define "IR_Repl.start"
     (fn args =>
       let
         val port =
           (case args of
-            [] => 9146
-          | [p] => the_default 9146 (Int.fromString p)
+            [] => 0
+          | [p] => the_default 0 (Int.fromString p)
           | _ => error "IR_Repl.start: expected at most one argument (port)")
       in
         case ML_Repl.start port of
-          SOME _ => Output.writeln ("IR_Repl: started on port " ^ string_of_int port)
-        | NONE => Output.writeln ("IR_Repl: already running on port " ^ string_of_int port)
+          SOME (actual_port, _) =>
+            (report_port actual_port;
+             Output.writeln ("IR_Repl: started on port " ^ string_of_int actual_port))
+        | NONE =>
+            Output.writeln "IR_Repl: already running"
       end);
 
 val _ =

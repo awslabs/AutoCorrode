@@ -17,7 +17,7 @@ signature TCP_HANDLER =
 sig
   val handler : (string -> BinIO.outstream -> unit) Synchronized.var
   val is_running : unit -> bool
-  val start : int -> (unit -> unit)
+  val start : int -> int * (unit -> unit)
   val stop : unit -> unit
 end;
 
@@ -98,15 +98,19 @@ fun accept_loop () =
       end;
 
 fun start port =
-  let val SOME me = NetHostDB.getByName "127.0.0.1"
+  let (* port = 0: OS picks any free ephemeral port;
+         port > 0: binds to that specific port.
+         In both cases, actual_port is read back via getSockName. *)
+      val SOME me = NetHostDB.getByName "127.0.0.1"
       val addr = INetSock.toAddr (NetHostDB.addr me, port)
       val ssock : Socket.passive INetSock.stream_sock = INetSock.TCP.socket ()
       val _ = Socket.Ctl.setREUSEADDR (ssock, true)
       val _ = Socket.bind (ssock, addr)
       val _ = Socket.listen (ssock, 1)
+      val (_, actual_port) = INetSock.fromAddr (Socket.Ctl.getSockName ssock)
       val _ = Synchronized.change server_socket (K (SOME ssock))
-      val _ = writeln ("Tcp_Handler: listening on 127.0.0.1:" ^ string_of_int port)
-  in accept_loop end;
+      val _ = writeln ("Tcp_Handler: listening on 127.0.0.1:" ^ string_of_int actual_port)
+  in (actual_port, accept_loop) end;
 
 fun stop () =
   Synchronized.change server_socket (fn old =>

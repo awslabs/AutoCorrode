@@ -9,6 +9,9 @@ import org.gjt.sp.jedit.{EBMessage, EBPlugin, jEdit}
 object IQPlugin {
   @volatile private var instance: Option[IQPlugin] = None
 
+  /** Port reported by ML_Repl via PIDE protocol message. */
+  @volatile var mlReplPort: Option[Int] = None
+
   private def register(plugin: IQPlugin): Unit = {
     instance = Some(plugin)
   }
@@ -19,6 +22,22 @@ object IQPlugin {
 
   def restartServerFromSettings(): Unit = {
     instance.foreach(_.restartServerFromSettings())
+  }
+
+  /** PIDE protocol handler: receives IR_Repl.port messages from ML. */
+  class IR_Repl_Handler extends Session.Protocol_Handler {
+    private def handle_port(msg: Prover.Protocol_Output): Boolean = {
+      msg.properties match {
+        case List(_, ("port", isabelle.Value.Int(port))) =>
+          mlReplPort = Some(port)
+          Output.writeln("IQPlugin: ML_Repl port = " + port)
+          true
+        case _ => false
+      }
+    }
+
+    override val functions: Session.Protocol_Functions =
+      List("IR_Repl.port" -> handle_port)
   }
 }
 

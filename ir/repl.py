@@ -497,7 +497,8 @@ class PolyMLProcess:
 
     def __init__(self, isabelle, session, directory, ml_dir, port,
                  bash_server=None, no_build=False, redirect=True):
-        self.port = port
+        self.requested_port = port
+        self.port = port  # updated to actual port after start
         self.cmd = self._build_cmd(isabelle, session, directory, ml_dir, port,
                                    bash_server=bash_server, redirect=redirect)
         self.proc = subprocess.Popen(
@@ -508,6 +509,20 @@ class PolyMLProcess:
             bufsize=0,
             start_new_session=True,
         )
+
+    def read_actual_port(self, timeout=60):
+        """Read stdout until Tcp_Handler reports its port. Updates self.port."""
+        import re
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and self.alive():
+            line = self.proc.stdout.readline().decode("utf-8", errors="replace")
+            if not line:
+                break
+            m = re.search(r"Tcp_Handler: listening on 127\.0\.0\.1:(\d+)", line)
+            if m:
+                self.port = int(m.group(1))
+                return self.port
+        return None
 
     @staticmethod
     def _build_cmd(isabelle, session, directory, ml_dir, port,
@@ -525,7 +540,7 @@ class PolyMLProcess:
         cmd += ["-f", os.path.join(ml_dir, "tcp_handler.ML"),
                 "-f", os.path.join(ml_dir, "ir.ML"),
                 "-f", os.path.join(ml_dir, "ml_repl.ML"),
-                "-e", f"case ML_Repl.start {port} of SOME f => Future.join f | NONE => ();"]
+                "-e", f"case ML_Repl.start {port} of SOME (_, f) => Future.join f | NONE => ();"]
         return cmd
 
     def alive(self):
@@ -1315,8 +1330,8 @@ def find_isabelle_installation(isabelle_arg):
 def main():
     p = argparse.ArgumentParser(description="I/R REPL TCP server")
     p.add_argument("--port", type=int, default=9147)
-    p.add_argument("--poly-ml-port", type=int, default=9146,
-                   help="Port for ML_Repl inside Poly/ML (default: 9146)")
+    p.add_argument("--poly-ml-port", type=int, default=0,
+                   help="Port for ML_Repl inside Poly/ML (default: 0 = OS picks a free port)")
     p.add_argument("--isabelle", default=None,
                    help="Path to Isabelle executable (auto-detected if not provided)")
     p.add_argument("--session", default="AutoCorrode")
@@ -1442,6 +1457,10 @@ def main():
         os.execvp(cmd[0], cmd)
 
     # Try connecting to an already-running ML_Repl
+    if args.poly_ml_port == 0 and args.expect_ml:
+        print(f"{RED}--expect-ml requires a specific --poly-ml-port{RST}",
+              file=sys.stderr)
+        sys.exit(1)
     conn = PolyMLConnection(port=args.poly_ml_port)
     poly = None  # PolyMLProcess, only if we need to start one
     bash_server = None
@@ -1500,6 +1519,16 @@ def main():
         poly = PolyMLProcess(args.isabelle, args.session, args.dir, ml_dir,
                              args.poly_ml_port, bash_server=bash_server)
 
+        # Learn the actual port (important when --poly-ml-port 0)
+        actual_port = poly.read_actual_port()
+        if actual_port is None:
+            if done: done.set(); t.join()
+            print(f"{RED}Poly/ML process exited or timed out before "
+                  f"reporting port{RST}", file=sys.stderr)
+            poly.close()
+            sys.exit(1)
+        conn = PolyMLConnection(port=actual_port)
+
         # Wait for ML_Repl TCP port to become available
         for attempt in range(300):  # up to 60s
             if not poly.alive():
@@ -1527,9 +1556,9 @@ def main():
             sys.exit(1)
 
         if done: done.set(); t.join()
-        _log(f"ML_Repl ready on 127.0.0.1:{args.poly_ml_port}" if quiet else
+        _log(f"ML_Repl ready on 127.0.0.1:{poly.port}" if quiet else
              f"{GREEN}● ML_Repl ready on "
-             f"127.0.0.1:{args.poly_ml_port}{RST}")
+             f"127.0.0.1:{poly.port}{RST}")
 
     def _signal_cleanup(signum, frame):
         if poly:

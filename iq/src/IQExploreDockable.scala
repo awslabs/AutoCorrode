@@ -53,12 +53,33 @@ object IQExploreDockable {
         onStatus("ir/repl.py not found at " + replPy)
         started = false
       case Some(replPy) =>
-        // Start ML_Repl
-        PIDE.session.protocol_command("IR_Repl.start", XML.string("9146"))
-        onStatus("Sent IR_Repl.start (port 9146)")
+        // Register protocol handler to receive ML_Repl port
+        PIDE.session.init_protocol_handler(new IQPlugin.IR_Repl_Handler)
+        // Start ML_Repl (port 0 = pick any free port)
+        PIDE.session.protocol_command("IR_Repl.start")
+        onStatus("Sent IR_Repl.start")
+        // Wait for ML_Repl to report its port (max 10s)
+        val mlPort = {
+          var attempts = 0
+          while (IQPlugin.mlReplPort.isEmpty && attempts < 20) {
+            Thread.sleep(500)
+            attempts += 1
+            onStatus("Waiting for ML_Repl port... (" + (attempts * 500) + "ms)")
+          }
+          IQPlugin.mlReplPort match {
+            case Some(p) =>
+              onStatus("ML_Repl reported port " + p)
+              p
+            case None =>
+              onStatus("ML_Repl did not report port within 10s — cannot start repl.py")
+              started = false
+              return
+          }
+        }
         // Launch repl.py --daemon with current Isabelle home
         val isabellePath = Isabelle_System.getenv("ISABELLE_HOME")
         val pb = new ProcessBuilder("python3", replPy, "--daemon", "--mcp", "--expect-ml",
+          "--poly-ml-port", mlPort.toString,
           "--isabelle", isabellePath)
         pb.redirectErrorStream(true)
         val cmdLine = pb.command().toArray.mkString(" ")
