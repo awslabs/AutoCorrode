@@ -1121,7 +1121,28 @@ def console_loop(server, session, output_fn=None):
             break
 
 
-MGMT_SOCKET_PATH = os.path.expanduser("~/.ir_repl_mgmt.sock")
+MGMT_SOCKET_DIR = os.path.expanduser("~")
+MGMT_SOCKET_PREFIX = ".ir_repl_mgmt_"
+MGMT_SOCKET_SUFFIX = ".sock"
+
+def mgmt_socket_path(port):
+    """Return the mgmt socket path for a given repl.py TCP port."""
+    return os.path.join(MGMT_SOCKET_DIR, f"{MGMT_SOCKET_PREFIX}{port}{MGMT_SOCKET_SUFFIX}")
+
+def discover_mgmt_sockets():
+    """Return list of (port, path) for all existing mgmt sockets."""
+    import glob
+    pattern = os.path.join(MGMT_SOCKET_DIR,
+                           f"{MGMT_SOCKET_PREFIX}*{MGMT_SOCKET_SUFFIX}")
+    results = []
+    for path in sorted(glob.glob(pattern)):
+        base = os.path.basename(path)
+        try:
+            port = int(base[len(MGMT_SOCKET_PREFIX):-len(MGMT_SOCKET_SUFFIX)])
+            results.append((port, path))
+        except ValueError:
+            pass
+    return results
 
 
 class MgmtSocketServer:
@@ -1224,7 +1245,34 @@ class MgmtSocketServer:
 
 
 def attach_mode(sock_path):
-    """Connect to a daemon's management socket and run the prompt loop locally."""
+    """Connect to a daemon's management socket and run the prompt loop locally.
+
+    If sock_path is None, discover available sockets automatically:
+    unique → connect; multiple → interactive choice."""
+    if sock_path is None:
+        sockets = discover_mgmt_sockets()
+        if not sockets:
+            print(f"{RED}No daemon sockets found{RST}", file=sys.stderr)
+            print(f"{DIM}Start with: repl.py --daemon{RST}", file=sys.stderr)
+            sys.exit(1)
+        elif len(sockets) == 1:
+            port, sock_path = sockets[0]
+            print(f"{DIM}Found daemon on port {port}{RST}", flush=True)
+        else:
+            print(f"Multiple daemons running:", flush=True)
+            for i, (port, path) in enumerate(sockets):
+                print(f"  {BOLD}[{i + 1}]{RST} port {GREEN}{port}{RST}  {DIM}({path}){RST}")
+            while True:
+                try:
+                    choice = input(f"Connect to [1-{len(sockets)}]: ").strip()
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(sockets):
+                        _, sock_path = sockets[idx]
+                        break
+                except (ValueError, EOFError):
+                    pass
+                print("Invalid choice, try again.")
+
     if not os.path.exists(sock_path):
         print(f"{RED}No daemon socket at {sock_path}{RST}", file=sys.stderr)
         print(f"{DIM}Start with: repl.py --daemon{RST}", file=sys.stderr)
@@ -1380,8 +1428,9 @@ def main():
                    help="Attach to a running daemon's mgmt console")
     p.add_argument("--kill-daemon", action="store_true",
                    help="Kill a running daemon and exit")
-    p.add_argument("--mgmt-socket", default=MGMT_SOCKET_PATH,
-                   help=f"Unix socket path for --daemon/--attach (default: {MGMT_SOCKET_PATH})")
+    p.add_argument("--mgmt-socket", default=None,
+                   help="Unix socket path for --daemon/--attach "
+                        "(default: auto-derived from TCP port)")
     args = p.parse_args()
 
     # Find Isabelle installation
@@ -1394,6 +1443,19 @@ def main():
     # --kill-daemon: send /quit to the daemon's mgmt socket
     if args.kill_daemon:
         sock_path = args.mgmt_socket
+        if sock_path is None:
+            sockets = discover_mgmt_sockets()
+            if not sockets:
+                print(f"{DIM}No daemon running{RST}")
+                sys.exit(0)
+            elif len(sockets) == 1:
+                _, sock_path = sockets[0]
+            else:
+                print("Multiple daemons running:")
+                for port, path in sockets:
+                    print(f"  port {port}  ({path})")
+                print(f"{DIM}Use --mgmt-socket to specify which one{RST}")
+                sys.exit(1)
         if not os.path.exists(sock_path):
             print(f"{DIM}No daemon running (no socket at {sock_path}){RST}")
             sys.exit(0)
@@ -1419,7 +1481,7 @@ def main():
 
     # --attach: connect to daemon and run prompt loop
     if args.attach:
-        attach_mode(args.mgmt_socket)
+        attach_mode(args.mgmt_socket)  # None → auto-discover
         sys.exit(0)
 
     # --show-server / --kill-server: probe a running ML_Repl and exit
@@ -1625,7 +1687,7 @@ def main():
                                     f"Install dependencies: "
                                     f"pip install -r {req_path}{RST}")
                         mgmt_output(f"{DIM}   REPL is still available on "
-                                    f"{args.host}:{args.port}{RST}")
+                                    f"{args.host}:{server.port}{RST}")
                     elif not started and "running on" in line.lower():
                         started = True
                         mgmt_output(f"{DIM}[MCP]{RST} {line}")
@@ -1639,7 +1701,7 @@ def main():
             if rc != 0:
                 mgmt_output(f"{RED}⚠️  MCP server exited (rc={rc}){RST}")
                 mgmt_output(f"{DIM}   REPL is still available on "
-                            f"{args.host}:{args.port}{RST}")
+                            f"{args.host}:{server.port}{RST}")
 
         threading.Thread(target=_mcp_log_reader, daemon=True).start()
 
@@ -1654,12 +1716,13 @@ def main():
         completer = IrCompleter()
         with server.lock:
             completer.learn_theories(server.poly.send("Ir.theories ();"))
-        mgmt_sock = MgmtSocketServer(server, args.mgmt_socket, completer=completer)
+        sock_path = args.mgmt_socket or mgmt_socket_path(server.port)
+        mgmt_sock = MgmtSocketServer(server, sock_path, completer=completer)
         mgmt_output = server.mgmt_output  # now points to mgmt_sock.broadcast
         mgmt_output(f"{DIM}Daemon mode. Attach with: repl.py --attach{RST}")
-        mgmt_output(f"{DIM}Management socket: {args.mgmt_socket}{RST}")
+        mgmt_output(f"{DIM}Management socket: {sock_path}{RST}")
         # Print to local stderr too so the operator sees it
-        print(f"{GREEN}● Daemon mode.{RST} Mgmt socket: {args.mgmt_socket}",
+        print(f"{GREEN}● Daemon mode.{RST} Mgmt socket: {sock_path}",
               file=sys.stderr, flush=True)
         print(f"{DIM}Attach with: repl.py --attach{RST}",
               file=sys.stderr, flush=True)
@@ -1676,8 +1739,8 @@ def main():
                         f"Install dependencies for the full experience: "
                         f"pip install -r {req_path}{RST}")
         mgmt_output(f"{DIM}Running in server-only mode. "
-                    f"Connect on {args.host}:{args.port}, "
-                    f"e.g. nc {args.host} {args.port}{RST}")
+                    f"Connect on {args.host}:{server.port}, "
+                    f"e.g. nc {args.host} {server.port}{RST}")
         try:
             accept_thread.join()
         except KeyboardInterrupt:
