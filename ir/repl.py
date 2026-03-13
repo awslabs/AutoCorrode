@@ -1302,14 +1302,14 @@ def attach_mode(sock_path):
 
 def find_isabelle_installation(isabelle_arg):
     """Find Isabelle installation path.
-    
+
     If isabelle_arg is set, try it (handling both directory and binary paths).
     Otherwise, try platform-specific default locations.
     Returns the path to the isabelle executable on success.
     Raises RuntimeError if no installation is found.
     """
     candidates = []
-    
+
     if isabelle_arg:
         expanded = os.path.expanduser(isabelle_arg)
         # If it's a directory, try common binary locations
@@ -1332,11 +1332,11 @@ def find_isabelle_installation(isabelle_arg):
             candidates.extend([
                 os.path.expanduser("~/Isabelle2025-2/bin/isabelle"),
             ])
-    
+
     for candidate in candidates:
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
             return candidate
-    
+
     raise RuntimeError(
         f"Isabelle installation not found. Tried: {', '.join(candidates)}"
     )
@@ -1351,7 +1351,7 @@ def main():
                    help="Port for ML_Repl inside Poly/ML (default: 0 = OS picks a free port)")
     p.add_argument("--isabelle", default=None,
                    help="Path to Isabelle executable (auto-detected if not provided)")
-    p.add_argument("--session", default="AutoCorrode")
+    p.add_argument("--session", default="HOL")
     p.add_argument("--dir", default=None)
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Print the command being invoked")
