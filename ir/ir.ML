@@ -121,7 +121,7 @@ fun find_source thy_name =
   Thy_Info.get_theory_segments thy_name
   handle ERROR msg =>
     error ("No recorded segments for " ^ quote thy_name ^
-           ". Build the session with record_theories=true.");
+           ". Rebuild the session heap with: isabelle build -o record_theories=true -b <SESSION>");
 
 fun source thy_name start stop =
   let val segs = find_source thy_name
@@ -637,5 +637,5 @@ val _ =
   in if has_segments
      then writeln ("Ir: source commands available (" ^
                    string_of_int n ^ " theories)")
-     else writeln "Ir: source commands not available (no theories with recorded segments; build with record_theories=true)"
+     else writeln "Ir: source commands not available (no theories with recorded segments; rebuild with: isabelle build -o record_theories=true -b <SESSION>)"
   end;
