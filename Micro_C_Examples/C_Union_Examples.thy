@@ -129,7 +129,7 @@ using c_uint_byte_prism_valid[unfolded c_uint_byte_prism_def] by (simp add: c_in
    }
    Key union use case: writing through one field and reading through another. *)
 
-micro_c_translate \<open>
+micro_c_translate gv: \<open>byte list\<close> abort: 'abort \<open>
   union U {
     int i;
     unsigned int u;
