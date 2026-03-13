@@ -247,6 +247,7 @@ PROMPT = "Poly/ML> "
 PROMPT_RE = re.compile(re.escape(PROMPT) + r"$", re.MULTILINE)
 SENTINEL = "<<DONE>>"
 REPL_DEFAULT_PORT = 9147
+ML_REPL_DEFAULT_PORT = 9146
 
 
 def _load_symbols(isabelle_bin):
@@ -1473,40 +1474,39 @@ def main():
             print(f"{DIM}{' '.join(safe_cmd)}{RST}", flush=True)
         os.execvp(cmd[0], cmd)
 
-    # Try connecting to an already-running ML_Repl
+    # Connect to existing ML_Repl, or start our own Poly/ML
     if args.poly_ml_port == 0 and args.expect_ml:
-        print(f"{RED}--expect-ml requires a specific --poly-ml-port{RST}",
-              file=sys.stderr)
-        sys.exit(1)
-    conn = PolyMLConnection(port=args.poly_ml_port)
-    poly = None  # PolyMLProcess, only if we need to start one
+        print(f"{YELLOW}Warning: --expect-ml without --poly-ml-port; "
+              f"trying default port {ML_REPL_DEFAULT_PORT}{RST}", flush=True)
+        args.poly_ml_port = ML_REPL_DEFAULT_PORT
+
+    poly = None
     bash_server = None
-    connected = False
-    max_attempts = 60 if (args.daemon or args.expect_ml) else 1
-    for attempt in range(max_attempts):
-        try:
-            conn.connect()
-            probe = conn.send('Ir.help ();')
-            if "Ir.init" not in probe:
-                raise ConnectionError("Connected but Ir not available")
-            connected = True
-            print(f"{GREEN}● Connected to existing ML_Repl on "
-                  f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
-            break
-        except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
-            conn.close()
-            if attempt < max_attempts - 1:
+
+    if args.expect_ml:
+        # --expect-ml: connect to an already-running ML_Repl
+        conn = PolyMLConnection(port=args.poly_ml_port)
+        for attempt in range(60):
+            try:
+                conn.connect()
+                probe = conn.send('Ir.help ();')
+                if "Ir.init" in probe:
+                    print(f"{GREEN}● Connected to existing ML_Repl on "
+                          f"127.0.0.1:{args.poly_ml_port}{RST}", flush=True)
+                    break
+                conn.close()
+            except (ConnectionRefusedError, ConnectionError, OSError, EOFError):
+                conn.close()
                 if attempt == 0:
                     print(f"Waiting for ML_Repl on port {args.poly_ml_port}...",
                           flush=True)
                 time.sleep(2)
-    if not connected and args.expect_ml:
-        print(f"{RED}ML_Repl not available on port {args.poly_ml_port} "
-              f"after {max_attempts * 2}s{RST}", file=sys.stderr)
-        sys.exit(1)
-    if not connected:
-        # No running ML_Repl — start Poly/ML ourselves
-        conn.close()
+        else:
+            print(f"{RED}ML_Repl not available on port {args.poly_ml_port} "
+                  f"after 120s{RST}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        # Start our own Poly/ML
         quiet = args.daemon
 
         def _log(msg):
