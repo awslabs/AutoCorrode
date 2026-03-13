@@ -78,7 +78,7 @@ object IQExploreDockable {
         }
         // Launch repl.py --daemon with current Isabelle home
         val isabellePath = Isabelle_System.getenv("ISABELLE_HOME")
-        val pb = new ProcessBuilder("python3", replPy, "--daemon", "--mcp", "--expect-ml",
+        val pb = new ProcessBuilder("python3", replPy, "--daemon", "--expect-ml",
           "--poly-ml-port", mlPort.toString,
           "--isabelle", isabellePath)
         pb.redirectErrorStream(true)
