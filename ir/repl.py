@@ -1253,7 +1253,9 @@ def attach_mode(sock_path):
         sockets = discover_mgmt_sockets()
         if not sockets:
             print(f"{RED}No daemon sockets found{RST}", file=sys.stderr)
-            print(f"{DIM}Start with: repl.py --daemon{RST}", file=sys.stderr)
+            print(f"{DIM}Start a daemon with: repl.py --daemon{RST}", file=sys.stderr)
+            print(f"{DIM}Or specify a socket: repl.py --attach --mgmt-socket PATH{RST}",
+                  file=sys.stderr)
             sys.exit(1)
         elif len(sockets) == 1:
             port, sock_path = sockets[0]
