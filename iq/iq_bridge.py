@@ -13,6 +13,12 @@ import time
 import os
 from typing import Dict, Any, Optional, List
 
+# Ensure stdout/stderr are line-buffered for pipe consumers.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
+
 class MCPBridgeWithReconnect:
     _MAX_REQUEST_TIMEOUT_SEC = 3600.0
     _REQUEST_TIMEOUT_GRACE_SEC = 5.0
