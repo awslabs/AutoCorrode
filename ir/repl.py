@@ -92,6 +92,7 @@ IR_CMDS = {
     '/connections':           'show open client connections',
     '/verbosity':             'set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)',
     '/show_types':            'toggle display of type annotations',
+    '/info':                  'show server status summary',
     '/quit':                  'shut down the server',
     '/help':                  'show available commands',
 }
@@ -702,7 +703,8 @@ class PolyMLConnection:
 class Server:
     """TCP server that serializes client commands to the Poly/ML process."""
 
-    def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None):
+    def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None,
+                 session=None, directory=None):
         self.poly = poly
         self.host = host
         self.mgmt_output = mgmt_output or print
@@ -723,6 +725,9 @@ class Server:
         self.verbose = 0  # 0=off, 1=body, 2=body+headers, 3=body+headers+hex
         self.clients = {}
         self.clients_lock = threading.Lock()
+        self._start_time = time.time()
+        self.session = session
+        self.directory = directory
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
@@ -826,6 +831,17 @@ class Server:
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     text = line.decode("utf-8")
+                    # Intercept /info before command accumulation
+                    if not cmd_lines and text.strip() == "/info":
+                        response = (self.info_text(ansi=False) +
+                                    "\n" + SENTINEL + "\n").encode("utf-8")
+                        client.sendall(response)
+                        with self.clients_lock:
+                            if client in self.clients:
+                                self.clients[client]["commands"] += 1
+                                self.clients[client]["bytes_out"] += len(response)
+                                self.clients[client]["last_active"] = time.time()
+                        continue
                     cmd_lines.append(text)
                     if not text.rstrip().endswith(";"):
                         continue
@@ -876,14 +892,43 @@ class Server:
         with self.clients_lock:
             return len(self.clients)
 
+    def info_text(self, ansi=True):
+        """Return a server status summary string."""
+        uptime = int(time.time() - self._start_time)
+        h, m, s = uptime // 3600, (uptime % 3600) // 60, uptime % 60
+        n = self.num_clients
+        labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
+        d = self.directory or "(none)"
+        if ansi:
+            lines = [
+                f"{BOLD}Server info:{RST}",
+                f"  session   = {CYAN}{self.session}{RST}",
+                f"  dir       = {CYAN}{d}{RST}",
+                f"  listen    = {CYAN}127.0.0.1:{self.port}{RST}",
+                f"  ml_repl   = {CYAN}127.0.0.1:{self.poly.port}{RST}",
+                f"  uptime    = {h}h {m}m {s}s",
+                f"  clients   = {n}",
+                f"  verbosity = {self.verbose} / {labels[self.verbose]}",
+            ]
+        else:
+            lines = [
+                "Server info:",
+                f"  session   = {self.session}",
+                f"  dir       = {d}",
+                f"  listen    = 127.0.0.1:{self.port}",
+                f"  ml_repl   = 127.0.0.1:{self.poly.port}",
+                f"  uptime    = {h}h {m}m {s}s",
+                f"  clients   = {n}",
+                f"  verbosity = {self.verbose} / {labels[self.verbose]}",
+            ]
+        return "\n".join(lines)
+
     def shutdown(self):
         self.running = False
         self.sock.close()
 
 
 def make_toolbar(completer):
-    """Create a bottom toolbar that shows the current command's signature,
-    and source context when typing Theory:N arguments."""
 
     def toolbar():
         app = __import__('prompt_toolkit').application.get_app()
@@ -1018,6 +1063,8 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                         f"idle={idle}s  "
                         f"cmds={c['commands']}  "
                         f"in={c['bytes_in']}B out={c['bytes_out']}B")
+        elif cmd == "/info":
+            out(server.info_text(ansi=True))
         elif cmd == "/quit":
             return True
         elif cmd == "/verbosity":
@@ -1041,6 +1088,7 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
             labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
             state = labels[server.verbose]
             out(f"  {YELLOW}/connections{RST}     Show open client connections")
+            out(f"  {YELLOW}/info{RST}            Show server status summary")
             out(f"  {YELLOW}/verbosity [N]{RST}   Set verbosity (currently {server.verbose} / {state})")
             out(f"                      0=off  1=non-empty  2=all messages  3=all+hex")
             types_state = "hidden" if "typing" in yxml_suppress else "shown"
@@ -1650,7 +1698,8 @@ def main():
     signal.signal(signal.SIGTERM, _signal_cleanup)
     signal.signal(signal.SIGHUP, _signal_cleanup)
 
-    server = Server(conn, args.port, host=args.host)
+    server = Server(conn, args.port, host=args.host,
+                    session=args.session, directory=args.dir)
     mgmt_output = server.mgmt_output
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()

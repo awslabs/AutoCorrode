@@ -192,6 +192,23 @@ def disconnect() -> str:
     repl.disconnect()
     return "Disconnected"
 
+@mcp.tool(description="Show the loaded Isabelle session name and available theories.")
+def session_info() -> str:
+    if not repl.connected:
+        return "Not connected. Call `connect` first."
+    welcome = apply_transforms(repl.send('val _ = writeln (Session.welcome ());'))
+    theories = apply_transforms(repl.send('Ir.theories ();'))
+    return f"{welcome}\n\nAvailable theories:\n{theories}"
+
+@mcp.tool(description=(
+    "Show server status including the Isabelle session name, "
+    "root directory, ports, uptime, and client count. "
+    "Use this to find out which session and directory the REPL is running with."))
+def server_info() -> str:
+    if not repl.connected:
+        return "Not connected. Call `connect` first."
+    return repl.send("/info")
+
 @mcp.tool(description=(
     "Create a new REPL session that imports the given Isabelle theories. "
     "This is equivalent to writing `theory T imports A B C begin ...` in a .thy file. "
