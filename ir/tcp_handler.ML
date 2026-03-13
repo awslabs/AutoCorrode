@@ -97,15 +97,22 @@ fun accept_loop () =
          handle Fail "stopped" => ()
       end;
 
+val default_port = 9146;
+
 fun start port =
-  let (* port = 0: OS picks any free ephemeral port;
-         port > 0: binds to that specific port.
+  let (* port = 0: try default_port first, then any free port.
+         port > 0: bind to that specific port.
          In both cases, actual_port is read back via getSockName. *)
       val SOME me = NetHostDB.getByName "127.0.0.1"
-      val addr = INetSock.toAddr (NetHostDB.addr me, port)
       val ssock : Socket.passive INetSock.stream_sock = INetSock.TCP.socket ()
       val _ = Socket.Ctl.setREUSEADDR (ssock, true)
-      val _ = Socket.bind (ssock, addr)
+      val _ =
+        if port = 0 then
+          (Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, default_port))
+           handle OS.SysErr _ =>
+             Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, 0)))
+        else
+          Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, port))
       val _ = Socket.listen (ssock, 1)
       val (_, actual_port) = INetSock.fromAddr (Socket.Ctl.getSockName ssock)
       val _ = Synchronized.change server_socket (K (SOME ssock))
