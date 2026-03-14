@@ -296,8 +296,10 @@ def back() -> str:
 def merge() -> str:
     return repl.send("Ir.merge ();")
 
-@mcp.tool(description="Run Sledgehammer on the current proof state with the given timeout in seconds.")
-def sledgehammer(timeout_secs: int) -> str:
+@mcp.tool(description=(
+    "Run Sledgehammer on the current proof state with the given timeout in seconds. "
+    "Recommended timeout: 15s. Sledgehammer rarely finds new proofs past 15s."))
+def sledgehammer(timeout_secs: int = 15) -> str:
     return repl.send(f"Ir.sledgehammer {ml_int(timeout_secs)};")
 
 @mcp.tool(description='Search for theorems. Criteria: '
