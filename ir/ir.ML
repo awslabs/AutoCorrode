@@ -65,7 +65,7 @@ fun get_cfg () = Synchronized.value cfg;
 
 (** Step timeout (seconds, 0 = no limit) **)
 
-val step_timeout : int Synchronized.var = Synchronized.var "Ir.timeout" 5;
+val step_timeout : int Synchronized.var = Synchronized.var "Ir.timeout" 10;
 fun timeout secs =
   (Synchronized.change step_timeout (K secs);
    TextIO.print ("Timeout set to " ^ (if secs = 0 then "unlimited" else string_of_int secs ^ "s") ^ "\n"));

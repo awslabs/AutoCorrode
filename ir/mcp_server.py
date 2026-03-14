@@ -322,7 +322,7 @@ def find_theorems(query: str, max_results: int = 40) -> str:
             parts.append(criterion.strip())
     return repl.send(f"Ir.find_theorems {ml_int(max_results)} {ml_str(' '.join(parts))};")
 
-@mcp.tool(description="Set step timeout in seconds (0=unlimited, default 5s).")
+@mcp.tool(description="Set step timeout in seconds (0=unlimited, default 10s).")
 def timeout(secs: int) -> str:
     return repl.send(f"Ir.timeout {ml_int(secs)};")
 
