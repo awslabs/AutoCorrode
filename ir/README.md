@@ -85,11 +85,16 @@ in a Kiro CLI agent config:
     "i/r": {
       "type": "http",
       "url": "http://localhost:9148/mcp",
-      "description": "Isabelle Isar REPL"
+      "description": "Isabelle Isar REPL",
+      "timeout": 300000
     }
   }
 }
 ```
+
+> **Note:** The `timeout` (in milliseconds) should be set high enough
+> for long-running operations like `sledgehammer` (default is 120000 = 2 min;
+> 300000 = 5 min is recommended).
 
 When an MCP client connects successfully, you should see:
 
