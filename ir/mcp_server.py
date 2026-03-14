@@ -183,7 +183,7 @@ repl = ReplClient()
 @mcp.tool(description="Connect to the I/R REPL server. Call this before using any other tool. Can also reconnect after a dropped connection.")
 def connect(port: int = 9147, host: str = "127.0.0.1") -> str:
     repl.connect(host, port)
-    return f"Connected to {repl.host}:{repl.port}"
+    return f"Connected to {repl.host}:{repl.port}\n\n{session_info()}"
 
 @mcp.tool(description="Disconnect from the I/R REPL server.")
 def disconnect() -> str:
@@ -192,13 +192,20 @@ def disconnect() -> str:
     repl.disconnect()
     return "Disconnected"
 
-@mcp.tool(description="Show the loaded Isabelle session name and available theories.")
+@mcp.tool(description="Show the loaded Isabelle session name, directory, and available theories.")
 def session_info() -> str:
     if not repl.connected:
         return "Not connected. Call `connect` first."
-    welcome = apply_transforms(repl.send('val _ = writeln (Session.welcome ());'))
+    info = repl.send('/info')
+    session = dir_ = ""
+    for line in info.splitlines():
+        line = line.strip()
+        if line.startswith("session"):
+            session = line.split("=", 1)[1].strip()
+        elif line.startswith("dir"):
+            dir_ = line.split("=", 1)[1].strip()
     theories = apply_transforms(repl.send('Ir.theories ();'))
-    return f"{welcome}\n\nAvailable theories:\n{theories}"
+    return f"Session name: {session}\nSession directory: {dir_}\n\nAvailable theories:\n{theories}"
 
 @mcp.tool(description=(
     "Show server status including the Isabelle session name, "
