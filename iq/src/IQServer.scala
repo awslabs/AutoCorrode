@@ -686,7 +686,9 @@ class IQServer(
       case Some(c) if c.isConnected =>
         try Right(Map("text" -> f(c)))
         catch { case ex: Exception => Left(s"I/R error: ${ex.getMessage}") }
-      case _ => Left("I/R REPL not available — startup failed or timed out.")
+      case _ =>
+        val reason = IQExploreDockable.startupError.getOrElse("startup failed or timed out")
+        Left(s"I/R REPL not available — $reason")
     }
   }
 

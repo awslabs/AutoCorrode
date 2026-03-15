@@ -23,6 +23,8 @@ object IQExploreDockable {
   @volatile var daemonProcess: Option[Process] = None
   /** Whether I/R startup has been initiated. */
   @volatile private var started: Boolean = false
+  /** If startup failed, the reason. */
+  @volatile var startupError: Option[String] = None
 
   /** Optional status callback for UI feedback. */
   @volatile var onStatus: String => Unit = msg => Output.writeln("I/R: " + msg)
@@ -32,6 +34,7 @@ object IQExploreDockable {
   def ensureStarted(): Unit = synchronized {
     if (started) return
     started = true
+    startupError = None
 
     import isabelle._
     import isabelle.jedit._
@@ -46,11 +49,15 @@ object IQExploreDockable {
     }
     replPyOpt match {
       case None =>
-        onStatus("iq/Isar_Explore.thy not found in document model. " +
-          "Open a theory that imports 'iq' and wait for it to be fully processed.")
+        val msg = "iq/Isar_Explore.thy not found in document model. " +
+          "Open a theory that imports 'iq' and wait for it to be fully processed."
+        onStatus(msg)
+        startupError = Some(msg)
         started = false
       case Some(replPy) if !new java.io.File(replPy).exists() =>
-        onStatus("ir/repl.py not found at " + replPy)
+        val msg = "ir/repl.py not found at " + replPy
+        onStatus(msg)
+        startupError = Some(msg)
         started = false
       case Some(replPy) =>
         // Register protocol handler to receive ML_Repl port
@@ -71,7 +78,9 @@ object IQExploreDockable {
               onStatus("ML_Repl reported port " + p)
               p
             case None =>
-              onStatus("ML_Repl did not report port within 10s — cannot start repl.py")
+              val msg = "ML_Repl did not report port within 10s — cannot start repl.py"
+              onStatus(msg)
+              startupError = Some(msg)
               started = false
               return
           }
@@ -127,10 +136,12 @@ object IQExploreDockable {
     }
   }
 
-  /** Block until IRClient is connected (up to 30s). */
+  /** Block until IRClient is connected (up to 30s).
+    * Returns None immediately if startup failed. */
   def awaitClient(): Option[IRClient] = {
     ensureStarted()
-    for (_ <- 1 to 30 if ir.isEmpty) Thread.sleep(1000)
+    if (startupError.isDefined) return None
+    for (_ <- 1 to 30 if ir.isEmpty && startupError.isEmpty) Thread.sleep(1000)
     ir
   }
 
