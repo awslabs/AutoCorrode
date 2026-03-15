@@ -25,8 +25,49 @@ object IQExploreDockable {
   @volatile private var started: Boolean = false
   /** If startup failed, the reason. */
   @volatile var startupError: Option[String] = None
+  /** The I/R directory used for the current connection. */
+  @volatile var connectedIRDir: Option[String] = None
 
   /** Optional status callback for UI feedback. */
+  /** Optional explicit I/R home directory, settable via MCP or Scala console. */
+  @volatile var irHome: Option[String] = None
+
+  /** Locate the I/R directory containing repl.py.
+    * Priority: A) explicit irHome, B) ISABELLE_IR_HOME env var, C) document model. */
+  private def findIRDirectory(): Either[String, String] = {
+    import isabelle._
+    import isabelle.jedit._
+
+    def check(dir: String, source: String): Either[String, String] = {
+      val replPy = new java.io.File(dir, "repl.py")
+      if (replPy.exists()) Right(dir)
+      else Left(s"repl.py not found in $dir (from $source)")
+    }
+
+    // A) Explicit parameter
+    irHome.map(d => check(d, "ir_home parameter")).getOrElse {
+      // B) ISABELLE_IR_HOME environment variable
+      val envHome = Option(Isabelle_System.getenv("ISABELLE_IR_HOME"))
+        .map(_.trim).filter(_.nonEmpty)
+      envHome.map(d => check(d, "ISABELLE_IR_HOME")).getOrElse {
+        // C) Document model: find iq/Isar_Explore.thy
+        val snapshot = PIDE.session.snapshot()
+        val fromModel = snapshot.version.nodes.iterator
+          .map(_._1.node)
+          .find(_.endsWith("iq/Isar_Explore.thy"))
+          .map(p => p.stripSuffix("iq/Isar_Explore.thy") + "ir")
+        fromModel match {
+          case Some(dir) => check(dir, "document model")
+          case None => Left(
+            "I/R directory not found. Either:\n" +
+            "  - Pass ir_home to repl_connect\n" +
+            "  - Set the ISABELLE_IR_HOME environment variable\n" +
+            "  - Open a theory that imports 'iq' in Isabelle/jEdit")
+        }
+      }
+    }
+  }
+
   @volatile var onStatus: String => Unit = msg => Output.writeln("I/R: " + msg)
 
   /** Start I/R (ML_Repl + repl.py daemon + IRClient). Idempotent.
@@ -39,101 +80,91 @@ object IQExploreDockable {
     import isabelle._
     import isabelle.jedit._
 
-    // Find repl.py by locating iq/Isar_Explore.thy in the document model
-    val replPyOpt: Option[String] = {
-      val snapshot = PIDE.session.snapshot()
-      snapshot.version.nodes.iterator
-        .map(_._1.node)
-        .find(_.endsWith("iq/Isar_Explore.thy"))
-        .map(p => p.stripSuffix("iq/Isar_Explore.thy") + "ir/repl.py")
+    val irDir = findIRDirectory() match {
+      case Right(dir) => dir
+      case Left(msg) =>
+        onStatus(msg)
+        startupError = Some(msg)
+        started = false
+        return
     }
-    replPyOpt match {
-      case None =>
-        val msg = "iq/Isar_Explore.thy not found in document model. " +
-          "Open a theory that imports 'iq' and wait for it to be fully processed."
-        onStatus(msg)
-        startupError = Some(msg)
-        started = false
-      case Some(replPy) if !new java.io.File(replPy).exists() =>
-        val msg = "ir/repl.py not found at " + replPy
-        onStatus(msg)
-        startupError = Some(msg)
-        started = false
-      case Some(replPy) =>
-        // Register protocol handler to receive ML_Repl port
-        PIDE.session.init_protocol_handler(new IQPlugin.IR_Repl_Handler)
-        // Start ML_Repl (port 0 = pick any free port)
-        PIDE.session.protocol_command("IR_Repl.start")
-        onStatus("Sent IR_Repl.start")
-        // Wait for ML_Repl to report its port (max 10s)
-        val mlPort = {
-          var attempts = 0
-          while (IQPlugin.mlReplPort.isEmpty && attempts < 20) {
-            Thread.sleep(500)
-            attempts += 1
-            onStatus("Waiting for ML_Repl port... (" + (attempts * 500) + "ms)")
-          }
-          IQPlugin.mlReplPort match {
-            case Some(p) =>
-              onStatus("ML_Repl reported port " + p)
-              p
-            case None =>
-              val msg = "ML_Repl did not report port within 10s — cannot start repl.py"
-              onStatus(msg)
-              startupError = Some(msg)
-              started = false
-              return
-          }
-        }
-        // Launch repl.py --daemon with current Isabelle home
-        val isabellePath = Isabelle_System.getenv("ISABELLE_HOME")
-        val pb = new ProcessBuilder("python3", replPy, "--daemon", "--expect-ml",
-          "--poly-ml-port", mlPort.toString,
-          "--isabelle", isabellePath)
-        pb.redirectErrorStream(true)
-        val cmdLine = pb.command().toArray.mkString(" ")
-        daemonProcess = Some(pb.start())
-        onStatus("Executing: " + cmdLine)
-        // Read repl.py stdout to learn its TCP port, then connect IRClient
-        new Thread(() => {
-          def stripAnsi(s: String): String = s.replaceAll("\u001b\\[[0-9;]*m", "")
+    connectedIRDir = Some(irDir)
+    val replPy = new java.io.File(irDir, "repl.py").getPath
 
-          val proc = daemonProcess.get
-          val reader = new java.io.BufferedReader(
-            new java.io.InputStreamReader(proc.getInputStream))
-          val portPattern = """Waiting for connections on \S+:(\d+)""".r
-          var replPort: Option[Int] = None
-          var line: String = null
-          var eof = false
-          while (replPort.isEmpty && !eof) {
-            line = reader.readLine()
-            if (line == null) {
-              eof = true
-              onStatus("repl.py: EOF on stdout")
-            } else {
-              val clean = stripAnsi(line)
-              onStatus("repl.py: " + clean)
-              portPattern.findFirstMatchIn(clean).foreach(m =>
-                replPort = Some(m.group(1).toInt))
-            }
-          }
-          replPort match {
-            case Some(port) =>
-              onStatus("repl.py listening on port " + port)
-              try {
-                val client = new IRClient(port = port)
-                client.connect()
-                ir = Some(client)
-                onStatus("IRClient connected on port " + port)
-              } catch {
-                case e: Exception =>
-                  onStatus("IRClient failed to connect: " + e.getMessage)
-              }
-            case None =>
-              onStatus("repl.py did not report port")
-          }
-        }, "IRClient-connect").start()
+    // Register protocol handler to receive ML_Repl port
+    PIDE.session.init_protocol_handler(new IQPlugin.IR_Repl_Handler)
+    // Start ML_Repl (port 0 = pick any free port)
+    PIDE.session.protocol_command("IR_Repl.start")
+    onStatus("Sent IR_Repl.start")
+    // Wait for ML_Repl to report its port (max 10s)
+    val mlPort = {
+      var attempts = 0
+      while (IQPlugin.mlReplPort.isEmpty && attempts < 20) {
+        Thread.sleep(500)
+        attempts += 1
+        if (attempts % 4 == 0)
+          onStatus("Waiting for ML_Repl port... (" + (attempts / 2) + "s)")
+      }
+      IQPlugin.mlReplPort match {
+        case Some(p) =>
+          onStatus("ML_Repl reported port " + p)
+          p
+        case None =>
+          val msg = "ML_Repl did not report port within 10s — cannot start repl.py"
+          onStatus(msg)
+          startupError = Some(msg)
+          started = false
+          return
+      }
     }
+    // Launch repl.py --daemon with current Isabelle home
+    val isabellePath = Isabelle_System.getenv("ISABELLE_HOME")
+    val pb = new ProcessBuilder("python3", replPy, "--daemon", "--expect-ml",
+      "--poly-ml-port", mlPort.toString,
+      "--isabelle", isabellePath)
+    pb.redirectErrorStream(true)
+    val cmdLine = pb.command().toArray.mkString(" ")
+    daemonProcess = Some(pb.start())
+    onStatus("Executing: " + cmdLine)
+    // Read repl.py stdout to learn its TCP port, then connect IRClient
+    new Thread(() => {
+      def stripAnsi(s: String): String = s.replaceAll("\u001b\\[[0-9;]*m", "")
+
+      val proc = daemonProcess.get
+      val reader = new java.io.BufferedReader(
+        new java.io.InputStreamReader(proc.getInputStream))
+      val portPattern = """Waiting for connections on \S+:(\d+)""".r
+      var replPort: Option[Int] = None
+      var line: String = null
+      var eof = false
+      while (replPort.isEmpty && !eof) {
+        line = reader.readLine()
+        if (line == null) {
+          eof = true
+          onStatus("repl.py: EOF on stdout")
+        } else {
+          val clean = stripAnsi(line)
+          onStatus("repl.py: " + clean)
+          portPattern.findFirstMatchIn(clean).foreach(m =>
+            replPort = Some(m.group(1).toInt))
+        }
+      }
+      replPort match {
+        case Some(port) =>
+          onStatus("repl.py listening on port " + port)
+          try {
+            val client = new IRClient(port = port)
+            client.connect()
+            ir = Some(client)
+            onStatus("IRClient connected on port " + port)
+          } catch {
+            case e: Exception =>
+              onStatus("IRClient failed to connect: " + e.getMessage)
+          }
+        case None =>
+          onStatus("repl.py did not report port")
+      }
+    }, "IRClient-connect").start()
   }
 
   /** Block until IRClient is connected (up to 30s).

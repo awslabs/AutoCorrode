@@ -678,17 +678,12 @@ class IQServer(
   // -- I/R REPL tool handlers (delegate to IRClient via TCP) --
 
   private def withIR(f: IRClient => String): Either[String, Map[String, Any]] = {
-    val clientOpt = IQExploreDockable.ir match {
-      case Some(c) if c.isConnected => Some(c)
-      case _ => IQExploreDockable.awaitClient()
-    }
-    clientOpt match {
+    IQExploreDockable.ir match {
       case Some(c) if c.isConnected =>
         try Right(Map("text" -> f(c)))
         catch { case ex: Exception => Left(s"I/R error: ${ex.getMessage}") }
       case _ =>
-        val reason = IQExploreDockable.startupError.getOrElse("startup failed or timed out")
-        Left(s"I/R REPL not available — $reason")
+        Left("I/R REPL not connected. Call repl_connect first.")
     }
   }
 
@@ -715,6 +710,20 @@ class IQServer(
     }
 
   private lazy val replToolHandlers: Map[IQToolName, IQCapabilityBackend.RawToolHandler] = Map(
+    IQToolName.ReplConnect -> (params => {
+      val p = params.toMap
+      p.get("ir_home").collect { case s: String if s.nonEmpty => s }
+        .foreach(h => IQExploreDockable.irHome = Some(h))
+      IQExploreDockable.ensureStarted()
+      IQExploreDockable.awaitClient() match {
+        case Some(c) if c.isConnected =>
+          val dir = IQExploreDockable.connectedIRDir.getOrElse("unknown")
+          Right(IQToolResult.fromMap(Map("text" -> s"I/R REPL connected (ir_home=$dir).")))
+        case _ =>
+          val reason = IQExploreDockable.startupError.getOrElse("startup failed or timed out")
+          Left(s"I/R REPL connection failed — $reason")
+      }
+    }),
     IQToolName.ReplInit -> (params => {
       val p = params.toMap
       for {
@@ -1873,6 +1882,13 @@ class IQServer(
     def int(desc: String): Map[String, Any] = Map("type" -> "integer", "description" -> desc)
     val replPrefix = "I/R REPL: "
     List(
+      Map("name" -> "repl_connect",
+        "description" -> (replPrefix + "Connect to the I/R REPL backend. MUST be called before any other repl_* tool. " +
+          "Starts ML_Repl and repl.py if not already running. " +
+          "Pass ir_home if the I/R directory cannot be auto-detected."),
+        "inputSchema" -> schema(Map(
+          "ir_home" -> str("Path to the I/R directory containing repl.py (optional; auto-detected from ISABELLE_IR_HOME or document model)")),
+          List.empty[String])),
       Map("name" -> "repl_init",
         "description" -> (replPrefix + "Create a new REPL session importing theories. Use repl_init_from_source to start from a specific location in an open file."),
         "inputSchema" -> schema(Map(

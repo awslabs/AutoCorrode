@@ -36,6 +36,7 @@ enum IQToolName(val wire: String) {
   case Explore extends IQToolName("explore")
   case SaveFile extends IQToolName("save_file")
   // I/R REPL tools
+  case ReplConnect extends IQToolName("repl_connect")
   case ReplInit extends IQToolName("repl_init")
   case ReplInitFromSource extends IQToolName("repl_init_from_source")
   case ReplFork extends IQToolName("repl_fork")
