@@ -31,7 +31,7 @@ class MCPBridgeWithReconnect:
         self.auth_token = token if token else None
         self.server_host = os.environ.get("IQ_MCP_BRIDGE_HOST", "localhost").strip() or "localhost"
         self.server_port = self._parse_positive_int_env("IQ_MCP_BRIDGE_PORT", 8765)
-        self.response_timeout_sec = float(self._parse_positive_int_env("IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC", 30))
+        self.response_timeout_sec = float(self._parse_positive_int_env("IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC", 300))
         self.log_max_bytes = self._parse_non_negative_int_env("IQ_MCP_BRIDGE_LOG_MAX_BYTES", 5 * 1024 * 1024)
         self.log_file = os.environ.get(
             "IQ_MCP_BRIDGE_LOG_FILE",
