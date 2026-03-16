@@ -325,7 +325,10 @@ def find_theorems(query: str, max_results: int = 40) -> str:
             parts.append(criterion.strip())
     return repl.send(f"Ir.find_theorems {ml_int(max_results)} {ml_str(' '.join(parts))};")
 
-@mcp.tool(description="Set step timeout in seconds (0=unlimited, default 10s).")
+@mcp.tool(description="Set step timeout in seconds (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have "
+          "a specific reason to. Calls like `metis`, `auto`, `blast`, `force`, should NOT take longer than 5s. Even if they do, and the call "
+          "ultimately succeeds, it points at a proof that ought to be broken down further. ONLY use a large timeout if you work with very large "
+          "scripts or in special circumstances where, exceptionally, a large timeout is expected / tolerated.")
 def timeout(secs: int) -> str:
     return repl.send(f"Ir.timeout {ml_int(secs)};")
 

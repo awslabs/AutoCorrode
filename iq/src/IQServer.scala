@@ -1959,7 +1959,10 @@ class IQServer(
           "max_results" -> int("Maximum results (default 40)")),
           List("query"))),
       Map("name" -> "repl_timeout",
-        "description" -> (replPrefix + "Set step timeout in seconds (0=unlimited)."),
+        "description" -> (replPrefix + "Set step timeout in seconds (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have " +
+          "a specific reason to. Calls like `metis`, `auto`, `blast`, `force`, should NOT take longer than 5s. Even if they do, and the call " +
+          "ultimately succeeds, it points at a proof that ought to be broken down further. ONLY use a large timeout if you work with very large " +
+          "scripts or in special circumstances where, exceptionally, a large timeout is expected / tolerated."),
         "inputSchema" -> schema(Map("secs" -> int("Timeout in seconds")), List("secs"))),
       Map("name" -> "repl_raw",
         "description" -> (replPrefix + "Send a raw ML expression to the REPL."),
