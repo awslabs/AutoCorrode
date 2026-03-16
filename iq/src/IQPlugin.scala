@@ -12,6 +12,9 @@ object IQPlugin {
   /** Port reported by ML_Repl via PIDE protocol message. */
   @volatile var mlReplPort: Option[Int] = None
 
+  /** Port of the I/R REPL (repl.py), set by IQExploreDockable on connect. */
+  @volatile var irReplPort: Option[Int] = None
+
   private def register(plugin: IQPlugin): Unit = {
     instance = Some(plugin)
   }
@@ -22,6 +25,23 @@ object IQPlugin {
 
   def restartServerFromSettings(): Unit = {
     instance.foreach(_.restartServerFromSettings())
+  }
+
+  /** Append a status widget name to the status bar if not already present. */
+  def activateWidget(name: String): Unit = {
+    GUI_Thread.later {
+      val key = "view.status"
+      var current = jEdit.getProperty(key, "")
+      if (!current.contains(name)) {
+        current = current + " " + name
+        jEdit.setProperty(key, current)
+        var view = jEdit.getFirstView()
+        while (view != null) {
+          view.getStatus.propertiesChanged()
+          view = view.getNext
+        }
+      }
+    }
   }
 
   /** PIDE protocol handler: receives IR_Repl.port messages from ML. */
@@ -69,6 +89,7 @@ class IQPlugin extends EBPlugin {
       iqServer = Some(new IQServer(port = 8765, securityConfig = securityConfig))
       iqServer.foreach(_.start())
       Output.writeln("Isabelle/Q Server started successfully on port 8765")
+      IQPlugin.activateWidget("iq-mcp-status")
     } catch {
       case ex: Exception =>
         iqServer = None
@@ -80,6 +101,13 @@ class IQPlugin extends EBPlugin {
   override def stop(): Unit = {
     // Plugin cleanup
     Output.writeln("Isabelle/Q Plugin with MCP Server stopping...")
+
+    // Remove status bar widgets
+    val key = "view.status"
+    val current = jEdit.getProperty(key, "")
+    val cleaned = current.replace("iq-mcp-status", "").replace("ir-repl-status", "")
+      .replaceAll("  +", " ").trim
+    jEdit.setProperty(key, cleaned)
 
     // Stop MCP server
     iqServer.foreach(_.stop())

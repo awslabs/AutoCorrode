@@ -152,6 +152,8 @@ object IQExploreDockable {
       replPort match {
         case Some(port) =>
           onStatus("repl.py listening on port " + port)
+          IQPlugin.irReplPort = Some(port)
+          IQPlugin.activateWidget("ir-repl-status")
           try {
             val client = new IRClient(port = port)
             client.connect()
@@ -690,17 +692,6 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   buttonsPanel.add(locateButton)
   buttonsPanel.add(statusLabel)
 
-
-  private val startIRButton = new JButton("Start I/R")
-  startIRButton.setToolTipText("Start the I/R TCP REPL server (port 9146)")
-  startIRButton.addActionListener(new ActionListener {
-    def actionPerformed(e: ActionEvent): Unit = {
-      IQExploreDockable.onStatus = msg =>
-        javax.swing.SwingUtilities.invokeLater(() => appendOutput(msg))
-      IQExploreDockable.ensureStarted()
-    }
-  })
-  buttonsPanel.add(startIRButton)
 
   controlsPanel.add(queryPanel)
   controlsPanel.add(inputPanel)

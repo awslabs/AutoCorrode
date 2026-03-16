@@ -2,7 +2,4 @@
 <!DOCTYPE DOCKABLES SYSTEM "dockables.dtd">
 
 <DOCKABLES>
-	<DOCKABLE NAME="proxy-log-dockable" MOVABLE="TRUE">
-		new ProxyLogDockable(view, position);
-	</DOCKABLE>
 </DOCKABLES>

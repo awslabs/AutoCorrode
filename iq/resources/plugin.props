@@ -21,7 +21,7 @@ options.iq-options.code=new IQOptions();
 
 # Menu actions
 plugin.IQPlugin.menu.label=I/Q
-plugin.IQPlugin.menu=mcp-dockable sledgehammer-dockable pide-dump-dockable
+plugin.IQPlugin.menu=mcp-dockable sledgehammer-dockable
 
 # Dockable definitions
 mcp-dockable.label=I/Q Server Log
@@ -30,5 +30,4 @@ mcp-dockable.title=I/Q Server Log
 sledgehammer-dockable.label=I/Q Explore
 sledgehammer-dockable.title=I/Q Explore
 
-pide-dump-dockable.label=I/Q PIDE Markup
-pide-dump-dockable.title=I/Q PIDE Markup
+

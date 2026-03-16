@@ -12,7 +12,6 @@ plugin.ProxyPlugin.depend.0=jdk 21
 plugin.ProxyPlugin.depend.1=jedit 05.06.00.00
 
 plugin.ProxyPlugin.menu.label=ML Proxy
-plugin.ProxyPlugin.menu=proxy-log-dockable
+plugin.ProxyPlugin.menu=
 
-proxy-log-dockable.label=Proxy Log
-proxy-log-dockable.title=Proxy Log
+

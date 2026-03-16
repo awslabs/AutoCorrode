@@ -8,7 +8,4 @@
 	<DOCKABLE NAME="sledgehammer-dockable" MOVABLE="TRUE">
 		new IQExploreDockable(view, position);
 	</DOCKABLE>
-	<DOCKABLE NAME="pide-dump-dockable" MOVABLE="TRUE">
-		new IQDumpPIDEDockable(view, position);
-	</DOCKABLE>
 </DOCKABLES>
