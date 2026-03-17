@@ -109,6 +109,39 @@ When an MCP client connects successfully, you should see:
 [MCP] Processing request of type ListPromptsRequest
 ```
 
+## Management Console
+
+When running in interactive mode, the operator gets a management console on stdin/stdout.
+Lines starting with `/` are management commands; everything else is sent to the REPL directly.
+
+Available commands:
+
+- `/connections` — Show number of open client connections
+- `/verbosity N` — Set verbosity 0–3 (0=off, 1=body, 2=headers, 3=hex)
+- `/quit` — Shut down the server
+- `/help` — Show available commands
+
+## Daemon Mode
+
+In daemon mode, the management console is served on a Unix socket instead of stdin/stdout,
+allowing the server to run in the background:
+
+```bash
+python3 ./ir/repl.py --daemon [options]
+```
+
+Connect to the management console of a running daemon:
+
+```bash
+python3 ./ir/repl.py --attach
+```
+
+Stop a running daemon:
+
+```bash
+python3 ./ir/repl.py --kill-daemon
+```
+
 ## Recorded Segments: Forking REPLs at Arbitrary Theory Points
 
 By default, `Ir.init` creates a REPL at the end of a theory.

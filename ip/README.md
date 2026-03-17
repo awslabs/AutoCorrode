@@ -41,6 +41,12 @@ isabelle-remote ubuntu@host
 isabelle jedit -l HOL $ISABELLE_REMOTE
 ```
 
+The `setup` subcommand installs AFP components on the remote by default (`Word_Lib`).
+You can override this with the `--components` flag. For example,
+`--components Word_Lib Isabelle_C` would install both `Word_Lib` and `Isabelle_C`.
+To skip AFP installation entirely, pass `--components` with no arguments.
+Note: `--components` is only available on the `setup` subcommand, not `run`.
+
 ## Setup Scripts
 
 - `setup_ubuntu.sh` — Installs Isabelle on a remote Ubuntu/Debian host (aarch64 or x86_64).

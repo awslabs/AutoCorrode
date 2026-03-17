@@ -87,8 +87,8 @@ Use these environment variables to configure behavior:
 - `IQ_MCP_BIND_HOST`: Host/IP to bind to (default: `127.0.0.1`).
 - `IQ_MCP_ALLOW_REMOTE_BIND`: Set to `true` to allow non-loopback bind hosts (default: `false`).
 - `IQ_MCP_AUTH_TOKEN`: If set, every JSON-RPC request must include top-level `auth_token` matching this value.
-- `IQ_MCP_ALLOWED_ROOTS`: Path-list of allowed mutation roots (supports OS path separator, comma, or newline delimiters). If unset, defaults to the current working directory or the I/Q UI setting if configured.
-- `IQ_MCP_ALLOWED_READ_ROOTS`: Path-list of allowed read roots (supports OS path separator, comma, or newline delimiters). If unset, defaults to `IQ_MCP_ALLOWED_ROOTS` or the I/Q UI setting if configured.
+- `IQ_MCP_ALLOWED_ROOTS`: Path-list of allowed mutation roots (supports OS path separator, comma, or newline delimiters). Precedence: environment variable → I/Q UI setting → current working directory.
+- `IQ_MCP_ALLOWED_READ_ROOTS`: Path-list of allowed read roots (supports OS path separator, comma, or newline delimiters). Precedence: environment variable → I/Q UI setting → value of `IQ_MCP_ALLOWED_ROOTS`.
 - `IQ_MCP_MAX_CLIENT_THREADS`: Maximum concurrent MCP client handler threads (default: `16`, minimum `2`).
 
 The bundled `iq_bridge.py` automatically forwards `IQ_MCP_AUTH_TOKEN` as `auth_token` on outgoing requests, enforces socket read timeouts, and supports log-file rotation:
@@ -153,8 +153,19 @@ You have XXX theory files open in total, ...
 12. **get_proof_context**: Read-only local proof context lookup (`print_context`) at a command selection
 13. **get_definitions**: Read-only definition lookup for names via `get_defs` at a command selection
 14. **get_diagnostics**: Read-only error/warning diagnostics for either command selection or full file scope
-15. **explore**: Non-invasive proof exploration (sledgehammer, find_theorems, proof attempts)
+15. **explore**: Non-invasive proof exploration at any point in a document, with three query types:
+    - `query='proof'`: Execute an Isar method/script candidate (requires `arguments` with the Isar text, e.g. `'by simp'`)
+    - `query='sledgehammer'`: Run sledgehammer (optional `arguments` for prover list)
+    - `query='find_theorems'`: Search for theorems (requires `arguments` with the search query, optional `max_results`)
 16. **save_file**: Save one file or all modified open files
+
+### Tool Classification
+
+**Read-only tools** (restricted to allowed read roots):
+`list_files`, `read_file`, `get_command_info`, `get_document_info`, `open_file` (without `create_if_missing`), `resolve_command_target`, `get_context_info`, `get_entities`, `get_type_at_selection`, `get_proof_blocks`, `get_proof_context`, `get_definitions`, `get_diagnostics`, `explore`
+
+**Mutating tools** (restricted to allowed mutation roots):
+`open_file` (with `create_if_missing=true`), `write_file`, `save_file`, `get_command_info` (with `xml_result_file`)
 
 ## Behavioral Guidance
 
