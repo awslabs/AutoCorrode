@@ -274,6 +274,25 @@ def ssh_control_cleanup():
                            capture_output=True)
 
 
+def ssh_forward_local(host, local_port, remote_port):
+    """Dynamically add an SSH local forward via the control socket.
+
+    Maps local_port on the local machine to remote_port on the remote.
+    Requires an active SSH ControlMaster connection.
+    """
+    cmd = ["ssh"] + ssh_control_flags() + [
+        "-O", "forward",
+        "-L", f"127.0.0.1:{local_port}:127.0.0.1:{remote_port}",
+        host,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.warning(f"SSH local forward failed (rc={result.returncode}): {result.stderr.strip()}")
+        return False
+    logger.debug(f"SSH local forward: local:{local_port} -> remote:{remote_port}")
+    return True
+
+
 def ssh_run(host, *cmd_args, capture=True, ssh_flags=None, **kwargs):
     """Run a command on the remote host via SSH. Returns CompletedProcess or Popen.
 
@@ -493,7 +512,7 @@ def pide_proxy(server_sock, scala_port, scala_password,
                remote_bash_addr, remote_bash_pw, local_isabelle_home,
                path_rewrites=None, remote_host=None,
                stats_rewrite=None, target_isabelle_home=None,
-               target_ml_home=None):
+               target_ml_home=None, mgmt=None):
     """PIDE protocol proxy.
 
         ML (remote, via SSH tunnel)
@@ -514,6 +533,8 @@ def pide_proxy(server_sock, scala_port, scala_password,
     ml_sock, ml_addr = server_sock.accept()
     server_sock.close()
     logger.debug(f"ML connected from {ml_addr}")
+    if mgmt:
+        mgmt.event(f"{GREEN}ML connected{RST} from {ml_addr}", 1)
 
     # Read ML's password line
     ml_pw = b""
@@ -552,6 +573,8 @@ def pide_proxy(server_sock, scala_port, scala_password,
                     new_chunks, modified = rewrite_bash_process_options(
                         chunks, remote_bash_addr, remote_bash_pw)
                     if modified:
+                        if mgmt:
+                            mgmt.event(f"{YELLOW}→ML{RST} Prover.options: rewrote bash_process", 1)
                         write_pide_message(ml_sock, new_chunks)
                         continue
 
@@ -562,14 +585,19 @@ def pide_proxy(server_sock, scala_port, scala_password,
                         chunks, path_rewrites,
                         remote_bash_addr, remote_bash_pw)
                     if modified:
+                        if mgmt:
+                            mgmt.event(f"{YELLOW}→ML{RST} build_session: rewrote paths", 1)
                         write_pide_message(ml_sock, new_chunks)
                         continue
 
                 # Forward unmodified (preserve original header for efficiency)
+                n = len(header_line) + 1 + sum(len(c) for c in chunks)
                 ml_sock.sendall(header_line + b"\n")
                 for chunk in chunks:
                     ml_sock.sendall(chunk)
-                count_bytes(len(header_line) + 1 + sum(len(c) for c in chunks))
+                count_bytes(n)
+                if mgmt:
+                    mgmt.event(f"{CYAN}→ML{RST} {cmd.decode(errors='replace')} ({n}B)", 2)
         except (ConnectionError, OSError) as e:
             logger.debug(f"Scala->ML error: {e}")
 
@@ -603,8 +631,14 @@ def pide_proxy(server_sock, scala_port, scala_password,
                 if (kind == b"error" and
                         any(b"No such file" in c for c in chunks[2:])):
                     error_text = b" ".join(chunks[2:])
-                    file_match = re.search(rb'No such file: "([^"]*)"', error_text)
-                    missing = file_match.group(1).decode() if file_match else "?"
+                    file_match = (re.search(rb'No such file: "([^"]*)"', error_text) or
+                                  re.search(rb'No such file:\s*(.+)', error_text))
+                    if file_match:
+                        raw = file_match.group(1)
+                        # Strip YXML markup
+                        missing = re.sub(rb'[\x05\x06][^\x05\x06]*', b'', raw).decode(errors="replace").strip()
+                    else:
+                        missing = "?"
                     logger.debug("File-not-found error chunks:\n" + "\n".join(
                         f"  chunk[{i}]: {c[:300]!r}" for i, c in enumerate(chunks)))
                     new_prefix = b"Prover cannot verify existence of file: "
@@ -612,24 +646,24 @@ def pide_proxy(server_sock, scala_port, scala_password,
                         chunks[j] = chunks[j].replace(b"No such file: ", new_prefix)
                     chunks[0] = b"warning"
                     logger.info(f"Prover cannot verify existence of file: {missing}")
+                    if mgmt:
+                        mgmt.event(f"{YELLOW}←Scala{RST} error→warning: {missing}", 1)
                     with scala_write_lock:
                         write_pide_message(scala_sock, chunks)
                     continue
 
                 # Drop "failed" status on text commands
-                # (text blocks fail when \<^file> can't check remote paths,
-                #  but the failure is cosmetic — the proof state is unaffected.
-                #  The subsequent "finished" status will mark the command as done.)
                 if (kind == b"status" and
                         any(b"label=command.text" == c for c in chunks) and
                         any(b"failed" in c for c in chunks)):
                     logger.debug("Dropped text command failed status")
+                    if mgmt:
+                        mgmt.event(f"{YELLOW}←Scala{RST} dropped text failed status", 1)
                     continue
 
                 # Suppress ML_statistics and start remote stats monitoring instead
                 if (kind == b"protocol" and stats_rewrite and
                         any(b"function=ML_statistics" == c for c in chunks)):
-                    # Extract PID from the message
                     stats_pid = None
                     for c in chunks:
                         if c.startswith(b"pid="):
@@ -638,18 +672,50 @@ def pide_proxy(server_sock, scala_port, scala_password,
                     if stats_pid:
                         logger.debug(f"Suppressed ML_statistics, starting remote monitor "
                                      f"(pid={stats_pid}, dir={remote_stats_dir})")
+                        if mgmt:
+                            mgmt.event(f"{YELLOW}←Scala{RST} ML_statistics: started remote monitor (pid={stats_pid})", 1)
                         _start_remote_stats_monitor(
                             remote_host, stats_pid, remote_stats_dir,
                             target_isabelle_home, target_ml_home,
                             scala_sock, scala_write_lock)
                     continue
 
-                # Reverse-rewrite loading_theory paths (remote→local) so that
-                # Scala's Sources lookup finds the correct local-keyed entries.
+                # Intercept IR_Repl.port: set up SSH local forward so I/R
+                # is reachable locally, then rewrite the port in the message.
+                if (kind == b"protocol" and len(chunks) > 3 and
+                        chunks[2] == b"function=IR_Repl.port"):
+                    m = re.match(rb"port=(\d+)$", chunks[3])
+                    if m:
+                        remote_port = int(m.group(1))
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.bind(("127.0.0.1", 0))
+                            local_port = s.getsockname()[1]
+                        if ssh_forward_local(remote_host, local_port, remote_port):
+                            logger.info(f"I/R tunnel (PIDE): local:{local_port} -> remote:{remote_port}")
+                            if mgmt:
+                                mgmt.tunnels["I/R"] = f"local:{local_port} → remote:{remote_port}"
+                                mgmt.event(f"{GREEN}I/R tunnel{RST}: local:{local_port} → remote:{remote_port}", 0)
+                            chunks[3] = f"port={local_port}".encode()
+                        else:
+                            logger.warning("I/R tunnel (PIDE) failed")
+                            if mgmt:
+                                mgmt.event(f"{RED}I/R tunnel failed{RST}", 0)
+                    with scala_write_lock:
+                        write_pide_message(scala_sock, chunks)
+                    continue
+
+                # Reverse-rewrite loading_theory paths (remote→local)
                 if (kind == b"protocol" and path_rewrites and
                         any(b"function=loading_theory" in c for c in chunks)):
                     chunks = [backward_rewrite(c, path_rewrites, label="loading_theory")
                               for c in chunks]
+                    if mgmt:
+                        theory = "?"
+                        for c in chunks:
+                            if c.startswith(b"name="):
+                                theory = c[5:].decode(errors="replace")
+                                break
+                        mgmt.event(f"{YELLOW}←Scala{RST} loading_theory: {theory}", 1)
                     with scala_write_lock:
                         write_pide_message(scala_sock, chunks)
                     count_bytes(sum(len(c) for c in chunks))
@@ -662,6 +728,8 @@ def pide_proxy(server_sock, scala_port, scala_password,
                     for chunk in chunks:
                         scala_sock.sendall(chunk)
                 count_bytes(n)
+                if mgmt:
+                    mgmt.event(f"{GREEN}←Scala{RST} {kind.decode(errors='replace')} ({n}B)", 2)
         except (ConnectionError, OSError) as e:
             logger.debug(f"ML->Scala error: {e}")
 
@@ -672,6 +740,8 @@ def pide_proxy(server_sock, scala_port, scala_password,
     def count_bytes(n):
         with byte_counter_lock:
             byte_counter[0] += n
+        if mgmt:
+            mgmt.bytes_transferred[0] += n
 
     def proxy_heartbeat():
         """Send periodic proxy_status with throughput to Scala/jEdit."""
@@ -830,6 +900,383 @@ def start_remote_bash_server(host, target_isabelle_home):
 
 
 # ---------------------------------------------------------------------------
+# ANSI colors (consistent with I/R repl.py)
+# ---------------------------------------------------------------------------
+
+try:
+    from prompt_toolkit import PromptSession as _PromptSession
+    from prompt_toolkit.completion import Completer as _Completer, Completion as _Completion
+    from prompt_toolkit.formatted_text import HTML as _HTML
+    from prompt_toolkit.patch_stdout import patch_stdout as _patch_stdout
+    _HAVE_PT = True
+except ImportError:
+    _HAVE_PT = False
+
+_MGMT_COMMANDS = {
+    "/help": "Show available commands",
+    "/verbosity": "Set verbosity [N] (0=off 1=events 2=+summaries 3=+hex)",
+    "/old": "Replay last [N] events at current verbosity",
+    "/status": "Show proxy state",
+    "/tunnels": "Show active SSH tunnels",
+    "/rewrites": "Show path rewrites (local → remote)",
+    "/quit": "Detach",
+}
+
+if _HAVE_PT:
+    class _MgmtCompleter(_Completer):
+        def get_completions(self, document, complete_event):
+            text = document.text_before_cursor.lstrip()
+            for cmd, desc in _MGMT_COMMANDS.items():
+                if cmd.startswith(text):
+                    yield _Completion(cmd, start_position=-len(text),
+                                      display_meta=desc)
+
+RST = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+
+# ---------------------------------------------------------------------------
+# Management console
+# ---------------------------------------------------------------------------
+
+MGMT_SOCKET_DIR = "/tmp"
+MGMT_SOCKET_PREFIX = "ml_proxy_mgmt_"
+MGMT_SOCKET_SUFFIX = ".sock"
+
+
+def mgmt_socket_path(host):
+    """Socket path keyed by remote hostname (shared across proxy invocations)."""
+    # Sanitize host for use in filename (user@host -> user_host)
+    safe = host.replace("@", "_").replace("/", "_").replace(":", "_")
+    return os.path.join(MGMT_SOCKET_DIR,
+                        f"{MGMT_SOCKET_PREFIX}{safe}{MGMT_SOCKET_SUFFIX}")
+
+
+def discover_mgmt_sockets():
+    import glob as _glob
+    pattern = os.path.join(MGMT_SOCKET_DIR,
+                           f"{MGMT_SOCKET_PREFIX}*{MGMT_SOCKET_SUFFIX}")
+    results = []
+    for path in sorted(_glob.glob(pattern)):
+        base = os.path.basename(path)
+        label = base[len(MGMT_SOCKET_PREFIX):-len(MGMT_SOCKET_SUFFIX)]
+        results.append((label, path))
+    return results
+
+
+class ProxyMgmtServer:
+    """Unix socket server for the proxy management console.
+
+    Accepts multiple connections. Output is broadcast to all connected
+    clients. Input from any client is processed as / commands.
+    """
+
+    def __init__(self, sock_path, host="?", start_time=None):
+        self.sock_path = sock_path
+        self.host = host
+        self.start_time = start_time or time.time()
+        self.verbosity = 0
+        self.tunnels = {}  # label -> "local:N -> remote:M"
+        self.rewrites = []  # list of (old, new) path rewrites
+        self.bytes_transferred = [0]
+        self.clients = []
+        self.clients_lock = threading.Lock()
+        self.history = []       # ring buffer of (level, msg)
+        self.history_max = 1000
+        self.history_lock = threading.Lock()
+        self.running = True
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        if os.path.exists(sock_path):
+            os.unlink(sock_path)
+        self.sock.bind(sock_path)
+        self.sock.listen(4)
+
+    def broadcast(self, msg):
+        data = (str(msg) + "\n").encode("utf-8")
+        with self.clients_lock:
+            dead = []
+            for c in self.clients:
+                try:
+                    c.sendall(data)
+                except (BrokenPipeError, OSError):
+                    dead.append(c)
+            for c in dead:
+                self.clients.remove(c)
+                try:
+                    c.close()
+                except OSError:
+                    pass
+
+    def event(self, msg, level=1):
+        """Store in history always; broadcast if verbosity >= level."""
+        with self.history_lock:
+            self.history.append((level, msg))
+            if len(self.history) > self.history_max:
+                self.history = self.history[-self.history_max:]
+        if self.verbosity >= level:
+            self.broadcast(msg)
+
+    def serve_forever(self):
+        self.sock.settimeout(1.0)
+        while self.running:
+            try:
+                client, _ = self.sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            with self.clients_lock:
+                self.clients.append(client)
+            threading.Thread(target=self._handle_client, args=(client,),
+                             daemon=True).start()
+
+    def _handle_client(self, client):
+        self.broadcast(f"{DIM}Console attached{RST}")
+        buf = b""
+        try:
+            while self.running:
+                chunk = client.recv(4096)
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    line_bytes, buf = buf.split(b"\n", 1)
+                    line = line_bytes.decode("utf-8", errors="replace").strip()
+                    if line:
+                        self._process_command(line)
+        except (ConnectionResetError, BrokenPipeError, OSError):
+            pass
+        finally:
+            with self.clients_lock:
+                if client in self.clients:
+                    self.clients.remove(client)
+            try:
+                client.close()
+            except OSError:
+                pass
+            self.broadcast(f"{DIM}Console detached{RST}")
+
+    def _process_command(self, line):
+        if not line.startswith("/"):
+            self.broadcast(f"{RED}Commands must start with / (try /help){RST}")
+            return
+        cmd = line.split()[0].lower()
+        if cmd == "/help":
+            v = self.verbosity
+            labels = {0: "off", 1: "events", 2: "events+summaries", 3: "events+hex"}
+            self.broadcast(f"{BOLD}Proxy management commands:{RST}")
+            self.broadcast(f"  {YELLOW}/verbosity [N]{RST}   "
+                           f"Set verbosity (currently {v} / {labels[v]})")
+            self.broadcast(f"                      0=off  1=events  2=+summaries  3=+hex")
+            self.broadcast(f"  {YELLOW}/old [N]{RST}         Replay last N events at current verbosity (default: all)")
+            self.broadcast(f"  {YELLOW}/status{RST}          Show proxy state")
+            self.broadcast(f"  {YELLOW}/tunnels{RST}         Show active SSH tunnels")
+            self.broadcast(f"  {YELLOW}/rewrites{RST}        Show path rewrites (local → remote)")
+            self.broadcast(f"  {YELLOW}/quit{RST}            Detach")
+            self.broadcast(f"  {YELLOW}/help{RST}            This help")
+        elif cmd == "/verbosity":
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].isdigit():
+                self.verbosity = min(int(parts[1]), 3)
+            else:
+                self.verbosity = (self.verbosity + 1) % 4
+            labels = {0: "off", 1: "events", 2: "events+summaries", 3: "events+hex"}
+            self.broadcast(f"Verbosity {self.verbosity} / {labels[self.verbosity]}")
+        elif cmd == "/status":
+            uptime = int(time.time() - self.start_time)
+            mb = self.bytes_transferred[0] / (1024 * 1024)
+            self.broadcast(f"{BOLD}Proxy status:{RST}")
+            self.broadcast(f"  Host:     {GREEN}{self.host}{RST}")
+            self.broadcast(f"  Uptime:   {uptime}s")
+            self.broadcast(f"  Transfer: {mb:.1f} MB total")
+            n = len(self.tunnels)
+            self.broadcast(f"  Tunnels:  {n}")
+        elif cmd == "/tunnels":
+            if not self.tunnels:
+                self.broadcast(f"{DIM}No active tunnels{RST}")
+            else:
+                for label, desc in self.tunnels.items():
+                    self.broadcast(f"  {CYAN}{label}{RST}: {desc}")
+        elif cmd == "/rewrites":
+            if not self.rewrites:
+                self.broadcast(f"{DIM}No path rewrites{RST}")
+            else:
+                self.broadcast(f"{BOLD}{len(self.rewrites)} rewrite(s):{RST}")
+                for old, new in self.rewrites:
+                    self.broadcast(f"  {old}")
+                    self.broadcast(f"    {CYAN}→{RST} {new}")
+        elif cmd == "/quit":
+            self.broadcast(f"{DIM}Detaching...{RST}")
+            # Close the requesting client (the broadcast above will reach it)
+        elif cmd == "/old":
+            parts = line.split()
+            with self.history_lock:
+                matching = [(lvl, msg) for lvl, msg in self.history
+                            if lvl <= self.verbosity]
+            if len(parts) >= 2 and parts[1].isdigit():
+                n = int(parts[1])
+                matching = matching[-n:]
+            if not matching:
+                self.broadcast(f"{DIM}No events at verbosity {self.verbosity}{RST}")
+            else:
+                self.broadcast(f"{DIM}--- {len(matching)} event(s) ---{RST}")
+                for _, msg in matching:
+                    self.broadcast(msg)
+                self.broadcast(f"{DIM}--- end ---{RST}")
+        else:
+            self.broadcast(f"{RED}Unknown command: {cmd}{RST} (try /help)")
+
+    def shutdown(self):
+        self.running = False
+        self.sock.close()
+        with self.clients_lock:
+            for c in self.clients:
+                try:
+                    c.close()
+                except OSError:
+                    pass
+            self.clients.clear()
+        try:
+            os.unlink(self.sock_path)
+        except OSError:
+            pass
+
+
+def attach_mode(sock_path):
+    """Connect to a running proxy's management socket with auto-reconnect."""
+    if sock_path is None:
+        sockets = discover_mgmt_sockets()
+        if not sockets:
+            print(f"{RED}No proxy sockets found{RST}", file=sys.stderr)
+            sys.exit(1)
+        elif len(sockets) == 1:
+            label, sock_path = sockets[0]
+            print(f"{DIM}Found proxy for {label}{RST}", flush=True)
+        else:
+            print("Multiple proxies running:")
+            for i, (label, path) in enumerate(sockets):
+                print(f"  {BOLD}[{i + 1}]{RST} {GREEN}{label}{RST}  {DIM}({path}){RST}")
+            while True:
+                try:
+                    choice = input(f"Connect to [1-{len(sockets)}]: ").strip()
+                    idx = int(choice) - 1
+                    if 0 <= idx < len(sockets):
+                        _, sock_path = sockets[idx]
+                        break
+                except (ValueError, EOFError):
+                    pass
+                print("Invalid choice, try again.")
+
+    stop = threading.Event()
+
+    def _connect():
+        """Try to connect to the socket. Returns socket or None."""
+        if not os.path.exists(sock_path):
+            return None
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(sock_path)
+            return s
+        except (ConnectionRefusedError, OSError):
+            s.close()
+            return None
+
+    def _session(sock):
+        """Run one attached session. Returns True to reconnect, False to quit."""
+        print(f"{GREEN}● Attached{RST} ({sock_path})", flush=True)
+
+        disconnected = threading.Event()
+
+        def reader():
+            buf = b""
+            try:
+                while not stop.is_set():
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    while b"\n" in buf:
+                        line_bytes, buf = buf.split(b"\n", 1)
+                        print(line_bytes.decode("utf-8", errors="replace"))
+            except OSError:
+                pass
+            disconnected.set()
+            if not stop.is_set():
+                print(f"\n{YELLOW}Proxy disconnected — waiting for reconnect...{RST}")
+
+        reader_thread = threading.Thread(target=reader, daemon=True)
+        reader_thread.start()
+
+        def _send(line):
+            if line.strip().lower() == "/quit":
+                stop.set()
+                return False
+            try:
+                sock.sendall((line + "\n").encode("utf-8"))
+            except (BrokenPipeError, OSError):
+                return False
+            return True
+
+        try:
+            if _HAVE_PT and sys.stdin.isatty():
+                session = _PromptSession(completer=_MgmtCompleter())
+                with _patch_stdout(raw=True):
+                    while not stop.is_set() and not disconnected.is_set():
+                        try:
+                            line = session.prompt(_HTML("<b><ansicyan>%&gt;</ansicyan></b> "))
+                        except (EOFError, KeyboardInterrupt):
+                            stop.set()
+                            return False
+                        if not _send(line):
+                            break
+            else:
+                while not stop.is_set() and not disconnected.is_set():
+                    try:
+                        line = input(f"{BOLD}{CYAN}%>{RST} ")
+                    except (EOFError, KeyboardInterrupt):
+                        stop.set()
+                        return False
+                    if not _send(line):
+                        break
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            sock.close()
+
+        return not stop.is_set()  # reconnect unless user quit
+
+    # Initial connect
+    sock = _connect()
+    if sock is None:
+        print(f"{YELLOW}No proxy at {sock_path} — waiting (retry every 5s)...{RST}", flush=True)
+
+    while not stop.is_set():
+        if sock is None:
+            # Poll for socket to appear, retry every 5s indefinitely
+            attempt = 0
+            while not stop.is_set():
+                time.sleep(5)
+                attempt += 1
+                sock = _connect()
+                if sock is not None:
+                    break
+                if attempt % 12 == 0:  # every 60s
+                    print(f"{DIM}Still waiting for proxy ({attempt * 5}s)...{RST}", flush=True)
+            if sock is None:
+                break
+
+        if not _session(sock):
+            break
+        sock = None  # loop back to reconnect
+
+    print(f"{DIM}Detached.{RST}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -837,27 +1284,52 @@ def main():
     parser = argparse.ArgumentParser(
         description="Isabelle remote ML prover proxy",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--target-isabelle-home", required=True,
-                        help="ISABELLE_HOME on the target machine")
-    parser.add_argument("--target-ml-platform", default=None,
-                        help="ML platform on the target (e.g. arm64-linux). "
-                             "If unset, assumed same as local.")
-    parser.add_argument("--host", required=True,
-                        help="SSH host (user@host)")
-    parser.add_argument("-v", "--verbose", action="store_true")
-    parser.add_argument("--log", default=None,
-                        help="Log file (default: stderr)")
-    parser.add_argument("--minheap", default=None,
-                        help="Override poly --minheap (MB)")
-    parser.add_argument("--maxheap", default=None,
-                        help="Override poly --maxheap (MB)")
-    parser.add_argument("--gcthreads", default=None,
-                        help="Override poly --gcthreads")
-    parser.add_argument("-H", dest="initial_heap", default=None,
-                        help="Override poly -H initial heap size (MB)")
-    parser.add_argument("--gcpercent", default=None,
-                        help="Override poly --gcpercent (1-99)")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # attach subcommand
+    attach_parser = subparsers.add_parser(
+        "attach", help="Attach to a running proxy's management console")
+    attach_parser.add_argument("--host", default=None,
+                               help="Connect to proxy for this SSH host")
+    attach_parser.add_argument("--mgmt-socket", default=None,
+                               help="Path to mgmt socket (overrides --host and auto-discovery)")
+
+    # proxy subcommand (used by configure-remote.py / process_policy)
+    proxy_parser = subparsers.add_parser(
+        "proxy", help="Run the proxy (invoked by Isabelle process_policy)")
+    proxy_parser.add_argument("--target-isabelle-home", required=True,
+                              help="ISABELLE_HOME on the target machine")
+    proxy_parser.add_argument("--target-ml-platform", default=None,
+                              help="ML platform on the target (e.g. arm64-linux). "
+                                   "If unset, assumed same as local.")
+    proxy_parser.add_argument("--host", required=True,
+                              help="SSH host (user@host)")
+    proxy_parser.add_argument("-v", "--verbose", action="store_true")
+    proxy_parser.add_argument("--log", default=None,
+                              help="Log file (default: stderr)")
+    proxy_parser.add_argument("--minheap", default=None,
+                              help="Override poly --minheap (MB)")
+    proxy_parser.add_argument("--maxheap", default=None,
+                              help="Override poly --maxheap (MB)")
+    proxy_parser.add_argument("--gcthreads", default=None,
+                              help="Override poly --gcthreads")
+    proxy_parser.add_argument("-H", dest="initial_heap", default=None,
+                              help="Override poly -H initial heap size (MB)")
+    proxy_parser.add_argument("--gcpercent", default=None,
+                              help="Override poly --gcpercent (1-99)")
+
     args, poly_argv = parser.parse_known_args()
+
+    if args.command == "attach":
+        sock = args.mgmt_socket
+        if sock is None and args.host:
+            sock = mgmt_socket_path(args.host)
+        attach_mode(sock)
+        sys.exit(0)
+
+    if args.command != "proxy":
+        parser.print_help()
+        sys.exit(1)
 
     setup_logging(args.verbose, args.log)
 
@@ -891,6 +1363,13 @@ def main():
 
     target_isabelle_home = args.target_isabelle_home
     host = args.host
+
+    # Start management console socket (keyed by host, shared across invocations)
+    mgmt_path = mgmt_socket_path(host)
+    mgmt = ProxyMgmtServer(mgmt_path, host=host)
+    mgmt_thread = threading.Thread(target=mgmt.serve_forever, daemon=True)
+    mgmt_thread.start()
+    logger.debug(f"Management socket: {mgmt_path}")
 
     # Derive local ML_PLATFORM from the poly binary path in the command line.
     # The path looks like: .../contrib/polyml-X.Y.Z/PLATFORM/poly
@@ -1013,6 +1492,7 @@ def main():
             logger.warning(f"Local component {name} ({lc}) has no match on remote")
 
     argv_rewrites.sort(key=lambda x: -len(x[0]))
+    mgmt.rewrites = argv_rewrites
     logger.debug(f"argv_rewrites ({len(argv_rewrites)} entries):")
     for old, new in argv_rewrites:
         logger.debug(f"  {old} -> {new}")
@@ -1177,7 +1657,8 @@ def main():
             args=(proxy_server, scala_port, scala_password,
                   remote_bash_addr, remote_bash_pw, local_isabelle_home,
                   path_rewrites, host, stats_rewrite,
-                  target_isabelle_home, target_env_vars.get("ML_HOME", "")),
+                  target_isabelle_home, target_env_vars.get("ML_HOME", ""),
+                  mgmt),
             daemon=True)
         pide_thread.start()
 
@@ -1185,6 +1666,7 @@ def main():
     ssh_tunnel_flags = []
     if has_pide:
         ssh_tunnel_flags = ["-R", f"{proxy_port}:127.0.0.1:{proxy_port}"]
+        mgmt.tunnels["PIDE"] = f"remote:{proxy_port} → local:{proxy_port} (reverse)"
     ssh_cmd = [
         "ssh",
         "-C",
@@ -1226,8 +1708,46 @@ def main():
             f.write(script_content)
         logger.debug(f"Full remote script dumped to {wrapped_dump}")
 
-    proc = subprocess.Popen(ssh_cmd, stdin=sys.stdin, stdout=sys.stdout, stderr=sys.stderr)
+    proc = subprocess.Popen(ssh_cmd, stdin=sys.stdin, stdout=subprocess.PIPE, stderr=sys.stderr)
     register_process(proc)
+
+    # Relay stdout, intercepting Tcp_Handler port announcements to set up
+    # an SSH local forward so that I/R (ML_Repl) is reachable locally.
+    _tcp_handler_re = re.compile(rb"Tcp_Handler: listening on 127\.0\.0\.1:(\d+)")
+
+    def _relay_stdout():
+        try:
+            while True:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                text = line.rstrip(b"\n").decode("utf-8", errors="replace")
+                if text:
+                    mgmt.event(f"{DIM}stdout:{RST} {text}", 0)
+                m = _tcp_handler_re.search(line)
+                if m:
+                    remote_port = int(m.group(1))
+                    # Pick a free local port
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind(("127.0.0.1", 0))
+                        local_port = s.getsockname()[1]
+                    if ssh_forward_local(host, local_port, remote_port):
+                        logger.info(f"I/R tunnel: local:{local_port} -> remote:{remote_port}")
+                        mgmt.tunnels["I/R"] = f"local:{local_port} → remote:{remote_port}"
+                        mgmt.event(f"{GREEN}I/R tunnel{RST}: local:{local_port} → remote:{remote_port}", 1)
+                        line = line.replace(
+                            f"127.0.0.1:{remote_port}".encode(),
+                            f"127.0.0.1:{local_port}".encode())
+                    else:
+                        logger.warning("I/R tunnel failed — I/R will not be reachable locally")
+                        mgmt.event(f"{RED}I/R tunnel failed{RST}", 1)
+                sys.stdout.buffer.write(line)
+                sys.stdout.buffer.flush()
+        except (OSError, ValueError):
+            pass
+
+    stdout_thread = threading.Thread(target=_relay_stdout, daemon=True)
+    stdout_thread.start()
 
     # Read the remote session leader PID (= PGID) from the pidfile.
     # This is the PID inside setsid's child; cleanup_all uses it for
@@ -1254,6 +1774,7 @@ def main():
 
     try:
         rc = proc.wait()
+        stdout_thread.join(timeout=2)
         logger.debug(f"SSH process exited with rc={rc}")
         if rc == 127:
             logger.error("rc=127 (command not found) — the setsid-wrapped "
@@ -1264,6 +1785,7 @@ def main():
     finally:
         # Kill remote PIDs first (needs SSH master alive), then clean up
         # local processes and temp files.
+        mgmt.shutdown()
         cleanup_all()
         cleanup_remote(host, remote_tmp, remote_src_dir)
 
