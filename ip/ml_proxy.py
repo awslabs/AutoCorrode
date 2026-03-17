@@ -263,7 +263,7 @@ def ssh_control_flags():
         _ssh_control_path = f"/tmp/ml_proxy_ssh_{os.getpid()}_%h"
     return ["-o", "ControlMaster=auto",
             "-o", f"ControlPath={_ssh_control_path}",
-            "-o", "ControlPersist=60s"]
+            "-o", "ControlPersist=yes"]
 
 def ssh_control_cleanup():
     """Stop the SSH master connection."""
