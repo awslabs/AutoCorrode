@@ -55,19 +55,6 @@ else
   echo "Installed: $INSTALL_DIR"
 fi
 
-# AFP Word_Lib
-AFP_URL="https://www.isa-afp.org/release/afp-Word_Lib-2026-02-06.tar.gz"
-AFP_DIR="$HOME/.isabelle/Isabelle2025-2/AFP"
-if [ -d "$AFP_DIR/Word_Lib" ]; then
-  echo "AFP Word_Lib already installed"
-else
-  echo "Downloading AFP Word_Lib ..."
-  mkdir -p "$AFP_DIR"
-  curl -fSL "$AFP_URL" | tar xz -C "$AFP_DIR"
-  "$ISABELLE_HOME/bin/isabelle" components -u "$AFP_DIR/Word_Lib"
-  echo "Registered AFP Word_Lib"
-fi
-
 if [ -z "$SKIP_BUILD" ]; then
 
 POLYML_SRC=$ISABELLE_HOME/contrib/polyml-5.9.2-2/src

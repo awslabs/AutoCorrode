@@ -117,6 +117,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ISABELLE_VERSION = "Isabelle2025-2"
 POLYML_CONTRIB = "contrib/polyml-5.9.2-2"
 HEAP_PREFIX = "polyml-5.9.2"
+AFP_RELEASE_DATE = "2026-02-06"
+AFP_BASE_URL = "https://www.isa-afp.org/release"
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +152,23 @@ _step_t0 = None
 _step_msg = ""
 _step_indent = "  "
 
+_step_had_rolling = False
+
+def _set_rolling():
+    global _step_had_rolling
+    _step_had_rolling = True
+
 def _finish_step():
     """Overwrite busy symbol with checkmark and print elapsed time."""
-    global _step_t0
+    global _step_t0, _step_had_rolling
     if _step_t0 is not None:
         elapsed = _time.time() - _step_t0
-        print(f"{_CLEAR_LINE}{_step_indent}{_SYM_OK} {_step_msg}"
+        # If rolling output was shown, cursor is on the line below the ↻ line
+        up = "\033[A" if _step_had_rolling else ""
+        print(f"{up}{_CLEAR_LINE}{_step_indent}{_SYM_OK} {_step_msg}"
               f" {_DIM}({elapsed:.1f}s){_RESET}", file=sys.stderr)
         _step_t0 = None
+        _step_had_rolling = False
 
 def step(msg, indent=0):
     """Start a new progress step. Shows ↻ until the next step replaces it with ✓."""
@@ -186,6 +197,58 @@ def step_fail(msg):
               f" {_DIM}({elapsed:.1f}s){_RESET}", file=sys.stderr)
         _step_t0 = None
     die(msg)
+
+
+# Rolling output window for subprocess commands
+_ROLLING_LINES = 10
+
+try:
+    from rich.console import Console as _RichConsole
+    from rich.live import Live as _RichLive
+    from rich.text import Text as _RichText
+    _HAVE_RICH = True
+except ImportError:
+    _HAVE_RICH = False
+
+
+def run_with_rolling_output(cmd, max_lines=_ROLLING_LINES, **kwargs):
+    """Run a command, showing a rolling window of its output.
+
+    Uses rich.live if available, otherwise passes output through directly.
+    On failure, prints the last max_lines of output for debugging.
+    Returns the process exit code.
+    """
+    if not _HAVE_RICH or not sys.stderr.isatty():
+        print("", file=sys.stderr)
+        return subprocess.call(cmd, **kwargs)
+
+    _set_rolling()
+    print("", file=sys.stderr)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, **kwargs)
+    all_lines = []
+    window = []
+    console = _RichConsole(stderr=True)
+
+    with _RichLive(console=console, refresh_per_second=8, transient=True) as live:
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", errors="replace").rstrip("\n")
+            all_lines.append(line)
+            window.append(line)
+            if len(window) > max_lines:
+                window = window[-max_lines:]
+            t = _RichText()
+            for ln in window:
+                t.append(f"    {ln}\n", style="dim")
+            live.update(t)
+
+    rc = proc.wait()
+    if rc != 0:
+        tail = all_lines[-max_lines:]
+        console.print(f"    [bold red]Command failed (exit {rc}). Last {len(tail)} line(s):[/]")
+        for ln in tail:
+            console.print(f"    [red]{ln}[/]")
+    return rc
 
 
 _ssh_control_path = None
@@ -219,9 +282,40 @@ def ssh_check(host, *cmd, timeout=15):
 
 
 def rsync(src, dst, **kwargs):
-    """Run rsync -az with progress on stderr."""
-    kwargs.setdefault("stdout", sys.stderr)
-    subprocess.run(["rsync", "-az", "--progress", src, dst], **kwargs)
+    """Run rsync -az with live progress display."""
+    check = kwargs.pop("check", False)
+    cmd = ["rsync", "-az", "--progress", src, dst]
+
+    if not _HAVE_RICH or not sys.stderr.isatty():
+        print("", file=sys.stderr)
+        rc = subprocess.call(cmd)
+        if check and rc != 0:
+            die(f"rsync failed (exit {rc})")
+        return
+
+    _set_rolling()
+    print("", file=sys.stderr)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    console = _RichConsole(stderr=True)
+    line_buf = b""
+
+    with _RichLive(console=console, refresh_per_second=8, transient=True) as live:
+        while True:
+            b = proc.stdout.read(1)
+            if not b:
+                break
+            if b in (b"\n", b"\r"):
+                text = line_buf.decode("utf-8", errors="replace").strip()
+                if text:
+                    live.update(_RichText(f"    {text}", style="dim"))
+                line_buf = b""
+            else:
+                line_buf += b
+
+    rc = proc.wait()
+    if check and rc != 0:
+        die(f"rsync failed (exit {rc})")
 
 
 def sha1_file(path):
@@ -270,7 +364,24 @@ def resolve_local_home(explicit):
         if env:
             path = env
         else:
-            die("Set ISABELLE_HOME or use --local-isabelle to point to the root of your Isabelle installation")
+            # Auto-detect from common locations
+            if sys.platform == "darwin":
+                candidates = [
+                    f"/Applications/{ISABELLE_VERSION}.app",
+                    os.path.expanduser(f"~/{ISABELLE_VERSION}.app"),
+                ]
+            else:
+                candidates = [
+                    os.path.expanduser(f"~/{ISABELLE_VERSION}"),
+                ]
+            path = None
+            for c in candidates:
+                if os.path.isfile(os.path.join(c, "bin", "isabelle")):
+                    path = c
+                    break
+            if path is None:
+                die("Set ISABELLE_HOME or use --local-isabelle to point to "
+                    "the root of your Isabelle installation")
     # Normalize: strip trailing /bin if given
     if os.path.basename(path.rstrip("/")) == "bin":
         path = os.path.dirname(path.rstrip("/"))
@@ -285,7 +396,7 @@ def query_base_platform(host, remote_home, use_64):
     if not base:
         die("Failed to query ISABELLE_PLATFORM64")
     if not use_64:
-        base = base.replace("arm64-", "arm64_32-", 1)
+        base = base.replace("x86_64-", "x86_64_32-", 1).replace("arm64-", "arm64_32-", 1)
     return base
 
 
@@ -317,6 +428,29 @@ def remote_user_heap_dir(host, base_platform):
 # setup subcommand
 # ---------------------------------------------------------------------------
 
+def install_afp_components(host, remote_home, components):
+    """Download and register AFP components on the remote."""
+    if not components:
+        return
+    afp_dir = f"$HOME/.isabelle/{ISABELLE_VERSION}/AFP"
+    for name in components:
+        step(f"AFP component: {name}")
+        # Check if already installed
+        if ssh_check(host, "test", "-d", f"{afp_dir}/{name}") is not None:
+            step_detail("already installed")
+            continue
+        url = f"{AFP_BASE_URL}/afp-{name}-{AFP_RELEASE_DATE}.tar.gz"
+        rc = run_with_rolling_output([
+            "ssh", host,
+            f"mkdir -p {afp_dir} && "
+            f"curl -fSL {url} | tar xz -C {afp_dir} && "
+            f"{remote_home}/bin/isabelle components -u {afp_dir}/{name}"
+        ])
+        if rc != 0:
+            step_fail(f"Failed to install AFP component {name}")
+        step_detail("installed")
+
+
 def cmd_setup(args):
     host = args.host
     user = host.split("@")[0] if "@" in host else os.environ.get("USER") or die("USER not set")
@@ -346,14 +480,16 @@ def cmd_setup(args):
     # Install Isabelle on remote (idempotent: setup scripts skip existing components)
     setup_script = pick_setup_script(arch, os_id)
     step(f"Setting up Isabelle on remote ({os.path.basename(setup_script)})")
-    print("", file=sys.stderr)
     setup_args = [setup_script, host, remote_home,
                   "64" if args.use_64 else "32"]
     if args.copy_from_local:
         setup_args.append("skip_build")
-    rc = subprocess.call(setup_args)
+    rc = run_with_rolling_output(setup_args)
     if rc != 0:
         step_fail("Remote Isabelle installation failed")
+
+    # Install AFP components
+    install_afp_components(host, remote_home, args.components)
 
     step("Identifying ML platform")
     base_platform = query_base_platform(host, remote_home, args.use_64)
@@ -616,7 +752,7 @@ def cmd_run(args):
         f"-o ML_platform={platform}"
         f" -o threads={threads}"
         f" -o jedit_auto_resolve=true"
-        f" -o 'process_policy={proxy}"
+        f" -o 'process_policy={proxy} proxy"
         f" -v --log /tmp/ml_proxy.log"
         f" --host {host}"
         f" --target-isabelle-home {remote_home}"
@@ -727,24 +863,32 @@ def main():
         p.add_argument("--local-isabelle",
                         help="Local ISABELLE_HOME (default: auto-detect)")
         bits = p.add_mutually_exclusive_group()
-        bits.add_argument("--64", dest="use_64", action="store_true", default=True,
-                          help="Use 64-bit ML (default)")
-        bits.add_argument("--32", dest="use_64", action="store_false",
-                          help="Use 32-in-64-bit ML")
+        bits.add_argument("--64", dest="use_64", action="store_true",
+                          help="Use 64-bit ML")
+        bits.add_argument("--32", dest="use_64", action="store_false", default=False,
+                          help="Use 32-in-64-bit ML (default)")
         p.add_argument("--ml-platform",
                         help="Force local ML platform name (e.g. aarch64-ubuntu)")
 
     # setup
     p_setup = sub.add_parser("setup",
-        help="Install Isabelle on remote, sync poly/heaps")
+        help="Install Isabelle on remote, sync poly/heaps",
+        description="Install Isabelle on remote, build Poly/ML and heaps, "
+                    "then copy poly binary and heaps back to local. "
+                    "By default, builds on remote and fetches results locally. "
+                    "Use --copy-from-local to push a local build to the remote instead.")
     add_common(p_setup)
     sync = p_setup.add_mutually_exclusive_group()
     sync.add_argument("--force-write-local", action="store_true",
-                      help="Overwrite local ML platform with remote poly/heaps")
+                      help="Overwrite local ML platform with remote poly/heaps "
+                           "(use when remote was rebuilt)")
     sync.add_argument("--copy-from-local", action="store_true",
-                      help="Copy local poly/heaps to remote")
+                      help="Copy local poly/heaps to remote instead of building "
+                           "on remote (requires matching local platform)")
     p_setup.add_argument("--sync-all-heaps", action="store_true",
                          help="With --copy-from-local: sync entire heaps dir, not just Pure/HOL")
+    p_setup.add_argument("--components", nargs="*", default=["Word_Lib"],
+                         help="AFP components to install on remote (default: Word_Lib)")
     p_setup.set_defaults(func=cmd_setup)
 
     # run
