@@ -91,8 +91,9 @@ object IQExploreDockable {
     connectedIRDir = Some(irDir)
     val replPy = new java.io.File(irDir, "repl.py").getPath
 
-    // Register protocol handler to receive ML_Repl port
-    PIDE.session.init_protocol_handler(new IQPlugin.IR_Repl_Handler)
+    // Register protocol handler to receive ML_Repl port (if not already present)
+    if (PIDE.session.get_protocol_handler(classOf[IQPlugin.IR_Repl_Handler]).isEmpty)
+      PIDE.session.init_protocol_handler(new IQPlugin.IR_Repl_Handler)
     // Start ML_Repl (port 0 = pick any free port)
     PIDE.session.protocol_command("IR_Repl.start")
     onStatus("Sent IR_Repl.start")
