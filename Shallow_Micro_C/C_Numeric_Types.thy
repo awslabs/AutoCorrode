@@ -232,6 +232,20 @@ definition c_signed_shr :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
      else
        literal (word_of_int (sint a div 2 ^ unat b))\<close>
 
+text \<open>Conservative right shift: aborts on negative operands instead of relying
+  on implementation-defined arithmetic shift. Used by the @{text "conservative"}
+  compiler profile where no specific compiler behavior is assumed.\<close>
+
+definition c_signed_shr_conservative :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_shr_conservative a b \<equiv>
+     if unat b \<ge> LENGTH('l) then
+       c_shift_out_of_range
+     else if sint a < 0 then
+       c_signed_overflow
+     else
+       literal (word_of_int (sint a div 2 ^ unat b))\<close>
+
 section \<open>C unsigned comparison operations\<close>
 
 definition c_unsigned_less :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
