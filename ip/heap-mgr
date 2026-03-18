@@ -1,0 +1,647 @@
+#!/usr/bin/env python3
+"""Isabelle heap directory manager.
+
+Commands:
+    heap-mgr find  [--heaps PREFIX] -- isabelle build ...
+    heap-mgr find  [--heaps PREFIX] -- "$(make -Bn target)"
+    heap-mgr list  [--heaps PREFIX]
+    heap-mgr show  <heap-directory>
+    heap-mgr remove <heap-directory>
+"""
+
+import argparse
+import glob
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+
+# ANSI colors
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+CHECK = f"{GREEN}✓{RESET}"
+CROSS = f"{RED}✗{RESET}"
+ARROW = f"{CYAN}→{RESET}"
+
+
+def fmt_size(nbytes):
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if nbytes < 1024:
+            return f"{nbytes:.1f} {unit}" if unit != "B" else f"{nbytes} {unit}"
+        nbytes /= 1024
+    return f"{nbytes:.1f} TiB"
+
+
+def dir_size(path):
+    total = 0
+    for dirpath, _, filenames in os.walk(path):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                total += os.path.getsize(fp)
+            except OSError:
+                pass
+    return total
+
+
+def get_heap_base(args, isabelle_bin=None):
+    """Resolve heap base from --heaps or ISABELLE_HOME_USER/heaps."""
+    if args.heaps:
+        return os.path.abspath(args.heaps)
+    isa = isabelle_bin or find_isabelle()
+    if not isa:
+        sys.exit(f"{RED}Error: cannot find isabelle binary; use --heaps{RESET}")
+    try:
+        r = subprocess.run([isa, "getenv", "-b", "ISABELLE_HOME_USER"],
+                           capture_output=True, text=True, timeout=10)
+        home_user = r.stdout.strip()
+    except Exception as e:
+        sys.exit(f"{RED}Error: could not determine ISABELLE_HOME_USER: {e}{RESET}")
+    if not home_user:
+        sys.exit(f"{RED}Error: ISABELLE_HOME_USER is empty{RESET}")
+    return os.path.abspath(os.path.join(home_user, "heaps"))
+
+
+def find_isabelle():
+    """Try to find isabelle on PATH or in /Applications."""
+    for p in ["/Applications/Isabelle2025-2.app/bin/isabelle",
+              "/Applications/Isabelle2025.app/bin/isabelle"]:
+        if os.path.isfile(p):
+            return p
+    return shutil.which("isabelle")
+
+
+def get_candidates(heap_base):
+    return sorted(d for d in glob.glob(heap_base + "*") if os.path.isdir(d))
+
+
+# ---------------------------------------------------------------------------
+# find
+# ---------------------------------------------------------------------------
+
+def to_build_cmd(cmd):
+    """Convert an isabelle command to a dry-run build command."""
+    cmd = list(cmd)
+    sub_idx = None
+    for i, arg in enumerate(cmd):
+        if arg in ("build", "jedit"):
+            sub_idx = i
+            break
+    if sub_idx is None:
+        sys.exit(f"{RED}Error: command must contain 'build' or 'jedit'{RESET}")
+
+    isabelle = cmd[:sub_idx]
+
+    def extract_args(args):
+        clean = []
+        i = 0
+        while i < len(args):
+            if args[i] == "-o" and i + 1 < len(args):
+                if args[i + 1].startswith("ML_platform="):
+                    clean.extend(["-o", args[i + 1]])
+                i += 2
+            elif args[i] == "--":
+                i += 1
+            else:
+                clean.append(args[i])
+                i += 1
+        return clean
+
+    if cmd[sub_idx] == "build":
+        return isabelle + ["build", "-n", "-v"] + extract_args(cmd[sub_idx + 1:])
+
+    jedit_args = cmd[sub_idx + 1:]
+    dirs, opts, logic = [], [], None
+    i = 0
+    while i < len(jedit_args):
+        if jedit_args[i] == "-d" and i + 1 < len(jedit_args):
+            dirs.append(jedit_args[i + 1]); i += 2
+        elif jedit_args[i] == "-l" and i + 1 < len(jedit_args):
+            logic = jedit_args[i + 1]; i += 2
+        elif jedit_args[i] == "-o" and i + 1 < len(jedit_args):
+            if jedit_args[i + 1].startswith("ML_platform="):
+                opts.extend(["-o", jedit_args[i + 1]])
+            i += 2
+        else:
+            i += 1
+    if not logic:
+        sys.exit(f"{RED}Error: isabelle jedit command must have -l NAME{RESET}")
+    build = isabelle + ["build", "-n", "-v", "-b"] + opts
+    for d in dirs:
+        build.extend(["-d", d])
+    build.append(logic)
+    return build
+
+
+def parse_unfinished(output):
+    order = []
+    for line in output.splitlines():
+        m = re.match(r"Skipping (\S+) \.\.\.", line)
+        if m:
+            order.append(m.group(1))
+    unfinished_set = set()
+    for line in output.splitlines():
+        m = re.match(r"Unfinished session\(s\): (.+)", line)
+        if m:
+            unfinished_set = {s.strip() for s in m.group(1).split(",")}
+            break
+    if not unfinished_set:
+        return []
+    result = [s for s in order if s in unfinished_set]
+    remaining = [s for s in unfinished_set if s not in result]
+    return result + sorted(remaining)
+
+
+def parse_isabelle_cmd(lines):
+    """Extract isabelle command from a list of lines."""
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if "isabelle build" in line or "isabelle jedit" in line:
+            try:
+                return shlex.split(line), lines
+            except ValueError:
+                return line.split(), lines
+    return None, lines
+
+
+def cmd_find(args, extra):
+    """Find the best matching heap directory for an isabelle command."""
+    if "--" not in sys.argv:
+        sys.exit(f"Usage: heap-mgr find [--heaps PREFIX] -- <isabelle command>\n"
+                 f"       heap-mgr find [--heaps PREFIX] -- \"$(make -Bn target)\"")
+
+    sep = sys.argv.index("--")
+    rest = sys.argv[sep + 1:]
+    if not rest:
+        sys.exit(f"{RED}Error: no isabelle command after --{RESET}")
+
+    # Support quoted multi-line input: -- "$(make -Bn ...)"
+    lines = " ".join(rest).splitlines()
+    user_cmd, lines = parse_isabelle_cmd(lines)
+
+    if not user_cmd:
+        print(f"{RED}Error: no 'isabelle build' or 'isabelle jedit' found in input:{RESET}")
+        for line in (lines or []):
+            print(f"  {DIM}{line}{RESET}")
+        sys.exit(1)
+
+    heap_base = get_heap_base(args, isabelle_bin=user_cmd[0])
+    candidates = get_candidates(heap_base)
+
+    print(f"\n{BOLD}Isabelle Heap Finder{RESET}")
+    print(f"{'─' * 60}")
+    print(f"  Heap base:  {heap_base}")
+
+    build_cmd = to_build_cmd(user_cmd)
+    print(f"  Command:    {DIM}{' '.join(build_cmd)}{RESET}")
+
+    if candidates:
+        print(f"  Candidates: {BOLD}{len(candidates)}{RESET}")
+        for d in candidates:
+            print(f"              {DIM}{d}{RESET}")
+    else:
+        print(f"  Candidates: {YELLOW}none matching {heap_base}*{RESET}")
+
+    results = []
+    ml_id = ""
+
+    def suffix_of(d):
+        return d[len(heap_base):]
+
+    def print_suffix(d):
+        print(f"  export ISABELLE_HEAP_SUFFIX='{suffix_of(d)}'\n")
+
+    print(f"\n{'─' * 60}")
+    for d in candidates:
+        env = {**os.environ, "ISABELLE_HEAPS_OVERRIDE": d}
+        label = os.path.basename(d)
+        print(f"\n  {BOLD}{label}{RESET}  {DIM}{d}{RESET}")
+        result = subprocess.run(build_cmd, env=env, capture_output=True, text=True)
+        out = (result.stdout.strip() + "\n" + result.stderr.strip()).strip()
+
+        if not ml_id:
+            m = re.search(r'\((\S+) on ', out)
+            if m:
+                ml_id = m.group(1)
+        if result.returncode == 0:
+            print(f"  {CHECK} All heaps up to date\n")
+            print(f"{'─' * 60}")
+            print(f"\n{GREEN}{BOLD}Match found!{RESET}\n")
+            print_suffix(d)
+            sys.exit(0)
+        else:
+            unfinished = parse_unfinished(out)
+            if unfinished:
+                results.append((d, len(unfinished), unfinished))
+                print(f"  {CROSS} Needs rebuilding: {YELLOW}{' → '.join(unfinished)}{RESET}")
+            else:
+                results.append((d, 999, []))
+                print(f"  {CROSS} Failed (rc={result.returncode})")
+                for line in out.splitlines()[:3]:
+                    print(f"    {DIM}{line}{RESET}")
+
+    print(f"\n{'─' * 60}")
+    print(f"\n{RED}{BOLD}No exact match found.{RESET}\n")
+
+    if not results:
+        sys.exit(1)
+
+    if ml_id:
+        print(f"  {DIM}ML identifier: {ml_id}{RESET}")
+
+    best_count = min(r[1] for r in results)
+    best_matches = [(d, n, s) for d, n, s in results if n == best_count and s]
+
+    i = 1
+    while True:
+        new_dir = f"{heap_base}-{i}"
+        if not os.path.exists(new_dir):
+            break
+        i += 1
+
+    if not best_matches:
+        print(f"  {ARROW} Fresh directory:\n")
+        print_suffix(new_dir)
+        sys.exit(1)
+
+    print(f"  Closest match{'es' if len(best_matches) > 1 else ''} "
+          f"({YELLOW}{best_count}{RESET} session(s) to rebuild):\n")
+    for i, (d, n, sessions) in enumerate(best_matches):
+        label = os.path.basename(d)
+        idx = f"  [{i + 1}] " if len(best_matches) > 1 else "  "
+        print(f"{idx}{BOLD}{label}{RESET}  {DIM}{d}{RESET}")
+        print(f"      Rebuild: {DIM}{' → '.join(sessions)}{RESET}")
+
+    # Interactive
+    print()
+    print(f"  Options:")
+    print(f"    {BOLD}u{RESET})se one of the existing heap directories")
+    print(f"    {BOLD}c{RESET})lone one into a new directory")
+    print(f"    {BOLD}n{RESET})o action")
+    action = input(f"\n  [u/c/N] ").strip().lower()
+
+    if action == "u":
+        if len(best_matches) == 1:
+            source_dir = best_matches[0][0]
+        else:
+            choice = input(f"  Which? [1-{len(best_matches)}] ").strip()
+            try:
+                source_dir = best_matches[int(choice) - 1][0]
+            except (ValueError, IndexError):
+                print(f"\n  {DIM}No changes made.{RESET}\n")
+                sys.exit(1)
+        print(f"\n  export ISABELLE_HEAP_SUFFIX='{suffix_of(source_dir)}'\n")
+        sys.exit(0)
+
+    if action != "c":
+        print(f"\n  {DIM}No changes made.{RESET}\n")
+        sys.exit(1)
+
+    if len(best_matches) == 1:
+        source_dir = best_matches[0][0]
+    else:
+        choice = input(f"  Clone which? [1-{len(best_matches)}] ").strip()
+        try:
+            source_dir = best_matches[int(choice) - 1][0]
+        except (ValueError, IndexError):
+            print(f"\n  {DIM}No changes made.{RESET}\n")
+            sys.exit(1)
+
+    src_platform = os.path.join(source_dir, ml_id) if ml_id else source_dir
+    dst_platform = os.path.join(new_dir, ml_id) if ml_id else new_dir
+
+    print(f"\n  {BOLD}This will:{RESET}")
+    if ml_id and os.path.isdir(src_platform):
+        cmds = [f"mkdir -p {dst_platform}", f"cp -a {src_platform}/* {dst_platform}/"]
+    else:
+        cmds = [f"cp -a {source_dir} {new_dir}"]
+    for cmd in cmds:
+        print(f"    $ {cmd}")
+
+    answer = input(f"\n  Proceed? [y/N] ").strip().lower()
+    if answer != "y":
+        print(f"\n  {DIM}No changes made.{RESET}\n")
+        sys.exit(1)
+
+    print()
+    for cmd in cmds:
+        print(f"    $ {cmd}")
+        os.system(cmd)
+
+    print(f"\n  {GREEN}{BOLD}Done.{RESET}\n")
+    print_suffix(new_dir)
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# list
+# ---------------------------------------------------------------------------
+
+def cmd_list(args, extra):
+    """List all heap directories matching the prefix."""
+    heap_base = get_heap_base(args)
+    candidates = get_candidates(heap_base)
+
+    print(f"\n{BOLD}Isabelle Heap Directories{RESET}")
+    print(f"{'─' * 60}")
+    print(f"  Base: {heap_base}\n")
+
+    if not candidates:
+        print(f"  {YELLOW}No directories matching {heap_base}*{RESET}\n")
+        return
+
+    for d in candidates:
+        label = os.path.basename(d)
+        size = fmt_size(dir_size(d))
+        # Count platform subdirs and heaps
+        subdirs = [s for s in os.listdir(d)
+                   if os.path.isdir(os.path.join(d, s)) and not s.startswith(".")]
+        heap_count = 0
+        for sd in subdirs:
+            sd_path = os.path.join(d, sd)
+            heaps = [f for f in os.listdir(sd_path)
+                     if os.path.isfile(os.path.join(sd_path, f)) and f != "log" and not f.startswith(".")]
+            heap_count += len(heaps)
+
+        print(f"  {BOLD}{label}{RESET}  {DIM}{d}{RESET}")
+        print(f"    {size}, {len(subdirs)} platform(s), {heap_count} heap(s)")
+        for sd in sorted(subdirs):
+            sd_path = os.path.join(d, sd)
+            heaps = sorted(f for f in os.listdir(sd_path)
+                           if os.path.isfile(os.path.join(sd_path, f)) and not f.startswith("."))
+            if heaps:
+                print(f"    {CYAN}{sd}{RESET}: {DIM}{', '.join(heaps)}{RESET}")
+        print()
+
+
+# ---------------------------------------------------------------------------
+# show
+# ---------------------------------------------------------------------------
+
+def cmd_show(args, extra):
+    """Show contents of a heap directory, pairing heaps with .db files."""
+    if extra:
+        heap_dir = os.path.abspath(extra[0])
+        if not os.path.isdir(heap_dir):
+            sys.exit(f"{RED}Error: {heap_dir} is not a directory{RESET}")
+    else:
+        # Interactive: list candidates and ask
+        heap_base = get_heap_base(args)
+        candidates = get_candidates(heap_base)
+        if not candidates:
+            sys.exit(f"{RED}No heap directories matching {heap_base}*{RESET}")
+        print(f"\n{BOLD}Available heap directories:{RESET}\n")
+        for i, d in enumerate(candidates):
+            print(f"  [{i + 1}] {BOLD}{os.path.basename(d)}{RESET}  {DIM}{d}{RESET}")
+        choice = input(f"\n  Which? [1-{len(candidates)}] ").strip()
+        try:
+            heap_dir = candidates[int(choice) - 1]
+        except (ValueError, IndexError):
+            sys.exit(1)
+
+    print(f"\n{BOLD}Heap Directory: {CYAN}{os.path.basename(heap_dir)}{RESET}")
+    print(f"{'─' * 60}")
+    print(f"  Path: {DIM}{heap_dir}{RESET}")
+    print(f"  Size: {fmt_size(dir_size(heap_dir))}\n")
+
+    import time as _time
+
+    def file_mtime(path):
+        try:
+            return os.path.getmtime(path)
+        except OSError:
+            return 0
+
+    def fmt_date(mtime):
+        if mtime == 0:
+            return ""
+        return _time.strftime("%Y-%m-%d %H:%M", _time.localtime(mtime))
+
+    subdirs = [s for s in os.listdir(heap_dir)
+               if os.path.isdir(os.path.join(heap_dir, s)) and not s.startswith(".")]
+
+    # Compute max mtime per subdir for sorting
+    def subdir_max_mtime(sd):
+        sd_path = os.path.join(heap_dir, sd)
+        log_dir = os.path.join(sd_path, "log")
+        mtimes = []
+        for f in os.listdir(sd_path):
+            fp = os.path.join(sd_path, f)
+            if os.path.isfile(fp):
+                mtimes.append(file_mtime(fp))
+        if os.path.isdir(log_dir):
+            for f in os.listdir(log_dir):
+                fp = os.path.join(log_dir, f)
+                if os.path.isfile(fp):
+                    mtimes.append(file_mtime(fp))
+        return max(mtimes) if mtimes else 0
+
+    subdirs.sort(key=subdir_max_mtime, reverse=True)
+
+    for sd in subdirs:
+        sd_path = os.path.join(heap_dir, sd)
+        log_dir = os.path.join(sd_path, "log")
+
+        # Collect heaps (files in sd_path, not dirs)
+        heaps = [f for f in os.listdir(sd_path)
+                 if os.path.isfile(os.path.join(sd_path, f)) and not f.startswith(".")]
+
+        # Collect .db files
+        dbs = {}
+        if os.path.isdir(log_dir):
+            for f in os.listdir(log_dir):
+                if f.endswith(".db"):
+                    name = f[:-3]
+                    dbs[name] = os.path.join(log_dir, f)
+
+        print(f"  {BOLD}{sd}{RESET}")
+
+        if not heaps and not dbs:
+            print(f"    {DIM}(empty){RESET}")
+            print()
+            continue
+
+        # All session names, sorted by most recent mtime (heap or db)
+        all_sessions = sorted(set(heaps) | set(dbs.keys()),
+                              key=lambda s: max(
+                                  file_mtime(os.path.join(sd_path, s)) if s in heaps else 0,
+                                  file_mtime(dbs[s]) if s in dbs else 0),
+                              reverse=True)
+
+        for session in all_sessions:
+            heap_path = os.path.join(sd_path, session)
+            db_path = dbs.get(session)
+
+            has_heap = session in heaps
+            has_db = db_path is not None
+
+            # Most recent mtime of heap or db
+            mtime = max(file_mtime(heap_path) if has_heap else 0,
+                        file_mtime(db_path) if has_db else 0)
+            date_str = fmt_date(mtime)
+
+            heap_info = ""
+            if has_heap:
+                heap_size = fmt_size(os.path.getsize(heap_path))
+                heap_info = f"heap={heap_size}"
+
+            db_info = ""
+            if has_db:
+                db_size = fmt_size(os.path.getsize(db_path))
+                db_info = f"db={db_size}"
+
+            parts = [p for p in [heap_info, db_info] if p]
+            if has_heap and has_db:
+                status = CHECK
+            elif has_heap and not has_db:
+                status = f"{YELLOW}!{RESET}"
+                parts.append(f"{YELLOW}no .db{RESET}")
+            elif has_db and not has_heap:
+                status = f"{YELLOW}!{RESET}"
+                parts.append(f"{YELLOW}no heap{RESET}")
+            else:
+                status = f"{RED}?{RESET}"
+
+            print(f"    {status} {BOLD}{session:{30}}{RESET} {DIM}{date_str}  {', '.join(parts)}{RESET}")
+            if has_db:
+                print(f"         {DIM}{db_path}{RESET}")
+            elif has_heap:
+                print(f"         {DIM}(no .db){RESET}")
+
+        print()
+
+    print(f"  {DIM}Use 'heap-db-inspect <file.db>' to inspect a .db file in detail.{RESET}\n")
+
+
+# ---------------------------------------------------------------------------
+# remove
+# ---------------------------------------------------------------------------
+
+def cmd_remove(args, extra):
+    """Remove a heap directory after confirmation."""
+    if extra:
+        heap_dir = os.path.abspath(extra[0])
+        if not os.path.isdir(heap_dir):
+            sys.exit(f"{RED}Error: {heap_dir} is not a directory{RESET}")
+    else:
+        heap_base = get_heap_base(args)
+        candidates = get_candidates(heap_base)
+        if not candidates:
+            sys.exit(f"{RED}No heap directories matching {heap_base}*{RESET}")
+        print(f"\n{BOLD}Available heap directories:{RESET}\n")
+        for i, d in enumerate(candidates):
+            label = os.path.basename(d)
+            size = fmt_size(dir_size(d))
+            print(f"  [{i + 1}] {BOLD}{label}{RESET}  {DIM}{d}{RESET}  ({size})")
+        choice = input(f"\n  Which to remove? [1-{len(candidates)}] ").strip()
+        try:
+            heap_dir = candidates[int(choice) - 1]
+        except (ValueError, IndexError):
+            sys.exit(1)
+
+    print(f"\n{RED}{BOLD}Remove heap directory:{RESET} {heap_dir}\n")
+
+    # List contents
+    total_files = 0
+    total_size = 0
+    for dirpath, dirnames, filenames in os.walk(heap_dir):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                sz = os.path.getsize(fp)
+            except OSError:
+                sz = 0
+            total_files += 1
+            total_size += sz
+            rel = os.path.relpath(fp, heap_dir)
+            print(f"  {DIM}{rel}{RESET}  ({fmt_size(sz)})")
+
+    print(f"\n  {BOLD}{total_files}{RESET} files, {BOLD}{fmt_size(total_size)}{RESET} total\n")
+
+    answer = input(f"  {RED}Delete everything above?{RESET} [y/N] ").strip().lower()
+    if answer != "y":
+        print(f"\n  {DIM}No changes made.{RESET}\n")
+        return
+
+    shutil.rmtree(heap_dir)
+    print(f"\n  {GREEN}Removed.{RESET}\n")
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        print(f"""usage: heap-mgr <command> [options]
+
+{BOLD}Tool to help managing multiple Isabelle heap directories.{RESET}
+
+Commands:
+  {BOLD}find{RESET}      For a given isabelle command, identify the heap directory
+            matching the target most closely.
+  {BOLD}list{RESET}      List all heap directories with the given prefix.
+  {BOLD}show{RESET}      Show contents of a heap directory (heaps + .db files).
+  {BOLD}remove{RESET}    Remove a heap directory (with confirmation).
+
+Run 'heap-mgr <command> --help' for command-specific help.""")
+        sys.exit(0)
+
+    command = sys.argv[1]
+    commands = {
+        "find": (cmd_find, argparse.ArgumentParser(
+            prog="heap-mgr find",
+            description="For a given isabelle command, identify the heap directory matching the target most closely.",
+            epilog="""Examples:
+  %(prog)s -- isabelle build -b -d . My_Session
+  %(prog)s -- "$(make -Bn my-target)"
+
+The isabelle command follows '--'. If the input contains multiple lines
+(e.g. from "$(make -Bn ...)"), it must be quoted so that newlines are
+preserved. Lines not containing 'isabelle build' or 'isabelle jedit'
+are silently ignored.""",
+            formatter_class=argparse.RawDescriptionHelpFormatter)),
+        "list": (cmd_list, argparse.ArgumentParser(
+            prog="heap-mgr list",
+            description="List all heap directories with the given prefix.",
+            epilog="""Examples:
+  %(prog)s
+  %(prog)s --heaps /path/to/heaps""",
+            formatter_class=argparse.RawDescriptionHelpFormatter)),
+        "show": (cmd_show, argparse.ArgumentParser(
+            prog="heap-mgr show",
+            description="Show contents of a heap directory (heaps paired with .db files).",
+            epilog="""Examples:
+  %(prog)s /path/to/heaps-A
+  %(prog)s                      (interactive selection)""",
+            formatter_class=argparse.RawDescriptionHelpFormatter)),
+        "remove": (cmd_remove, argparse.ArgumentParser(
+            prog="heap-mgr remove",
+            description="Remove a heap directory after listing contents and confirming.",
+            epilog="""Examples:
+  %(prog)s /path/to/heaps-old""",
+            formatter_class=argparse.RawDescriptionHelpFormatter)),
+    }
+
+    if command not in commands:
+        sys.exit(f"{RED}Unknown command: {command}{RESET}\nAvailable: {', '.join(commands)}")
+
+    func, parser = commands[command]
+    parser.add_argument("--heaps", default=None,
+                        help="Heap base path prefix (default: $ISABELLE_HOME_USER/heaps)")
+    args, extra = parser.parse_known_args(sys.argv[2:])
+    func(args, extra)
+
+
+if __name__ == "__main__":
+    main()

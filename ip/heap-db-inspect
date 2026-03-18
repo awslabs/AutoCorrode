@@ -1,0 +1,788 @@
+#!/usr/bin/env python3
+"""Inspect an Isabelle session heap database (.db file).
+
+Usage:
+    heap-db-inspect <file.db> [session] [FLAGS]
+
+Sections (default: -baES):
+  -b, --build            Build info (timing, rc, uuid, blobs)
+  -a, --ancestry         Heap ancestry (input/output heaps)
+  -s, --sources          Source file listing (full paths + digests)
+  -S, --source-summary   Source prefix summary (default)
+  -e, --exports          Export listing (full: theory × name)
+  -E, --export-summary   Export type summary (default)
+  -t, --theories         List exported theories
+  -d, --documents        Documents (PDFs)
+  -c, --checksums        Sources shasum (rebuild-check digests)
+  -T, --timings          Slowest commands and per-file timing
+  -M, --ml-stats         ML runtime statistics summary (peak heap, GC, workers)
+  -A, --all              Everything
+
+Filters:
+  --theory NAME          Restrict exports to a specific theory
+  --grep PATTERN         Filter source/export names by regex
+  --top N                Number of entries for timing lists (default: 15)
+"""
+
+import argparse
+import hashlib
+import os
+import re
+import sqlite3
+import subprocess
+import sys
+
+# ANSI colors
+GREEN = "\033[32m"
+RED = "\033[31m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RESET = "\033[0m"
+
+try:
+    import zstandard
+    HAS_ZSTD = True
+except ImportError:
+    HAS_ZSTD = False
+
+
+# --- File resolution and digest checking ---
+
+_isabelle_env_cache = {}
+
+def isabelle_getenv(var):
+    """Resolve an Isabelle environment variable. Checks os.environ first, then 'isabelle getenv'."""
+    if var not in _isabelle_env_cache:
+        val = os.environ.get(var, "")
+        if not val:
+            try:
+                r = subprocess.run(
+                    [os.environ.get("ISABELLE_TOOL", "isabelle"), "getenv", "-b", var],
+                    capture_output=True, text=True, timeout=5)
+                val = r.stdout.strip()
+            except Exception:
+                val = ""
+        _isabelle_env_cache[var] = val
+    return _isabelle_env_cache[var]
+
+
+def resolve_path(name):
+    """Resolve symbolic Isabelle path to filesystem path. Returns None if unresolvable."""
+    if name.startswith("~~/"):
+        return None  # ISABELLE_HOME files don't change
+    if name.startswith("~/"):
+        return os.path.expanduser(name)
+    if name.startswith("$"):
+        slash = name.find("/")
+        if slash < 0:
+            return None
+        var = name[1:slash]
+        base = isabelle_getenv(var)
+        return os.path.join(base, name[slash + 1:]) if base else None
+    if name.startswith("/"):
+        return name
+    return None
+
+
+_file_content_cache = {}
+
+
+def file_sha1(path):
+    """Compute SHA1 of a file, or None if unreadable."""
+    try:
+        return hashlib.sha1(open(path, "rb").read()).hexdigest()
+    except OSError:
+        return None
+
+
+def file_lines(path):
+    """Get cached symbol-offset-to-line table for a file.
+
+    Isabelle uses symbol offsets where \\<name> counts as 1 symbol.
+    Returns list of symbol offsets at each line start, or None.
+    """
+    if path not in _file_content_cache:
+        try:
+            content = open(path, "r", errors="replace").read()
+            line_starts = [0]  # symbol offset at start of each line
+            sym = 0
+            i = 0
+            while i < len(content):
+                if content[i] == "\n":
+                    sym += 1
+                    line_starts.append(sym)
+                elif content[i] == "\\" and i + 1 < len(content) and content[i + 1] == "<":
+                    end = content.find(">", i)
+                    if end >= 0:
+                        i = end
+                    sym += 1
+                else:
+                    sym += 1
+                i += 1
+            _file_content_cache[path] = line_starts
+        except OSError:
+            _file_content_cache[path] = None
+    return _file_content_cache[path]
+
+
+def offset_to_line(path, offset):
+    """Convert 1-based Isabelle symbol offset to 1-based line number."""
+    line_starts = file_lines(path)
+    if line_starts is None:
+        return None
+    offset = int(offset)
+    # Binary search for the last line_start <= offset
+    lo, hi = 0, len(line_starts) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if line_starts[mid] <= offset:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo + 1
+
+
+class SourceChecker:
+    """Check source file digests against filesystem."""
+    def __init__(self, conn, session):
+        self.rows = conn.execute(
+            "SELECT name, digest FROM isabelle_sources WHERE session_name=? ORDER BY name",
+            (session,)).fetchall()
+        self._checked = {}  # name -> (resolved_path, matches)
+        # Pre-resolve all $VAR prefixes so env vars are populated
+        for name, _ in self.rows:
+            if name.startswith("$"):
+                slash = name.find("/")
+                if slash > 0:
+                    isabelle_getenv(name[1:slash])
+
+    def check(self, name, digest):
+        if name not in self._checked:
+            path = resolve_path(name)
+            if path and os.path.isfile(path):
+                actual = file_sha1(path)
+                self._checked[name] = (path, actual == digest)
+            else:
+                self._checked[name] = (path, None)  # None = can't check
+        return self._checked[name]
+
+    def get_line(self, name, offset):
+        """Get line number for a file+offset, only if digest matches."""
+        entry = self._checked.get(name)
+        if not entry:
+            # Try to check it
+            for n, d in self.rows:
+                if n == name:
+                    self.check(n, d)
+                    break
+            entry = self._checked.get(name)
+        if entry and entry[1] is True and entry[0]:
+            return offset_to_line(entry[0], offset)
+        return None
+
+_SYSTEM_PREFIXES = ("~~/src/Pure/", "~~/src/HOL/", "~~/src/Tools/")
+
+def is_system_source(name):
+    return any(name.startswith(p) for p in _SYSTEM_PREFIXES)
+
+
+def decompress_blob(blob):
+    if not blob:
+        return ""
+    if blob[:4] == b'\x28\xb5\x2f\xfd':  # zstd magic
+        if not HAS_ZSTD:
+            return None  # signal missing dependency
+        data = zstandard.ZstdDecompressor().decompress(blob, max_output_size=50*1024*1024)
+        return data.decode("utf-8", errors="replace")
+    # Try raw YXML
+    return blob.decode("utf-8", errors="replace") if isinstance(blob, bytes) else blob
+
+
+def parse_yxml_records(text):
+    """Parse YXML-encoded list of property records."""
+    if not text:
+        return []
+    records = []
+    for entry in text.split("\x05\x06\x05"):
+        props = {}
+        for part in entry.split("\x06"):
+            part = part.strip("\x05:").strip()
+            if "=" in part:
+                k, v = part.split("=", 1)
+                if k:
+                    props[k] = v
+        if props:
+            records.append(props)
+    return records
+
+
+def decode_yxml_props(data):
+    if not data:
+        return {}
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    props = {}
+    for part in text.split("\x06"):
+        part = part.strip("\x05:").strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            if k:
+                props[k] = v
+    return props
+
+
+def fmt_time(secs_str):
+    try:
+        s = float(secs_str)
+    except (ValueError, TypeError):
+        return str(secs_str)
+    if s < 60:
+        return f"{s:.1f}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{int(m)}m {s:.0f}s"
+    h, m = divmod(m, 60)
+    return f"{int(h)}h {int(m)}m {s:.0f}s"
+
+
+def fmt_size(nbytes):
+    if nbytes is None:
+        return "—"
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if nbytes < 1024:
+            return f"{nbytes:.1f} {unit}" if unit != "B" else f"{nbytes} {unit}"
+        nbytes /= 1024
+    return f"{nbytes:.1f} TiB"
+
+
+def bar(n, max_n):
+    width = int(40 * n / max_n) if max_n else 0
+    return f"{DIM}{'█' * max(width, 1)}{RESET}"
+
+
+def section(title):
+    print(f"\n{BOLD}{title}{RESET}")
+    print(f"{'─' * 60}")
+
+
+def show_build(conn, session):
+    row = conn.execute(
+        "SELECT return_code, uuid, sources, session_timing, "
+        "length(command_timings), length(ml_statistics), "
+        "length(task_statistics), length(errors) "
+        "FROM isabelle_session_info WHERE session_name=?", (session,)).fetchone()
+    if not row:
+        print(f"\n{RED}No session info for '{session}'{RESET}")
+        return None
+    rc, uuid, sources, session_timing, cmd_sz, ml_sz, task_sz, err_sz = row
+
+    section("Build Info")
+    rc_color = GREEN if rc == 0 else RED
+    print(f"  Return code:  {rc_color}{BOLD}{rc}{RESET}")
+    print(f"  UUID:         {DIM}{uuid or '—'}{RESET}")
+
+    if session_timing:
+        timing = decode_yxml_props(session_timing)
+        parts = []
+        if "elapsed" in timing:
+            parts.append(f"elapsed {BOLD}{fmt_time(timing['elapsed'])}{RESET}")
+        if "cpu" in timing:
+            parts.append(f"cpu {fmt_time(timing['cpu'])}")
+        if "gc" in timing:
+            parts.append(f"gc {fmt_time(timing['gc'])}")
+        if "threads" in timing:
+            parts.append(f"{timing['threads']} threads")
+        print(f"  Timing:       {', '.join(parts)}")
+
+    blobs = []
+    if cmd_sz:  blobs.append(f"command_timings={fmt_size(cmd_sz)}")
+    if ml_sz:   blobs.append(f"ml_statistics={fmt_size(ml_sz)}")
+    if task_sz: blobs.append(f"task_statistics={fmt_size(task_sz)}")
+    if err_sz:  blobs.append(f"{RED}errors={fmt_size(err_sz)}{RESET}")
+    if blobs:
+        print(f"  Blobs:        {DIM}{', '.join(blobs)}{RESET}")
+
+    return sources
+
+
+def show_ancestry(conn, session):
+    row = conn.execute(
+        "SELECT input_heaps, output_heap FROM isabelle_session_info WHERE session_name=?",
+        (session,)).fetchone()
+    if not row:
+        return
+
+    section("Heap Ancestry")
+    input_heaps, output_heap = row
+    if input_heaps:
+        for line in input_heaps.strip().splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2:
+                sha, name = parts
+                print(f"  {CYAN}←{RESET} {BOLD}{name}{RESET}  {DIM}{sha[:16]}…{RESET}")
+    else:
+        print(f"  {DIM}(root session){RESET}")
+
+    if output_heap:
+        for line in output_heap.strip().splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) == 2:
+                sha, name = parts
+                print(f"  {GREEN}→{RESET} {BOLD}{name}{RESET}  {DIM}{sha[:16]}…{RESET}")
+
+
+def show_sources_full(conn, session, grep=None, checker=None, only_mismatches=False, with_system=False):
+    section("Sources" + (" (mismatches only)" if only_mismatches else ""))
+    rows = conn.execute(
+        "SELECT name, digest FROM isabelle_sources WHERE session_name=? ORDER BY name",
+        (session,)).fetchall()
+    if not with_system:
+        rows = [(n, d) for n, d in rows if not is_system_source(n)]
+    if grep:
+        pat = re.compile(grep, re.IGNORECASE)
+        rows = [(n, d) for n, d in rows if pat.search(n)]
+
+    display = []
+    n_match = n_mismatch = n_unknown = 0
+    for name, digest in rows:
+        if checker:
+            path, matches = checker.check(name, digest)
+            if matches is True:
+                n_match += 1
+                if only_mismatches:
+                    continue
+                status = f"{GREEN}✓{RESET}"
+            elif matches is False:
+                n_mismatch += 1
+                status = f"{RED}✗{RESET}"
+            else:
+                n_unknown += 1
+                if only_mismatches:
+                    continue
+                status = f"{DIM}?{RESET}"
+            display.append((name, digest, status, matches))
+        else:
+            display.append((name, digest, "", None))
+
+    print(f"  {BOLD}{len(rows)}{RESET} source files", end="")
+    if checker:
+        parts = []
+        if n_match:    parts.append(f"{GREEN}{n_match} up to date{RESET}")
+        if n_mismatch: parts.append(f"{RED}{n_mismatch} changed{RESET}")
+        if n_unknown:  parts.append(f"{DIM}{n_unknown} unresolved{RESET}")
+        print(f" ({', '.join(parts)})", end="")
+    print(":\n")
+
+    # Sort: changed first, then ok, then unknown
+    sort_key = lambda x: (0 if x[3] is False else 1 if x[3] is True else 2, x[0])
+    display.sort(key=sort_key)
+
+    max_name = max((len(n) for n, _, _, _ in display), default=0) if display else 0
+    for name, digest, status, matches in display:
+        d = digest or "—"
+        padded = f"{name:{max_name}s}"
+        if matches is False:
+            padded = f"{RED}{padded}{RESET}"
+        prefix = f" {status} " if status else "  "
+        print(f"{prefix}{padded}  {DIM}{d}{RESET}")
+
+
+def show_sources_summary(conn, session, with_system=False):
+    section("Sources")
+    rows = conn.execute(
+        "SELECT name FROM isabelle_sources WHERE session_name=? ORDER BY name",
+        (session,)).fetchall()
+    if not with_system:
+        rows = [(n,) for (n,) in rows if not is_system_source(n)]
+
+    prefixes = {}
+    for (name,) in rows:
+        if name.startswith("~~/"):
+            prefix = "ISABELLE_HOME"
+        elif name.startswith("~/"):
+            prefix = "USER_HOME"
+        elif name.startswith("$"):
+            prefix = name.split("/")[0]
+        elif name.startswith("/"):
+            prefix = "(absolute)"
+        else:
+            prefix = "(relative)"
+        prefixes[prefix] = prefixes.get(prefix, 0) + 1
+
+    max_cnt = max(prefixes.values()) if prefixes else 1
+    print(f"  {BOLD}{len(rows)}{RESET} source files:\n")
+    for prefix, cnt in sorted(prefixes.items(), key=lambda x: -x[1]):
+        print(f"    {prefix:30s} {cnt:4d}  {bar(cnt, max_cnt)}")
+
+
+def show_checksums(conn, session):
+    row = conn.execute(
+        "SELECT sources FROM isabelle_session_info WHERE session_name=?",
+        (session,)).fetchone()
+    if not row or not row[0]:
+        return
+
+    section("Sources Shasum (rebuild-check)")
+    lines = [l.strip() for l in row[0].strip().splitlines() if l.strip()]
+    print(f"  {BOLD}{len(lines)}{RESET} entries:\n")
+    for line in lines[:30]:
+        parts = line.split(None, 1)
+        if len(parts) == 2:
+            sha, name = parts
+            print(f"  {DIM}{sha[:16]}…{RESET}  {name}")
+        else:
+            print(f"  {DIM}{line}{RESET}")
+    if len(lines) > 30:
+        print(f"\n  {DIM}… and {len(lines) - 30} more{RESET}")
+
+
+def show_exports_full(conn, session, theory=None, grep=None):
+    section("Exports")
+    if theory:
+        rows = conn.execute(
+            "SELECT theory_name, name, executable, length(body) "
+            "FROM isabelle_exports WHERE session_name=? AND theory_name=? ORDER BY name",
+            (session, theory)).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT theory_name, name, executable, length(body) "
+            "FROM isabelle_exports WHERE session_name=? ORDER BY theory_name, name",
+            (session,)).fetchall()
+
+    if grep:
+        pat = re.compile(grep, re.IGNORECASE)
+        rows = [r for r in rows if pat.search(r[0]) or pat.search(r[1])]
+
+    print(f"  {BOLD}{len(rows)}{RESET} exports:\n")
+    cur_theory = None
+    for thy, name, exe, sz in rows:
+        if thy != cur_theory:
+            cur_theory = thy
+            print(f"\n  {CYAN}{thy}{RESET}")
+        exe_flag = f" {YELLOW}[exe]{RESET}" if exe else ""
+        sz_str = fmt_size(sz) if sz else "—"
+        print(f"    {name:40s} {DIM}{sz_str}{RESET}{exe_flag}")
+
+
+def show_exports_summary(conn, session):
+    section("Exports")
+    rows = conn.execute(
+        "SELECT name, COUNT(*) as cnt FROM isabelle_exports "
+        "WHERE session_name=? GROUP BY name ORDER BY cnt DESC",
+        (session,)).fetchall()
+    theories = conn.execute(
+        "SELECT COUNT(DISTINCT theory_name) FROM isabelle_exports WHERE session_name=?",
+        (session,)).fetchone()[0]
+
+    total = sum(cnt for _, cnt in rows)
+    max_cnt = rows[0][1] if rows else 1
+    print(f"  {BOLD}{total}{RESET} exports across {BOLD}{theories}{RESET} theories:\n")
+    for name, cnt in rows:
+        print(f"    {name:35s} {cnt:4d}  {bar(cnt, max_cnt)}")
+
+
+def show_theories(conn, session):
+    section("Theories")
+    rows = conn.execute(
+        "SELECT DISTINCT theory_name FROM isabelle_exports "
+        "WHERE session_name=? ORDER BY theory_name",
+        (session,)).fetchall()
+    print(f"  {BOLD}{len(rows)}{RESET} theories:\n")
+    for (name,) in rows:
+        print(f"    {name}")
+
+
+def show_documents(conn, session):
+    rows = conn.execute(
+        "SELECT name, length(pdf), length(sources), length(log_xz) "
+        "FROM isabelle_documents WHERE session_name=?",
+        (session,)).fetchall()
+    if not rows:
+        return
+    section("Documents")
+    for name, pdf_sz, src_sz, log_sz in rows:
+        parts = []
+        if pdf_sz:  parts.append(f"pdf={fmt_size(pdf_sz)}")
+        if src_sz:  parts.append(f"sources={fmt_size(src_sz)}")
+        if log_sz:  parts.append(f"log={fmt_size(log_sz)}")
+        print(f"  {BOLD}{name}{RESET}  {DIM}{', '.join(parts)}{RESET}")
+
+
+def show_timings(conn, session, top_n, theory=None, checker=None, with_system=False):
+    blob = conn.execute(
+        "SELECT command_timings FROM isabelle_session_info WHERE session_name=?",
+        (session,)).fetchone()
+    if not blob or not blob[0]:
+        return
+
+    text = decompress_blob(blob[0])
+    if text is None:
+        print(f"\n  {YELLOW}Install 'zstandard' to decode command timings{RESET}")
+        return
+    records = parse_yxml_records(text)
+    if not records:
+        return
+
+    # Filter by theory file if requested
+    if theory:
+        records = [r for r in records if theory in r.get("file", "")]
+        if not records:
+            print(f"\n  {YELLOW}No commands matching '{theory}'{RESET}")
+            return
+
+    if not with_system:
+        records = [r for r in records if not is_system_source(r.get("file", ""))]
+
+    # Pre-check all files for line resolution
+    if checker:
+        for r in records:
+            f = r.get("file", "")
+            if f:
+                for n, d in checker.rows:
+                    if n == f:
+                        checker.check(n, d)
+                        break
+
+    label = f" in {theory}" if theory else ""
+    section(f"Command Timings ({len(records)} commands{label})")
+
+    # Slowest commands
+    timed = [(float(r.get("elapsed", "0")), r) for r in records]
+    timed.sort(key=lambda x: -x[0])
+
+    print(f"\n  {BOLD}Slowest commands (top {top_n}):{RESET}")
+
+    # Check if any files couldn't be resolved for line numbers
+    if checker:
+        unresolved = set()
+        for _, r in timed[:top_n]:
+            f = r.get("file", "")
+            if f and r.get("offset"):
+                line = checker.get_line(f, r["offset"])
+                if line is None:
+                    unresolved.add(f)
+        if unresolved:
+            print(f"  {DIM}(file contents unavailable for {len(unresolved)} file(s) — offsets shown instead of line numbers){RESET}")
+
+    print()
+    max_t = timed[0][0] if timed else 1
+    for elapsed, r in timed[:top_n]:
+        name = r.get("name", "?")
+        f = r.get("file", "")
+        offset = r.get("offset", "")
+        loc = ""
+        no_source = ""
+        if checker and f and offset:
+            line = checker.get_line(f, offset)
+            if line:
+                loc = f":{line}"
+            else:
+                loc = f"+{offset}"
+                no_source = f" {YELLOW}(no source){RESET}"
+        f_short = f
+        for prefix in ("$ISABELLE_PROJECT_BASE/", "~~/src/"):
+            f_short = f_short.replace(prefix, "")
+        print(f"    {elapsed:6.2f}s  {bar(elapsed, max_t)}  {name:20s} {DIM}{f_short}{loc}{RESET}{no_source}")
+
+    # Per-file aggregation
+    file_times = {}
+    for elapsed, r in timed:
+        f = r.get("file", "(unknown)")
+        file_times[f] = file_times.get(f, 0.0) + elapsed
+
+    by_file = sorted(file_times.items(), key=lambda x: -x[1])
+    total_time = sum(t for _, t in by_file)
+
+    print(f"\n  {BOLD}Time per file (top {top_n}, total {fmt_time(str(total_time))}):{RESET}\n")
+    max_ft = by_file[0][1] if by_file else 1
+    for f, t in by_file[:top_n]:
+        for prefix in ("$ISABELLE_PROJECT_BASE/", "~~/src/"):
+            f = f.replace(prefix, "")
+        pct = 100 * t / total_time if total_time else 0
+        print(f"    {t:6.1f}s {pct:4.1f}%  {bar(t, max_ft)}  {DIM}{f}{RESET}")
+
+
+def show_ml_stats(conn, session):
+    blob = conn.execute(
+        "SELECT ml_statistics FROM isabelle_session_info WHERE session_name=?",
+        (session,)).fetchone()
+    if not blob or not blob[0]:
+        return
+
+    text = decompress_blob(blob[0])
+    if text is None:
+        print(f"\n  {YELLOW}Install 'zstandard' to decode ML statistics{RESET}")
+        return
+    records = parse_yxml_records(text)
+    if not records:
+        return
+
+    section(f"ML Runtime Statistics ({len(records)} snapshots)")
+
+    def fval(r, k):
+        try: return float(r.get(k, "0"))
+        except ValueError: return 0.0
+
+    def ival(r, k):
+        try: return int(float(r.get(k, "0")))
+        except ValueError: return 0
+
+    heaps = [fval(r, "size_heap") for r in records]
+    peak_heap = max(heaps) if heaps else 0
+    final_heap = heaps[-1] if heaps else 0
+    peak_workers = max(ival(r, "workers_active") for r in records)
+    total_workers = ival(records[-1], "workers_total") if records else 0
+    time_gc = fval(records[-1], "time_GC") if records else 0
+    time_cpu = fval(records[-1], "time_CPU") if records else 0
+    full_gcs = ival(records[-1], "full_GCs") if records else 0
+    partial_gcs = ival(records[-1], "partial_GCs") if records else 0
+
+    # Java heap
+    java_heaps = [fval(r, "java_heap_used") for r in records if r.get("java_heap_used")]
+    peak_java = max(java_heaps) if java_heaps else 0
+
+    print(f"\n  {BOLD}ML Heap{RESET}")
+    print(f"    Peak:    {BOLD}{peak_heap/1024/1024:.0f} MiB{RESET}")
+    print(f"    Final:   {final_heap/1024/1024:.0f} MiB")
+
+    if peak_java:
+        print(f"\n  {BOLD}JVM Heap{RESET}")
+        print(f"    Peak:    {peak_java/1024/1024:.0f} MiB")
+
+    print(f"\n  {BOLD}GC{RESET}")
+    print(f"    Time:    {fmt_time(str(time_gc))}")
+    pct = 100 * time_gc / (time_cpu + time_gc) if (time_cpu + time_gc) else 0
+    print(f"    Overhead:{pct:5.1f}% of CPU")
+    print(f"    Full:    {full_gcs}   Partial: {partial_gcs}")
+
+    print(f"\n  {BOLD}Workers{RESET}")
+    print(f"    Peak:    {peak_workers} / {total_workers}")
+
+    # Mini sparkline of heap usage
+    n_cols = 50
+    step = max(1, len(heaps) // n_cols)
+    sampled = heaps[::step][:n_cols]
+    if sampled and peak_heap > 0:
+        blocks = " ▁▂▃▄▅▆▇█"
+        sparkline = ""
+        for h in sampled:
+            idx = int(8 * h / peak_heap)
+            sparkline += blocks[min(idx, 8)]
+        print(f"\n  {BOLD}Heap over time:{RESET}")
+        print(f"    {DIM}{sparkline}{RESET}")
+        print(f"    {DIM}0{'─' * (len(sparkline) - 6)}{peak_heap/1024/1024:.0f} MiB{RESET}")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Inspect an Isabelle session heap database.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("db", help="Path to .db file")
+    parser.add_argument("session", nargs="?", help="Session name (default: filename stem)")
+
+    g = parser.add_argument_group("sections (default: -baES)")
+    g.add_argument("-b", "--build", action="store_true", help="Build info")
+    g.add_argument("-a", "--ancestry", action="store_true", help="Heap ancestry")
+    g.add_argument("-s", "--sources", action="store_true", help="Full source listing")
+    g.add_argument("-S", "--source-summary", action="store_true", help="Source prefix summary")
+    g.add_argument("-e", "--exports", action="store_true", help="Full export listing")
+    g.add_argument("-E", "--export-summary", action="store_true", help="Export type summary")
+    g.add_argument("-t", "--theories", action="store_true", help="List theories")
+    g.add_argument("-d", "--documents", action="store_true", help="Documents")
+    g.add_argument("-c", "--checksums", action="store_true", help="Sources shasum")
+    g.add_argument("-T", "--timings", action="store_true", help="Command timings")
+    g.add_argument("-M", "--ml-stats", action="store_true", help="ML runtime statistics")
+    g.add_argument("-A", "--all", action="store_true", help="Everything")
+
+    f = parser.add_argument_group("filters")
+    f.add_argument("--theory", help="Restrict exports/timings to a specific theory")
+    f.add_argument("--grep", help="Filter names by regex")
+    f.add_argument("--top", type=int, default=15, help="Entries for timing lists (default: 15)")
+    f.add_argument("--check", action="store_true", help="Check source digests against filesystem")
+    f.add_argument("--mismatches", action="store_true", help="Only show sources with mismatching digests (implies --check -s)")
+    f.add_argument("--with-system-sources", action="store_true", help="Include Pure/HOL/HOL-Library sources (hidden by default)")
+
+    args = parser.parse_args()
+
+    if not os.path.isfile(args.db):
+        sys.exit(f"{RED}Error: {args.db} not found{RESET}")
+
+    session = args.session or os.path.splitext(os.path.basename(args.db))[0]
+    conn = sqlite3.connect(args.db)
+
+    any_section = (args.build or args.ancestry or args.sources or args.source_summary
+                   or args.exports or args.export_summary or args.theories
+                   or args.documents or args.checksums or args.timings
+                   or args.ml_stats or args.all)
+    if not any_section:
+        args.build = args.ancestry = args.source_summary = True
+
+    if args.all:
+        args.build = args.ancestry = args.sources = True
+        args.theories = args.documents = args.checksums = True
+        args.timings = args.ml_stats = True
+
+    # Header
+    heap_dir = os.path.dirname(os.path.dirname(args.db))
+    heap_file = os.path.join(heap_dir, session)
+    heap_size = fmt_size(os.path.getsize(heap_file)) if os.path.isfile(heap_file) else f"{RED}missing{RESET}"
+    db_size = fmt_size(os.path.getsize(args.db))
+
+    print(f"\n{BOLD}Isabelle Heap: {CYAN}{session}{RESET}")
+    print(f"{'═' * 60}")
+    print(f"  DB:   {DIM}{args.db}{RESET}  ({db_size})")
+    print(f"  Heap: {DIM}{heap_file}{RESET}  ({heap_size})")
+
+    if args.mismatches:
+        args.check = True
+
+    if args.check and not args.mismatches:
+        args.sources = True
+
+    # Create source checker if needed
+    checker = None
+    if args.check or args.timings:
+        checker = SourceChecker(conn, session)
+        # Show resolved environment variables
+        if _isabelle_env_cache:
+            print(f"\n  {BOLD}Environment:{RESET}")
+            for var, val in sorted(_isabelle_env_cache.items()):
+                if val:
+                    print(f"    {var} = {val}")
+                else:
+                    print(f"    {var} = {RED}(unset){RESET}")
+
+    ws = args.with_system_sources
+
+    if args.build:      show_build(conn, session)
+    if args.ancestry:   show_ancestry(conn, session)
+    if checker:
+        # Pre-check all sources so mismatches are known
+        for name, digest in checker.rows:
+            checker.check(name, digest)
+        if args.mismatches or args.all:
+            mismatched = [(n, d) for n, d in checker.rows
+                          if checker._checked.get(n, (None, None))[1] is False]
+            if mismatched:
+                section("Changed Sources")
+                max_name = max(len(n) for n, _ in mismatched)
+                for name, digest in mismatched:
+                    print(f"  {RED}✗{RESET} {RED}{name:{max_name}s}{RESET}  {DIM}{digest}{RESET}")
+    if args.timings:    show_timings(conn, session, args.top, theory=args.theory, checker=checker, with_system=ws)
+    if args.ml_stats:   show_ml_stats(conn, session)
+    if args.sources:    show_sources_full(conn, session, grep=args.grep, checker=checker,
+                                          with_system=ws)
+    elif args.source_summary: show_sources_summary(conn, session, with_system=ws)
+    if args.checksums:  show_checksums(conn, session)
+    if args.theories:   show_theories(conn, session)
+    if args.exports:    show_exports_full(conn, session, theory=args.theory, grep=args.grep)
+    elif args.export_summary: show_exports_summary(conn, session)
+    if args.documents:  show_documents(conn, session)
+
+    print()
+    conn.close()
+
+
+if __name__ == "__main__":
+    main()
