@@ -1,10 +1,12 @@
-/* Proxy Plugin: entry point, protocol handler, shared state.
+/* Proxy Plugin: entry point, protocol handler, proxy detection.
 
-   Registers a PIDE protocol handler that recognizes two message types
-   injected by ml_proxy.py into the ML→Scala message stream:
+   Detects proxy usage from process_policy option at startup.
+   If active, adds a status bar widget that polls a proxy-stats file
+   written by ml_proxy.py (modeled after Status_Widget.Java_GUI).
 
-     ("function", "proxy_log")    — body text appended to the log panel
-     ("function", "proxy_status") — properties: host, mbps
+   Also registers a PIDE protocol handler for:
+     ("function", "proxy_log")      — body text appended to the log panel
+     ("function", "proxy_ml_stats") — remote ML statistics forwarding
 */
 
 import isabelle._
@@ -13,52 +15,17 @@ import isabelle.jedit.PIDE
 import org.gjt.sp.jedit.{EBMessage, EBPlugin, jEdit}
 
 
-/* Shared mutable state between protocol handler and UI components. */
+/* Shared state: log listeners and proxy stats file path. */
 object ProxyState {
-  case class Status(host: String = "", mbps: Double = 0.0)
+  /* Set once at startup; empty if no proxy detected. */
+  @volatile var stats_file: String = ""
+  @volatile var proxy_host: String = ""
 
-  @volatile var status: Status = Status()
-  @volatile private var activated: Boolean = false
-
-  private var statusListeners: List[Status => Unit] = Nil
   private var logListeners: List[String => Unit] = Nil
-
-  def addStatusListener(f: Status => Unit): Unit = synchronized { statusListeners ::= f }
-  def removeStatusListener(f: Status => Unit): Unit = synchronized {
-    statusListeners = statusListeners.filterNot(_ eq f)
-  }
 
   def addLogListener(f: String => Unit): Unit = synchronized { logListeners ::= f }
   def removeLogListener(f: String => Unit): Unit = synchronized {
     logListeners = logListeners.filterNot(_ eq f)
-  }
-
-  /* On first proxy_status, append proxy-status at the end (keep ml-status). */
-  private def activateStatusBar(): Unit = {
-    if (activated) return
-    synchronized {
-      if (activated) return
-      activated = true
-    }
-    GUI_Thread.later {
-      val key = "view.status"
-      var current = jEdit.getProperty(key, "")
-      if (!current.contains("proxy-status"))
-        current = current + " proxy-status"
-      jEdit.setProperty(key, current)
-      var view = jEdit.getFirstView()
-      while (view != null) {
-        view.getStatus.propertiesChanged()
-        view = view.getNext
-      }
-    }
-  }
-
-  def notifyStatus(s: Status): Unit = {
-    activateStatusBar()
-    status = s
-    val ls = synchronized { statusListeners }
-    GUI_Thread.later { ls.foreach(_(s)) }
   }
 
   def notifyLog(text: String): Unit = {
@@ -68,7 +35,7 @@ object ProxyState {
 }
 
 
-/* PIDE protocol handler. */
+/* PIDE protocol handler (proxy_log + proxy_ml_stats). */
 class ProxyProtocolHandler extends Session.Protocol_Handler {
   private var session: Session = null
 
@@ -76,15 +43,6 @@ class ProxyProtocolHandler extends Session.Protocol_Handler {
 
   private def handle_log(msg: Prover.Protocol_Output): Boolean = {
     ProxyState.notifyLog(msg.text)
-    true
-  }
-
-  private def handle_status(msg: Prover.Protocol_Output): Boolean = {
-    val host = Properties.get(msg.properties, "host").getOrElse("")
-    val mbps = Properties.get(msg.properties, "mbps").flatMap(s =>
-      try { Some(s.toDouble) } catch { case _: NumberFormatException => None }
-    ).getOrElse(0.0)
-    ProxyState.notifyStatus(ProxyState.Status(host, mbps))
     true
   }
 
@@ -101,7 +59,6 @@ class ProxyProtocolHandler extends Session.Protocol_Handler {
 
   override val functions: Session.Protocol_Functions =
     List("proxy_log" -> handle_log,
-         "proxy_status" -> handle_status,
          "proxy_ml_stats" -> handle_ml_stats)
 }
 
@@ -109,20 +66,48 @@ class ProxyProtocolHandler extends Session.Protocol_Handler {
 /* jEdit plugin lifecycle. */
 class ProxyPlugin extends EBPlugin {
   override def start(): Unit = {
-    /* Register protocol handler once PIDE session is available. */
     Isabelle_Thread.fork(name = "ip_plugin_init") {
+      /* Register protocol handler once PIDE session is available. */
       var registered = false
       while (!registered) {
         try {
           PIDE.session.init_protocol_handler(new ProxyProtocolHandler)
           registered = true
         } catch {
-          case _: Throwable =>
-            Time.seconds(0.5).sleep()
+          case _: Throwable => Time.seconds(0.5).sleep()
         }
       }
+      /* Detect proxy from process_policy; set up stats file path and widget. */
+      try {
+        val policy = PIDE.options.string("process_policy")
+        if (policy.contains("ml_proxy")) {
+          val host = "--host\\s+(\\S+)".r.findFirstMatchIn(policy).map(_.group(1)).getOrElse("")
+          val bare_host = if (host.contains("@")) host.split("@", 2)(1) else host
+          ProxyState.proxy_host = host
+
+          val tmp_prefix = Isabelle_System.getenv("ISABELLE_TMP_PREFIX")
+          if (tmp_prefix.nonEmpty) {
+            ProxyState.stats_file = tmp_prefix + "/proxy-stats-" + bare_host
+          }
+
+          GUI_Thread.later {
+            val key = "view.status"
+            var current = jEdit.getProperty(key, "")
+            if (!current.contains("proxy-status"))
+              current = current + " proxy-status"
+            jEdit.setProperty(key, current)
+            val suffix = " [PROXY: " + bare_host + "]"
+            var view = jEdit.getFirstView()
+            while (view != null) {
+              view.getStatus.propertiesChanged()
+              view = view.getNext
+            }
+          }
+        }
+      } catch { case _: Throwable => }
     }
   }
+
   override def stop(): Unit = {
     val key = "view.status"
     val current = jEdit.getProperty(key, "")
@@ -130,5 +115,30 @@ class ProxyPlugin extends EBPlugin {
       jEdit.setProperty(key, current.replace("proxy-status", "").replaceAll("  +", " ").trim)
     }
   }
-  override def handleMessage(message: EBMessage): Unit = {}
+
+  /* Re-apply proxy suffix after Isabelle resets the title. */
+  override def handleMessage(message: EBMessage): Unit = {
+    val host = ProxyState.proxy_host
+    if (host.nonEmpty) {
+      val bare = if (host.contains("@")) host.split("@", 2)(1) else host
+      val suffix = " [PROXY: " + bare + "]"
+      message match {
+        case _: org.gjt.sp.jedit.msg.EditPaneUpdate |
+             _: org.gjt.sp.jedit.msg.ViewUpdate |
+             _: org.gjt.sp.jedit.msg.EditorStarted =>
+          /* Delay to run after Isabelle's init_title in the same EDT cycle. */
+          javax.swing.SwingUtilities.invokeLater(() => {
+            var view = jEdit.getFirstView()
+            while (view != null) {
+              val cfg = view.getViewConfig.title
+              if (cfg != null && !cfg.contains("[PROXY:")) {
+                view.setUserTitle(cfg + suffix)
+              }
+              view = view.getNext
+            }
+          })
+        case _ =>
+      }
+    }
+  }
 }

@@ -1,21 +1,23 @@
 /* Proxy status bar widget: shows "Proxy: host  X.X MB/s" with progress bar.
 
-   Modeled after Status_Widget.ML_GUI / Java_GUI.
-   Registered via services.xml as "proxy-status".
+   Polls proxy-stats-{host} file on a 500ms timer, modeled after
+   Status_Widget.Java_GUI which polls JVM heap via a Swing Timer.
 */
 
 import isabelle._
 
 import java.awt.{Color, Dimension, Graphics, Graphics2D, Insets, RenderingHints}
+import java.awt.event.{ActionEvent, ActionListener}
 import java.awt.font.FontRenderContext
-import javax.swing.JComponent
+import java.io.File
+import java.nio.file.Files
+import javax.swing.{JComponent, Timer}
 
 import org.gjt.sp.jedit.{View, jEdit}
 import org.gjt.sp.jedit.gui.statusbar.{StatusWidgetFactory, Widget}
 
 
 class ProxyStatusWidget(view: View) extends JComponent {
-  /* The progress bar scales to this ceiling (MB/s). */
   private val MAX_MBPS = 25.0
 
   private val template = "Proxy: 999.999.999.999  99.9 MB/s"
@@ -38,31 +40,66 @@ class ProxyStatusWidget(view: View) extends JComponent {
   private def progressFg: Color = jEdit.getColorProperty("view.status.memory.foreground")
   private def progressBg: Color = jEdit.getColorProperty("view.status.memory.background")
 
-  @volatile private var currentStatus = ProxyState.Status()
+  /* Component state — owned by GUI thread. */
+  private var currentHost: String = ""
+  private var currentMbps: Double = 0.0
 
-  private val listener: ProxyState.Status => Unit = { s =>
-    if (s != currentStatus) { currentStatus = s; repaint() }
-  }
+  /* Timer polls the stats file every 500ms, like Java_GUI. */
+  private val timer = new Timer(500, new ActionListener {
+    override def actionPerformed(e: ActionEvent): Unit = {
+      val path = ProxyState.stats_file
+      if (path.nonEmpty) {
+        try {
+          val f = new File(path)
+          if (f.isFile) {
+            val lines = new String(Files.readAllBytes(f.toPath), "UTF-8")
+            var host = ""
+            var mbps = 0.0
+            for (line <- lines.split('\n')) {
+              val eq = line.indexOf('=')
+              if (eq > 0) {
+                val key = line.substring(0, eq)
+                val value = line.substring(eq + 1)
+                if (key == "host") host = value
+                else if (key == "mbps")
+                  try { mbps = value.toDouble } catch { case _: NumberFormatException => }
+              }
+            }
+            if (host != currentHost || mbps != currentMbps) {
+              currentHost = host
+              currentMbps = mbps
+              repaint()
+            }
+          }
+        } catch { case _: Exception => }
+      } else if (currentHost.isEmpty) {
+        /* No stats file yet; show host from process_policy if available. */
+        val h = ProxyState.proxy_host
+        if (h.nonEmpty && h != currentHost) {
+          currentHost = h
+          repaint()
+        }
+      }
+    }
+  })
 
   override def addNotify(): Unit = {
     super.addNotify()
-    ProxyState.addStatusListener(listener)
-    listener(ProxyState.status)
+    timer.start()
   }
 
   override def removeNotify(): Unit = {
     super.removeNotify()
-    ProxyState.removeStatusListener(listener)
+    timer.stop()
   }
 
   override def paintComponent(gfx: Graphics): Unit = {
     super.paintComponent(gfx)
-    val s = currentStatus
-    if (s.host.isEmpty) return
+    if (currentHost.isEmpty) return
 
-    val host = if (s.host.contains("@")) s.host.split("@", 2)(1) else s.host
-    val text = f"Proxy: $host  ${s.mbps}%.1f MB/s"
-    val fraction = math.min(s.mbps / MAX_MBPS, 1.0)
+    val host = if (currentHost.contains("@")) currentHost.split("@", 2)(1) else currentHost
+    val text = f"Proxy: $host  ${currentMbps}%.1f MB/s"
+    val fraction = math.min(currentMbps / MAX_MBPS, 1.0)
 
     val insets = new Insets(0, 0, 0, 0)
     val width = getWidth - insets.left - insets.right

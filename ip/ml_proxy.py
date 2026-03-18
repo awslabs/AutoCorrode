@@ -744,27 +744,47 @@ def pide_proxy(server_sock, scala_port, scala_password,
             mgmt.bytes_transferred[0] += n
 
     def proxy_heartbeat():
-        """Send periodic proxy_status with throughput to Scala/jEdit."""
+        """Write periodic proxy stats to ISABELLE_TMP_PREFIX/proxy-stats-{host}."""
         host_label = remote_host or "unknown"
         interval = 0.5
+        # Use ISABELLE_TMP_PREFIX (parent of ISABELLE_TMP), accessible from jEdit
+        stats_dir = os.environ.get("ISABELLE_TMP_PREFIX", "")
+        if not stats_dir:
+            # Fallback: derive from ISABELLE_TMP (its parent)
+            isabelle_tmp = os.environ.get("ISABELLE_TMP", "")
+            if isabelle_tmp:
+                stats_dir = os.path.dirname(isabelle_tmp)
+        if not stats_dir:
+            logger.warning("No ISABELLE_TMP_PREFIX or ISABELLE_TMP, proxy stats disabled")
+            return
+        # Use hostname/IP only (strip user@ prefix)
+        bare_host = host_label.split("@")[-1] if "@" in host_label else host_label
+        stats_path = os.path.join(stats_dir, f"proxy-stats-{bare_host}")
+        tmp_path = stats_path + ".tmp"
         try:
             with scala_write_lock:
                 inject_proxy_message(scala_sock, "proxy_log",
                                      body=f"Proxy connected to {host_label}")
-                inject_proxy_message(scala_sock, "proxy_status",
-                                     props={"host": host_label, "mbps": "0.0"})
+            with open(tmp_path, "w") as f:
+                f.write(f"host={host_label}\nmbps=0.0\n")
+            os.replace(tmp_path, stats_path)
             while True:
                 time.sleep(interval)
                 with byte_counter_lock:
                     b = byte_counter[0]
                     byte_counter[0] = 0
                 mbps = b / interval / (1024 * 1024)
-                with scala_write_lock:
-                    inject_proxy_message(scala_sock, "proxy_status",
-                                         props={"host": host_label,
-                                                "mbps": f"{mbps:.1f}"})
+                with open(tmp_path, "w") as f:
+                    f.write(f"host={host_label}\nmbps={mbps:.1f}\n")
+                os.replace(tmp_path, stats_path)
         except (ConnectionError, OSError):
             pass
+        finally:
+            for p in (stats_path, tmp_path):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
 
     t1 = threading.Thread(target=forward_scala_to_ml, daemon=True)
     t2 = threading.Thread(target=forward_ml_to_scala, daemon=True)
