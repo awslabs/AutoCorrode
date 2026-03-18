@@ -13,7 +13,7 @@ theory C_To_Core_Translation
     "Shallow_Micro_C.C_Translation_Model"
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
-       and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:" and "abort:"
+       and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:" and "abort:" and "compiler:"
 begin
 
 section \<open>C-to-Core Monad Translation Infrastructure\<close>
@@ -83,6 +83,52 @@ struct
   (* Keep current default behavior for plain char in all built-in profiles for now.
      This can be split per-profile later if needed. *)
   fun char_is_signed _ = false
+end
+\<close>
+
+ML \<open>
+structure C_Compiler : sig
+  datatype signed_shr_behavior = ArithmeticShift | ConservativeShift
+  datatype signed_narrowing_behavior = Truncating | Checked
+
+  type profile = {
+    char_is_signed: bool,
+    signed_shr: signed_shr_behavior,
+    signed_narrowing: signed_narrowing_behavior
+  }
+
+  val parse_compiler : string -> profile
+  val default_profile : profile
+  val set_compiler_profile : profile -> unit
+  val get_compiler_profile : unit -> profile
+end = struct
+  datatype signed_shr_behavior = ArithmeticShift | ConservativeShift
+  datatype signed_narrowing_behavior = Truncating | Checked
+
+  type profile = {
+    char_is_signed: bool,
+    signed_shr: signed_shr_behavior,
+    signed_narrowing: signed_narrowing_behavior
+  }
+
+  (* Default: current behavior (unsigned char, arithmetic shr, truncating narrowing) *)
+  val default_profile : profile = {
+    char_is_signed = false,
+    signed_shr = ArithmeticShift,
+    signed_narrowing = Truncating
+  }
+
+  fun parse_compiler "gcc-x86_64" = {char_is_signed = true, signed_shr = ArithmeticShift, signed_narrowing = Truncating}
+    | parse_compiler "clang-x86_64" = {char_is_signed = true, signed_shr = ArithmeticShift, signed_narrowing = Truncating}
+    | parse_compiler "gcc-aarch64" = {char_is_signed = false, signed_shr = ArithmeticShift, signed_narrowing = Truncating}
+    | parse_compiler "clang-aarch64" = {char_is_signed = false, signed_shr = ArithmeticShift, signed_narrowing = Truncating}
+    | parse_compiler "conservative" = {char_is_signed = false, signed_shr = ConservativeShift, signed_narrowing = Checked}
+    | parse_compiler name = error ("micro_c_translate: unknown compiler profile: " ^ name ^
+        ". Known profiles: gcc-x86_64, clang-x86_64, gcc-aarch64, clang-aarch64, conservative")
+
+  val current_compiler_profile : profile Unsynchronized.ref = Unsynchronized.ref default_profile
+  fun set_compiler_profile p = (current_compiler_profile := p)
+  fun get_compiler_profile () = !current_compiler_profile
 end
 \<close>
 
@@ -389,7 +435,7 @@ struct
       else if has_char then
         if has_unsigned then SOME CChar  (* unsigned char = c_char = 8 word *)
         else if has_signed then SOME CSChar
-        else if C_ABI.char_is_signed (get_abi_profile ()) then SOME CSChar else SOME CChar
+        else if #char_is_signed (C_Compiler.get_compiler_profile ()) then SOME CSChar else SOME CChar
       else if has_short then
         if has_unsigned then SOME CUShort
         else SOME CShort
@@ -2731,7 +2777,11 @@ struct
       end
     else let val cast_const =
                if C_Ast_Utils.is_signed from_cty
-               then Const (\<^const_name>\<open>c_scast\<close>, isa_dummyT)
+               then (case #signed_narrowing (C_Compiler.get_compiler_profile ()) of
+                       C_Compiler.Checked =>
+                         Const (\<^const_name>\<open>c_scast_checked\<close>, isa_dummyT)
+                     | C_Compiler.Truncating =>
+                         Const (\<^const_name>\<open>c_scast\<close>, isa_dummyT))
                else Const (\<^const_name>\<open>c_ucast\<close>, isa_dummyT)
              (* Type-annotate the lambda variable with the source HOL type
                 so c_scast/c_ucast input type is fully determined. *)
@@ -2900,7 +2950,11 @@ struct
         else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shl\<close>, isa_dummyT))
     | translate_binop cty CShrOp0 = (* right shift *)
         if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr\<close>, isa_dummyT))
+        then (case #signed_shr (C_Compiler.get_compiler_profile ()) of
+                C_Compiler.ArithmeticShift =>
+                  Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr\<close>, isa_dummyT))
+              | C_Compiler.ConservativeShift =>
+                  Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr_conservative\<close>, isa_dummyT)))
         else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shr\<close>, isa_dummyT))
     | translate_binop _ _ = unsupported "unsupported binary operator"
 
@@ -7287,7 +7341,7 @@ struct
       val defs = [
           ("abi_pointer_bits", HOLogic.mk_nat (C_ABI.pointer_bits abi_profile)),
           ("abi_long_bits", HOLogic.mk_nat (C_ABI.long_bits abi_profile)),
-          ("abi_char_is_signed", mk_bool_term (C_ABI.char_is_signed abi_profile)),
+          ("abi_char_is_signed", mk_bool_term (#char_is_signed (C_Compiler.get_compiler_profile ()))),
           ("abi_big_endian", mk_bool_term (abi_is_big_endian abi_profile))
         ]
     in
@@ -7925,7 +7979,6 @@ text \<open>
 \<close>
 
 ML \<open>
-local
   datatype translate_opt =
       TranslatePrefix of string
     | TranslateAddrTy of string
@@ -7935,6 +7988,7 @@ local
     | TranslatePtrAdd of string
     | TranslatePtrShiftSigned of string
     | TranslatePtrDiff of string
+    | TranslateCompiler of string
   val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
   val parse_abi_dash =
       Scan.one (fn tok => Token.is_kind Token.Sym_Ident tok andalso Token.content_of tok = "-") >> K ()
@@ -7949,6 +8003,7 @@ local
   val parse_ptr_add_key = Parse.$$$ "ptr_add:" >> K ()
   val parse_ptr_shift_signed_key = Parse.$$$ "ptr_shift_signed:" >> K ()
   val parse_ptr_diff_key = Parse.$$$ "ptr_diff:" >> K ()
+  val parse_compiler_key = Parse.$$$ "compiler:" >> K ()
   val parse_translate_opt =
       (parse_prefix_key |-- Parse.name >> TranslatePrefix)
       || (parse_addr_key |-- Parse.typ >> TranslateAddrTy)
@@ -7958,64 +8013,88 @@ local
       || (parse_ptr_add_key |-- Parse.name >> TranslatePtrAdd)
       || (parse_ptr_shift_signed_key |-- Parse.name >> TranslatePtrShiftSigned)
       || (parse_ptr_diff_key |-- Parse.name >> TranslatePtrDiff)
+      || (parse_compiler_key |-- parse_abi_name >> TranslateCompiler)
 
-  fun apply_translate_opt (TranslatePrefix pfx) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case prefix_opt of
-           NONE => (SOME pfx, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate prefix option")
-    | apply_translate_opt (TranslateAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case addr_opt of
-           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate addr option")
-    | apply_translate_opt (TranslateGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case gv_opt of
-           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate gv option")
-    | apply_translate_opt (TranslateAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case abi_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate abi option")
-    | apply_translate_opt (TranslateAbortTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case abort_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME ty, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate abort option")
-    | apply_translate_opt (TranslatePtrAdd name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case ptr_add_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, SOME name, ptr_shift_signed_opt, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate ptr_add option")
-    | apply_translate_opt (TranslatePtrShiftSigned name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case ptr_shift_signed_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, SOME name, ptr_diff_opt)
-         | SOME _ => error "micro_c_translate: duplicate ptr_shift_signed option")
-    | apply_translate_opt (TranslatePtrDiff name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-        (case ptr_diff_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, SOME name)
-         | SOME _ => error "micro_c_translate: duplicate ptr_diff option")
+  type translate_opts = {
+    prefix: string option, addr: string option, gv: string option,
+    abi: string option, abort: string option,
+    ptr_add: string option, ptr_shift_signed: string option, ptr_diff: string option,
+    compiler: string option
+  }
+
+  val empty_opts : translate_opts = {
+    prefix = NONE, addr = NONE, gv = NONE, abi = NONE, abort = NONE,
+    ptr_add = NONE, ptr_shift_signed = NONE, ptr_diff = NONE, compiler = NONE
+  }
+
+  fun set_once _ NONE v = SOME v
+    | set_once name (SOME _) _ = error ("micro_c_translate: duplicate " ^ name ^ " option")
+
+  fun apply_translate_opt (TranslatePrefix v) (r : translate_opts) =
+        {prefix = set_once "prefix" (#prefix r) v, addr = #addr r, gv = #gv r, abi = #abi r,
+         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslateAddrTy v) (r : translate_opts) =
+        {prefix = #prefix r, addr = set_once "addr" (#addr r) v, gv = #gv r, abi = #abi r,
+         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslateGvTy v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = set_once "gv" (#gv r) v, abi = #abi r,
+         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslateAbi v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = set_once "abi" (#abi r) v,
+         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslateAbortTy v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
+         abort = set_once "abort" (#abort r) v, ptr_add = #ptr_add r,
+         ptr_shift_signed = #ptr_shift_signed r, ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslatePtrAdd v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
+         abort = #abort r, ptr_add = set_once "ptr_add" (#ptr_add r) v,
+         ptr_shift_signed = #ptr_shift_signed r, ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslatePtrShiftSigned v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
+         abort = #abort r, ptr_add = #ptr_add r,
+         ptr_shift_signed = set_once "ptr_shift_signed" (#ptr_shift_signed r) v,
+         ptr_diff = #ptr_diff r, compiler = #compiler r}
+    | apply_translate_opt (TranslatePtrDiff v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
+         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = set_once "ptr_diff" (#ptr_diff r) v, compiler = #compiler r}
+    | apply_translate_opt (TranslateCompiler v) (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
+         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = #ptr_diff r, compiler = set_once "compiler" (#compiler r) v}
 
   fun collect_translate_opts opts =
-    fold apply_translate_opt opts (NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE)
-in
+    fold apply_translate_opt opts empty_opts
+
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_translate\<close>
     "parse C source and generate core monad definitions"
     (Scan.repeat parse_translate_opt -- Parse.embedded_input -- Scan.repeat parse_translate_opt >>
       (fn ((opts_pre, source), opts_post) => fn lthy =>
       let
-        val (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt) =
-          collect_translate_opts (opts_pre @ opts_post)
-        val prefix = the_default "c_" prefix_opt
-        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" abi_opt)
-        val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
-        val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
-        val abort_ty_opt = Option.map (Syntax.read_typ lthy) abort_opt
+        val opts = collect_translate_opts (opts_pre @ opts_post)
+        val prefix = the_default "c_" (#prefix opts)
+        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" (#abi opts))
+        val compiler_profile =
+          (case #compiler opts of
+             SOME name => C_Compiler.parse_compiler name
+           | NONE => C_Compiler.default_profile)
+        val addr_ty = Syntax.read_typ lthy (the_default "'addr" (#addr opts))
+        val gv_ty = Syntax.read_typ lthy (the_default "'gv" (#gv opts))
+        val abort_ty_opt = Option.map (Syntax.read_typ lthy) (#abort opts)
         fun require_visible_const_name name =
           (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
              SOME _ => name
            | NONE => error ("micro_c_translate: missing required pointer-model constant: " ^ name))
         val pointer_model =
-          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" ptr_add_opt))
-          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" ptr_shift_signed_opt))
-          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" ptr_diff_opt))
+          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" (#ptr_add opts)))
+          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" (#ptr_shift_signed opts)))
+          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" (#ptr_diff opts)))
           }
         (* Build expression type constraint from abort type + locale's reference_types.
            This constrains state/abort/prompt positions so that type inference doesn't
@@ -8050,13 +8129,13 @@ val _ =
         val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest {functions = NONE, types = NONE}
         val _ = C_Def_Gen.set_abi_profile abi_profile
+        val _ = C_Compiler.set_compiler_profile compiler_profile
         val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
         val _ = C_Def_Gen.set_ref_abort_type expr_constraint
         val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
       end))
-end
 \<close>
 
 text \<open>
@@ -8105,41 +8184,10 @@ text \<open>
 ML \<open>
 local
   datatype manifest_section = Manifest_None | Manifest_Functions | Manifest_Types
-  datatype load_opt =
-      LoadPrefix of string
-    | LoadAddrTy of string
-    | LoadGvTy of string
-    | LoadAbi of string
-    | LoadAbortTy of string
-    | LoadPtrAdd of string
-    | LoadPtrShiftSigned of string
-    | LoadPtrDiff of string
-    | LoadManifest of (theory -> Token.file)
-  val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
-  val parse_abi_dash =
-      Scan.one (fn tok => Token.is_kind Token.Sym_Ident tok andalso Token.content_of tok = "-") >> K ()
-  val parse_abi_name =
-      parse_abi_ident -- Scan.repeat (parse_abi_dash |-- parse_abi_ident)
-      >> (fn (h, t) => String.concatWith "-" (h :: t))
-  val parse_prefix_key = Parse.$$$ "prefix:" >> K ()
-  val parse_addr_key = Parse.$$$ "addr:" >> K ()
-  val parse_gv_key = Parse.$$$ "gv:" >> K ()
-  val parse_abi_key = Parse.$$$ "abi:" >> K ()
-  val parse_abort_key = Parse.$$$ "abort:" >> K ()
-  val parse_ptr_add_key = Parse.$$$ "ptr_add:" >> K ()
-  val parse_ptr_shift_signed_key = Parse.$$$ "ptr_shift_signed:" >> K ()
-  val parse_ptr_diff_key = Parse.$$$ "ptr_diff:" >> K ()
+  datatype load_opt = CommonOpt of translate_opt | ManifestOpt of (theory -> Token.file)
   val parse_manifest_key = Parse.$$$ "manifest:" >> K ()
   val parse_load_opt =
-      (parse_prefix_key |-- Parse.name >> LoadPrefix)
-      || (parse_addr_key |-- Parse.typ >> LoadAddrTy)
-      || (parse_gv_key |-- Parse.typ >> LoadGvTy)
-      || (parse_abi_key |-- parse_abi_name >> LoadAbi)
-      || (parse_abort_key |-- Parse.typ >> LoadAbortTy)
-      || (parse_ptr_add_key |-- Parse.name >> LoadPtrAdd)
-      || (parse_ptr_shift_signed_key |-- Parse.name >> LoadPtrShiftSigned)
-      || (parse_ptr_diff_key |-- Parse.name >> LoadPtrDiff)
-      || (parse_manifest_key |-- Resources.parse_file >> LoadManifest)
+      (parse_translate_opt >> CommonOpt) || (parse_manifest_key |-- Resources.parse_file >> ManifestOpt)
   val semi = Scan.option \<^keyword>\<open>;\<close>;
 
   fun trim s = Symbol.trim_blanks s
@@ -8184,44 +8232,13 @@ local
       , types = if null ts then NONE else SOME ts }
     end
 
-  fun apply_load_opt (LoadPrefix prefix) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case prefix_opt of
-           NONE => (SOME prefix, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate prefix option")
-    | apply_load_opt (LoadAddrTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case addr_opt of
-           NONE => (prefix_opt, SOME ty, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate addr option")
-    | apply_load_opt (LoadGvTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case gv_opt of
-           NONE => (prefix_opt, addr_opt, SOME ty, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate gv option")
-    | apply_load_opt (LoadAbi abi_name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case abi_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, SOME abi_name, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate abi option")
-    | apply_load_opt (LoadAbortTy ty) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case abort_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, SOME ty, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate abort option")
-    | apply_load_opt (LoadPtrAdd name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case ptr_add_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, SOME name, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate ptr_add option")
-    | apply_load_opt (LoadPtrShiftSigned name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case ptr_shift_signed_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, SOME name, ptr_diff_opt, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate ptr_shift_signed option")
-    | apply_load_opt (LoadPtrDiff name) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case ptr_diff_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, SOME name, manifest_opt)
-         | SOME _ => error "micro_c_file: duplicate ptr_diff option")
-    | apply_load_opt (LoadManifest get_file) (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_opt) =
-        (case manifest_opt of
-           NONE => (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, SOME get_file)
-         | SOME _ => error "micro_c_file: duplicate manifest option")
-
-  fun collect_load_opts opts = fold apply_load_opt opts (NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE, NONE)
+  fun collect_load_opts opts =
+    let
+      fun step (CommonOpt topt) (topts, mopt) = (topt :: topts, mopt)
+        | step (ManifestOpt _) (_, SOME _) = error "micro_c_file: duplicate manifest option"
+        | step (ManifestOpt f) (topts, NONE) = (topts, SOME f)
+      val (rev_topts, manifest_opt) = fold step opts ([], NONE)
+    in (collect_translate_opts (rev rev_topts), manifest_opt) end
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
@@ -8229,21 +8246,24 @@ val _ =
     (Scan.repeat parse_load_opt -- Resources.parse_file -- Scan.repeat parse_load_opt --| semi >>
       (fn ((opts_pre, get_file), opts_post) => fn lthy =>
       let
-        val (prefix_opt, addr_opt, gv_opt, abi_opt, abort_opt, ptr_add_opt, ptr_shift_signed_opt, ptr_diff_opt, manifest_get_file) =
-          collect_load_opts (opts_pre @ opts_post)
-        val prefix = the_default "c_" prefix_opt
-        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" abi_opt)
-        val addr_ty = Syntax.read_typ lthy (the_default "'addr" addr_opt)
-        val gv_ty = Syntax.read_typ lthy (the_default "'gv" gv_opt)
-        val abort_ty_opt = Option.map (Syntax.read_typ lthy) abort_opt
+        val (opts, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
+        val prefix = the_default "c_" (#prefix opts)
+        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" (#abi opts))
+        val compiler_profile =
+          (case #compiler opts of
+             SOME name => C_Compiler.parse_compiler name
+           | NONE => C_Compiler.default_profile)
+        val addr_ty = Syntax.read_typ lthy (the_default "'addr" (#addr opts))
+        val gv_ty = Syntax.read_typ lthy (the_default "'gv" (#gv opts))
+        val abort_ty_opt = Option.map (Syntax.read_typ lthy) (#abort opts)
         fun require_visible_const_name name =
           (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
              SOME _ => name
            | NONE => error ("micro_c_file: missing required pointer-model constant: " ^ name))
         val pointer_model =
-          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" ptr_add_opt))
-          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" ptr_shift_signed_opt))
-          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" ptr_diff_opt))
+          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" (#ptr_add opts)))
+          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" (#ptr_shift_signed opts)))
+          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" (#ptr_diff opts)))
           }
         (* Build expression type constraint from abort type + locale's reference_types *)
         val expr_constraint =
@@ -8304,6 +8324,7 @@ val _ =
         val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest manifest
         val _ = C_Def_Gen.set_abi_profile abi_profile
+        val _ = C_Compiler.set_compiler_profile compiler_profile
         val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
         val _ = C_Def_Gen.set_ref_abort_type expr_constraint
         val _ = C_Def_Gen.set_pointer_model pointer_model
