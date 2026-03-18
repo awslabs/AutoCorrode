@@ -1620,10 +1620,10 @@ struct
     | type_rank CUInt   = 3
     | type_rank CLong     = 4
     | type_rank CULong   = 4
-    | type_rank CLongLong  = 4
-    | type_rank CULongLong = 4
-    | type_rank CInt128    = 5
-    | type_rank CUInt128   = 5
+    | type_rank CLongLong  = 5
+    | type_rank CULongLong = 5
+    | type_rank CInt128    = 6
+    | type_rank CUInt128   = 6
     | type_rank _       = 3  (* default: int rank *)
 
   (* C11 \<section>6.3.1.1: integer promotion — sub-int types promote to int *)
@@ -1638,10 +1638,18 @@ struct
        else if is_signed lp = is_signed rp then
          (if type_rank lp >= type_rank rp then lp else rp)
        else
-         let val (_, u) = if is_signed lp then (lp, rp) else (rp, lp)
-         in if type_rank u >= type_rank lp andalso type_rank u >= type_rank rp
-            then u  (* unsigned wins when rank >= signed *)
-            else if is_signed lp then lp else rp  (* signed can represent all unsigned values *)
+         let val (s, u) = if is_signed lp then (lp, rp) else (rp, lp)
+         in if type_rank u >= type_rank s
+            then u  (* C11 rule 1: unsigned rank >= signed rank *)
+            else
+              (* C11 rules 2+3: signed has higher rank *)
+              case (bit_width_of s, bit_width_of u) of
+                (SOME sw, SOME uw) =>
+                  if sw > uw then s  (* rule 2: signed strictly wider, can represent all unsigned *)
+                  else (* rule 3: convert to unsigned type corresponding to signed *)
+                    (case s of CLong => CULong | CLongLong => CULongLong
+                             | CInt => CUInt | CInt128 => CUInt128 | _ => CUInt)
+              | _ => s  (* fallback: assume signed is wider *)
          end
     end
 end
