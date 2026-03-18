@@ -1,6 +1,7 @@
 theory C_Translation_Smoke_Memory
   imports
     C_To_Core_Translation
+    "Shallow_Separation_Logic.Separation_Algebra"
 begin
 
 section \<open>Memory/Pointer Translation Smoke\<close>
