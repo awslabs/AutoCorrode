@@ -306,4 +306,17 @@ definition c_ucast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, '
 definition c_scast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_scast w \<equiv> literal (scast w)\<close>
 
+text \<open>Checked signed narrowing cast: aborts with @{text "SignedOverflow"} when
+  @{text "sint w"} does not fit in the target type's signed range. Used by the
+  @{text "conservative"} compiler profile where implementation-defined narrowing
+  truncation is not assumed.\<close>
+
+definition c_scast_checked :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_scast_checked w \<equiv>
+     let v = sint w
+     in if v < -(2^(LENGTH('b) - 1)) \<or> v \<ge> 2^(LENGTH('b) - 1) then
+       c_signed_overflow
+     else
+       literal (word_of_int v)\<close>
+
 end
