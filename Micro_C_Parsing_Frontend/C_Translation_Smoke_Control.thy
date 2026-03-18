@@ -174,4 +174,47 @@ unsigned int smoke_ctrl_mul_assign(unsigned int a) {
 
 thm c_smoke_ctrl_mul_assign_def
 
+section \<open>Switch Statement Smoke\<close>
+
+micro_c_translate \<open>
+unsigned int smoke_ctrl_switch_basic(unsigned int x) {
+  unsigned int r;
+  switch (x) {
+    case 0: r = 10; break;
+    case 1: r = 20; break;
+    default: r = 99; break;
+  }
+  return r;
+}
+\<close>
+
+thm c_smoke_ctrl_switch_basic_def
+
+micro_c_translate \<open>
+unsigned int smoke_ctrl_switch_fallthrough(unsigned int x) {
+  unsigned int r;
+  switch (x) {
+    case 0:
+    case 1: r = 42; break;
+    default: r = 0; break;
+  }
+  return r;
+}
+\<close>
+
+thm c_smoke_ctrl_switch_fallthrough_def
+
+micro_c_translate \<open>
+unsigned int smoke_ctrl_switch_no_default(unsigned int x) {
+  unsigned int r = 0;
+  switch (x) {
+    case 1: r = 1; break;
+    case 2: r = 2; break;
+  }
+  return r;
+}
+\<close>
+
+thm c_smoke_ctrl_switch_no_default_def
+
 end
