@@ -138,7 +138,9 @@ To help this, two scripts are provided:
   the heap directory that matches a given `isabelle build ...` or `isabelle jedit ...` command most
   closely.
 
-### TL;DR: Example `etc/settings`
+### TL;DR
+
+* Add the following to your local `etc/settings` (e.g. `~/.isabelle/Isabelle2025-2/etc/settings`):
 
 ```
 if [ -n "$ISABELLE_HEAP_BASE" ]; then
@@ -157,3 +159,14 @@ if [ -n "$AFP_COMPONENT_BASE" ]; then
   isabelle_directory '$AFP_COMPONENT_BASE'
 fi
 ```
+
+* When working in a worktree of your project, make sure that you set `$ISABELLE_PROJECT_BASE` to
+the base of the worktree, and `$AFP_COMPONENT_BASE` to where you store the AFP components. Finally,
+set `ISABELLE_HEAP_SUFFIX` if you want to use a separate heap directory: E.g.
+`export ISABELLE_HEAP_SUFFIX=A` would look for and update heaps in `$ISABELLE_USER_HOME/heaps-A`
+instead of the default `$ISABELLE_USER_HOME/heaps`.
+
+* Use `heap-mgr` to manage multiple heap directories, and `heap-mgr find -- {your isabelle command}`
+to find the most suitable heap directory for a build you want to do.
+
+* If you want to inspect a heap in more detail, use `heap-db-inspect`.
