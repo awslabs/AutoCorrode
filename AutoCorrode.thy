@@ -24,6 +24,7 @@ theory AutoCorrode
     "Micro_C_Parsing_Frontend.C_Translation_Smoke_Options"
     "Micro_C_Parsing_Frontend.C_Translation_Smoke_Types"
     "Micro_C_Parsing_Frontend.C_Translation_Smoke_ILP32"
+    "Micro_C_Parsing_Frontend.C_Translation_Smoke_Compiler"
     "Shallow_Micro_C.C_Arithmetic_Rules"
     "Shallow_Micro_C.C_Abort"
     "Shallow_Micro_C.C_Abort_Rules"
