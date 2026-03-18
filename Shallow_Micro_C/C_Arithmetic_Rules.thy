@@ -617,6 +617,35 @@ lemma wp_c_scastI [micro_rust_wp_intros]:
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_scast w) \<psi> \<rho> \<theta>\<close>
 using assms by (simp add: c_scast_def wp_literalI asepconj_simp)
 
+lemma wp_c_scast_checked [micro_rust_wp_simps]:
+    fixes w :: \<open>'a::{len} word\<close>
+      and \<psi> :: \<open>'b::{len} word \<Rightarrow> 's::{sepalg} set\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+      and \<open>\<And>r. ucincl (\<theta> r)\<close>
+    shows \<open>\<W>\<P> \<Gamma> (c_scast_checked w) \<psi> \<rho> \<theta> =
+             (let v = sint w
+              in if v < -(2^(LENGTH('b) - 1)) \<or> v \<ge> 2^(LENGTH('b) - 1) then
+                   \<theta> (CustomAbort SignedOverflow)
+                 else
+                   \<psi> (word_of_int v))\<close>
+using assms by (simp add: c_scast_checked_def c_signed_overflow_def c_abort_def
+  micro_rust_wp_simps asepconj_simp Let_def)
+
+lemma wp_c_scast_checkedI [micro_rust_wp_intros]:
+    fixes w :: \<open>'a::{len} word\<close>
+      and \<psi> :: \<open>'b::{len} word \<Rightarrow> 's::{sepalg} set\<close>
+  assumes \<open>\<And>r. ucincl (\<psi> r)\<close>
+      and \<open>sint w \<ge> -(2^(LENGTH('b) - 1))\<close>
+      and \<open>sint w < 2^(LENGTH('b) - 1)\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi> (word_of_int (sint w) :: 'b word)\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> (c_scast_checked w) \<psi> \<rho> \<theta>\<close>
+proof -
+  from assms have eq: \<open>c_scast_checked w = literal (word_of_int (sint w) :: 'b word)\<close>
+    by (simp add: c_scast_checked_def c_signed_overflow_def Let_def)
+  from assms this show ?thesis
+    unfolding eq by (auto intro: wp_literalI simp add: asepconj_simp)
+qed
+
 subsection \<open>Unsigned Division and Modulo\<close>
 
 lemma wp_c_unsigned_div [micro_rust_wp_simps]:
