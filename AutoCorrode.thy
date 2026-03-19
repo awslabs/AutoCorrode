@@ -18,6 +18,7 @@ theory AutoCorrode
     "Micro_C_Parsing_Frontend.C_To_Core_Translation"
     "Micro_C_Parsing_Frontend.C_File_Load_Smoke"
     "Micro_C_Parsing_Frontend.C_Parser_Smoke"
+    "Micro_C_Parsing_Frontend.C_Translation_Smoke_Advanced"
     "Micro_C_Parsing_Frontend.C_Translation_Smoke_Control"
     "Micro_C_Parsing_Frontend.C_Translation_Smoke_Core"
     "Micro_C_Parsing_Frontend.C_Translation_Smoke_Memory"

@@ -8063,6 +8063,52 @@ ML \<open>
   fun collect_translate_opts opts =
     fold apply_translate_opt opts empty_opts
 
+  (* Shared setup: resolve options against the local theory context and
+     configure global translation state.  Manifest is set by the caller. *)
+  fun setup_translation_context cmd_name (opts : translate_opts) lthy =
+    let
+      val prefix = the_default "c_" (#prefix opts)
+      val abi_profile = C_ABI.parse_profile (the_default "lp64-le" (#abi opts))
+      val compiler_profile =
+        (case #compiler opts of
+           SOME name => C_Compiler.parse_compiler name
+         | NONE => C_Compiler.default_profile)
+      val addr_ty = Syntax.read_typ lthy (the_default "'addr" (#addr opts))
+      val gv_ty = Syntax.read_typ lthy (the_default "'gv" (#gv opts))
+      val abort_ty_opt = Option.map (Syntax.read_typ lthy) (#abort opts)
+      fun require_visible_const_name name =
+        (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
+           SOME _ => name
+         | NONE => error (cmd_name ^ ": missing required pointer-model constant: " ^ name))
+      val pointer_model =
+        { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" (#ptr_add opts)))
+        , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" (#ptr_shift_signed opts)))
+        , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" (#ptr_diff opts)))
+        }
+      val expr_constraint =
+        let
+          val abort_ty = the_default @{typ c_abort} abort_ty_opt
+          val ref_args =
+            (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
+               SOME (Free (_, ref_ty)) =>
+                 C_Translate.strip_isa_fun_type ref_ty
+             | _ => [])
+          val (state_ty, prompt_in_ty, prompt_out_ty) =
+            (case ref_args of
+               [s, _, _, _, i, o] => (s, i, o)
+             | _ => (dummyT, dummyT, dummyT))
+        in
+          SOME (Type (\<^type_name>\<open>expression\<close>,
+            [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
+        end
+      val _ = C_Def_Gen.set_decl_prefix prefix
+      val _ = C_Def_Gen.set_abi_profile abi_profile
+      val _ = C_Compiler.set_compiler_profile compiler_profile
+      val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
+      val _ = C_Def_Gen.set_ref_abort_type expr_constraint
+      val _ = C_Def_Gen.set_pointer_model pointer_model
+    in () end
+
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_translate\<close>
     "parse C source and generate core monad definitions"
@@ -8071,61 +8117,12 @@ val _ =
       with_micro_c_lock (fn () =>
       let
         val opts = collect_translate_opts (opts_pre @ opts_post)
-        val prefix = the_default "c_" (#prefix opts)
-        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" (#abi opts))
-        val compiler_profile =
-          (case #compiler opts of
-             SOME name => C_Compiler.parse_compiler name
-           | NONE => C_Compiler.default_profile)
-        val addr_ty = Syntax.read_typ lthy (the_default "'addr" (#addr opts))
-        val gv_ty = Syntax.read_typ lthy (the_default "'gv" (#gv opts))
-        val abort_ty_opt = Option.map (Syntax.read_typ lthy) (#abort opts)
-        fun require_visible_const_name name =
-          (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
-             SOME _ => name
-           | NONE => error ("micro_c_translate: missing required pointer-model constant: " ^ name))
-        val pointer_model =
-          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" (#ptr_add opts)))
-          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" (#ptr_shift_signed opts)))
-          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" (#ptr_diff opts)))
-          }
-        (* Build expression type constraint from abort type + locale's reference_types.
-           This constrains state/abort/prompt positions so that type inference doesn't
-           leave them as unconstrained TFrees that can't unify across functions. *)
-        val expr_constraint =
-          let
-            val abort_ty = the_default @{typ c_abort} abort_ty_opt
-            val ref_args =
-              (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
-                 SOME (Free (_, ref_ty)) =>
-                   C_Translate.strip_isa_fun_type ref_ty
-               | _ => [])
-            val (state_ty, prompt_in_ty, prompt_out_ty) =
-              (case ref_args of
-                 [s, _, _, _, i, o] => (s, i, o)
-               | _ => (dummyT, dummyT, dummyT))
-          in
-            SOME (Type (\<^type_name>\<open>expression\<close>,
-              [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
-          end
-        (* Step 1: Parse the C source using Isabelle/C's parser.
-           We use a Theory context so that Root_Ast_Store is updated at the
-           theory level, where get_CTranslUnit can retrieve it. *)
+        val _ = setup_translation_context "micro_c_translate" opts lthy
+        val _ = C_Def_Gen.set_manifest {functions = NONE, types = NONE}
         val thy = Proof_Context.theory_of lthy
         val context' = C_Module.exec_eval source (Context.Theory thy)
         val thy' = Context.theory_of context'
-
-        (* Step 2: Retrieve the parsed AST from Root_Ast_Store *)
         val tu = get_CTranslUnit thy'
-
-        (* Step 3: Translate and generate definitions *)
-        val _ = C_Def_Gen.set_decl_prefix prefix
-        val _ = C_Def_Gen.set_manifest {functions = NONE, types = NONE}
-        val _ = C_Def_Gen.set_abi_profile abi_profile
-        val _ = C_Compiler.set_compiler_profile compiler_profile
-        val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
-        val _ = C_Def_Gen.set_ref_abort_type expr_constraint
-        val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
       end)))
@@ -8241,41 +8238,7 @@ val _ =
       with_micro_c_lock (fn () =>
       let
         val (opts, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
-        val prefix = the_default "c_" (#prefix opts)
-        val abi_profile = C_ABI.parse_profile (the_default "lp64-le" (#abi opts))
-        val compiler_profile =
-          (case #compiler opts of
-             SOME name => C_Compiler.parse_compiler name
-           | NONE => C_Compiler.default_profile)
-        val addr_ty = Syntax.read_typ lthy (the_default "'addr" (#addr opts))
-        val gv_ty = Syntax.read_typ lthy (the_default "'gv" (#gv opts))
-        val abort_ty_opt = Option.map (Syntax.read_typ lthy) (#abort opts)
-        fun require_visible_const_name name =
-          (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
-             SOME _ => name
-           | NONE => error ("micro_c_file: missing required pointer-model constant: " ^ name))
-        val pointer_model =
-          { ptr_add = SOME (require_visible_const_name (the_default "c_ptr_add" (#ptr_add opts)))
-          , ptr_shift_signed = SOME (require_visible_const_name (the_default "c_ptr_shift_signed" (#ptr_shift_signed opts)))
-          , ptr_diff = SOME (require_visible_const_name (the_default "c_ptr_diff" (#ptr_diff opts)))
-          }
-        (* Build expression type constraint from abort type + locale's reference_types *)
-        val expr_constraint =
-          let
-            val abort_ty = the_default @{typ c_abort} abort_ty_opt
-            val ref_args =
-              (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
-                 SOME (Free (_, ref_ty)) =>
-                   C_Translate.strip_isa_fun_type ref_ty
-               | _ => [])
-            val (state_ty, prompt_in_ty, prompt_out_ty) =
-              (case ref_args of
-                 [s, _, _, _, i, o] => (s, i, o)
-               | _ => (dummyT, dummyT, dummyT))
-          in
-            SOME (Type (\<^type_name>\<open>expression\<close>,
-              [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
-          end
+        val _ = setup_translation_context "micro_c_file" opts lthy
         val thy = Proof_Context.theory_of lthy
         val {src_path, lines, digest, pos} : Token.file = get_file thy
 
@@ -8315,13 +8278,7 @@ val _ =
 
         (* Step 3: Retrieve parsed AST and translate *)
         val tu = get_CTranslUnit thy'
-        val _ = C_Def_Gen.set_decl_prefix prefix
         val _ = C_Def_Gen.set_manifest manifest
-        val _ = C_Def_Gen.set_abi_profile abi_profile
-        val _ = C_Compiler.set_compiler_profile compiler_profile
-        val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
-        val _ = C_Def_Gen.set_ref_abort_type expr_constraint
-        val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
       end)))
