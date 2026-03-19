@@ -163,29 +163,23 @@ logger = logging.getLogger("ml_proxy")
 
 
 class MgmtLogHandler(logging.Handler):
-    """Logging handler that forwards all messages to a management console."""
+    """Logging handler that forwards messages to a management console.
+
+    Maps logger levels to mgmt verbosity:
+      WARNING/ERROR → level 0 (always shown)
+      INFO          → level 0 (always shown)
+      DEBUG         → level 1 (shown at /verbosity >= 1)
+    """
     def __init__(self, mgmt):
         super().__init__()
         self.mgmt = mgmt
     def emit(self, record):
         try:
             msg = f"{DIM}[{record.levelname[0]}] {record.getMessage()}{RST}"
-            self.mgmt.event(msg, level=0)
+            level = 0 if record.levelno >= logging.INFO else 1
+            self.mgmt.event(msg, level=level)
         except Exception:
             pass
-
-# Global reference set by proxy main to forward log messages to mgmt console
-_mgmt_ref = None
-
-class _MgmtLogHandler(logging.Handler):
-    """Logging handler that forwards all messages to the management console."""
-    def emit(self, record):
-        if _mgmt_ref is not None:
-            try:
-                msg = f"{DIM}[{record.levelname[0]}] {record.getMessage()}{RST}"
-                _mgmt_ref.event(msg, level=0)
-            except Exception:
-                pass
 
 def setup_logging(verbose, log_file=None):
     """Configure the logger. DEBUG for verbose, WARNING otherwise.
@@ -607,6 +601,7 @@ def pide_proxy(server_sock, scala_port, scala_password,
                 # Intercept build_session: rewrite session_directories paths
                 # and bash_process_address/password
                 if cmd == b"build_session" and path_rewrites:
+
                     new_chunks, modified = rewrite_build_session_paths(
                         chunks, path_rewrites,
                         remote_bash_addr, remote_bash_pw)
@@ -642,6 +637,7 @@ def pide_proxy(server_sock, scala_port, scala_password,
         \\<^file> annotations) while preserving the message as a warning.
         """
         local_home_bytes = local_isabelle_home.encode() if local_isabelle_home else b""
+        rewrite_counts = {}  # label -> count, for summarizing at exit
         try:
             while True:
                 msg = read_pide_message(ml_sock)
@@ -733,8 +729,10 @@ def pide_proxy(server_sock, scala_port, scala_password,
                 # Reverse-rewrite loading_theory paths (remote→local)
                 if (kind == b"protocol" and path_rewrites and
                         any(b"function=loading_theory" in c for c in chunks)):
-                    chunks = [backward_rewrite(c, path_rewrites, label="loading_theory")
+                    chunks = [backward_rewrite(c, path_rewrites, label="loading_theory",
+                                               quiet=True)
                               for c in chunks]
+                    rewrite_counts["loading_theory"] = rewrite_counts.get("loading_theory", 0) + 1
                     if mgmt:
                         theory = "?"
                         for c in chunks:
@@ -758,6 +756,9 @@ def pide_proxy(server_sock, scala_port, scala_password,
                     mgmt.event(f"{GREEN}←Scala{RST} {kind.decode(errors='replace')} ({n}B)", 2)
         except (ConnectionError, OSError) as e:
             logger.debug(f"ML->Scala error: {e}")
+        finally:
+            for label, count in rewrite_counts.items():
+                logger.debug(f"Rewrote {count} {label} messages")
 
     # Byte counter for throughput reporting (updated by both forwarding threads)
     byte_counter = [0]  # mutable via list; protected by GIL for atomic reads
@@ -828,12 +829,12 @@ def pide_proxy(server_sock, scala_port, scala_password,
 # Path rewriting
 # ---------------------------------------------------------------------------
 
-def forward_rewrite(data, rewrites, label=""):
+def forward_rewrite(data, rewrites, label="", quiet=False):
     """Apply rewrites (old→new) to str or bytes, logging changes."""
     result = data
     for old, new in rewrites:
         result = result.replace(old, new)
-    if result != data and logger.isEnabledFor(logging.DEBUG):
+    if result != data and not quiet and logger.isEnabledFor(logging.DEBUG):
         if isinstance(data, bytes):
             logger.debug(f"  forward_rewrite [{label}]: (modified, {len(data)} -> {len(result)} bytes)")
         else:
@@ -841,12 +842,12 @@ def forward_rewrite(data, rewrites, label=""):
     return result
 
 
-def backward_rewrite(data, rewrites, label=""):
+def backward_rewrite(data, rewrites, label="", quiet=False):
     """Apply rewrites in reverse (new→old) to str or bytes, logging changes."""
     result = data
     for old, new in rewrites:
         result = result.replace(new, old)
-    if result != data and logger.isEnabledFor(logging.DEBUG):
+    if result != data and not quiet and logger.isEnabledFor(logging.DEBUG):
         if isinstance(data, bytes):
             logger.debug(f"  backward_rewrite [{label}]: (modified, {len(data)} -> {len(result)} bytes)")
         else:
@@ -858,6 +859,63 @@ def rewrite_argv(poly_argv, rewrites):
     """Rewrite paths in the poly command line using a list of (old, new) pairs."""
     return [forward_rewrite(arg, rewrites, label=f"arg[{i}]")
             for i, arg in enumerate(poly_argv)]
+
+# ---------------------------------------------------------------------------
+# ROOT file helpers
+# ---------------------------------------------------------------------------
+
+def parse_root_sessions(root_path):
+    """Extract imported session names from the 'sessions' block of a ROOT file."""
+    sessions = []
+    try:
+        text = open(root_path).read()
+    except OSError:
+        return sessions
+    # Find the 'sessions' keyword and collect names until the next keyword
+    in_sessions = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        # ROOT keywords that end a sessions block
+        if stripped and stripped.split()[0] in (
+            "theories", "directories", "document_theories",
+            "document_files", "export_files", "export_classpath",
+        ):
+            in_sessions = False
+        if in_sessions and stripped:
+            # Session name: bare or quoted
+            name = stripped.strip('"')
+            if name:
+                sessions.append(name)
+        if stripped.startswith("sessions"):
+            in_sessions = True
+            # Handle inline: "sessions Foo Bar"
+            rest = stripped[len("sessions"):].strip()
+            for tok in rest.split():
+                sessions.append(tok.strip('"'))
+    return sessions
+
+
+def find_session_dir(session_name, search_root):
+    """Find the source directory of a session by searching for ROOT files
+    under search_root that declare 'session <name>'."""
+    for dirpath, _dirnames, filenames in os.walk(search_root):
+        if "ROOT" in filenames:
+            root_path = os.path.join(dirpath, "ROOT")
+            try:
+                text = open(root_path).read()
+            except OSError:
+                continue
+            for line in text.splitlines():
+                # Match: session Name = ... or session "Name" = ...
+                line = line.strip()
+                if line.startswith("session"):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        declared = parts[1].strip('"')
+                        if declared == session_name:
+                            return dirpath
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Options file helpers
@@ -1025,7 +1083,7 @@ class ProxyMgmtServer:
         self.sock_path = sock_path
         self.host = host
         self.start_time = start_time or time.time()
-        self.verbosity = 0
+        self.verbosity = 1
         self.tunnels = {}  # label -> "local:N -> remote:M"
         self.rewrites = []  # list of (old, new) path rewrites
         self.bytes_transferred = [0]
@@ -1082,6 +1140,16 @@ class ProxyMgmtServer:
 
     def _handle_client(self, client):
         self.broadcast(f"{DIM}Console attached{RST}")
+        # Replay history to the newly connected client
+        with self.history_lock:
+            replay = [(lvl, msg) for lvl, msg in self.history
+                      if lvl <= self.verbosity]
+        if replay:
+            try:
+                for _, msg in replay:
+                    client.sendall((str(msg) + "\n").encode("utf-8"))
+            except (BrokenPipeError, OSError):
+                return
         buf = b""
         try:
             while self.running:
@@ -1240,6 +1308,9 @@ def attach_mode(sock_path):
         print(f"{GREEN}● Attached{RST} ({sock_path})", flush=True)
 
         disconnected = threading.Event()
+        # Container for the PromptSession so the reader thread can interrupt it
+        class session_holder:
+            app = None
 
         def reader():
             buf = b""
@@ -1257,11 +1328,19 @@ def attach_mode(sock_path):
             disconnected.set()
             if not stop.is_set():
                 print(f"\n{YELLOW}Proxy disconnected — waiting for reconnect...{RST}")
+                # Interrupt the blocking prompt so _session can return
+                if _HAVE_PT and session_holder.app:
+                    try:
+                        session_holder.app.app.exit()
+                    except Exception:
+                        pass
 
         reader_thread = threading.Thread(target=reader, daemon=True)
         reader_thread.start()
 
         def _send(line):
+            if line is None:
+                return False
             if line.strip().lower() == "/quit":
                 stop.set()
                 return False
@@ -1274,11 +1353,14 @@ def attach_mode(sock_path):
         try:
             if _HAVE_PT and sys.stdin.isatty():
                 session = _PromptSession(completer=_MgmtCompleter())
+                session_holder.app = session
                 with _patch_stdout(raw=True):
                     while not stop.is_set() and not disconnected.is_set():
                         try:
                             line = session.prompt(_HTML("<b><ansicyan>%&gt;</ansicyan></b> "))
                         except (EOFError, KeyboardInterrupt):
+                            if disconnected.is_set():
+                                break  # reconnect
                             stop.set()
                             return False
                         if not _send(line):
@@ -1672,21 +1754,59 @@ def main():
         remote_cmd = f"cd {shlex.quote(remote_cwd)} && " + remote_cmd
         logger.debug(f"Remote cwd: {remote_cwd}")
     elif is_heap_build:
-        # Build outside ISABELLE_HOME (e.g. user session): rsync sources to remote
+        # Build outside ISABELLE_HOME (e.g. user session): rsync sources to remote.
+        # Create a temp dir with a subdirectory per session that needs syncing.
         remote_src_dir = ssh_run_stdout(host, "mktemp", "-d", "/tmp/isabelle-proxy-src-XXXXXX")
-        logger.info(f"Syncing {local_cwd}/ to {host}:{remote_src_dir}/")
+        session_subdir = os.path.basename(local_cwd)
+        remote_session_dir = f"{remote_src_dir}/{session_subdir}"
+        logger.info(f"Syncing {local_cwd}/ to {host}:{remote_session_dir}/")
         subprocess.run(
             ["rsync", "--copy-links", "-az", "-e", "ssh " + " ".join(ssh_control_flags()),
-             "--chmod=a-w", local_cwd + "/", f"{host}:{remote_src_dir}/"],
+             "--chmod=a-w", local_cwd + "/", f"{host}:{remote_session_dir}/"],
             check=True)
-        remote_cmd = f"cd {shlex.quote(remote_src_dir)} && " + remote_cmd
-        logger.debug(f"Remote cwd (synced): {remote_src_dir}")
+        remote_cmd = f"cd {shlex.quote(remote_session_dir)} && " + remote_cmd
+        logger.debug(f"Remote cwd (synced): {remote_session_dir}")
+
+    # Sync imported session directories that are outside ISABELLE_HOME.
+    # The ML process needs .thy files for sessions listed in the ROOT file's
+    # 'sessions' block if they aren't part of the parent heap chain.
+    # We rsync each such directory to a subdirectory of remote_src_dir and
+    # add a path rewrite so build_session's session_directories point there.
+    imported_session_rewrites = []
+    if remote_src_dir:
+        root_path = os.path.join(local_cwd, "ROOT")
+        imported_sessions = parse_root_sessions(root_path)
+        if imported_sessions:
+            logger.debug(f"ROOT imports sessions: {imported_sessions}")
+        # Search from the parent of local_cwd (the -d directory for isabelle build)
+        search_root = os.path.dirname(local_cwd)
+        for sname in imported_sessions:
+            sdir = find_session_dir(sname, search_root)
+            if not sdir:
+                logger.debug(f"Imported session '{sname}': not found under {search_root}")
+                continue
+            if local_isabelle_home and sdir.startswith(local_isabelle_home):
+                logger.debug(f"Imported session '{sname}': under ISABELLE_HOME, skip")
+                continue
+            if os.path.normpath(sdir) == os.path.normpath(local_cwd):
+                logger.debug(f"Imported session '{sname}': is target session, skip")
+                continue
+            remote_sdir = f"{remote_src_dir}/{os.path.basename(sdir)}"
+            logger.info(f"Syncing imported session '{sname}': {sdir}/ to {host}:{remote_sdir}/")
+            subprocess.run(
+                ["rsync", "--copy-links", "-az", "-e",
+                 "ssh " + " ".join(ssh_control_flags()),
+                 "--chmod=a-w", sdir + "/", f"{host}:{remote_sdir}/"],
+                check=True)
+            imported_session_rewrites.append((sdir, remote_sdir))
 
     # Build path rewrite table for PIDE protocol interception (build_session).
     # Same as argv_rewrites, plus source dir rewrite for user sessions.
     path_rewrites = [(old.encode(), new.encode()) for old, new in argv_rewrites]
     if remote_src_dir:
-        path_rewrites.append((local_cwd.encode(), remote_src_dir.encode()))
+        path_rewrites.append((local_cwd.encode(), remote_session_dir.encode()))
+    for local_dir, remote_dir in imported_session_rewrites:
+        path_rewrites.append((local_dir.encode(), remote_dir.encode()))
     path_rewrites.sort(key=lambda x: -len(x[0]))
     logger.debug(f"path_rewrites ({len(path_rewrites)} entries):")
     for old, new in path_rewrites:
@@ -1729,13 +1849,91 @@ def main():
     ]
     if has_pide:
         logger.debug(f"SSH tunnel: remote:{proxy_port} -> local:{proxy_port} (PIDE proxy)")
-    logger.debug(f"Remote command (first 500 chars): {remote_cmd[:500]}")
-    logger.debug(f"Remote command (last 500 chars): ...{remote_cmd[-500:]}")
-    if args.log:
-        cmd_dump = os.path.splitext(args.log)[0] + "_cmd.txt"
-        with open(cmd_dump, "w") as f:
-            f.write(remote_cmd)
-        logger.debug(f"Full remote command dumped to {cmd_dump}")
+
+    # Pretty-print the remote command structure
+    def _format_remote_cmd(cmd):
+        """Format remote command for readable logging."""
+        lines = []
+        parts = cmd.split(" && ", 1)
+        if len(parts) == 2:
+            lines.append(f"  cd {parts[0].replace('cd ', '')}")
+            rest = parts[1]
+        else:
+            rest = parts[0]
+        import shlex as _shlex
+        tokens = _shlex.split(rest)
+        env_vars = []
+        cmd_tokens = []
+        for tok in tokens:
+            if not cmd_tokens and '=' in tok and not tok.startswith('-'):
+                env_vars.append(tok)
+            else:
+                cmd_tokens.append(tok)
+        if env_vars:
+            lines.append(f"  env ({len(env_vars)} variables):")
+            for ev in env_vars:
+                k, _, v = ev.partition('=')
+                if ':' in v and len(v) > 80:
+                    lines.append(f"      {k}=")
+                    for part in v.split(':'):
+                        lines.append(f"          {part}")
+                else:
+                    lines.append(f"      {ev}")
+
+        def _indent_ml(val, base):
+            """Pretty-print ML value with indented lists and semicolons."""
+            import re
+            # Split on [ ... ] and ( ... ; ... )
+            # Handle list: [..., ..., ...]
+            m = re.match(r'^(.*?\[)(.+)(\].*)$', val, re.DOTALL)
+            if m and ',' in m.group(2) and len(val) > 100:
+                prefix, items_str, suffix = m.group(1), m.group(2), m.group(3)
+                items = [s.strip() for s in items_str.split(',')]
+                result = [f"{base}{prefix}"]
+                for item in items:
+                    result.append(f"{base}    {item},")
+                # Remove trailing comma from last item
+                result[-1] = result[-1].rstrip(',')
+                result.append(f"{base}  {suffix}")
+                return "\n".join(result)
+            # Handle semicolons in parens: (a; b; c)
+            m = re.match(r'^(.*?\()(.+)(\);?.*)$', val, re.DOTALL)
+            if m and ';' in m.group(2) and len(val) > 100:
+                prefix, body, suffix = m.group(1), m.group(2), m.group(3)
+                stmts = [s.strip() for s in body.split(';')]
+                result = [f"{base}{prefix}"]
+                for stmt in stmts:
+                    result.append(f"{base}    {stmt};")
+                result[-1] = result[-1].rstrip(';')
+                result.append(f"{base}  {suffix}")
+                return "\n".join(result)
+            return f"{base}{val}"
+
+        if cmd_tokens:
+            lines.append(f"  exe {cmd_tokens[0]}")
+            valued_flags = {"--eval", "--use", "--minheap", "--maxheap",
+                            "--gcthreads", "--gcpercent", "--codepage"}
+            i = 1
+            while i < len(cmd_tokens):
+                tok = cmd_tokens[i]
+                if tok in valued_flags and i + 1 < len(cmd_tokens):
+                    val = cmd_tokens[i + 1]
+                    if tok == "--eval" and len(val) > 100:
+                        lines.append(_indent_ml(val, "        "))
+                        lines[-1] = f"      {tok} " + lines[-1].lstrip()
+                    else:
+                        lines.append(f"      {tok} {val}")
+                    i += 2
+                else:
+                    lines.append(f"      {tok}")
+                    i += 1
+        return "\n".join(lines)
+
+    try:
+        formatted = _format_remote_cmd(remote_cmd)
+        logger.debug(f"Remote command:\n{formatted}")
+    except Exception:
+        logger.debug(f"Remote command (first 500 chars): {remote_cmd[:500]}")
 
     # Wrap the remote command in setsid so it gets its own process group
     # (PID == PGID), enabling cleanup_all to kill the entire tree with
@@ -1751,13 +1949,7 @@ def main():
             f"cat > {shlex.quote(remote_script)} && chmod +x {shlex.quote(remote_script)}",
             capture=True, input=script_content)
     remote_cmd_wrapped = f"setsid --wait {shlex.quote(remote_script)}"
-    logger.debug(f"Poly wrapped cmd: {remote_cmd_wrapped}")
     ssh_cmd[-1] = remote_cmd_wrapped
-    if args.log:
-        wrapped_dump = os.path.splitext(args.log)[0] + "_wrapped_cmd.txt"
-        with open(wrapped_dump, "w") as f:
-            f.write(script_content)
-        logger.debug(f"Full remote script dumped to {wrapped_dump}")
 
     proc = subprocess.Popen(ssh_cmd, stdin=sys.stdin, stdout=subprocess.PIPE, stderr=sys.stderr)
     register_process(proc)
