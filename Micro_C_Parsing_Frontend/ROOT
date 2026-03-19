@@ -17,4 +17,5 @@ session Micro_C_Parsing_Frontend = HOL +
     C_Translation_Smoke_ILP32
     C_Translation_Smoke_Compiler
     C_Translation_Smoke_Options
+    C_Translation_Smoke_Advanced
     C_File_Load_Smoke
