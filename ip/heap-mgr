@@ -527,8 +527,101 @@ def cmd_show(args, extra):
 # remove
 # ---------------------------------------------------------------------------
 
+def parse_selection(expr, max_val):
+    """Parse a selection expression into a set of 1-based indices.
+
+    Supports: single (3), ranges (1-5), comma-separated (1,3,5),
+    combined (1-3,7-10), and complement (~3, ~1-3).
+    0 means 'all'.
+    """
+    expr = expr.strip()
+    if expr == "0":
+        return {0}
+
+    complement = expr.startswith("~")
+    if complement:
+        expr = expr[1:]
+
+    indices = set()
+    for part in expr.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            try:
+                indices.update(range(int(a), int(b) + 1))
+            except ValueError:
+                return None
+        else:
+            try:
+                indices.add(int(part))
+            except ValueError:
+                return None
+
+    if any(i < 1 or i > max_val for i in indices):
+        return None
+
+    if complement:
+        indices = set(range(1, max_val + 1)) - indices
+
+    return indices if indices else None
+
+
+def _confirm_and_remove(target):
+    """List contents of target, ask for confirmation, and remove."""
+    print(f"\n{RED}{BOLD}Will remove:{RESET} {target}\n")
+    total_files = 0
+    total_size = 0
+    for dirpath, _, filenames in os.walk(target):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                sz = os.path.getsize(fp)
+            except OSError:
+                sz = 0
+            total_files += 1
+            total_size += sz
+            rel = os.path.relpath(fp, target)
+            print(f"  {DIM}{rel}{RESET}  ({fmt_size(sz)})")
+
+    print(f"\n  {BOLD}{total_files}{RESET} files, {BOLD}{fmt_size(total_size)}{RESET} total\n")
+
+    answer = input(f"  {RED}Delete everything above?{RESET} [y/N] ").strip().lower()
+    if answer != "y":
+        print(f"\n  {DIM}No changes made.{RESET}\n")
+        return False
+    shutil.rmtree(target)
+    print(f"\n  {GREEN}Removed.{RESET}\n")
+    return True
+
+
+def _remove_targets(targets):
+    """List and confirm removal of multiple directories."""
+    print(f"\n{RED}{BOLD}Will remove {len(targets)} platform(s):{RESET}\n")
+    total_files = 0
+    total_size = 0
+    for t in targets:
+        t_size = dir_size(t)
+        total_size += t_size
+        print(f"  {BOLD}{os.path.basename(t)}{RESET}  ({fmt_size(t_size)})")
+        for dirpath, _, filenames in os.walk(t):
+            for f in filenames:
+                total_files += 1
+
+    print(f"\n  {BOLD}{total_files}{RESET} files, {BOLD}{fmt_size(total_size)}{RESET} total\n")
+
+    answer = input(f"  {RED}Delete all above?{RESET} [y/N] ").strip().lower()
+    if answer != "y":
+        print(f"\n  {DIM}No changes made.{RESET}\n")
+        return
+    for t in targets:
+        shutil.rmtree(t)
+    print(f"\n  {GREEN}Removed {len(targets)} platform(s).{RESET}\n")
+
+
 def cmd_remove(args, extra):
-    """Remove a heap directory after confirmation."""
+    """Remove a heap directory or a specific platform within it."""
     if extra:
         heap_dir = os.path.abspath(extra[0])
         if not os.path.isdir(heap_dir):
@@ -549,32 +642,53 @@ def cmd_remove(args, extra):
         except (ValueError, IndexError):
             sys.exit(1)
 
-    print(f"\n{RED}{BOLD}Remove heap directory:{RESET} {heap_dir}\n")
+    # Determine target: entire dir, or specific platform
+    platform_arg = getattr(args, 'platform', None)
 
-    # List contents
-    total_files = 0
-    total_size = 0
-    for dirpath, dirnames, filenames in os.walk(heap_dir):
-        for f in filenames:
-            fp = os.path.join(dirpath, f)
-            try:
-                sz = os.path.getsize(fp)
-            except OSError:
-                sz = 0
-            total_files += 1
-            total_size += sz
-            rel = os.path.relpath(fp, heap_dir)
-            print(f"  {DIM}{rel}{RESET}  ({fmt_size(sz)})")
+    if platform_arg:
+        target = os.path.join(heap_dir, platform_arg)
+        if not os.path.isdir(target):
+            sys.exit(f"{RED}Error: platform '{platform_arg}' not found in {heap_dir}{RESET}")
+    else:
+        platforms = sorted(s for s in os.listdir(heap_dir)
+                           if os.path.isdir(os.path.join(heap_dir, s)) and not s.startswith("."))
 
-    print(f"\n  {BOLD}{total_files}{RESET} files, {BOLD}{fmt_size(total_size)}{RESET} total\n")
+        if len(platforms) > 1:
+            print(f"\n{BOLD}Platforms in {os.path.basename(heap_dir)}:{RESET}\n")
+            print(f"  [0] {BOLD}ALL{RESET}  (entire directory)")
+            for i, p in enumerate(platforms):
+                p_path = os.path.join(heap_dir, p)
+                size = fmt_size(dir_size(p_path))
+                print(f"  [{i + 1}] {BOLD}{p}{RESET}  ({size})")
+            choice = input(f"\n  Remove which? [0=all, 1-{len(platforms)}, ~N=except, ranges] ").strip()
+            if not choice:
+                sys.exit(1)
+            sel = parse_selection(choice, len(platforms))
+            if sel is None:
+                sys.exit(f"{RED}Invalid selection{RESET}")
+            if 0 in sel:
+                target = heap_dir
+            elif len(sel) == 1:
+                target = os.path.join(heap_dir, platforms[list(sel)[0] - 1])
+            else:
+                # Multiple platforms selected — remove each
+                targets = [os.path.join(heap_dir, platforms[i - 1]) for i in sorted(sel)]
+                _remove_targets(targets)
+                return
+        elif len(platforms) == 1:
+            print(f"\n  Single platform: {BOLD}{platforms[0]}{RESET}")
+            print(f"  [0] Entire directory  [1] Only {platforms[0]}")
+            choice = input(f"\n  [0/1] ").strip()
+            if choice == "1":
+                target = os.path.join(heap_dir, platforms[0])
+            elif choice == "0":
+                target = heap_dir
+            else:
+                sys.exit(1)
+        else:
+            target = heap_dir
 
-    answer = input(f"  {RED}Delete everything above?{RESET} [y/N] ").strip().lower()
-    if answer != "y":
-        print(f"\n  {DIM}No changes made.{RESET}\n")
-        return
-
-    shutil.rmtree(heap_dir)
-    print(f"\n  {GREEN}Removed.{RESET}\n")
+    _confirm_and_remove(target)
 
 
 # ---------------------------------------------------------------------------
@@ -627,9 +741,11 @@ are silently ignored.""",
             formatter_class=argparse.RawDescriptionHelpFormatter)),
         "remove": (cmd_remove, argparse.ArgumentParser(
             prog="heap-mgr remove",
-            description="Remove a heap directory after listing contents and confirming.",
+            description="Remove a heap directory or a specific platform within it.",
             epilog="""Examples:
-  %(prog)s /path/to/heaps-old""",
+  %(prog)s /path/to/heaps-old
+  %(prog)s /path/to/heaps-old --platform polyml-5.9.2_arm64_32-darwin
+  %(prog)s                      (interactive selection)""",
             formatter_class=argparse.RawDescriptionHelpFormatter)),
     }
 
@@ -639,6 +755,8 @@ are silently ignored.""",
     func, parser = commands[command]
     parser.add_argument("--heaps", default=None,
                         help="Heap base path prefix (default: $ISABELLE_HOME_USER/heaps)")
+    parser.add_argument("--platform", default=None,
+                        help="Remove only this platform subdirectory (for 'remove' command)")
     args, extra = parser.parse_known_args(sys.argv[2:])
     func(args, extra)
 

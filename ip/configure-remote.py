@@ -196,7 +196,7 @@ def step_fail(msg):
         print(f"{_CLEAR_LINE}{_step_indent}{_SYM_FAIL} {_step_msg}"
               f" {_DIM}({elapsed:.1f}s){_RESET}", file=sys.stderr)
         _step_t0 = None
-    die(msg)
+    die(f"\n{_RED}{msg}{_RESET}")
 
 
 # Rolling output window for subprocess commands
@@ -288,7 +288,7 @@ def rsync(src, dst, **kwargs):
 
     if not _HAVE_RICH or not sys.stderr.isatty():
         print("", file=sys.stderr)
-        rc = subprocess.call(cmd)
+        rc = subprocess.call(cmd, stdout=sys.stderr, stderr=sys.stderr)
         if check and rc != 0:
             die(f"rsync failed (exit {rc})")
         return
@@ -466,6 +466,27 @@ def cmd_setup(args):
     if ssh_check(host, "true", timeout=10) is None:
         step_fail(f"Cannot connect to {host}")
 
+    # Handle --remove-existing early
+    if args.remove_existing:
+        remote_isabelle = f"{remote_home}/bin/isabelle"
+        if ssh_check(host, "test", "-x", remote_isabelle) is None:
+            step(f"Nothing to remove: {remote_home} not found")
+            return
+        remote_home_user = ssh_check(host, remote_isabelle, "getenv", "-b", "ISABELLE_HOME_USER") or ""
+        paths = [("Isabelle installation", remote_home)]
+        if remote_home_user:
+            paths.append(("User settings/heaps", remote_home_user))
+        if not confirm_removal(f"remote Isabelle on {host}", paths):
+            info("No changes made.")
+            return
+        step(f"Removing remote Isabelle installation")
+        ssh_check(host, "rm", "-rf", remote_home)
+        if remote_home_user:
+            ssh_check(host, "rm", "-rf", remote_home_user)
+        step_done()
+        info("Remote Isabelle removed. Re-run setup to reinstall.")
+        return
+
     arch, os_id = detect_remote(host)
 
     # Early check: if we know the platform name and it exists locally,
@@ -477,16 +498,38 @@ def cmd_setup(args):
                       f"{local_platform_dir(local_home, args.ml_platform)}\n"
                       f"Use --force-write-local to overwrite, or --copy-from-local to push to remote.")
 
-    # Install Isabelle on remote (idempotent: setup scripts skip existing components)
-    setup_script = pick_setup_script(arch, os_id)
-    step(f"Setting up Isabelle on remote ({os.path.basename(setup_script)})")
-    setup_args = [setup_script, host, remote_home,
-                  "64" if args.use_64 else "32"]
-    if args.copy_from_local:
-        setup_args.append("skip_build")
-    rc = run_with_rolling_output(setup_args)
-    if rc != 0:
-        step_fail("Remote Isabelle installation failed")
+    # Check if Isabelle is already installed and has working heaps
+    remote_isabelle = f"{remote_home}/bin/isabelle"
+    already_installed = ssh_check(host, "test", "-x", remote_isabelle) is not None
+
+    if already_installed:
+        # Check if Pure+HOL heaps exist
+        hol_ok = ssh_check(host, remote_isabelle, "build", "-n",
+                           *(["-o", "ML_system_64=true"] if args.use_64 else []),
+                           "HOL", timeout=30) is not None
+        if hol_ok:
+            step(f"Remote Isabelle already installed with Pure+HOL heaps — skipping setup")
+        else:
+            step(f"Remote Isabelle installed but heaps missing — rebuilding Pure+HOL")
+            setup_script = pick_setup_script(arch, os_id)
+            setup_args = [setup_script, host, remote_home,
+                          "64" if args.use_64 else "32"]
+            if args.copy_from_local:
+                setup_args.append("skip_build")
+            rc = run_with_rolling_output(setup_args)
+            if rc != 0:
+                step_fail("Remote heap build failed")
+    else:
+        # Full install
+        setup_script = pick_setup_script(arch, os_id)
+        step(f"Setting up Isabelle on remote ({os.path.basename(setup_script)})")
+        setup_args = [setup_script, host, remote_home,
+                      "64" if args.use_64 else "32"]
+        if args.copy_from_local:
+            setup_args.append("skip_build")
+        rc = run_with_rolling_output(setup_args)
+        if rc != 0:
+            step_fail("Remote Isabelle installation failed")
 
     # Install AFP components
     install_afp_components(host, remote_home, args.components)
@@ -665,7 +708,9 @@ def cmd_run(args):
                     step_detail(platform)
                     break
         if not platform:
-            step_fail("No local poly binary matches remote. Run 'setup' first.")
+            step_fail(f"No local poly binary matches remote.\n"
+                      f"If you removed the local platform, re-fetch it from the remote:\n"
+                      f"  configure-remote.py setup {host} --ml-platform {platform} --force-write-local")
 
     # Verify poly and heap hashes match between local and remote
     remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}/poly"
@@ -688,7 +733,9 @@ def cmd_run(args):
         local_path = os.path.join(lhdir, heap)
         lh = sha1_file(local_path)
         if not lh:
-            step_fail(f"Local heap missing: {local_path}\nRun 'setup' first.")
+            step_fail(f"Local heap missing: {local_path}\n"
+                      f"If you removed the local heap, re-fetch it from the remote:\n"
+                      f"  configure-remote.py setup {host} --ml-platform {platform} --force-write-local")
         lh = sha1_file(local_path)
         rh = remote_sha1(host, f"{remote_hdir}/{heap}")
         if rh and lh != rh:
@@ -703,9 +750,11 @@ def cmd_run(args):
     sync = args.sync_heaps
     if extra_heaps and sync is None:
         step_done()
-        die(f"Additional local heaps: {_BOLD}{', '.join(extra_heaps)}{_RESET}\n"
-            f"Use {_GREEN}--sync-heaps{_RESET} to sync all heaps to remote, "
-            f"or {_YELLOW}--no-sync-heaps{_RESET} to skip.")
+        die(f"\n{_RED}{_BOLD}Action required:{_RESET} Local heaps not on remote: {_BOLD}{', '.join(extra_heaps)}{_RESET}\n"
+            f"You must either sync them or explicitly skip:\n"
+            f"  {_GREEN}--sync-heaps{_RESET}     Sync all local heaps to remote\n"
+            f"  {_YELLOW}--no-sync-heaps{_RESET}  Skip syncing (heaps will be rebuilt on demand)\n\n"
+            f"Setup is not complete until one of the above is chosen.")
 
     if sync:
         step("Syncing heaps to remote")
@@ -806,6 +855,33 @@ def cmd_list(args):
 
 
 # ---------------------------------------------------------------------------
+def confirm_removal(description, paths, skip_confirm=False):
+    """Show what will be removed and ask for confirmation.
+    
+    Args:
+        description: What is being removed (e.g. "platform 'aarch64-ubuntu'")
+        paths: List of (label, path) tuples
+        skip_confirm: If True, skip the prompt
+    Returns True if confirmed, False otherwise.
+    """
+    _finish_step()
+    print(f"\n  ⚠️  {_RED}{_BOLD}WARNING: Will remove {description}:{_RESET}")
+    for label, path in paths:
+        print(f"    {label}: {path}")
+        if os.path.isdir(path):
+            for f in sorted(os.listdir(path)):
+                fp = os.path.join(path, f)
+                if os.path.isfile(fp):
+                    print(f"      {f} ({os.path.getsize(fp)} bytes)")
+                elif os.path.isdir(fp):
+                    print(f"      {f}/")
+    if skip_confirm:
+        return True
+    answer = input(f"\n  {_RED}Proceed?{_RESET} [y/N] ").strip().lower()
+    return answer == "y"
+
+
+# ---------------------------------------------------------------------------
 # remove subcommand
 # ---------------------------------------------------------------------------
 
@@ -824,21 +900,8 @@ def cmd_remove(args):
     if not to_remove:
         die(f"Nothing to remove for platform {platform}")
 
-    print(f"Will remove platform '{platform}':", file=sys.stderr)
-    for label, path in to_remove:
-        print(f"  {label}: {path}", file=sys.stderr)
-        if label == "Heap dir":
-            for f in sorted(os.listdir(path)):
-                fp = os.path.join(path, f)
-                if os.path.isfile(fp):
-                    print(f"    {f} ({os.path.getsize(fp)} bytes)", file=sys.stderr)
-                elif os.path.isdir(fp):
-                    print(f"    {f}/", file=sys.stderr)
-
-    if not args.yes:
-        answer = input("Proceed? [y/N] ").strip().lower()
-        if answer != "y":
-            die("Aborted.")
+    if not confirm_removal(f"platform '{platform}'", to_remove, skip_confirm=args.yes):
+        die("Aborted.")
 
     for _, path in to_remove:
         shutil.rmtree(path)
@@ -887,6 +950,8 @@ def main():
                            "on remote (requires matching local platform)")
     p_setup.add_argument("--sync-all-heaps", action="store_true",
                          help="With --copy-from-local: sync entire heaps dir, not just Pure/HOL")
+    p_setup.add_argument("--remove-existing", action="store_true",
+                         help="Remove remote ~/.isabelle and Isabelle installation, then exit")
     p_setup.add_argument("--components", nargs="*", default=["Word_Lib"],
                          help="AFP components to install on remote (default: Word_Lib)")
     p_setup.set_defaults(func=cmd_setup)
