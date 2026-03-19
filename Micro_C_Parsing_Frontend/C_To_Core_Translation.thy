@@ -320,7 +320,9 @@ struct
        SOME bits => bits div 8
      | NONE => error "micro_c_translate: sizeof: unsupported type")
 
-  fun alignof_c_type cty = Int.min (sizeof_c_type cty, 8)
+  fun alignof_c_type CInt128 = 16
+    | alignof_c_type CUInt128 = 16
+    | alignof_c_type cty = Int.min (sizeof_c_type cty, 8)
 
   fun builtin_typedefs () =
     let
@@ -7952,6 +7954,24 @@ struct
 end
 \<close>
 
+text \<open>
+  Global translation lock: the ML translation pipeline uses unsynchronized
+  mutable refs for threading state through structures.  When Isabelle processes
+  multiple theories that each contain @{text "micro_c_translate"} or
+  @{text "micro_c_file"} commands in parallel, concurrent executions can
+  clobber each other's global state, producing spurious failures such as
+  "missing struct field accessor constant".  We serialize all translation
+  invocations through a single mutex to prevent this.
+\<close>
+
+ML \<open>
+val micro_c_translation_lock : unit Synchronized.var =
+  Synchronized.var "micro_c_translation_lock" ()
+
+fun with_micro_c_lock (f : unit -> 'a) : 'a =
+  Synchronized.change_result micro_c_translation_lock (fn () => (f (), ()))
+\<close>
+
 subsection \<open>The \<open>micro_c_translate\<close> Command\<close>
 
 text \<open>
@@ -8076,6 +8096,7 @@ val _ =
     "parse C source and generate core monad definitions"
     (Scan.repeat parse_translate_opt -- Parse.embedded_input -- Scan.repeat parse_translate_opt >>
       (fn ((opts_pre, source), opts_post) => fn lthy =>
+      with_micro_c_lock (fn () =>
       let
         val opts = collect_translate_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" (#prefix opts)
@@ -8135,7 +8156,7 @@ val _ =
         val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
-      end))
+      end)))
 \<close>
 
 text \<open>
@@ -8245,6 +8266,7 @@ val _ =
     "load C file and generate core monad definitions"
     (Scan.repeat parse_load_opt -- Resources.parse_file -- Scan.repeat parse_load_opt --| semi >>
       (fn ((opts_pre, get_file), opts_post) => fn lthy =>
+      with_micro_c_lock (fn () =>
       let
         val (opts, manifest_get_file) = collect_load_opts (opts_pre @ opts_post)
         val prefix = the_default "c_" (#prefix opts)
@@ -8330,7 +8352,7 @@ val _ =
         val _ = C_Def_Gen.set_pointer_model pointer_model
       in
         C_Def_Gen.process_translation_unit tu lthy
-      end))
+      end)))
 end
 \<close>
 
