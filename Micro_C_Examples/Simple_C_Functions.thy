@@ -741,6 +741,32 @@ lemma c_skip_add_spec [crush_specs]:
 by (crush_boot f: c_skip_add_def contract: c_skip_add_contract_def)
     (crush_base simp add: c_unsigned_eq_def c_unsigned_add_def)
 
+subsection \<open>Unsigned Division (with Division-by-Zero Precondition)\<close>
+
+text \<open>
+  Exercises unsigned division end-to-end. The precondition ensures
+  the divisor is non-zero (division by zero aborts with @{const DivisionByZero}).
+  Unsigned division has no overflow — the result is always representable.
+\<close>
+micro_c_translate \<open>
+  unsigned int u_div(unsigned int a, unsigned int b) {
+    return a / b;
+  }
+\<close>
+
+definition c_u_div_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, c_abort) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_div_contract a b \<equiv>
+    let pre  = \<langle>b \<noteq> 0\<rangle>;
+        post = \<lambda>r. \<langle>r = a div b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_u_div_contract
+
+lemma c_u_div_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_u_div a b \<Turnstile>\<^sub>F c_u_div_contract a b\<close>
+by (crush_boot f: c_u_div_def contract: c_u_div_contract_def)
+   (crush_base simp add: c_unsigned_div_def c_division_by_zero_def c_abort_def)
+
 end
 
 section \<open>Fixed-width integer type verification (\<^verbatim>\<open>uint16_t\<close>)\<close>
