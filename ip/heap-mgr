@@ -161,16 +161,22 @@ def parse_unfinished(output):
 
 
 def parse_isabelle_cmd(lines):
-    """Extract isabelle command from a list of lines."""
+    """Extract isabelle command from a list of lines.
+    
+    Only lines starting with a path to 'isabelle build' or 'isabelle jedit'
+    are considered. Other lines are silently ignored.
+    """
     for line in lines:
         line = line.strip()
         if not line:
             continue
-        if "isabelle build" in line or "isabelle jedit" in line:
-            try:
-                return shlex.split(line), lines
-            except ValueError:
-                return line.split(), lines
+        # Line must start with something ending in 'isabelle' followed by build/jedit
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            tokens = line.split()
+        if len(tokens) >= 2 and tokens[0].endswith("isabelle") and tokens[1] in ("build", "jedit"):
+            return tokens, lines
     return None, lines
 
 
@@ -190,9 +196,12 @@ def cmd_find(args, extra):
     user_cmd, lines = parse_isabelle_cmd(lines)
 
     if not user_cmd:
-        print(f"{RED}Error: no 'isabelle build' or 'isabelle jedit' found in input:{RESET}")
-        for line in (lines or []):
-            print(f"  {DIM}{line}{RESET}")
+        print(f"{RED}Error: no line starting with 'isabelle build' or 'isabelle jedit' found.{RESET}")
+        print(f"{DIM}If using $(make -Bn ...), make sure to quote it: -- \"$(make -Bn ...)\" {RESET}")
+        if lines:
+            print(f"\n{DIM}Received input:{RESET}")
+            for line in lines:
+                print(f"  {DIM}{line}{RESET}")
         sys.exit(1)
 
     heap_base = get_heap_base(args, isabelle_bin=user_cmd[0])
