@@ -3,7 +3,7 @@ theory C_Definition_Generation
     C_Translation_Engine
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
-       and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:" and "abort:" and "compiler:"
+       and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:" and "compiler:"
 begin
 
 subsection \<open>Definition Generation\<close>
@@ -762,7 +762,6 @@ ML \<open>
     | TranslateAddrTy of string
     | TranslateGvTy of string
     | TranslateAbi of string
-    | TranslateAbortTy of string
     | TranslatePtrAdd of string
     | TranslatePtrShiftSigned of string
     | TranslatePtrDiff of string
@@ -777,7 +776,6 @@ ML \<open>
   val parse_addr_key = Parse.$$$ "addr:" >> K ()
   val parse_gv_key = Parse.$$$ "gv:" >> K ()
   val parse_abi_key = Parse.$$$ "abi:" >> K ()
-  val parse_abort_key = Parse.$$$ "abort:" >> K ()
   val parse_ptr_add_key = Parse.$$$ "ptr_add:" >> K ()
   val parse_ptr_shift_signed_key = Parse.$$$ "ptr_shift_signed:" >> K ()
   val parse_ptr_diff_key = Parse.$$$ "ptr_diff:" >> K ()
@@ -787,7 +785,6 @@ ML \<open>
       || (parse_addr_key |-- Parse.typ >> TranslateAddrTy)
       || (parse_gv_key |-- Parse.typ >> TranslateGvTy)
       || (parse_abi_key |-- parse_abi_name >> TranslateAbi)
-      || (parse_abort_key |-- Parse.typ >> TranslateAbortTy)
       || (parse_ptr_add_key |-- Parse.name >> TranslatePtrAdd)
       || (parse_ptr_shift_signed_key |-- Parse.name >> TranslatePtrShiftSigned)
       || (parse_ptr_diff_key |-- Parse.name >> TranslatePtrDiff)
@@ -795,13 +792,13 @@ ML \<open>
 
   type translate_opts = {
     prefix: string option, addr: string option, gv: string option,
-    abi: string option, abort: string option,
+    abi: string option,
     ptr_add: string option, ptr_shift_signed: string option, ptr_diff: string option,
     compiler: string option
   }
 
   val empty_opts : translate_opts = {
-    prefix = NONE, addr = NONE, gv = NONE, abi = NONE, abort = NONE,
+    prefix = NONE, addr = NONE, gv = NONE, abi = NONE,
     ptr_add = NONE, ptr_shift_signed = NONE, ptr_diff = NONE, compiler = NONE
   }
 
@@ -810,40 +807,36 @@ ML \<open>
 
   fun apply_translate_opt (TranslatePrefix v) (r : translate_opts) =
         {prefix = set_once "prefix" (#prefix r) v, addr = #addr r, gv = #gv r, abi = #abi r,
-         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
          ptr_diff = #ptr_diff r, compiler = #compiler r}
     | apply_translate_opt (TranslateAddrTy v) (r : translate_opts) =
         {prefix = #prefix r, addr = set_once "addr" (#addr r) v, gv = #gv r, abi = #abi r,
-         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
          ptr_diff = #ptr_diff r, compiler = #compiler r}
     | apply_translate_opt (TranslateGvTy v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = set_once "gv" (#gv r) v, abi = #abi r,
-         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
          ptr_diff = #ptr_diff r, compiler = #compiler r}
     | apply_translate_opt (TranslateAbi v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = set_once "abi" (#abi r) v,
-         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
          ptr_diff = #ptr_diff r, compiler = #compiler r}
-    | apply_translate_opt (TranslateAbortTy v) (r : translate_opts) =
-        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
-         abort = set_once "abort" (#abort r) v, ptr_add = #ptr_add r,
-         ptr_shift_signed = #ptr_shift_signed r, ptr_diff = #ptr_diff r, compiler = #compiler r}
     | apply_translate_opt (TranslatePtrAdd v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
-         abort = #abort r, ptr_add = set_once "ptr_add" (#ptr_add r) v,
+         ptr_add = set_once "ptr_add" (#ptr_add r) v,
          ptr_shift_signed = #ptr_shift_signed r, ptr_diff = #ptr_diff r, compiler = #compiler r}
     | apply_translate_opt (TranslatePtrShiftSigned v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
-         abort = #abort r, ptr_add = #ptr_add r,
+         ptr_add = #ptr_add r,
          ptr_shift_signed = set_once "ptr_shift_signed" (#ptr_shift_signed r) v,
          ptr_diff = #ptr_diff r, compiler = #compiler r}
     | apply_translate_opt (TranslatePtrDiff v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
-         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
          ptr_diff = set_once "ptr_diff" (#ptr_diff r) v, compiler = #compiler r}
     | apply_translate_opt (TranslateCompiler v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
-         abort = #abort r, ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
          ptr_diff = #ptr_diff r, compiler = set_once "compiler" (#compiler r) v}
 
   fun collect_translate_opts opts =
@@ -861,7 +854,6 @@ ML \<open>
          | NONE => C_Compiler.default_profile)
       val addr_ty = Syntax.read_typ lthy (the_default "'addr" (#addr opts))
       val gv_ty = Syntax.read_typ lthy (the_default "'gv" (#gv opts))
-      val abort_ty_opt = Option.map (Syntax.read_typ lthy) (#abort opts)
       fun require_visible_const_name name =
         (case try (Syntax.check_term lthy) (Free (name, dummyT)) of
            SOME _ => name
@@ -873,16 +865,15 @@ ML \<open>
         }
       val expr_constraint =
         let
-          val abort_ty = the_default @{typ c_abort} abort_ty_opt
           val ref_args =
             (case try (Syntax.check_term lthy) (Free ("reference_types", dummyT)) of
                SOME (Free (_, ref_ty)) =>
                  C_Translate.strip_isa_fun_type ref_ty
              | _ => [])
-          val (state_ty, prompt_in_ty, prompt_out_ty) =
+          val (state_ty, abort_ty, prompt_in_ty, prompt_out_ty) =
             (case ref_args of
-               [s, _, _, _, i, o] => (s, i, o)
-             | _ => (dummyT, dummyT, dummyT))
+               [s, _, _, a, i, o] => (s, a, i, o)
+             | _ => (dummyT, @{typ c_abort}, dummyT, dummyT))
         in
           SOME (Type (\<^type_name>\<open>expression\<close>,
             [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
