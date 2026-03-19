@@ -32,19 +32,22 @@ text \<open>
 
 ML \<open>
 structure C_ABI : sig
-  datatype profile = LP64_LE | ILP32_LE | LP64_BE
+  datatype profile = LP64_LE | ILP32_LE | LP64_BE | LLP64_LE | ILP32_BE
   val profile_name : profile -> string
   val parse_profile : string -> profile
   val long_bits : profile -> int
   val pointer_bits : profile -> int
   val char_is_signed : profile -> bool
+  val big_endian : profile -> bool
 end =
 struct
-  datatype profile = LP64_LE | ILP32_LE | LP64_BE
+  datatype profile = LP64_LE | ILP32_LE | LP64_BE | LLP64_LE | ILP32_BE
 
   fun profile_name LP64_LE = "lp64-le"
     | profile_name ILP32_LE = "ilp32-le"
     | profile_name LP64_BE = "lp64-be"
+    | profile_name LLP64_LE = "llp64-le"
+    | profile_name ILP32_BE = "ilp32-be"
 
   fun parse_profile s =
     let
@@ -55,17 +58,27 @@ struct
          "lp64-le" => LP64_LE
        | "ilp32-le" => ILP32_LE
        | "lp64-be" => LP64_BE
+       | "llp64-le" => LLP64_LE
+       | "ilp32-be" => ILP32_BE
        | _ => error ("micro_c_translate: unsupported ABI profile: " ^ s ^
-                     " (supported: lp64-le, ilp32-le, lp64-be)"))
+                     " (supported: lp64-le, ilp32-le, lp64-be, llp64-le, ilp32-be)"))
     end
 
   fun long_bits LP64_LE = 64
     | long_bits ILP32_LE = 32
     | long_bits LP64_BE = 64
+    | long_bits LLP64_LE = 32
+    | long_bits ILP32_BE = 32
 
   fun pointer_bits LP64_LE = 64
     | pointer_bits ILP32_LE = 32
     | pointer_bits LP64_BE = 64
+    | pointer_bits LLP64_LE = 64
+    | pointer_bits ILP32_BE = 32
+
+  fun big_endian LP64_BE = true
+    | big_endian ILP32_BE = true
+    | big_endian _ = false
 
   (* NOTE: This function is NOT used by the translation pipeline.
      Plain-char signedness is controlled by C_Compiler.get_compiler_profile,

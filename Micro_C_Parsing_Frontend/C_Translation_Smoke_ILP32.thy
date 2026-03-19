@@ -82,4 +82,52 @@ lemma ilp32_abi_profile_values:
     and "ilp32_abi_big_endian = False"
   by (simp_all add: ilp32_abi_pointer_bits_def ilp32_abi_long_bits_def ilp32_abi_big_endian_def)
 
+section \<open>LLP64 (Windows) ABI Smoke Tests\<close>
+
+text \<open>
+  Under LLP64 (Windows x64), @{text "long"} is 32-bit but pointers are 64-bit.
+  This distinguishes LLP64 from LP64 (where @{text "long"} is 64-bit) and from
+  ILP32 (where pointers are 32-bit).
+\<close>
+
+micro_c_translate prefix: llp64_ abi: llp64-le \<open>
+long long add_long_longlong(long a, long long b) {
+  return a + b;
+}
+\<close>
+
+thm llp64_add_long_longlong_def
+
+micro_c_translate prefix: llp64_ abi: llp64-le \<open>
+unsigned int sizeof_long(void) { return sizeof(long); }
+unsigned int sizeof_ptr(void) { return sizeof(int *); }
+unsigned int sizeof_longlong(void) { return sizeof(long long); }
+\<close>
+
+thm llp64_sizeof_long_def
+thm llp64_sizeof_ptr_def
+thm llp64_sizeof_longlong_def
+
+lemma llp64_abi_profile_values:
+  shows "llp64_abi_pointer_bits = 64"
+    and "llp64_abi_long_bits = 32"
+    and "llp64_abi_big_endian = False"
+  by (simp_all add: llp64_abi_pointer_bits_def llp64_abi_long_bits_def llp64_abi_big_endian_def)
+
+section \<open>ILP32-BE (32-bit Big-Endian) ABI Smoke Tests\<close>
+
+micro_c_translate prefix: ilp32be_ abi: ilp32-be \<open>
+unsigned int sizeof_long(void) { return sizeof(long); }
+unsigned int sizeof_ptr(void) { return sizeof(int *); }
+\<close>
+
+thm ilp32be_sizeof_long_def
+thm ilp32be_sizeof_ptr_def
+
+lemma ilp32be_abi_profile_values:
+  shows "ilp32be_abi_pointer_bits = 32"
+    and "ilp32be_abi_long_bits = 32"
+    and "ilp32be_abi_big_endian = True"
+  by (simp_all add: ilp32be_abi_pointer_bits_def ilp32be_abi_long_bits_def ilp32be_abi_big_endian_def)
+
 end

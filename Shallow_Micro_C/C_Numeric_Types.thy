@@ -101,6 +101,13 @@ definition c_signed_div :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
          else
            literal (word_of_int result_int)\<close>
 
+text \<open>
+  @{text "c_signed_mod"} checks the \emph{quotient} for overflow, not the remainder itself.
+  Per C11 6.5.5p6, if \<open>a/b\<close> is not representable, both \<open>a/b\<close> and \<open>a%b\<close> are undefined.
+  The canonical case is @{text "INT_MIN % (-1)"}: the remainder is 0, but
+  @{text "INT_MIN / (-1)"} overflows, so the operation is UB.
+\<close>
+
 definition c_signed_mod :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_mod a b \<equiv>

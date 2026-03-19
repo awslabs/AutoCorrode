@@ -174,4 +174,49 @@ int smoke_mem_read_global(unsigned int i) {
 thm c_global_smoke_mem_global_vals_def
 thm c_smoke_mem_read_global_def
 
+section \<open>Pointer Relational Comparison Smoke\<close>
+
+micro_c_translate addr: nat \<open>
+unsigned int smoke_mem_ptr_lt(unsigned int *p, unsigned int *q) {
+  return p < q;
+}
+\<close>
+
+thm c_smoke_mem_ptr_lt_def
+
+micro_c_translate addr: nat \<open>
+unsigned int smoke_mem_ptr_le(unsigned int *p, unsigned int *q) {
+  return p <= q;
+}
+\<close>
+
+thm c_smoke_mem_ptr_le_def
+
+micro_c_translate addr: nat \<open>
+unsigned int smoke_mem_ptr_gt(unsigned int *p, unsigned int *q) {
+  return p > q;
+}
+\<close>
+
+thm c_smoke_mem_ptr_gt_def
+
+micro_c_translate addr: nat \<open>
+unsigned int smoke_mem_ptr_ge(unsigned int *p, unsigned int *q) {
+  return p >= q;
+}
+\<close>
+
+thm c_smoke_mem_ptr_ge_def
+
+section \<open>Pointer Subtraction Smoke\<close>
+
+micro_c_translate addr: nat \<open>
+typedef long ptrdiff_t;
+ptrdiff_t smoke_mem_ptr_diff(unsigned int *p, unsigned int *q) {
+  return p - q;
+}
+\<close>
+
+thm c_smoke_mem_ptr_diff_def
+
 end

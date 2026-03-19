@@ -2349,6 +2349,39 @@ struct
             fun mk_raw_ptr_add ptr_term idx_term idx_cty elem_cty prefer_unsigned_add =
               (mk_raw_ptr_loc_expr ctxt unseq_operands ptr_term idx_term idx_cty elem_cty prefer_unsigned_add,
                C_Ast_Utils.CPtr elem_cty)
+            fun mk_ptr_relcmp const_name short_name =
+              let val lhs_c =
+                    (case pointer_expr_value_hol_ty lhs_cty of
+                       SOME ty => constrain_expr_value_type ty lhs'
+                     | NONE => lhs')
+                  val rhs_c =
+                    (case pointer_expr_value_hol_ty rhs_cty of
+                       SOME ty => constrain_expr_value_type ty rhs'
+                     | NONE => rhs')
+                  val lhs_ptr_ty = expr_value_type lhs_c
+                  val rhs_ptr_ty = expr_value_type rhs_c
+                  val p_var = Isa_Free ("v__lptr", lhs_ptr_ty)
+                  val q_var = Isa_Free ("v__rptr", rhs_ptr_ty)
+                  val raw_ptr_ty =
+                    Isa_Type (\<^type_name>\<open>gref\<close>, [!current_ref_addr_ty, !current_ref_gv_ty])
+                  fun raw_ptr_of ptr_ty ptr_var =
+                    (case ptr_ty of
+                       Term.Type (name, _) =>
+                         if name = \<^type_name>\<open>focused\<close>
+                         then Isa_Const (\<^const_name>\<open>unwrap_focused\<close>, isa_dummyT --> raw_ptr_ty) $ ptr_var
+                         else ptr_var
+                     | _ => ptr_var)
+                  val p_raw = raw_ptr_of lhs_ptr_ty p_var
+                  val q_raw = raw_ptr_of rhs_ptr_ty q_var
+                  val cmp_const =
+                    Type.constraint (raw_ptr_ty --> raw_ptr_ty --> @{typ bool})
+                      (if uses_raw_pointer_model () then resolve_required_visible_const ctxt short_name
+                       else Isa_Const (const_name, isa_dummyT))
+                  val cmp_body = cmp_const $ p_raw $ q_raw
+              in (mk_pair_eval unseq_operands lhs_c rhs_c p_var q_var
+                    (C_Term_Build.mk_literal cmp_body),
+                  C_Ast_Utils.CBool)
+              end
         in
         case binop of
           (* C logical operators short-circuit and return _Bool *)
@@ -2424,13 +2457,13 @@ struct
                 else
                   unsupported "pointer comparison with non-pointer operand"
             | (CLeOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                mk_ptr_relcmp \<^const_name>\<open>c_ptr_less\<close> "c_ptr_less"
             | (CLeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                mk_ptr_relcmp \<^const_name>\<open>c_ptr_le\<close> "c_ptr_le"
             | (CGrOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                mk_ptr_relcmp \<^const_name>\<open>c_ptr_greater\<close> "c_ptr_greater"
             | (CGeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
-                unsupported "pointer relational comparison"
+                mk_ptr_relcmp \<^const_name>\<open>c_ptr_ge\<close> "c_ptr_ge"
             | (CLeOp0, C_Ast_Utils.CPtr _, _) =>
                 unsupported "pointer relational comparison with non-pointer operand"
             | (CLeOp0, _, C_Ast_Utils.CPtr _) =>

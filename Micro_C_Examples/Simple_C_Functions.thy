@@ -197,6 +197,30 @@ lemma c_signed_add_spec [crush_specs]:
 by (crush_boot f: c_signed_add_def contract: c_signed_add_contract_def)
    (crush_base simp add: c_signed_add_def c_signed_overflow_def Let_def)
 
+subsection \<open>Signed Overflow UB Detection\<close>
+
+text \<open>
+  When the precondition specifies that overflow \emph{does} occur, the function
+  correctly aborts with @{const SignedOverflow}. This demonstrates the core value
+  of the C frontend: UB is detected and turned into a verifiable abort.
+\<close>
+
+definition c_signed_add_overflow_contract ::
+    \<open>c_int \<Rightarrow> c_int \<Rightarrow> ('s::{sepalg}, c_int, c_abort) function_contract\<close> where
+  [crush_contracts]: \<open>c_signed_add_overflow_contract a b \<equiv>
+    let pre  = \<langle>\<not> c_signed_in_range (sint a + sint b) LENGTH(32)\<rangle>;
+        post = \<lambda>_. \<bottom>;
+        abort_post = \<lambda>ab. \<langle>ab = CustomAbort SignedOverflow\<rangle>
+     in make_function_contract_with_abort pre post abort_post\<close>
+ucincl_auto c_signed_add_overflow_contract
+
+lemma c_signed_add_overflow_spec:
+  shows \<open>\<Gamma>; c_signed_add a b \<Turnstile>\<^sub>F c_signed_add_overflow_contract a b\<close>
+  apply (crush_boot f: c_signed_add_def contract: c_signed_add_overflow_contract_def)
+  apply (simp only: C_Numeric_Types.c_signed_add_def Let_def)
+  apply (crush_base simp add: c_signed_overflow_def c_abort_def)
+  done
+
 end
 
 section \<open>C Unsigned Arithmetic Verification\<close>
@@ -794,6 +818,27 @@ ucincl_auto c_u_div_contract
 lemma c_u_div_spec [crush_specs]:
   shows \<open>\<Gamma>; c_u_div a b \<Turnstile>\<^sub>F c_u_div_contract a b\<close>
 by (crush_boot f: c_u_div_def contract: c_u_div_contract_def)
+   (crush_base simp add: c_unsigned_div_def c_division_by_zero_def c_abort_def)
+
+subsection \<open>Division by Zero UB Detection\<close>
+
+text \<open>
+  When the divisor is zero, unsigned division correctly aborts with
+  @{const DivisionByZero}. The function never returns normally.
+\<close>
+
+definition c_u_div_zero_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, c_abort) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_div_zero_contract a b \<equiv>
+    let pre  = \<langle>b = 0\<rangle>;
+        post = \<lambda>_. \<bottom>;
+        abort_post = \<lambda>ab. \<langle>ab = CustomAbort DivisionByZero\<rangle>
+     in make_function_contract_with_abort pre post abort_post\<close>
+ucincl_auto c_u_div_zero_contract
+
+lemma c_u_div_zero_spec:
+  shows \<open>\<Gamma>; c_u_div a b \<Turnstile>\<^sub>F c_u_div_zero_contract a b\<close>
+by (crush_boot f: c_u_div_def contract: c_u_div_zero_contract_def)
    (crush_base simp add: c_unsigned_div_def c_division_by_zero_def c_abort_def)
 
 end
