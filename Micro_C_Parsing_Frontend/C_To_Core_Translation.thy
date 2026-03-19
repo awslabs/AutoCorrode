@@ -801,48 +801,96 @@ struct
   fun fundef_is_pure_with pure_tab (CFunDef0 (_, _, _, body, _)) =
     not (stmt_has_side_effect_with pure_tab body)
 
-  fun expr_reads_vars (CVar0 (ident, _)) = [ident_name ident]
-    | expr_reads_vars (CAssign0 (_, lhs, rhs, _)) =
-        expr_reads_vars lhs @ expr_reads_vars rhs
-    | expr_reads_vars (CBinary0 (_, l, r, _)) =
-        expr_reads_vars l @ expr_reads_vars r
-    | expr_reads_vars (CUnary0 (_, e, _)) = expr_reads_vars e
-    | expr_reads_vars (CIndex0 (a, i, _)) =
-        expr_reads_vars a @ expr_reads_vars i
-    | expr_reads_vars (CMember0 (e, _, _, _)) = expr_reads_vars e
-    | expr_reads_vars (CCast0 (_, e, _)) = expr_reads_vars e
-    | expr_reads_vars (CCall0 (f, args, _)) =
-        expr_reads_vars f @ List.concat (List.map expr_reads_vars args)
-    | expr_reads_vars (CComma0 (es, _)) = List.concat (List.map expr_reads_vars es)
-    | expr_reads_vars (CCond0 (c, t, e, _)) =
-        expr_reads_vars c @
-          (case t of Some te => expr_reads_vars te | None => []) @
-          expr_reads_vars e
-    | expr_reads_vars _ = []
+  (* ----- Generic C AST fold -----
+     Post-order fold over C expression/statement trees.
+     The handler f receives each node AFTER its children have been accumulated.
+     This eliminates the need for repetitive per-walker AST traversal code. *)
+  fun fold_c_expr f expr acc =
+    f expr (case expr of
+      CAssign0 (_, lhs, rhs, _) => fold_c_expr f rhs (fold_c_expr f lhs acc)
+    | CBinary0 (_, l, r, _) => fold_c_expr f r (fold_c_expr f l acc)
+    | CUnary0 (_, e, _) => fold_c_expr f e acc
+    | CIndex0 (a, i, _) => fold_c_expr f i (fold_c_expr f a acc)
+    | CMember0 (e, _, _, _) => fold_c_expr f e acc
+    | CCast0 (_, e, _) => fold_c_expr f e acc
+    | CCall0 (callee, args, _) =>
+        List.foldl (fn (a, ac) => fold_c_expr f a ac)
+          (fold_c_expr f callee acc) args
+    | CComma0 (es, _) =>
+        List.foldl (fn (e, ac) => fold_c_expr f e ac) acc es
+    | CCond0 (c, t, e, _) =>
+        fold_c_expr f e
+          ((case t of Some te => fold_c_expr f te | None => I)
+            (fold_c_expr f c acc))
+    | CCompoundLit0 (_, inits, _) =>
+        List.foldl (fn ((_, CInitExpr0 (e, _)), ac) => fold_c_expr f e ac
+                     | (_, ac) => ac) acc inits
+    | CGenericSelection0 (ctrl, assocs, _) =>
+        List.foldl (fn ((_, e), ac) => fold_c_expr f e ac)
+          (fold_c_expr f ctrl acc) assocs
+    | _ => acc)
 
-  fun expr_written_vars (CAssign0 (_, CVar0 (ident, _), rhs, _)) =
-        ident_name ident :: expr_written_vars rhs
-    | expr_written_vars (CAssign0 (_, lhs, rhs, _)) =
-        expr_written_vars lhs @ expr_written_vars rhs
-    | expr_written_vars (CUnary0 (CPreIncOp0, CVar0 (ident, _), _)) = [ident_name ident]
-    | expr_written_vars (CUnary0 (CPostIncOp0, CVar0 (ident, _), _)) = [ident_name ident]
-    | expr_written_vars (CUnary0 (CPreDecOp0, CVar0 (ident, _), _)) = [ident_name ident]
-    | expr_written_vars (CUnary0 (CPostDecOp0, CVar0 (ident, _), _)) = [ident_name ident]
-    | expr_written_vars (CBinary0 (_, l, r, _)) =
-        expr_written_vars l @ expr_written_vars r
-    | expr_written_vars (CUnary0 (_, e, _)) = expr_written_vars e
-    | expr_written_vars (CIndex0 (a, i, _)) =
-        expr_written_vars a @ expr_written_vars i
-    | expr_written_vars (CMember0 (e, _, _, _)) = expr_written_vars e
-    | expr_written_vars (CCast0 (_, e, _)) = expr_written_vars e
-    | expr_written_vars (CCall0 (f, args, _)) =
-        expr_written_vars f @ List.concat (List.map expr_written_vars args)
-    | expr_written_vars (CComma0 (es, _)) = List.concat (List.map expr_written_vars es)
-    | expr_written_vars (CCond0 (c, t, e, _)) =
-        expr_written_vars c @
-          (case t of Some te => expr_written_vars te | None => []) @
-          expr_written_vars e
-    | expr_written_vars _ = []
+  fun fold_c_init fe init acc =
+    (case init of
+       CInitExpr0 (e, _) => fe e acc
+     | CInitList0 (inits, _) =>
+         List.foldl (fn ((_, i), ac) => fold_c_init fe i ac) acc inits)
+
+  fun fold_c_stmt fe fs stmt acc =
+    let
+      val oe = fn (Some e) => fe e | None => I
+      fun fi (CBlockStmt0 s) acc = fold_c_stmt fe fs s acc
+        | fi (CBlockDecl0 (CDecl0 (_, declarators, _))) acc =
+            List.foldl
+              (fn (((_, Some init), _), ac) => fold_c_init fe init ac
+                | (_, ac) => ac)
+              acc declarators
+        | fi _ acc = acc
+    in
+      fs stmt (case stmt of
+        CCompound0 (_, items, _) =>
+          List.foldl (fn (item, ac) => fi item ac) acc items
+      | CExpr0 (Some e, _) => fe e acc
+      | CExpr0 (None, _) => acc
+      | CReturn0 (Some e, _) => fe e acc
+      | CReturn0 (None, _) => acc
+      | CIf0 (c, t, e_opt, _) =>
+          (case e_opt of Some e => fold_c_stmt fe fs e | None => I)
+            (fold_c_stmt fe fs t (fe c acc))
+      | CWhile0 (c, b, _, _) =>
+          fold_c_stmt fe fs b (fe c acc)
+      | CFor0 (Left (Some i), c, s, b, _) =>
+          fold_c_stmt fe fs b (oe s (oe c (fe i acc)))
+      | CFor0 (Left None, c, s, b, _) =>
+          fold_c_stmt fe fs b (oe s (oe c acc))
+      | CFor0 (Right d, c, s, b, _) =>
+          fold_c_stmt fe fs b (oe s (oe c (fi (CBlockDecl0 d) acc)))
+      | CSwitch0 (e, s, _) =>
+          fold_c_stmt fe fs s (fe e acc)
+      | CCase0 (e, s, _) =>
+          fold_c_stmt fe fs s (fe e acc)
+      | CCases0 (e1, e2, s, _) =>
+          fold_c_stmt fe fs s (fe e2 (fe e1 acc))
+      | CDefault0 (s, _) =>
+          fold_c_stmt fe fs s acc
+      | CLabel0 (_, s, _, _) =>
+          fold_c_stmt fe fs s acc
+      | _ => acc)
+    end
+
+  fun expr_reads_vars expr =
+    fold_c_expr
+      (fn CVar0 (ident, _) => (fn acc => ident_name ident :: acc)
+        | _ => I) expr []
+
+  fun expr_written_vars expr =
+    fold_c_expr
+      (fn CAssign0 (_, CVar0 (ident, _), _, _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPreIncOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPostIncOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPreDecOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPostDecOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | _ => I) expr []
 
   fun list_intersects xs ys =
     List.exists (fn x => List.exists (fn y => x = y) ys) xs
@@ -863,187 +911,31 @@ struct
     end
 
   (* Walk the C AST and collect variable names that appear on the LHS of
-     assignments or as operands of pre/post increment/decrement.
+     assignments or as operands of pre/post increment/decrement or address-of.
      Used to identify parameters that need promotion to local variables. *)
-  local
-    fun fae (CAssign0 (_, CVar0 (ident, _), rhs, _)) acc =
-          fae rhs (ident_name ident :: acc)
-      | fae (CAssign0 (_, lhs, rhs, _)) acc = fae rhs (fae lhs acc)
-      | fae (CUnary0 (CPreIncOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
-      | fae (CUnary0 (CPostIncOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
-      | fae (CUnary0 (CPreDecOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
-      | fae (CUnary0 (CPostDecOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
-      | fae (CBinary0 (_, l, r, _)) acc = fae r (fae l acc)
-      | fae (CUnary0 (CAdrOp0, CVar0 (ident, _), _)) acc = ident_name ident :: acc
-      | fae (CUnary0 (_, e, _)) acc = fae e acc
-      | fae (CCall0 (f, args, _)) acc =
-          List.foldl (fn (a, ac) => fae a ac) (fae f acc) args
-      | fae (CIndex0 (a, i, _)) acc = fae i (fae a acc)
-      | fae (CMember0 (e, _, _, _)) acc = fae e acc
-      | fae (CCast0 (_, e, _)) acc = fae e acc
-      | fae (CComma0 (es, _)) acc = List.foldl (fn (e, ac) => fae e ac) acc es
-      | fae (CCond0 (c, t, e, _)) acc =
-          fae e ((case t of Some te => fae te | None => I) (fae c acc))
-      | fae _ acc = acc
-    and fas (CCompound0 (_, items, _)) acc =
-          List.foldl (fn (CBlockStmt0 s, ac) => fas s ac | (_, ac) => ac) acc items
-      | fas (CExpr0 (Some e, _)) acc = fae e acc
-      | fas (CIf0 (c, t, e_opt, _)) acc =
-          (case e_opt of Some e => fas e | None => I) (fas t (fae c acc))
-      | fas (CWhile0 (c, b, _, _)) acc = fas b (fae c acc)
-      | fas (CFor0 (Left (Some i), c, s, b, _)) acc =
-          fas b (opt s (opt c (fae i acc)))
-      | fas (CFor0 (_, c, s, b, _)) acc =
-          fas b (opt s (opt c acc))
-      | fas (CReturn0 (Some e, _)) acc = fae e acc
-      | fas (CLabel0 (_, s, _, _)) acc = fas s acc
-      | fas (CSwitch0 (e, s, _)) acc = fas s (fae e acc)
-      | fas _ acc = acc
-    and opt (Some e) acc = fae e acc
-      | opt None acc = acc
-  in
-    fun find_assigned_vars stmt = distinct (op =) (fas stmt [])
-  end
-
-  local
-    fun writes_if in_loop e acc =
-          if in_loop then expr_written_vars e @ acc else acc
-
-    fun loop_init_writes in_loop (Left (Some e)) acc = writes_if in_loop e acc
-      | loop_init_writes in_loop (Right d) acc = loop_decl_writes in_loop d acc
-      | loop_init_writes _ _ acc = acc
-
-    and loop_decl_writes in_loop (CDecl0 (_, declarators, _)) acc =
-          List.foldl
-            (fn (((_, Some init), _), ac) => loop_initval_writes in_loop init ac
-              | (_, ac) => ac)
-            acc declarators
-      | loop_decl_writes _ _ acc = acc
-
-    and loop_initval_writes in_loop (CInitExpr0 (e, _)) acc = writes_if in_loop e acc
-      | loop_initval_writes in_loop (CInitList0 (inits, _)) acc =
-          List.foldl (fn ((_, init), ac) => loop_initval_writes in_loop init ac) acc inits
-
-    fun loop_item_writes in_loop (CBlockStmt0 s) acc = loop_stmt_writes in_loop s acc
-      | loop_item_writes in_loop (CBlockDecl0 d) acc = loop_decl_writes in_loop d acc
-      | loop_item_writes _ _ acc = acc
-
-    and loop_stmt_writes in_loop (CCompound0 (_, items, _)) acc =
-          List.foldl (fn (it, ac) => loop_item_writes in_loop it ac) acc items
-      | loop_stmt_writes in_loop (CExpr0 (Some e, _)) acc = writes_if in_loop e acc
-      | loop_stmt_writes _ (CExpr0 (None, _)) acc = acc
-      | loop_stmt_writes in_loop (CReturn0 (Some e, _)) acc = writes_if in_loop e acc
-      | loop_stmt_writes _ (CReturn0 (None, _)) acc = acc
-      | loop_stmt_writes in_loop (CIf0 (c, t, e_opt, _)) acc =
-          let
-            val acc = writes_if in_loop c acc
-            val acc = loop_stmt_writes in_loop t acc
-          in
-            (case e_opt of Some e => loop_stmt_writes in_loop e acc | None => acc)
-          end
-      | loop_stmt_writes _ (CWhile0 (c, b, _, _)) acc =
-          let
-            val acc = writes_if true c acc
-            val acc = loop_stmt_writes true b acc
-          in acc end
-      | loop_stmt_writes _ (CFor0 (init, c, s, b, _)) acc =
-          let
-            val acc = loop_init_writes true init acc
-            val acc = (case c of Some e => writes_if true e acc | None => acc)
-            val acc = (case s of Some e => writes_if true e acc | None => acc)
-            val acc = loop_stmt_writes true b acc
-          in acc end
-      | loop_stmt_writes in_loop (CSwitch0 (e, s, _)) acc =
-          loop_stmt_writes in_loop s (writes_if in_loop e acc)
-      | loop_stmt_writes in_loop (CCase0 (e, s, _)) acc =
-          loop_stmt_writes in_loop s (writes_if in_loop e acc)
-      | loop_stmt_writes in_loop (CDefault0 (s, _)) acc =
-          loop_stmt_writes in_loop s acc
-      | loop_stmt_writes in_loop (CLabel0 (_, s, _, _)) acc =
-          loop_stmt_writes in_loop s acc
-      | loop_stmt_writes _ _ acc = acc
-  in
-    fun find_loop_written_vars stmt = distinct (op =) (loop_stmt_writes false stmt [])
-  end
+  fun find_assigned_vars stmt =
+    distinct (op =) (fold_c_stmt (fold_c_expr
+      (fn CAssign0 (_, CVar0 (ident, _), _, _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPreIncOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPostIncOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPreDecOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CPostDecOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CAdrOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | _ => I)) (fn _ => I) stmt [])
 
   (* Walk the C AST and collect label names targeted by goto statements.
      Used to allocate goto flag references for forward-only goto support. *)
-  local
-    fun fgt (CGoto0 (ident, _)) acc = ident_name ident :: acc
-      | fgt (CCompound0 (_, items, _)) acc =
-          List.foldl (fn (CBlockStmt0 s, ac) => fgt s ac | (_, ac) => ac) acc items
-      | fgt (CIf0 (_, t, e_opt, _)) acc =
-          (case e_opt of Some e => fgt e | None => I) (fgt t acc)
-      | fgt (CWhile0 (_, b, _, _)) acc = fgt b acc
-      | fgt (CFor0 (_, _, _, b, _)) acc = fgt b acc
-      | fgt (CSwitch0 (_, s, _)) acc = fgt s acc
-      | fgt (CLabel0 (_, s, _, _)) acc = fgt s acc
-      | fgt _ acc = acc
-  in
-    fun find_goto_targets stmt = distinct (op =) (fgt stmt [])
-  end
+  fun find_goto_targets stmt =
+    distinct (op =) (fold_c_stmt (fn _ => I)
+      (fn CGoto0 (ident, _) => (fn acc => ident_name ident :: acc)
+        | _ => I) stmt [])
 
   (* Collect direct function-call targets used in a function body.
      Only named calls (CCall0 (CVar0 ...)) are collected. *)
-  local
-    fun fc_expr (CCall0 (CVar0 (ident, _), args, _)) acc =
-          List.foldl (fn (a, ac) => fc_expr a ac) (ident_name ident :: acc) args
-      | fc_expr (CCall0 (f, args, _)) acc =
-          List.foldl (fn (a, ac) => fc_expr a ac) (fc_expr f acc) args
-      | fc_expr (CAssign0 (_, lhs, rhs, _)) acc = fc_expr rhs (fc_expr lhs acc)
-      | fc_expr (CBinary0 (_, l, r, _)) acc = fc_expr r (fc_expr l acc)
-      | fc_expr (CUnary0 (_, e, _)) acc = fc_expr e acc
-      | fc_expr (CIndex0 (a, i, _)) acc = fc_expr i (fc_expr a acc)
-      | fc_expr (CMember0 (e, _, _, _)) acc = fc_expr e acc
-      | fc_expr (CCast0 (_, e, _)) acc = fc_expr e acc
-      | fc_expr (CComma0 (es, _)) acc =
-          List.foldl (fn (e, ac) => fc_expr e ac) acc es
-      | fc_expr (CCond0 (c, t, e, _)) acc =
-          fc_expr e ((case t of Some te => fc_expr te | None => I) (fc_expr c acc))
-      | fc_expr _ acc = acc
-
-    fun fc_init (CInitExpr0 (e, _)) acc = fc_expr e acc
-      | fc_init (CInitList0 (inits, _)) acc =
-          List.foldl (fn ((_, init), ac) => fc_init init ac) acc inits
-
-    fun fc_decl (CDecl0 (_, declarators, _)) acc =
-          List.foldl
-            (fn (((_, Some init), _), ac) => fc_init init ac
-              | (_, ac) => ac)
-            acc declarators
-      | fc_decl _ acc = acc
-
-    fun fc_item (CBlockStmt0 s) acc = fc_stmt s acc
-      | fc_item (CBlockDecl0 d) acc = fc_decl d acc
-      | fc_item _ acc = acc
-
-    and fc_stmt (CCompound0 (_, items, _)) acc =
-          List.foldl (fn (it, ac) => fc_item it ac) acc items
-      | fc_stmt (CExpr0 (Some e, _)) acc = fc_expr e acc
-      | fc_stmt (CExpr0 (None, _)) acc = acc
-      | fc_stmt (CReturn0 (Some e, _)) acc = fc_expr e acc
-      | fc_stmt (CReturn0 (None, _)) acc = acc
-      | fc_stmt (CIf0 (c, t, e_opt, _)) acc =
-          (case e_opt of Some e => fc_stmt e | None => I) (fc_stmt t (fc_expr c acc))
-      | fc_stmt (CWhile0 (c, b, _, _)) acc = fc_stmt b (fc_expr c acc)
-      | fc_stmt (CFor0 (Left (Some i), c, s, b, _)) acc =
-          fc_stmt b (opt_expr s (opt_expr c (fc_expr i acc)))
-      | fc_stmt (CFor0 (Left None, c, s, b, _)) acc =
-          fc_stmt b (opt_expr s (opt_expr c acc))
-      | fc_stmt (CFor0 (Right d, c, s, b, _)) acc =
-          fc_stmt b (opt_expr s (opt_expr c (fc_decl d acc)))
-      | fc_stmt (CSwitch0 (e, s, _)) acc = fc_stmt s (fc_expr e acc)
-      | fc_stmt (CCase0 (e, s, _)) acc = fc_stmt s (fc_expr e acc)
-      | fc_stmt (CDefault0 (s, _)) acc = fc_stmt s acc
-      | fc_stmt (CLabel0 (_, s, _, _)) acc = fc_stmt s acc
-      | fc_stmt _ acc = acc
-
-    and opt_expr (Some e) acc = fc_expr e acc
-      | opt_expr None acc = acc
-  in
-    fun find_called_functions (CFunDef0 (_, _, _, body, _)) =
-      distinct (op =) (rev (fc_stmt body []))
-  end
+  fun find_called_functions (CFunDef0 (_, _, _, body, _)) =
+    distinct (op =) (fold_c_stmt (fold_c_expr
+      (fn CCall0 (CVar0 (ident, _), _, _) => (fn acc => ident_name ident :: acc)
+        | _ => I)) (fn _ => I) body [])
 
   local
     fun declr_has_array (CDeclr0 (_, derived, _, _, _)) =
@@ -1193,153 +1085,6 @@ struct
           alias_names_from_expr struct_tab array_field_tab env struct_env e acc
       | opt_alias_expr _ _ _ _ None acc = acc
 
-    fun indexed_base_vars_expr (CIndex0 (CVar0 (ident, _), idx, _)) acc =
-          indexed_base_vars_expr idx (ident_name ident :: acc)
-      | indexed_base_vars_expr (CUnary0 (CIndOp0, CVar0 (ident, _), _)) acc =
-          ident_name ident :: acc
-      | indexed_base_vars_expr (CAssign0 (_, lhs, rhs, _)) acc =
-          indexed_base_vars_expr rhs (indexed_base_vars_expr lhs acc)
-      | indexed_base_vars_expr (CBinary0 (_, l, r, _)) acc =
-          indexed_base_vars_expr r (indexed_base_vars_expr l acc)
-      | indexed_base_vars_expr (CUnary0 (_, e, _)) acc =
-          indexed_base_vars_expr e acc
-      | indexed_base_vars_expr (CIndex0 (a, i, _)) acc =
-          indexed_base_vars_expr i (indexed_base_vars_expr a acc)
-      | indexed_base_vars_expr (CMember0 (e, _, _, _)) acc =
-          indexed_base_vars_expr e acc
-      | indexed_base_vars_expr (CCast0 (_, e, _)) acc =
-          indexed_base_vars_expr e acc
-      | indexed_base_vars_expr (CCall0 (f, args, _)) acc =
-          List.foldl (fn (a, ac) => indexed_base_vars_expr a ac)
-            (indexed_base_vars_expr f acc) args
-      | indexed_base_vars_expr (CComma0 (es, _)) acc =
-          List.foldl (fn (e, ac) => indexed_base_vars_expr e ac) acc es
-      | indexed_base_vars_expr (CCond0 (c, t, e, _)) acc =
-          indexed_base_vars_expr e
-            ((case t of Some te => indexed_base_vars_expr te | None => I)
-              (indexed_base_vars_expr c acc))
-      | indexed_base_vars_expr _ acc = acc
-
-    fun indexed_base_vars_stmt (CCompound0 (_, items, _)) acc =
-          List.foldl
-            (fn (CBlockStmt0 stmt, ac) => indexed_base_vars_stmt stmt ac
-              | (CBlockDecl0 (CDecl0 (_, declarators, _)), ac) =>
-                  List.foldl
-                    (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => indexed_base_vars_expr e ac'
-                      | (_, ac') => ac')
-                    ac declarators
-              | (_, ac) => ac)
-            acc items
-      | indexed_base_vars_stmt (CExpr0 (Some e, _)) acc = indexed_base_vars_expr e acc
-      | indexed_base_vars_stmt (CReturn0 (Some e, _)) acc = indexed_base_vars_expr e acc
-      | indexed_base_vars_stmt (CIf0 (c, t, e_opt, _)) acc =
-          (case e_opt of Some e => indexed_base_vars_stmt e | None => I)
-            (indexed_base_vars_stmt t (indexed_base_vars_expr c acc))
-      | indexed_base_vars_stmt (CWhile0 (c, b, _, _)) acc =
-          indexed_base_vars_stmt b (indexed_base_vars_expr c acc)
-      | indexed_base_vars_stmt (CFor0 (Left (Some i), c, s, b, _)) acc =
-          indexed_base_vars_stmt b
-            (opt_index_expr s (opt_index_expr c (indexed_base_vars_expr i acc)))
-      | indexed_base_vars_stmt (CFor0 (Left None, c, s, b, _)) acc =
-          indexed_base_vars_stmt b (opt_index_expr s (opt_index_expr c acc))
-      | indexed_base_vars_stmt (CFor0 (Right d, c, s, b, _)) acc =
-          let
-            val acc' =
-              (case d of
-                 CDecl0 (_, declarators, _) =>
-                   List.foldl
-                     (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => indexed_base_vars_expr e ac'
-                       | (_, ac') => ac')
-                     acc declarators
-               | _ => acc)
-          in
-            indexed_base_vars_stmt b (opt_index_expr s (opt_index_expr c acc'))
-          end
-      | indexed_base_vars_stmt (CSwitch0 (e, s, _)) acc =
-          indexed_base_vars_stmt s (indexed_base_vars_expr e acc)
-      | indexed_base_vars_stmt (CCase0 (e, s, _)) acc =
-          indexed_base_vars_stmt s (indexed_base_vars_expr e acc)
-      | indexed_base_vars_stmt (CDefault0 (s, _)) acc =
-          indexed_base_vars_stmt s acc
-      | indexed_base_vars_stmt (CLabel0 (_, s, _, _)) acc =
-          indexed_base_vars_stmt s acc
-      | indexed_base_vars_stmt _ acc = acc
-
-    and opt_index_expr (Some e) acc = indexed_base_vars_expr e acc
-      | opt_index_expr None acc = acc
-
-    fun named_calls_expr (CCall0 (CVar0 (ident, _), args, _)) acc =
-          List.foldl (fn (a, ac) => named_calls_expr a ac)
-            ((ident_name ident, args) :: acc) args
-      | named_calls_expr (CCall0 (f, args, _)) acc =
-          List.foldl (fn (a, ac) => named_calls_expr a ac)
-            (named_calls_expr f acc) args
-      | named_calls_expr (CAssign0 (_, lhs, rhs, _)) acc =
-          named_calls_expr rhs (named_calls_expr lhs acc)
-      | named_calls_expr (CBinary0 (_, l, r, _)) acc =
-          named_calls_expr r (named_calls_expr l acc)
-      | named_calls_expr (CUnary0 (_, e, _)) acc =
-          named_calls_expr e acc
-      | named_calls_expr (CIndex0 (a, i, _)) acc =
-          named_calls_expr i (named_calls_expr a acc)
-      | named_calls_expr (CMember0 (e, _, _, _)) acc =
-          named_calls_expr e acc
-      | named_calls_expr (CCast0 (_, e, _)) acc =
-          named_calls_expr e acc
-      | named_calls_expr (CComma0 (es, _)) acc =
-          List.foldl (fn (e, ac) => named_calls_expr e ac) acc es
-      | named_calls_expr (CCond0 (c, t, e, _)) acc =
-          named_calls_expr e
-            ((case t of Some te => named_calls_expr te | None => I)
-              (named_calls_expr c acc))
-      | named_calls_expr _ acc = acc
-
-    fun named_calls_stmt (CCompound0 (_, items, _)) acc =
-          List.foldl
-            (fn (CBlockStmt0 stmt, ac) => named_calls_stmt stmt ac
-              | (CBlockDecl0 (CDecl0 (_, declarators, _)), ac) =>
-                  List.foldl
-                    (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => named_calls_expr e ac'
-                      | (_, ac') => ac')
-                    ac declarators
-              | (_, ac) => ac)
-            acc items
-      | named_calls_stmt (CExpr0 (Some e, _)) acc = named_calls_expr e acc
-      | named_calls_stmt (CReturn0 (Some e, _)) acc = named_calls_expr e acc
-      | named_calls_stmt (CIf0 (c, t, e_opt, _)) acc =
-          (case e_opt of Some e => named_calls_stmt e | None => I)
-            (named_calls_stmt t (named_calls_expr c acc))
-      | named_calls_stmt (CWhile0 (c, b, _, _)) acc =
-          named_calls_stmt b (named_calls_expr c acc)
-      | named_calls_stmt (CFor0 (Left (Some i), c, s, b, _)) acc =
-          named_calls_stmt b (opt_call_expr s (opt_call_expr c (named_calls_expr i acc)))
-      | named_calls_stmt (CFor0 (Left None, c, s, b, _)) acc =
-          named_calls_stmt b (opt_call_expr s (opt_call_expr c acc))
-      | named_calls_stmt (CFor0 (Right d, c, s, b, _)) acc =
-          let
-            val acc' =
-              (case d of
-                 CDecl0 (_, declarators, _) =>
-                   List.foldl
-                     (fn (((_, Some (CInitExpr0 (e, _))), _), ac') => named_calls_expr e ac'
-                       | (_, ac') => ac')
-                     acc declarators
-               | _ => acc)
-          in
-            named_calls_stmt b (opt_call_expr s (opt_call_expr c acc'))
-          end
-      | named_calls_stmt (CSwitch0 (e, s, _)) acc =
-          named_calls_stmt s (named_calls_expr e acc)
-      | named_calls_stmt (CCase0 (e, s, _)) acc =
-          named_calls_stmt s (named_calls_expr e acc)
-      | named_calls_stmt (CDefault0 (s, _)) acc =
-          named_calls_stmt s acc
-      | named_calls_stmt (CLabel0 (_, s, _, _)) acc =
-          named_calls_stmt s acc
-      | named_calls_stmt _ acc = acc
-
-    and opt_call_expr (Some e) acc = named_calls_expr e acc
-      | opt_call_expr None acc = acc
   in
     fun find_list_backed_aliases struct_tab array_field_tab (CFunDef0 (_, declr, _, body, _)) =
       let
@@ -1387,12 +1132,18 @@ struct
         Symtab.keys (iterate env0)
       end
 
-    fun find_indexed_base_vars (CFunDef0 (_, _, _, body, _)) =
-      distinct (op =) (indexed_base_vars_stmt body [])
-
-    fun find_named_calls_with_args (CFunDef0 (_, _, _, body, _)) =
-      rev (named_calls_stmt body [])
   end
+
+  fun find_indexed_base_vars (CFunDef0 (_, _, _, body, _)) =
+    distinct (op =) (fold_c_stmt (fold_c_expr
+      (fn CIndex0 (CVar0 (ident, _), _, _) => (fn acc => ident_name ident :: acc)
+        | CUnary0 (CIndOp0, CVar0 (ident, _), _) => (fn acc => ident_name ident :: acc)
+        | _ => I)) (fn _ => I) body [])
+
+  fun find_named_calls_with_args (CFunDef0 (_, _, _, body, _)) =
+    fold_c_stmt (fold_c_expr
+      (fn CCall0 (CVar0 (ident, _), args, _) => (fn acc => (ident_name ident, args) :: acc)
+        | _ => I)) (fn _ => I) body []
 
 
   (* Extract struct definitions with field types from a top-level declaration.
