@@ -8235,7 +8235,7 @@ local
   fun collect_load_opts opts =
     let
       fun step (CommonOpt topt) (topts, mopt) = (topt :: topts, mopt)
-        | step (ManifestOpt _) (_, SOME _) = error "micro_c_file: duplicate manifest option"
+        | step (ManifestOpt f) (_, SOME _) = error "micro_c_file: duplicate manifest option"
         | step (ManifestOpt f) (topts, NONE) = (topts, SOME f)
       val (rev_topts, manifest_opt) = fold step opts ([], NONE)
     in (collect_translate_opts (rev rev_topts), manifest_opt) end
