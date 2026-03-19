@@ -161,6 +161,32 @@ import logging
 
 logger = logging.getLogger("ml_proxy")
 
+
+class MgmtLogHandler(logging.Handler):
+    """Logging handler that forwards all messages to a management console."""
+    def __init__(self, mgmt):
+        super().__init__()
+        self.mgmt = mgmt
+    def emit(self, record):
+        try:
+            msg = f"{DIM}[{record.levelname[0]}] {record.getMessage()}{RST}"
+            self.mgmt.event(msg, level=0)
+        except Exception:
+            pass
+
+# Global reference set by proxy main to forward log messages to mgmt console
+_mgmt_ref = None
+
+class _MgmtLogHandler(logging.Handler):
+    """Logging handler that forwards all messages to the management console."""
+    def emit(self, record):
+        if _mgmt_ref is not None:
+            try:
+                msg = f"{DIM}[{record.levelname[0]}] {record.getMessage()}{RST}"
+                _mgmt_ref.event(msg, level=0)
+            except Exception:
+                pass
+
 def setup_logging(verbose, log_file=None):
     """Configure the logger. DEBUG for verbose, WARNING otherwise.
 
@@ -1171,9 +1197,13 @@ def attach_mode(sock_path):
     if sock_path is None:
         sockets = discover_mgmt_sockets()
         if not sockets:
-            print(f"{RED}No proxy sockets found{RST}", file=sys.stderr)
-            sys.exit(1)
-        elif len(sockets) == 1:
+            print(f"{YELLOW}No proxy sockets found — waiting for one to appear...{RST}", flush=True)
+            while True:
+                time.sleep(2)
+                sockets = discover_mgmt_sockets()
+                if sockets:
+                    break
+        if len(sockets) == 1:
             label, sock_path = sockets[0]
             print(f"{DIM}Found proxy for {label}{RST}", flush=True)
         else:
@@ -1387,6 +1417,7 @@ def main():
     # Start management console socket (keyed by host, shared across invocations)
     mgmt_path = mgmt_socket_path(host)
     mgmt = ProxyMgmtServer(mgmt_path, host=host)
+    logger.addHandler(MgmtLogHandler(mgmt))
     mgmt_thread = threading.Thread(target=mgmt.serve_forever, daemon=True)
     mgmt_thread.start()
     logger.debug(f"Management socket: {mgmt_path}")
