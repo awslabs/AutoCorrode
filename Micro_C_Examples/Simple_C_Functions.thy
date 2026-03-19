@@ -253,6 +253,35 @@ micro_c_translate \<open>
 thm c_u_call_helper_def c_u_call_caller_def
 
 text \<open>
+  Multi-function contract composition: verify the helper first, tag its spec
+  with @{text "[crush_specs]"}, then the caller's proof automatically uses it.
+\<close>
+definition c_u_call_helper_contract ::
+    \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_call_helper_contract x \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = x\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_u_call_helper_contract
+
+lemma c_u_call_helper_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_u_call_helper x \<Turnstile>\<^sub>F c_u_call_helper_contract x\<close>
+by (crush_boot f: c_u_call_helper_def contract: c_u_call_helper_contract_def) crush_base
+
+definition c_u_call_caller_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_call_caller_contract a b \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = a + b\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_u_call_caller_contract
+
+lemma c_u_call_caller_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_u_call_caller a b \<Turnstile>\<^sub>F c_u_call_caller_contract a b\<close>
+by (crush_boot f: c_u_call_caller_def contract: c_u_call_caller_contract_def)
+   (crush_base simp add: c_unsigned_add_def)
+
+text \<open>
   The contract for @{text u_add}: unsigned addition wraps, so the result is
   always @{term \<open>a + b\<close>} (Isabelle word addition already wraps).
   No overflow precondition needed.
