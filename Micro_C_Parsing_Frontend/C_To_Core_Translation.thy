@@ -164,6 +164,8 @@ structure C_Ast_Utils : sig
   val bit_width_of : c_numeric_type -> int option
   val sizeof_c_type : c_numeric_type -> int
   val alignof_c_type : c_numeric_type -> int
+  val intinf_to_int_checked : string -> IntInf.int -> int
+  val struct_name_of_cty : c_numeric_type -> string option
   val builtin_typedefs : unit -> (string * c_numeric_type) list
   val hol_type_of : c_numeric_type -> typ
   val cty_to_record_typ : string -> c_numeric_type -> typ option
@@ -326,6 +328,27 @@ struct
   fun alignof_c_type CInt128 = 16
     | alignof_c_type CUInt128 = 16
     | alignof_c_type cty = Int.min (sizeof_c_type cty, 8)
+
+  fun intinf_to_int_checked what n =
+    let
+      val ge_min =
+        (case Int.minInt of
+           SOME lo => n >= IntInf.fromInt lo
+         | NONE => true)
+      val le_max =
+        (case Int.maxInt of
+           SOME hi => n <= IntInf.fromInt hi
+         | NONE => true)
+    in
+      if ge_min andalso le_max then IntInf.toInt n
+      else error ("micro_c_translate: " ^ what ^ " out of ML-int range: " ^ IntInf.toString n)
+    end
+
+  fun struct_name_of_cty (CStruct sname) = SOME sname
+    | struct_name_of_cty (CPtr (CStruct sname)) = SOME sname
+    | struct_name_of_cty (CUnion sname) = SOME sname
+    | struct_name_of_cty (CPtr (CUnion sname)) = SOME sname
+    | struct_name_of_cty _ = NONE
 
   fun builtin_typedefs () =
     let
@@ -592,20 +615,6 @@ struct
      Handles both explicit values and auto-incrementing. *)
   fun extract_enum_defs_from_spec (CTypeSpec0 (CEnumType0 (CEnum0 (_, Some enumerators, _, _), _))) =
         let
-            fun intinf_to_int_checked what n =
-              let
-                val ge_min =
-                  (case Int.minInt of
-                     SOME lo => n >= IntInf.fromInt lo
-                   | NONE => true)
-                val le_max =
-                  (case Int.maxInt of
-                     SOME hi => n <= IntInf.fromInt hi
-                   | NONE => true)
-              in
-                if ge_min andalso le_max then IntInf.toInt n
-                else error ("micro_c_translate: " ^ what ^ " out of ML-int range: " ^ IntInf.toString n)
-              end
             fun process [] _ = []
               | process ((ident, Some (CConst0 (CIntConst0 (CInteger0 (n, _, _), _)))) :: rest) _ =
                   let val v = intinf_to_int_checked "enum constant" n
@@ -2968,11 +2977,7 @@ struct
   fun is_union_aggregate name =
     List.exists (fn n => n = name) (!current_union_names)
 
-  fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CUnion sname) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) = SOME sname
-    | struct_name_of_cty _ = NONE
+  val struct_name_of_cty = C_Ast_Utils.struct_name_of_cty
 
   fun cty_of_decl_for_struct tctx (CDecl0 (specs, declrs, _)) =
         let
@@ -3771,20 +3776,7 @@ struct
     | compound_assign_to_binop COrAssOp0  = SOME COrOp0
     | compound_assign_to_binop _ = NONE
 
-  fun intinf_to_int_checked what n =
-    let
-      val ge_min =
-        (case Int.minInt of
-           SOME lo => n >= IntInf.fromInt lo
-         | NONE => true)
-      val le_max =
-        (case Int.maxInt of
-           SOME hi => n <= IntInf.fromInt hi
-         | NONE => true)
-    in
-      if ge_min andalso le_max then IntInf.toInt n
-      else error ("micro_c_translate: " ^ what ^ " out of ML-int range: " ^ IntInf.toString n)
-    end
+  val intinf_to_int_checked = C_Ast_Utils.intinf_to_int_checked
 
   val cty_bit_width = C_Ast_Utils.bit_width_of
   val sizeof_c_type = C_Ast_Utils.sizeof_c_type
@@ -3976,12 +3968,6 @@ struct
     | contains_continue _ = false
   and block_has_continue (CBlockStmt0 s) = contains_continue s
     | block_has_continue _ = false
-
-  fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CUnion sname) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) = SOME sname
-    | struct_name_of_cty _ = NONE
 
   fun is_zero_int_const (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) = (n = 0)
     | is_zero_int_const (CCast0 (_, e, _)) = is_zero_int_const e
@@ -7355,26 +7341,8 @@ struct
         define_named_value_if_absent (prefix ^ suffix) tm lthy_acc) lthy defs
     end
 
-  fun intinf_to_int_checked what n =
-    let
-      val ge_min =
-        (case Int.minInt of
-           SOME lo => n >= IntInf.fromInt lo
-         | NONE => true)
-      val le_max =
-        (case Int.maxInt of
-           SOME hi => n <= IntInf.fromInt hi
-         | NONE => true)
-    in
-      if ge_min andalso le_max then IntInf.toInt n
-      else error ("micro_c_translate: " ^ what ^ " out of ML-int range: " ^ IntInf.toString n)
-    end
-
-  fun struct_name_of_cty (C_Ast_Utils.CStruct sname) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CStruct sname)) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CUnion sname) = SOME sname
-    | struct_name_of_cty (C_Ast_Utils.CPtr (C_Ast_Utils.CUnion sname)) = SOME sname
-    | struct_name_of_cty _ = NONE
+  val intinf_to_int_checked = C_Ast_Utils.intinf_to_int_checked
+  val struct_name_of_cty = C_Ast_Utils.struct_name_of_cty
 
   fun type_exists ctxt tname =
     can (Proof_Context.read_type_name {proper = true, strict = true} ctxt) tname
