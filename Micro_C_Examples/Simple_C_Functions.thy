@@ -171,6 +171,32 @@ lemma c_abs_val_spec [crush_specs]:
 by (crush_boot f: c_abs_val_def contract: c_abs_val_contract_def) (crush_base simp add:
   c_signed_less_def c_signed_sub_def c_signed_overflow_def Let_def)
 
+subsection \<open>Signed Addition (with Overflow Precondition)\<close>
+
+text \<open>
+  A function exercising signed addition directly.
+  The precondition establishes no-overflow using @{const c_signed_in_range},
+  and the postcondition shows the result equals @{term "word_of_int (sint a + sint b)"}.
+\<close>
+micro_c_translate \<open>
+  int signed_add(int a, int b) {
+    return a + b;
+  }
+\<close>
+
+definition c_signed_add_contract ::
+    \<open>c_int \<Rightarrow> c_int \<Rightarrow> ('s::{sepalg}, c_int, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_signed_add_contract a b \<equiv>
+    let pre  = \<langle>c_signed_in_range (sint a + sint b) LENGTH(32)\<rangle>;
+        post = \<lambda>r. \<langle>r = word_of_int (sint a + sint b)\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_signed_add_contract
+
+lemma c_signed_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_signed_add a b \<Turnstile>\<^sub>F c_signed_add_contract a b\<close>
+by (crush_boot f: c_signed_add_def contract: c_signed_add_contract_def)
+   (crush_base simp add: c_signed_add_def c_signed_overflow_def Let_def)
+
 end
 
 section \<open>C Unsigned Arithmetic Verification\<close>
