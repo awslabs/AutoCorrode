@@ -82,6 +82,13 @@ definition c_signed_mul :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
        else
          literal (word_of_int result_int)\<close>
 
+text \<open>
+  Signed division and modulo hardcode @{typ c_abort} because they must
+  construct @{const DivisionByZero}, a @{typ c_abort} value.  This means
+  they cannot be used in locales whose @{typ "'abort"} parameter differs
+  from @{typ c_abort} --- see also @{text c_unsigned_div} below.
+\<close>
+
 definition c_signed_div :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_div a b \<equiv>
@@ -126,6 +133,17 @@ definition c_unsigned_sub :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
 definition c_unsigned_mul :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_mul a b \<equiv> literal (a * b)\<close>
+
+text \<open>
+  Like the signed variants, unsigned division and modulo hardcode
+  @{typ c_abort} to construct @{const DivisionByZero}.  Unlike
+  @{const c_unsigned_add}/@{const c_unsigned_sub}/@{const c_unsigned_mul}
+  which are polymorphic in @{typ "'abort"}, these two fix it to
+  @{typ c_abort}.  Consequence: in a locale whose abort type parameter
+  differs from @{typ c_abort}, using division or modulo causes a type
+  unification error.  Avoid division in examples that also require
+  locale-specific abort types (e.g.\ pointer operations).
+\<close>
 
 definition c_unsigned_div :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
