@@ -80,8 +80,11 @@ struct
     | pointer_bits ILP32_LE = 32
     | pointer_bits LP64_BE = 64
 
-  (* Keep current default behavior for plain char in all built-in profiles for now.
-     This can be split per-profile later if needed. *)
+  (* NOTE: This function is NOT used by the translation pipeline.
+     Plain-char signedness is controlled by C_Compiler.get_compiler_profile,
+     which is set via the compiler: option (see resolve_c_type).
+     This ABI-level function is retained only for the abi_char_is_signed
+     metadata constant; it always returns false. *)
   fun char_is_signed _ = false
 end
 \<close>
@@ -437,7 +440,8 @@ struct
       else if has_char then
         if has_unsigned then SOME CChar  (* unsigned char = c_char = 8 word *)
         else if has_signed then SOME CSChar
-        else if #char_is_signed (C_Compiler.get_compiler_profile ()) then SOME CSChar else SOME CChar
+        else if #char_is_signed (C_Compiler.get_compiler_profile ()) then SOME CSChar else SOME CChar  (* compiler: option controls plain-char signedness *)
+
       else if has_short then
         if has_unsigned then SOME CUShort
         else SOME CShort
