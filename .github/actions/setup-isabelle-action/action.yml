@@ -11,6 +11,12 @@ runs:
         repository: isabelle-prover/mirror-afp-2025-1
         path: afp
 
+    - name: Patch AFP Isabelle/C parser
+      shell: bash
+      run: |
+        cd afp
+        git apply $GITHUB_WORKSPACE/.github/patches/isabelle_c_parser_language.patch
+
     - name: Set AFP component base
       shell: bash
       run: |
