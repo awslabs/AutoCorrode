@@ -73,6 +73,25 @@ lemma c_u_shl_spec [crush_specs]:
 by (crush_boot f: c_u_shl_def contract: c_u_shl_contract_def)
     (crush_base simp add: c_unsigned_shl_def)
 
+text \<open>Shift out of range: when the shift amount exceeds the bit width,
+  the operation correctly aborts with @{const ShiftOutOfRange}.\<close>
+
+definition c_u_shl_oor_contract ::
+    \<open>c_uint \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, c_abort) function_contract\<close> where
+  [crush_contracts]: \<open>c_u_shl_oor_contract x n \<equiv>
+    let pre  = \<langle>\<not> unat n < 32\<rangle>;
+        post = \<lambda>_. \<langle>True\<rangle>;
+        abort_post = \<lambda>ab. \<langle>ab = CustomAbort ShiftOutOfRange\<rangle>
+     in make_function_contract_with_abort pre post abort_post\<close>
+ucincl_auto c_u_shl_oor_contract
+
+lemma c_u_shl_oor_spec:
+  shows \<open>\<Gamma>; c_u_shl x n \<Turnstile>\<^sub>F c_u_shl_oor_contract x n\<close>
+  apply (crush_boot f: c_u_shl_def contract: c_u_shl_oor_contract_def)
+  apply (simp only: c_unsigned_shl_def)
+  apply (crush_base simp add: c_shift_out_of_range_def c_abort_def)
+  done
+
 subsection \<open>Interesting semantic examples\<close>
 
 text \<open>Mask low byte: result fits in a byte.\<close>

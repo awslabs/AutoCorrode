@@ -108,8 +108,7 @@ struct
         in lthy' end
     end
 
-  fun abi_is_big_endian C_ABI.LP64_BE = true
-    | abi_is_big_endian _ = false
+  val abi_is_big_endian = C_ABI.big_endian
 
   fun mk_bool_term true = @{term True}
     | mk_bool_term false = @{term False}

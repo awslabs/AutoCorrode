@@ -40,6 +40,21 @@ locale c_abi_model =
   and c_abi_big_endian :: bool
   assumes c_abi_pointer_bits_supported [simp]: \<open>c_abi_pointer_bits = 32 \<or> c_abi_pointer_bits = 64\<close>
     and c_abi_long_bits_supported [simp]: \<open>c_abi_long_bits = 32 \<or> c_abi_long_bits = 64\<close>
+begin
+
+text \<open>
+  ABI-derived sizeof for C-level type names that vary by ABI.
+  Use these in manual specifications instead of @{text "c_sizeof TYPE(c_long)"},
+  which always returns 8 because @{typ c_long} is a fixed alias for @{typ "64 sword"}.
+\<close>
+
+definition c_sizeof_c_long :: nat where
+  \<open>c_sizeof_c_long \<equiv> c_abi_long_bits div 8\<close>
+
+definition c_sizeof_c_pointer :: nat where
+  \<open>c_sizeof_c_pointer \<equiv> c_abi_pointer_bits div 8\<close>
+
+end
 
 locale c_translation_model =
   c_pointer_model c_ptr_add c_ptr_shift_signed c_ptr_diff c_ptr_less c_ptr_le c_ptr_greater c_ptr_ge

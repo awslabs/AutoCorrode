@@ -217,4 +217,65 @@ unsigned int smoke_ctrl_switch_no_default(unsigned int x) {
 
 thm c_smoke_ctrl_switch_no_default_def
 
+section \<open>Nested Loop and Multi-Function Smoke\<close>
+
+micro_c_translate \<open>
+unsigned int smoke_ctrl_nested_break(unsigned int n) {
+  unsigned int count = 0;
+  for (unsigned int i = 0; i < n; i++) {
+    for (unsigned int j = 0; j < n; j++) {
+      if (j == 2) break;
+      count += 1;
+    }
+  }
+  return count;
+}
+\<close>
+
+thm c_smoke_ctrl_nested_break_def
+
+micro_c_translate \<open>
+unsigned int smoke_ctrl_nested_continue(unsigned int n) {
+  unsigned int count = 0;
+  for (unsigned int i = 0; i < n; i++) {
+    for (unsigned int j = 0; j < n; j++) {
+      if (j == 1) continue;
+      count += 1;
+    }
+  }
+  return count;
+}
+\<close>
+
+thm c_smoke_ctrl_nested_continue_def
+
+micro_c_translate \<open>
+static unsigned int smoke_ctrl_helper(unsigned int x) {
+  return x + 1;
+}
+unsigned int smoke_ctrl_caller(unsigned int a, unsigned int b) {
+  return smoke_ctrl_helper(a) + smoke_ctrl_helper(b);
+}
+\<close>
+
+thm c_smoke_ctrl_helper_def
+thm c_smoke_ctrl_caller_def
+
+section \<open>Enum in Expressions Smoke\<close>
+
+micro_c_translate \<open>
+enum smoke_ctrl_dir { SMOKE_LEFT = 0, SMOKE_RIGHT = 1, SMOKE_UP = 2, SMOKE_DOWN = 3 };
+unsigned int smoke_ctrl_enum_expr(unsigned int d) {
+  unsigned int r = 0;
+  switch (d) {
+    case SMOKE_LEFT: r = 10; break;
+    case SMOKE_RIGHT: r = 20; break;
+    default: r = SMOKE_UP + SMOKE_DOWN; break;
+  }
+  return r;
+}
+\<close>
+
+thm c_smoke_ctrl_enum_expr_def
+
 end
