@@ -23,6 +23,13 @@ begin
 end
 
 overloading
+  c_sizeof_schar \<equiv> \<open>c_sizeof :: c_schar itself \<Rightarrow> nat\<close>
+begin
+  definition c_sizeof_schar :: \<open>c_schar itself \<Rightarrow> nat\<close> where
+    \<open>c_sizeof_schar _ \<equiv> 1\<close>
+end
+
+overloading
   c_sizeof_short \<equiv> \<open>c_sizeof :: c_short itself \<Rightarrow> nat\<close>
 begin
   definition c_sizeof_short :: \<open>c_short itself \<Rightarrow> nat\<close> where
@@ -83,6 +90,10 @@ text \<open>Basic sizeof lemmas.\<close>
 lemma c_sizeof_char_val [simp]:
   shows \<open>c_sizeof TYPE(c_char) = 1\<close>
 by (simp add: c_sizeof_char_def)
+
+lemma c_sizeof_schar_val [simp]:
+  shows \<open>c_sizeof TYPE(c_schar) = 1\<close>
+by (simp add: c_sizeof_schar_def)
 
 lemma c_sizeof_short_val [simp]:
   shows \<open>c_sizeof TYPE(c_short) = 2\<close>
@@ -147,6 +158,13 @@ begin
 end
 
 overloading
+  c_alignof_schar \<equiv> \<open>c_alignof :: c_schar itself \<Rightarrow> nat\<close>
+begin
+  definition c_alignof_schar :: \<open>c_schar itself \<Rightarrow> nat\<close> where
+    \<open>c_alignof_schar _ \<equiv> 1\<close>
+end
+
+overloading
   c_alignof_short \<equiv> \<open>c_alignof :: c_short itself \<Rightarrow> nat\<close>
 begin
   definition c_alignof_short :: \<open>c_short itself \<Rightarrow> nat\<close> where
@@ -205,6 +223,10 @@ end
 lemma c_alignof_char_val [simp]:
   shows \<open>c_alignof TYPE(c_char) = 1\<close>
 by (simp add: c_alignof_char_def)
+
+lemma c_alignof_schar_val [simp]:
+  shows \<open>c_alignof TYPE(c_schar) = 1\<close>
+by (simp add: c_alignof_schar_def)
 
 lemma c_alignof_short_val [simp]:
   shows \<open>c_alignof TYPE(c_short) = 2\<close>
