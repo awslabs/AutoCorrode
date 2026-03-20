@@ -1,0 +1,16 @@
+--- a/thys/Isabelle_C/C11-FrontEnd/src/C_Parser_Language.thy
++++ b/thys/Isabelle_C/C11-FrontEnd/src/C_Parser_Language.thy
+@@ -344,8 +344,11 @@
+                   | (CDecl0 ([CTypeSpec0 (CSignedType0 _)], [], _)) => ("signed",decl)
+                   | (CDecl0 ([CTypeSpec0 (CUnsigType0 _)], [], _)) => ("unsigned",decl)
+                   | (CDecl0 ([CTypeSpec0 (CBoolType0 _)], [], _)) => ("bool",decl)
+-                  | (CDecl0 ([CTypeSpec0 (CIntType0 _)], [], _)) => ("int",decl)
+-                  | dd => error ("unknown declaration format : "^ @{make_string} dd)
++                  | (CDecl0 ([CTypeSpec0 (CIntType0 _)], [], _)) => ("int",decl)
++                  | (CDecl0 (_, [((Some (CDeclr0 (nameIdent,_,_,_,_)),_),_)], _)) =>
++                      (getVarName nameIdent, decl)
++                  | (CDecl0 (_, [], _)) => ("unknown", decl)
++                  | dd => ("unknown", dd)
+     in
+     case ident of [CFunDeclr0 (Right (declarations,_),_,_)] => Some (map transformDeclaration declarations)
+                                                | _ => None

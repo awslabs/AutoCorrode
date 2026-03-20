@@ -82,6 +82,13 @@ definition c_signed_mul :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
        else
          literal (word_of_int result_int)\<close>
 
+text \<open>
+  Signed division and modulo hardcode @{typ c_abort} because they must
+  construct @{const DivisionByZero}, a @{typ c_abort} value.  This means
+  they cannot be used in locales whose @{typ "'abort"} parameter differs
+  from @{typ c_abort} --- see also @{text c_unsigned_div} below.
+\<close>
+
 definition c_signed_div :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
   \<open>c_signed_div a b \<equiv>
@@ -93,6 +100,13 @@ definition c_signed_div :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
            c_signed_overflow
          else
            literal (word_of_int result_int)\<close>
+
+text \<open>
+  @{text "c_signed_mod"} checks the \emph{quotient} for overflow, not the remainder itself.
+  Per C11 6.5.5p6, if \<open>a/b\<close> is not representable, both \<open>a/b\<close> and \<open>a%b\<close> are undefined.
+  The canonical case is @{text "INT_MIN % (-1)"}: the remainder is 0, but
+  @{text "INT_MIN / (-1)"} overflows, so the operation is UB.
+\<close>
 
 definition c_signed_mod :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
     ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
@@ -126,6 +140,17 @@ definition c_unsigned_sub :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
 definition c_unsigned_mul :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_unsigned_mul a b \<equiv> literal (a * b)\<close>
+
+text \<open>
+  Like the signed variants, unsigned division and modulo hardcode
+  @{typ c_abort} to construct @{const DivisionByZero}.  Unlike
+  @{const c_unsigned_add}/@{const c_unsigned_sub}/@{const c_unsigned_mul}
+  which are polymorphic in @{typ "'abort"}, these two fix it to
+  @{typ c_abort}.  Consequence: in a locale whose abort type parameter
+  differs from @{typ c_abort}, using division or modulo causes a type
+  unification error.  Avoid division in examples that also require
+  locale-specific abort types (e.g.\ pointer operations).
+\<close>
 
 definition c_unsigned_div :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
     ('s, 'l word, 'r, c_abort, 'i, 'o) expression\<close> where
@@ -232,6 +257,20 @@ definition c_signed_shr :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
      else
        literal (word_of_int (sint a div 2 ^ unat b))\<close>
 
+text \<open>Conservative right shift: aborts on negative operands instead of relying
+  on implementation-defined arithmetic shift. Used by the @{text "conservative"}
+  compiler profile where no specific compiler behavior is assumed.\<close>
+
+definition c_signed_shr_conservative :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
+    ('s, 'l sword, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_signed_shr_conservative a b \<equiv>
+     if unat b \<ge> LENGTH('l) then
+       c_shift_out_of_range
+     else if sint a < 0 then
+       c_signed_overflow
+     else
+       literal (word_of_int (sint a div 2 ^ unat b))\<close>
+
 section \<open>C unsigned comparison operations\<close>
 
 definition c_unsigned_less :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
@@ -291,5 +330,18 @@ definition c_ucast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, '
 
 definition c_scast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_scast w \<equiv> literal (scast w)\<close>
+
+text \<open>Checked signed narrowing cast: aborts with @{text "SignedOverflow"} when
+  @{text "sint w"} does not fit in the target type's signed range. Used by the
+  @{text "conservative"} compiler profile where implementation-defined narrowing
+  truncation is not assumed.\<close>
+
+definition c_scast_checked :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, c_abort, 'i, 'o) expression\<close> where
+  \<open>c_scast_checked w \<equiv>
+     let v = sint w
+     in if v < -(2^(LENGTH('b) - 1)) \<or> v \<ge> 2^(LENGTH('b) - 1) then
+       c_signed_overflow
+     else
+       literal (word_of_int v)\<close>
 
 end

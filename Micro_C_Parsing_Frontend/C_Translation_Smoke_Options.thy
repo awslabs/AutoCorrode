@@ -1,6 +1,7 @@
 theory C_Translation_Smoke_Options
   imports
     C_To_Core_Translation
+    "Shallow_Separation_Logic.Separation_Algebra"
 begin
 
 section \<open>\<^verbatim>\<open>micro_c_translate\<close> Prefix Smoke\<close>
