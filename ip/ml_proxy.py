@@ -1421,8 +1421,8 @@ def main():
     # attach subcommand
     attach_parser = subparsers.add_parser(
         "attach", help="Attach to a running proxy's management console")
-    attach_parser.add_argument("--host", default=None,
-                               help="Connect to proxy for this SSH host")
+    attach_parser.add_argument("host", nargs="?", default=None,
+                               help="SSH host to connect to")
     attach_parser.add_argument("--mgmt-socket", default=None,
                                help="Path to mgmt socket (overrides --host and auto-discovery)")
 
