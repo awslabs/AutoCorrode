@@ -745,6 +745,18 @@ def pide_proxy(server_sock, scala_port, scala_password,
                     count_bytes(sum(len(c) for c in chunks))
                     continue
 
+                # Reverse-rewrite command_timing paths (remote→local)
+                if (kind == b"protocol" and path_rewrites and
+                        any(c == b"function=command_timing" for c in chunks)):
+                    chunks = [backward_rewrite(c, path_rewrites, label="command_timing",
+                                               quiet=True)
+                              for c in chunks]
+                    rewrite_counts["command_timing"] = rewrite_counts.get("command_timing", 0) + 1
+                    with scala_write_lock:
+                        write_pide_message(scala_sock, chunks)
+                    count_bytes(sum(len(c) for c in chunks))
+                    continue
+
                 # Forward unmodified
                 n = len(header_line) + 1 + sum(len(c) for c in chunks)
                 with scala_write_lock:
@@ -1722,16 +1734,7 @@ def main():
     if tmp_init:
         os.unlink(tmp_init.name)
 
-    # Step 8: Build remote command
-    env_parts = [
-        f"ISABELLE_PROCESS_OPTIONS={shlex.quote(remote_opts)}",
-        f"ISABELLE_INIT_SESSION={shlex.quote(remote_init)}",
-        f"ISABELLE_TMP={shlex.quote(remote_tmp)}",
-        f"POLYSTATSDIR={shlex.quote(remote_tmp)}",
-    ]
-    for k, v in target_env_vars.items():
-        env_parts.append(f"{k}={shlex.quote(v)}")
-    remote_cmd = " ".join(env_parts) + " " + " ".join(shlex.quote(a) for a in new_argv)
+    # Step 8: Build remote command (env vars assembled later, after path rewrites)
 
     # Rewrite the working directory for the remote.
     # Build processes (e.g. building HOL) use cwd=session_source_dir which is
@@ -1747,11 +1750,12 @@ def main():
     local_cwd = os.getcwd()
     is_heap_build = any("ML_Heap.save_child" in a for a in poly_argv)
     remote_src_dir = ""  # set if we rsync sources to remote
+    remote_cd = ""      # cd prefix for remote command
 
     if local_isabelle_home and local_cwd.startswith(local_isabelle_home):
         # Build inside ISABELLE_HOME (e.g. HOL): translate directly
         remote_cwd = local_cwd.replace(local_isabelle_home, target_isabelle_home)
-        remote_cmd = f"cd {shlex.quote(remote_cwd)} && " + remote_cmd
+        remote_cd = f"cd {shlex.quote(remote_cwd)} && "
         logger.debug(f"Remote cwd: {remote_cwd}")
     elif is_heap_build:
         # Build outside ISABELLE_HOME (e.g. user session): rsync sources to remote.
@@ -1764,7 +1768,7 @@ def main():
             ["rsync", "--copy-links", "-az", "-e", "ssh " + " ".join(ssh_control_flags()),
              "--chmod=a-w", local_cwd + "/", f"{host}:{remote_session_dir}/"],
             check=True)
-        remote_cmd = f"cd {shlex.quote(remote_session_dir)} && " + remote_cmd
+        remote_cd = f"cd {shlex.quote(remote_session_dir)} && "
         logger.debug(f"Remote cwd (synced): {remote_session_dir}")
 
     # Sync imported session directories that are outside ISABELLE_HOME.
@@ -1804,6 +1808,10 @@ def main():
     # Same as argv_rewrites, plus source dir rewrite for user sessions.
     path_rewrites = [(old.encode(), new.encode()) for old, new in argv_rewrites]
     if remote_src_dir:
+        # Parent directory (e.g. the -d . directory) maps to remote_src_dir
+        local_project_dir = os.path.dirname(local_cwd)
+        path_rewrites.append((local_project_dir.encode(), remote_src_dir.encode()))
+        # Session subdirectories (more specific, matched first due to sort)
         path_rewrites.append((local_cwd.encode(), remote_session_dir.encode()))
     for local_dir, remote_dir in imported_session_rewrites:
         path_rewrites.append((local_dir.encode(), remote_dir.encode()))
@@ -1811,6 +1819,46 @@ def main():
     logger.debug(f"path_rewrites ({len(path_rewrites)} entries):")
     for old, new in path_rewrites:
         logger.debug(f"  {old} -> {new}")
+
+    # Resolve ISABELLE_DIRECTORIES: look up the local symbolic value, resolve
+    # each $VAR locally, apply path rewrites, and forward the rewritten values
+    # to the remote. This ensures File.symbolic_path on the remote contracts
+    # paths (e.g. in command_timing) using $ISABELLE_PROJECT_BASE etc.
+    if local_isabelle_home:
+        local_isa_dirs = subprocess.run(
+            [local_isabelle_home + "/bin/isabelle", "getenv", "ISABELLE_DIRECTORIES"],
+            capture_output=True, text=True).stdout.strip()
+        if local_isa_dirs.startswith("ISABELLE_DIRECTORIES="):
+            local_isa_dirs = local_isa_dirs.split("=", 1)[1]
+        if local_isa_dirs:
+            # Use string rewrites (not bytes) since these are env var values
+            str_rewrites = [(o.decode(), n.decode()) for o, n in path_rewrites
+                            if isinstance(o, bytes)] if path_rewrites else []
+            str_rewrites += argv_rewrites
+            str_rewrites.sort(key=lambda x: -len(x[0]))
+            var_refs = re.findall(r'\$([A-Z_][A-Z_0-9]*)', local_isa_dirs)
+            for var in var_refs:
+                local_val = subprocess.run(
+                    [local_isabelle_home + "/bin/isabelle", "getenv", "-b", var],
+                    capture_output=True, text=True).stdout.strip()
+                if local_val:
+                    remote_val = forward_rewrite(local_val, str_rewrites,
+                                                 label=f"dir:{var}")
+                    target_env_vars[var] = remote_val
+                    logger.debug(f"ISABELLE_DIRECTORIES: {var}={local_val} -> {remote_val}")
+            target_env_vars["ISABELLE_DIRECTORIES"] = local_isa_dirs
+            logger.debug(f"ISABELLE_DIRECTORIES={local_isa_dirs}")
+
+    # Build remote command with all env vars (after path rewrites and ISABELLE_DIRECTORIES)
+    env_parts = [
+        f"ISABELLE_PROCESS_OPTIONS={shlex.quote(remote_opts)}",
+        f"ISABELLE_INIT_SESSION={shlex.quote(remote_init)}",
+        f"ISABELLE_TMP={shlex.quote(remote_tmp)}",
+        f"POLYSTATSDIR={shlex.quote(remote_tmp)}",
+    ]
+    for k, v in target_env_vars.items():
+        env_parts.append(f"{k}={shlex.quote(v)}")
+    remote_cmd = remote_cd + " ".join(env_parts) + " " + " ".join(shlex.quote(a) for a in new_argv)
 
     # Stats rewrite: (remote_path, local_path) for POLYSTATSDIR
     local_polystatsdir = os.environ.get("POLYSTATSDIR", "")
