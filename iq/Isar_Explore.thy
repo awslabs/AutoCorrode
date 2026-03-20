@@ -264,9 +264,9 @@ val _ = register {name = "isar_explore", pri = Task_Queue.urgent_pri}
 \<close>
 
 declare [[ML_write_global = true]]
-ML_file\<open>../ir/ir.ML\<close>
-ML_file\<open>../ir/tcp_handler.ML\<close>
-ML_file\<open>../ir/ml_repl.ML\<close>
+ML_file\<open>ir.ML\<close>
+ML_file\<open>tcp_handler.ML\<close>
+ML_file\<open>ml_repl.ML\<close>
 declare [[ML_write_global = false]]
 
 end
