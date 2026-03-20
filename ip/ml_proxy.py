@@ -2112,6 +2112,16 @@ def copy_heap_back(host, new_argv, argv_rewrites):
                 elapsed = time.time() - t0
                 size = os.path.getsize(local_heap)
                 logger.info(f"Heap copied successfully ({size} bytes, {elapsed:.1f}s)")
+                # Compute SHA1 digest and append to remote heap (matching what
+                # Scala's ML_Heap.write_file_digest does to the local copy).
+                # This keeps remote and local heaps identical.
+                try:
+                    ssh_run(host, "sh", "-c",
+                        f'digest="SHA1:$(sha1sum {shlex.quote(remote_heap)} | cut -d" " -f1)";'
+                        f'printf "%s" "$digest" >> {shlex.quote(remote_heap)}')
+                    logger.info(f"Appended digest to remote heap")
+                except Exception as e:
+                    logger.debug(f"Failed to append digest to remote heap: {e}")
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 logger.warning(f"Failed to copy heap: {e}")
 
