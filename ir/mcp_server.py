@@ -397,10 +397,12 @@ def main():
                    default="stdio")
     p.add_argument("--port", type=int, default=9148,
                    help="Port for SSE/streamable-http transport (default: 9148)")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="Host address to bind on (default: 127.0.0.1)")
     args = p.parse_args()
 
     if args.transport in ("sse", "streamable-http"):
-        mcp.settings.host = "0.0.0.0"
+        mcp.settings.host = args.host
         mcp.settings.port = args.port
         mcp.run(transport=args.transport)
     else:

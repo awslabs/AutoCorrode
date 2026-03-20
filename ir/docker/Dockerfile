@@ -36,4 +36,4 @@ CMD ["python3", "/opt/AutoCorrode/ir/repl.py", \
      "--session", "HOL", \
      "--host", "0.0.0.0", \
      "--isabelle", "/usr/local/Isabelle2025-2/bin/isabelle", \
-     "--mcp", "--mcp-options", "--transport streamable-http --port 9148"]
+     "--mcp", "--mcp-options", "--transport streamable-http --port 9148 --host 0.0.0.0"]

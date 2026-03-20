@@ -43,7 +43,7 @@ Starting MCP server...
 [MCP] INFO:     Waiting for application startup.
 [MCP] StreamableHTTP session manager started
 [MCP] INFO:     Application startup complete.
-[MCP] INFO:     Uvicorn running on http://0.0.0.0:9148 (Press CTRL+C to quit)
+[MCP] INFO:     Uvicorn running on http://127.0.0.1:9148 (Press CTRL+C to quit)
 ● MCP server started
 ```
 
