@@ -43,6 +43,7 @@ theory AutoCorrode
     "Micro_C_Examples.C_Void_Pointer_Examples"
     "Micro_C_Examples.C_Union_Examples"
     "Micro_C_Examples.C_Byte_Refinement"
+    "Micro_C_Examples.C_Misc_Examples"
     "Misc.Misc"
     "Lenses_And_Other_Optics.Lenses_And_Other_Optics"
     "Separation_Lenses.Separation_Lenses"

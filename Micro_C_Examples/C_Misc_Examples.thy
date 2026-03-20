@@ -68,23 +68,29 @@ subsection \<open>Range Case Labels\<close>
 
 micro_c_translate \<open>
   unsigned int range_case(unsigned int x) {
+    unsigned int result;
     switch (x) {
       case 1 ... 5:
-        return 1;
+        result = 1;
+        break;
       case 10 ... 20:
-        return 2;
+        result = 2;
+        break;
       default:
-        return 0;
+        result = 0;
+        break;
     }
+    return result;
   }
 \<close>
 
 definition c_range_case_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
   [crush_contracts]: \<open>c_range_case_contract x \<equiv>
-    let pre  = \<langle>True\<rangle>;
-        post = \<lambda>r. \<langle>r = (if 1 \<le> x \<and> x \<le> 5 then 1
-                         else if 10 \<le> x \<and> x \<le> 20 then 2
-                         else 0)\<rangle>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star>
+               \<langle>r = (if 1 \<le> x \<and> x \<le> 5 then 1
+                     else if 10 \<le> x \<and> x \<le> 20 then 2
+                     else 0)\<rangle>
      in make_function_contract pre post\<close>
 ucincl_auto c_range_case_contract
 

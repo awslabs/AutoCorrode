@@ -632,6 +632,59 @@ lemma c_double_val_spec [crush_specs]:
 by (crush_boot f: c_double_val_def contract: c_double_val_contract_def)
   (crush_base simp add: c_unsigned_add_def)
 
+subsection \<open>Mutable parameter: compound assignment and increment\<close>
+
+text \<open>
+  Test that compound assignment and pre/post increment on parameters are
+  correctly detected by \<^text>\<open>find_assigned_vars\<close> and promoted to locals.
+\<close>
+
+micro_c_translate \<open>
+  unsigned int param_compound(unsigned int x, unsigned int y) {
+    x += y;
+    return x;
+  }
+\<close>
+
+thm c_param_compound_def
+
+definition c_param_compound_contract :: \<open>c_uint \<Rightarrow> c_uint \<Rightarrow>
+      ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_param_compound_contract x y \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star>
+               \<langle>r = x + y\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_param_compound_contract
+
+lemma c_param_compound_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_param_compound x y \<Turnstile>\<^sub>F c_param_compound_contract x y\<close>
+by (crush_boot f: c_param_compound_def contract: c_param_compound_contract_def)
+  (crush_base simp add: c_unsigned_add_def)
+
+micro_c_translate \<open>
+  unsigned int param_inc(unsigned int x) {
+    x++;
+    return x;
+  }
+\<close>
+
+thm c_param_inc_def
+
+definition c_param_inc_contract :: \<open>c_uint \<Rightarrow>
+      ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_param_inc_contract x \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star>
+               \<langle>r = x + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_param_inc_contract
+
+lemma c_param_inc_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_param_inc x \<Turnstile>\<^sub>F c_param_inc_contract x\<close>
+by (crush_boot f: c_param_inc_def contract: c_param_inc_contract_def)
+  (crush_base simp add: c_unsigned_add_def)
+
 subsection \<open>Compound pointer dereference\<close>
 
 micro_c_translate \<open>
