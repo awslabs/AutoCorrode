@@ -531,6 +531,14 @@ def cmd_setup(args):
         if rc != 0:
             step_fail("Remote Isabelle installation failed")
 
+    # Ensure heaps are in user directory (not system directory)
+    migrate_script = (
+        f'SYS={remote_home}/heaps;'
+        f'USR=$({remote_isabelle} getenv -b ISABELLE_HEAPS);'
+        f'if [ -d "$SYS" ]; then mkdir -p "$USR" && rsync -a "$SYS"/ "$USR"/ && rm -rf "$SYS"; fi'
+    )
+    ssh_check(host, migrate_script)
+
     # Install AFP components
     install_afp_components(host, remote_home, args.components)
 
@@ -572,6 +580,8 @@ def cmd_setup(args):
 
     step_done()
     info(f"\n{_SYM_OK} Setup complete.")
+    info(f"\n  Use 'configure-remote.py run {host}' to get Isabelle flags for remote building.")
+    info(f"  See README.md for details and the isabelle-remote shell shortcut.")
 
 
 def _setup_write_local(host, remote_home, local_home,
