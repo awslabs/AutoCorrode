@@ -759,12 +759,29 @@ def cmd_run(args):
                          and f not in ("Pure", "HOL"))
     sync = args.sync_heaps
     if extra_heaps and sync is None:
+        # Check which heaps actually differ from remote
+        step(f"Checking {len(extra_heaps)} additional heaps against remote")
         step_done()
-        die(f"\n{_RED}{_BOLD}Action required:{_RESET} Local heaps not on remote: {_BOLD}{', '.join(extra_heaps)}{_RESET}\n"
-            f"You must either sync them or explicitly skip:\n"
-            f"  {_GREEN}--sync-heaps{_RESET}     Sync all local heaps to remote\n"
-            f"  {_YELLOW}--no-sync-heaps{_RESET}  Skip syncing (heaps will be rebuilt on demand)\n\n"
-            f"Setup is not complete until one of the above is chosen.")
+        remote_hdir = remote_user_heap_dir(host, base_platform)
+        stale = []
+        for heap in extra_heaps:
+            step(heap, indent=1)
+            local_hash = sha1_file(os.path.join(lhdir, heap))
+            remote_hash = remote_sha1(host, f"{remote_hdir}/{heap}")
+            if local_hash != remote_hash:
+                stale.append(heap)
+                msg = "missing on remote" if not remote_hash else "differs"
+                step_detail(f"{_YELLOW}⚠ {msg}{_RESET}")
+            else:
+                step_detail("up to date")
+        if not stale:
+            sync = False
+        else:
+            step_done()
+            die(f"\n{_RED}{_BOLD}Action required:{_RESET} Local heaps differ from remote: {_BOLD}{', '.join(stale)}{_RESET}\n"
+                f"You must either sync them or explicitly skip:\n"
+                f"  {_GREEN}--sync-heaps{_RESET}     Sync all local heaps to remote\n"
+                f"  {_YELLOW}--no-sync-heaps{_RESET}  Skip syncing (heaps will be rebuilt on demand)\n")
 
     if sync:
         step("Syncing heaps to remote")
