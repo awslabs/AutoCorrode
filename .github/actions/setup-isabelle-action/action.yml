@@ -15,7 +15,7 @@ runs:
       shell: bash
       run: |
         cd afp
-        git apply $GITHUB_WORKSPACE/.github/patches/isabelle_c_parser_language.patch
+        patch -p1 < $GITHUB_WORKSPACE/.github/patches/isabelle_c_parser_language.patch
 
     - name: Set AFP component base
       shell: bash

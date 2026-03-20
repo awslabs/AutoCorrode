@@ -2224,6 +2224,8 @@ struct
         end
     | case_label_value _ _ _ = error "micro_c_translate: unsupported case label expression"
 
+  (* Build condition for a case group: switch_var = label1 OR ... OR labelN.
+     Default labels map to default_cond, which should be ~(any explicit case matched). *)
   (* Build lo <= switch_var AND switch_var <= hi for range case labels *)
   fun mk_range_cond switch_var switch_cty tctx lo hi =
     let val lo_val = case_label_value switch_cty tctx lo
@@ -2232,8 +2234,6 @@ struct
         val leq = Isa_Const (\<^const_name>\<open>ord_class.less_eq\<close>, ty --> ty --> @{typ bool})
     in HOLogic.mk_conj (leq $ lo_val $ switch_var, leq $ switch_var $ hi_val) end
 
-  (* Build condition for a case group: switch_var = label1 OR ... OR labelN.
-     Default labels map to default_cond, which should be ~(any explicit case matched). *)
   fun make_switch_cond switch_var switch_cty tctx default_cond labels =
     let fun one_label (SingleCase e) =
               HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e)
@@ -3959,6 +3959,19 @@ struct
                   then translate_expr tctx expr
                   else find_match rest default_opt
         in find_match assoc_list NONE end
+    | translate_expr tctx (CBuiltinExpr0 (CBuiltinTypesCompatible0 (decl1, decl2, _))) =
+        let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
+            fun resolve_decl (CDecl0 (specs, _, _)) =
+                  C_Ast_Utils.resolve_c_type_full typedef_tab specs
+              | resolve_decl _ = NONE
+            val ty1 = resolve_decl decl1
+            val ty2 = resolve_decl decl2
+            val compatible = (ty1 = ty2 andalso Option.isSome ty1)
+        in (C_Term_Build.mk_literal_num C_Ast_Utils.CInt (if compatible then 1 else 0),
+            C_Ast_Utils.CInt)
+        end
+    | translate_expr _ (CBuiltinExpr0 _) =
+        unsupported "GCC builtin expression (only __builtin_types_compatible_p is supported)"
     | translate_expr tctx (CBuiltinExpr0 (CBuiltinTypesCompatible0 (decl1, decl2, _))) =
         let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
             fun resolve_decl (CDecl0 (specs, _, _)) =
