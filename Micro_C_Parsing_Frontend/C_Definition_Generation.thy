@@ -218,6 +218,8 @@ struct
       fun init_scalar_const_value (C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (n, _, _), _))) = n
         | init_scalar_const_value (C_Ast.CConst0 (C_Ast.CCharConst0 (C_Ast.CChar0 (c, _), _))) =
             C_Ast.integer_of_char c
+        | init_scalar_const_value (C_Ast.CConst0 (C_Ast.CCharConst0 (C_Ast.CChars0 _, _))) =
+            error "micro_c_translate: multi-character constant not supported in initializers"
         | init_scalar_const_value (C_Ast.CVar0 (ident, _)) =
             let val name = C_Ast_Utils.ident_name ident
             in case Symtab.lookup enum_tab name of
@@ -382,8 +384,20 @@ struct
               | process_one _ =
                   error "micro_c_translate: unsupported global declarator"
           in List.mapPartial process_one declarators end
+      fun resolve_decl_type_early (C_Ast.CDecl0 (specs, _, _)) =
+            C_Ast_Utils.resolve_c_type_full typedef_tab specs
+        | resolve_decl_type_early _ = NONE
+      fun check_static_assert expr msg_lit =
+            let val v = C_Ast_Utils.eval_const_int_expr resolve_decl_type_early expr
+            in if v = 0 then
+                 error ("micro_c_translate: _Static_assert failed: " ^
+                        C_Ast_Utils.extract_string_literal msg_lit)
+               else ()
+            end
       fun from_ext_decl (C_Ast.CDeclExt0 (C_Ast.CDecl0 (specs, declarators, _))) =
             process_decl specs declarators
+        | from_ext_decl (C_Ast.CDeclExt0 (C_Ast.CStaticAssert0 (expr, msg_lit, _))) =
+            (check_static_assert expr msg_lit; [])
         | from_ext_decl _ = []
     in
       List.concat (List.map from_ext_decl ext_decls)
@@ -458,6 +472,20 @@ struct
       val _ = if null typedef_defs then () else
         List.app (fn (name, _) =>
           writeln ("Registered typedef: " ^ name)) typedef_defs
+      (* Check _Static_assert declarations at top level *)
+      val C_Ast.CTranslUnit0 (all_ext_decls, _) = tu
+      fun resolve_decl_type_sa (C_Ast.CDecl0 (specs, _, _)) =
+            C_Ast_Utils.resolve_c_type_full typedef_tab specs
+        | resolve_decl_type_sa _ = NONE
+      val _ = List.app
+        (fn C_Ast.CDeclExt0 (C_Ast.CStaticAssert0 (expr, msg_lit, _)) =>
+              let val v = C_Ast_Utils.eval_const_int_expr resolve_decl_type_sa expr
+              in if v = 0 then
+                   error ("micro_c_translate: _Static_assert failed: " ^
+                          C_Ast_Utils.extract_string_literal msg_lit)
+                 else ()
+              end
+          | _ => ()) all_ext_decls
       val fundefs_raw =
         List.filter
           (fn C_Ast.CFunDef0 (_, declr, _, _, _) => keep_func (C_Ast_Utils.declr_name declr))

@@ -2169,12 +2169,20 @@ struct
 
   (* --- Switch statement helpers --- *)
 
-  (* Unwrap nested case/default labels from the C AST.
-     CCase0(1, CCase0(2, stmt)) becomes labels=[SOME 1, SOME 2], stmt *)
+  (* Structured case label representation *)
+  datatype case_label = SingleCase of nodeInfo cExpression
+                      | RangeCase of nodeInfo cExpression * nodeInfo cExpression
+                      | DefaultCase
+
+  (* Unwrap nested case/default/range labels from the C AST.
+     CCase0(1, CCase0(2, stmt)) becomes labels=[SingleCase 1, SingleCase 2], stmt
+     CCases0(lo, hi, stmt) becomes labels=[RangeCase(lo, hi)], stmt *)
   fun unwrap_case_labels (CCase0 (expr, inner, _)) labels =
-        unwrap_case_labels inner (SOME expr :: labels)
+        unwrap_case_labels inner (SingleCase expr :: labels)
+    | unwrap_case_labels (CCases0 (lo, hi, inner, _)) labels =
+        unwrap_case_labels inner (RangeCase (lo, hi) :: labels)
     | unwrap_case_labels (CDefault0 (inner, _)) labels =
-        unwrap_case_labels inner (NONE :: labels)
+        unwrap_case_labels inner (DefaultCase :: labels)
     | unwrap_case_labels stmt labels = (rev labels, stmt)
 
   (* Extract case groups from flat switch body items.
@@ -2186,6 +2194,10 @@ struct
         else {labels = rev labels, body = rev body, has_break = has_break} :: acc
       fun walk [] labels body acc = rev (close_group labels body false acc)
         | walk (CBlockStmt0 (stmt as CCase0 _) :: rest) labels body acc =
+            let val acc' = close_group labels body false acc
+                val (new_labels, first_stmt) = unwrap_case_labels stmt []
+            in walk rest new_labels [CBlockStmt0 first_stmt] acc' end
+        | walk (CBlockStmt0 (stmt as CCases0 _) :: rest) labels body acc =
             let val acc' = close_group labels body false acc
                 val (new_labels, first_stmt) = unwrap_case_labels stmt []
             in walk rest new_labels [CBlockStmt0 first_stmt] acc' end
@@ -2212,12 +2224,22 @@ struct
         end
     | case_label_value _ _ _ = error "micro_c_translate: unsupported case label expression"
 
+  (* Build lo <= switch_var AND switch_var <= hi for range case labels *)
+  fun mk_range_cond switch_var switch_cty tctx lo hi =
+    let val lo_val = case_label_value switch_cty tctx lo
+        val hi_val = case_label_value switch_cty tctx hi
+        val ty = C_Ast_Utils.hol_type_of switch_cty
+        val leq = Isa_Const (\<^const_name>\<open>ord_class.less_eq\<close>, ty --> ty --> @{typ bool})
+    in HOLogic.mk_conj (leq $ lo_val $ switch_var, leq $ switch_var $ hi_val) end
+
   (* Build condition for a case group: switch_var = label1 OR ... OR labelN.
      Default labels map to default_cond, which should be ~(any explicit case matched). *)
   fun make_switch_cond switch_var switch_cty tctx default_cond labels =
-    let fun one_label (SOME e) =
+    let fun one_label (SingleCase e) =
               HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e)
-          | one_label NONE = default_cond
+          | one_label (RangeCase (lo, hi)) =
+              mk_range_cond switch_var switch_cty tctx lo hi
+          | one_label DefaultCase = default_cond
         fun combine [] = Isa_Const (\<^const_name>\<open>HOL.False\<close>, @{typ bool})
           | combine [c] = c
           | combine (c :: cs) =
@@ -2228,14 +2250,17 @@ struct
   (* Build a condition that says whether switch_var matches any explicit case label. *)
   fun make_any_case_match switch_var switch_cty tctx groups =
     let val labels = List.concat (List.map #labels groups)
-                    |> List.mapPartial I
-        fun one_label e = HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e)
+        fun one_label (SingleCase e) =
+              SOME (HOLogic.mk_eq (switch_var, case_label_value switch_cty tctx e))
+          | one_label (RangeCase (lo, hi)) =
+              SOME (mk_range_cond switch_var switch_cty tctx lo hi)
+          | one_label DefaultCase = NONE
         fun combine [] = Isa_Const (\<^const_name>\<open>HOL.False\<close>, @{typ bool})
           | combine [c] = c
           | combine (c :: cs) =
               Isa_Const (\<^const_name>\<open>HOL.disj\<close>,
                 @{typ bool} --> @{typ bool} --> @{typ bool}) $ c $ (combine cs)
-    in combine (List.map one_label labels) end
+    in combine (List.mapPartial one_label labels) end
 
   (* --- Break/continue AST scanners --- *)
 
@@ -3695,6 +3720,8 @@ struct
         (C_Term_Build.mk_literal_num C_Ast_Utils.CInt
            (intinf_to_int_checked "character literal" (integer_of_char c)),
          C_Ast_Utils.CInt)
+    | translate_expr _ (CConst0 (CCharConst0 (CChars0 _, _))) =
+        unsupported "multi-character constant (implementation-defined in C)"
     | translate_expr _ (CConst0 (CStrConst0 (CString0 (abr_str, _), _))) =
         (* String literal: produce a c_char list with null terminator *)
         let val s = C_Ast_Utils.abr_string_to_string abr_str
@@ -3932,6 +3959,19 @@ struct
                   then translate_expr tctx expr
                   else find_match rest default_opt
         in find_match assoc_list NONE end
+    | translate_expr tctx (CBuiltinExpr0 (CBuiltinTypesCompatible0 (decl1, decl2, _))) =
+        let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
+            fun resolve_decl (CDecl0 (specs, _, _)) =
+                  C_Ast_Utils.resolve_c_type_full typedef_tab specs
+              | resolve_decl _ = NONE
+            val ty1 = resolve_decl decl1
+            val ty2 = resolve_decl decl2
+            val compatible = (ty1 = ty2 andalso Option.isSome ty1)
+        in (C_Term_Build.mk_literal_num C_Ast_Utils.CInt (if compatible then 1 else 0),
+            C_Ast_Utils.CInt)
+        end
+    | translate_expr _ (CBuiltinExpr0 _) =
+        unsupported "GCC builtin expression (only __builtin_types_compatible_p is supported)"
     | translate_expr _ _ =
         unsupported "expression"
 
@@ -4118,6 +4158,8 @@ struct
             fun init_scalar_const_value (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) = n
               | init_scalar_const_value (CConst0 (CCharConst0 (CChar0 (c, _), _))) =
                   integer_of_char c
+              | init_scalar_const_value (CConst0 (CCharConst0 (CChars0 _, _))) =
+                  unsupported "multi-character constant in array initializer"
               | init_scalar_const_value (CVar0 (ident, _)) =
                   let val name = C_Ast_Utils.ident_name ident
                   in case C_Trans_Ctxt.lookup_enum_const tctx name of
@@ -4457,6 +4499,17 @@ struct
          | _ => translate_stmt tctx stmt)
     | translate_compound_items _ [CNestedFunDef0 _] =
         unsupported "nested function definition"
+    | translate_compound_items tctx (CBlockDecl0 (CStaticAssert0 (expr, msg_lit, _)) :: rest) =
+        let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
+            fun resolve_decl_type (CDecl0 (specs, _, _)) =
+                  C_Ast_Utils.resolve_c_type_full typedef_tab specs
+              | resolve_decl_type _ = NONE
+            val v = C_Ast_Utils.eval_const_int_expr resolve_decl_type expr
+        in if v = 0 then
+             unsupported ("_Static_assert failed: " ^
+                          C_Ast_Utils.extract_string_literal msg_lit)
+           else translate_compound_items tctx rest
+        end
     | translate_compound_items tctx (CBlockDecl0 decl :: rest) =
         let val decls = translate_decl tctx decl
             fun fold_decls [] tctx' = translate_compound_items tctx' rest

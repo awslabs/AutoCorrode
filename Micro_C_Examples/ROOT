@@ -17,3 +17,4 @@ session Micro_C_Examples = HOL +
     C_Void_Pointer_Examples
     C_Union_Examples
     C_Byte_Refinement
+    C_Misc_Examples

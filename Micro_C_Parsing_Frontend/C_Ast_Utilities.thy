@@ -97,6 +97,9 @@ structure C_Ast_Utils : sig
       C_Ast.nodeInfo C_Ast.cFunctionDef
       -> (string * C_Ast.nodeInfo C_Ast.cExpression list) list
   val fundef_is_pure_with : unit Symtab.table -> C_Ast.nodeInfo C_Ast.cFunctionDef -> bool
+  val extract_string_literal : C_Ast.nodeInfo C_Ast.cStringLiteral -> string
+  val eval_const_int_expr : (C_Ast.nodeInfo C_Ast.cDeclaration -> c_numeric_type option)
+                            -> C_Ast.nodeInfo C_Ast.cExpression -> IntInf.int
 
   val extract_struct_defs_with_types : c_numeric_type Symtab.table
                                        -> C_Ast.nodeInfo C_Ast.cTranslationUnit
@@ -325,6 +328,8 @@ struct
         | accumulate (CTypeSpec0 (CTypeDef0 _)) flags = flags
         | accumulate (CTypeSpec0 _) _ =
             error "micro_c_translate: unsupported type specifier"
+        | accumulate (CAlignSpec0 _) flags = flags  (* _Alignas: silently ignored *)
+        | accumulate (CFunSpec0 _) flags = flags    (* inline/_Noreturn: silently ignored *)
         | accumulate _ flags = flags
       val (has_signed, has_unsigned, has_char, has_short, _, long_count, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
@@ -579,6 +584,47 @@ struct
            | NONE => NONE)
       | _ => resolve_c_type specs
     end
+
+  (* Extract the string from a C string literal node *)
+  fun extract_string_literal (CStrLit0 (CString0 (abr_str, _), _)) =
+        abr_string_to_string abr_str
+
+  (* Evaluate a constant integer expression at translation time.
+     Used for _Static_assert conditions and similar compile-time checks.
+     resolve_decl_type resolves CDecl0 to a c_numeric_type (for sizeof). *)
+  fun eval_const_int_expr resolve_decl_type expr =
+    let fun eval (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) = n
+          | eval (CConst0 (CCharConst0 (CChar0 (c, _), _))) = integer_of_char c
+          | eval (CSizeofType0 (decl, _)) =
+              (case resolve_decl_type decl of
+                 SOME cty => IntInf.fromInt (sizeof_c_type cty)
+               | NONE => error "micro_c_translate: _Static_assert: sizeof unsupported type")
+          | eval (CAlignofType0 (decl, _)) =
+              (case resolve_decl_type decl of
+                 SOME cty => IntInf.fromInt (alignof_c_type cty)
+               | NONE => error "micro_c_translate: _Static_assert: _Alignof unsupported type")
+          | eval (CUnary0 (CMinOp0, e, _)) = IntInf.~ (eval e)
+          | eval (CUnary0 (CPlusOp0, e, _)) = eval e
+          | eval (CUnary0 (CNegOp0, e, _)) =
+              if eval e = 0 then 1 else 0
+          | eval (CBinary0 (op_, lhs, rhs, _)) =
+              let val l = eval lhs val r = eval rhs
+              in case op_ of
+                   CEqOp0 => if l = r then 1 else 0
+                 | CNeqOp0 => if l <> r then 1 else 0
+                 | CLeOp0 => if l < r then 1 else 0
+                 | CGrOp0 => if l > r then 1 else 0
+                 | CLeqOp0 => if l <= r then 1 else 0
+                 | CGeqOp0 => if l >= r then 1 else 0
+                 | CAddOp0 => l + r
+                 | CSubOp0 => l - r
+                 | CMulOp0 => l * r
+                 | CLndOp0 => if l <> 0 andalso r <> 0 then 1 else 0
+                 | CLorOp0 => if l <> 0 orelse r <> 0 then 1 else 0
+                 | _ => error "micro_c_translate: _Static_assert: unsupported binary operator"
+              end
+          | eval _ = error "micro_c_translate: _Static_assert: unsupported expression in condition"
+    in eval expr end
 
   (* Conservative side-effect analysis for expression-order soundness checks.
      Calls and mutating operators are treated as side-effecting. *)
