@@ -163,6 +163,27 @@ lemma c_char_val_spec [crush_specs]:
 by (crush_boot f: c_char_val_def contract: c_char_val_contract_def)
    crush_base
 
+subsection \<open>Register Storage Class\<close>
+
+micro_c_translate \<open>
+  unsigned int register_add(register unsigned int x) {
+    register unsigned int y = x + 1;
+    return y;
+  }
+\<close>
+
+definition c_register_add_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_register_add_contract x \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = x + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_register_add_contract
+
+lemma c_register_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_register_add x \<Turnstile>\<^sub>F c_register_add_contract x\<close>
+by (crush_boot f: c_register_add_def contract: c_register_add_contract_def)
+   (crush_base simp add: c_unsigned_add_def)
+
 end
 
 end

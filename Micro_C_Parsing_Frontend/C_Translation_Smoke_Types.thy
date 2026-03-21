@@ -126,4 +126,13 @@ smoke_int16_t smoke_types_ret_caller(smoke_int16_t a, smoke_int16_t b) {
 
 thm c_smoke_types_ret_helper_def c_smoke_types_ret_caller_def
 
+micro_c_translate \<open>
+unsigned int smoke_types_register(register unsigned int x) {
+  register unsigned int y = x + 1;
+  return y;
+}
+\<close>
+
+thm c_smoke_types_register_def
+
 end
