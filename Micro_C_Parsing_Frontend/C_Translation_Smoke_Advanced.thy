@@ -122,4 +122,19 @@ void smoke_adv_struct_compound_lit(struct smoke_adv_compound_lit_pt *out) {
 
 thm c_smoke_adv_struct_compound_lit_def
 
+subsection \<open>Statement Expressions\<close>
+
+micro_c_translate \<open>
+unsigned int smoke_adv_stmt_expr(unsigned int a, unsigned int b) {
+  unsigned int m = ({
+    unsigned int t;
+    if (a > b) t = a; else t = b;
+    t;
+  });
+  return m;
+}
+\<close>
+
+thm c_smoke_adv_stmt_expr_def
+
 end

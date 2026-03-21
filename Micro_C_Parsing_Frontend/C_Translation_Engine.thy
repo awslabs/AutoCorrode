@@ -630,6 +630,14 @@ struct
   val current_visible_ctxt : Proof.context option Unsynchronized.ref =
     Unsynchronized.ref NONE
 
+  (* Forward reference for statement-expression translation.
+     Initialized after translate_compound_items_expr is defined. *)
+  val stmt_expr_translate_ref :
+    (C_Trans_Ctxt.t -> C_Ast.nodeInfo C_Ast.cCompoundBlockItem list
+     -> term * C_Ast_Utils.c_numeric_type) Unsynchronized.ref =
+    Unsynchronized.ref (fn _ => fn _ =>
+      error "micro_c_translate: statement expression forward ref not initialized")
+
   fun uses_raw_pointer_model () = true
 
   fun require_current_visible_ctxt () =
@@ -4089,6 +4097,10 @@ struct
             val offset = walk_offset struct_name desigs
             val size_cty = C_Ast_Utils.pointer_uint_cty ()
         in (C_Term_Build.mk_literal_num size_cty offset, size_cty) end
+    | translate_expr tctx (CStatExpr0 (CCompound0 (_, items, _), _)) =
+        (!stmt_expr_translate_ref) tctx items
+    | translate_expr _ (CStatExpr0 _) =
+        unsupported "statement expression with non-compound body"
     | translate_expr _ (CBuiltinExpr0 _) =
         unsupported "GCC builtin expression (only __builtin_types_compatible_p and __builtin_offsetof are supported)"
     | translate_expr _ _ =
@@ -4942,6 +4954,42 @@ struct
         end end
     | translate_compound_items _ _ = unsupported "block item"
 
+  (* GCC statement expression ({...}): like translate_compound_items but
+     returns the (term, cty) of the last expression instead of unit. *)
+  and translate_compound_items_expr _ [] = unsupported "empty statement expression"
+    | translate_compound_items_expr tctx [CBlockStmt0 (CExpr0 (Some expr, _))] =
+        translate_expr tctx expr
+    | translate_compound_items_expr tctx [CBlockStmt0 (CReturn0 (Some expr, _))] =
+        translate_expr tctx expr
+    | translate_compound_items_expr tctx (CBlockDecl0 decl :: rest) =
+        let val decls = translate_decl tctx decl
+            fun fold_decls [] tctx' = translate_compound_items_expr tctx' rest
+              | fold_decls ((name, init_term, cty, arr_meta, _) :: ds) tctx' =
+                  if C_Ast_Utils.is_ptr cty andalso not (Option.isSome arr_meta) then
+                    let val var = Isa_Free (name, isa_dummyT)
+                        val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Param var cty tctx'
+                    in if is_uninitialized_literal init_term then fold_decls ds tctx''
+                       else let val (inner, inner_cty) = fold_decls ds tctx''
+                            in (C_Term_Build.mk_bind init_term
+                                  (Term.lambda var inner), inner_cty) end
+                    end
+                  else
+                    let val val_type =
+                          let val ty = C_Ast_Utils.hol_type_of cty
+                          in if ty = isa_dummyT then expr_value_type init_term else ty end
+                        val alloc_expr =
+                          mk_resolved_var_alloc_typed (C_Trans_Ctxt.get_ctxt tctx') val_type init_term
+                        val var = mk_typed_ref_var tctx' name alloc_expr
+                        val tctx'' = C_Trans_Ctxt.add_var name C_Trans_Ctxt.Local var cty tctx'
+                        val (inner, inner_cty) = fold_decls ds tctx''
+                    in (C_Term_Build.mk_bind alloc_expr
+                          (Term.lambda var inner), inner_cty) end
+        in fold_decls decls tctx end
+    | translate_compound_items_expr tctx (CBlockStmt0 stmt :: rest) =
+        let val (inner, inner_cty) = translate_compound_items_expr tctx rest
+        in (C_Term_Build.mk_sequence (translate_stmt tctx stmt) inner, inner_cty) end
+    | translate_compound_items_expr _ _ = unsupported "complex statement expression item"
+
   (* Translate a C expression to a pure nat term (for loop bounds).
      Only integer literals and parameter variables are supported. *)
   and translate_pure_nat_expr _ (CConst0 (CIntConst0 (CInteger0 (n, _, _), _))) =
@@ -5652,6 +5700,8 @@ struct
   in
     fun find_loop_written_vars_local stmt = distinct (op =) (loop_stmt_writes stmt [])
   end
+
+  val _ = stmt_expr_translate_ref := translate_compound_items_expr
 
   fun translate_fundef struct_tab enum_tab typedef_tab func_ret_types func_param_types global_consts ctxt
       (CFunDef0 (specs, declr, _, body, _)) =

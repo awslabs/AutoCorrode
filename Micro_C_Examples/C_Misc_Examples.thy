@@ -238,6 +238,29 @@ micro_c_translate addr: nat \<open>
 
 thm c_compound_lit_write_def
 
+subsection \<open>Statement Expression\<close>
+
+micro_c_translate \<open>
+  unsigned int stmt_expr_add(unsigned int x) {
+    return ({
+      unsigned int r = x + 1;
+      r;
+    });
+  }
+\<close>
+
+definition c_stmt_expr_add_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_stmt_expr_add_contract x \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = x + 1\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_stmt_expr_add_contract
+
+lemma c_stmt_expr_add_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_stmt_expr_add x \<Turnstile>\<^sub>F c_stmt_expr_add_contract x\<close>
+by (crush_boot f: c_stmt_expr_add_def contract: c_stmt_expr_add_contract_def)
+   (crush_base simp add: c_unsigned_add_def)
+
 end
 
 end
