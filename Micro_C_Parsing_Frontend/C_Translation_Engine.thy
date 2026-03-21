@@ -4668,23 +4668,93 @@ struct
                   end
         in fold_decls decls tctx end
     | translate_compound_items tctx (CBlockStmt0 (CLabel0 (ident, inner_stmt, _, _)) :: rest) =
-        (* Label site: reset this label's goto flag, translate the labeled statement,
-           then continue with the rest of the block *)
         let val label_name = C_Ast_Utils.ident_name ident
             val false_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 0
-            val active' = List.filter (fn n => n <> label_name)
-                              (C_Trans_Ctxt.get_active_goto_labels tctx)
-            val tctx' = C_Trans_Ctxt.set_active_goto_labels active' tctx
-            val stmt_term = translate_stmt tctx' inner_stmt
-            val rest_term = translate_compound_items tctx' rest
+            val true_lit = C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1
+            (* Check if any goto in the remaining code (or inner_stmt) targets this label.
+               If so, this is a backward goto target and needs a bounded_while wrapper. *)
+            val backward_goto_targets =
+              C_Ast_Utils.find_goto_targets inner_stmt @
+              maps (fn CBlockStmt0 s => C_Ast_Utils.find_goto_targets s | _ => []) rest
+            val is_backward_target =
+              List.exists (fn n => n = label_name) backward_goto_targets
         in case C_Trans_Ctxt.lookup_goto_ref tctx label_name of
              SOME goto_ref =>
-               C_Term_Build.mk_sequence
-                 (C_Term_Build.mk_var_write goto_ref false_lit)
-                 (C_Term_Build.mk_sequence stmt_term rest_term)
+               if is_backward_target then
+                 (* Backward goto: wrap label body in bounded_while.
+                    Split rest at forward goto targets so they stay outside the while.
+                    flag := 1 (force first iteration)
+                    bounded_while fuel (flag != 0) (flag := 0; body; while_items)
+                    after_items (forward goto labels + remaining) *)
+                 let val active' = List.filter (fn n => n <> label_name)
+                                       (C_Trans_Ctxt.get_active_goto_labels tctx)
+                     (* Add backward goto label + forward targets from rest to active labels *)
+                     val rest_labels = find_block_labels rest
+                     val inner_labels = find_stmt_labels inner_stmt
+                     val tctx' = C_Trans_Ctxt.set_active_goto_labels
+                                   (distinct (op =) (label_name :: active' @ rest_labels @ inner_labels)) tctx
+                     val goto_refs = C_Trans_Ctxt.get_goto_refs tctx
+                     (* Split rest: items before first forward-goto label go in the while body;
+                        the label and everything after go outside. *)
+                     fun split_at_fwd_label [] = ([], [])
+                       | split_at_fwd_label (all as (CBlockStmt0 (CLabel0 (lid, _, _, _)) :: _)) =
+                           let val lname = C_Ast_Utils.ident_name lid
+                           in if List.exists (fn (n, _) => n = lname) goto_refs
+                                 andalso lname <> label_name
+                              then ([], all)
+                              else let val (pre, post) = split_at_fwd_label (tl all)
+                                   in (hd all :: pre, post) end
+                           end
+                       | split_at_fwd_label (item :: items) =
+                           let val (pre, post) = split_at_fwd_label items
+                           in (item :: pre, post) end
+                     val (while_items, after_items) = split_at_fwd_label rest
+                     (* Combine inner_stmt + while_items into a single compound block
+                        so the guard mechanism correctly wraps items after forward gotos
+                        (e.g., goto done inside if) with the done flag guard. *)
+                     val all_while_items = CBlockStmt0 inner_stmt :: while_items
+                     val while_body_term = translate_compound_items tctx' all_while_items
+                     val body_term =
+                       C_Term_Build.mk_sequence
+                         (C_Term_Build.mk_var_write goto_ref false_lit)
+                         while_body_term
+                     val cond_term = C_Term_Build.mk_var_read goto_ref
+                     val cond_bool =
+                       let val v = Isa_Free ("v__bkgoto", isa_dummyT)
+                           val nonzero =
+                             Isa_Const (\<^const_name>\<open>HOL.Not\<close>, isa_dummyT)
+                             $ (Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT)
+                                $ v
+                                $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT))
+                       in C_Term_Build.mk_bind cond_term
+                            (Term.lambda v (C_Term_Build.mk_literal nonzero))
+                       end
+                     val fuel_var = fresh_var [cond_bool, body_term] "while_fuel" @{typ nat}
+                     val while_term = C_Term_Build.mk_bounded_while fuel_var cond_bool body_term
+                     val after_term = translate_compound_items tctx after_items
+                 in C_Term_Build.mk_sequence
+                      (C_Term_Build.mk_var_write goto_ref true_lit)
+                      (C_Term_Build.mk_sequence while_term after_term)
+                 end
+               else
+                 (* Forward goto: reset flag and continue (existing behavior) *)
+                 let val active' = List.filter (fn n => n <> label_name)
+                                       (C_Trans_Ctxt.get_active_goto_labels tctx)
+                     val tctx' = C_Trans_Ctxt.set_active_goto_labels active' tctx
+                     val stmt_term = translate_stmt tctx' inner_stmt
+                     val rest_term = translate_compound_items tctx' rest
+                 in C_Term_Build.mk_sequence
+                      (C_Term_Build.mk_var_write goto_ref false_lit)
+                      (C_Term_Build.mk_sequence stmt_term rest_term)
+                 end
            | NONE =>
                (* Label not targeted by any goto — just translate normally *)
-               C_Term_Build.mk_sequence stmt_term rest_term
+               let val active' = List.filter (fn n => n <> label_name)
+                                     (C_Trans_Ctxt.get_active_goto_labels tctx)
+                   val tctx' = C_Trans_Ctxt.set_active_goto_labels active' tctx
+                   val stmt_term = translate_stmt tctx' inner_stmt
+                   val rest_term = translate_compound_items tctx' rest
+               in C_Term_Build.mk_sequence stmt_term rest_term end
         end
     | translate_compound_items tctx (CBlockStmt0 stmt :: rest) =
         (* Pointer alias assignment: when a pointer-typed Param variable is assigned,
@@ -5381,15 +5451,15 @@ struct
         end
     | translate_stmt tctx (CGoto0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
-            val is_forward_target =
+            val is_active_target =
               List.exists (fn n => n = name) (C_Trans_Ctxt.get_active_goto_labels tctx)
         in case C_Trans_Ctxt.lookup_goto_ref tctx name of
              SOME goto_ref =>
-               if is_forward_target then
+               if is_active_target then
                  C_Term_Build.mk_var_write goto_ref
                    (C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1)
                else
-                 unsupported ("non-forward goto not supported: " ^ name)
+                 unsupported ("goto to label in incompatible scope: " ^ name)
            | NONE => unsupported ("goto target not found: " ^ name)
         end
     | translate_stmt tctx (CLabel0 (_, stmt, _, _)) =

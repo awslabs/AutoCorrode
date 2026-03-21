@@ -967,6 +967,61 @@ lemma c_noop_loop_spec [crush_specs]:
   apply crush_base
   done
 
+subsection \<open>Backward goto\<close>
+
+text \<open>
+  Test backward goto: a label-based retry loop. The label @{text "start"}
+  is a backward goto target, wrapped in @{text "bounded_while"} with
+  fuel. The goto sets the flag, guards skip remaining code, and the
+  while re-enters.
+\<close>
+
+micro_c_translate \<open>
+  unsigned int count_down(unsigned int n) {
+    unsigned int i = n;
+  start:
+    if (i == 0) goto done;
+    i = i - 1;
+    goto start;
+  done:
+    return i;
+  }
+\<close>
+
+thm c_count_down_def
+
+definition c_count_down_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_count_down_contract n \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = 0\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_count_down_contract
+
+lemma c_count_down_spec:
+  assumes \<open>while_fuel = unat n\<close>
+  shows \<open>\<Gamma>; c_count_down while_fuel n \<Turnstile>\<^sub>F c_count_down_contract n\<close>
+  apply (crush_boot f: c_count_down_def contract: c_count_down_contract_def)
+  apply crush_base
+  apply (ucincl_discharge\<open>
+    rule_tac
+      INV=\<open>\<lambda>k. (\<Squnion>g. x \<mapsto>\<langle>\<top>\<rangle> g\<down>(1 :: c_uint)) \<star>
+               (\<Squnion>g. xa \<mapsto>\<langle>\<top>\<rangle> g\<down>(0 :: c_uint)) \<star>
+               (\<Squnion>g. xb \<mapsto>\<langle>\<top>\<rangle> g\<down>(of_nat k :: c_uint))\<close>
+      and INV'=\<open>\<lambda>k. (\<Squnion>g. x \<mapsto>\<langle>\<top>\<rangle> g\<down>(1 :: c_uint)) \<star>
+                    (\<Squnion>g. xa \<mapsto>\<langle>\<top>\<rangle> g\<down>(0 :: c_uint)) \<star>
+                    (\<Squnion>g. xb \<mapsto>\<langle>\<top>\<rangle> g\<down>(of_nat (Suc k) :: c_uint))\<close>
+      and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+      and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+    in wp_bounded_while_framedI\<close>)
+  apply (crush_base simp add: c_unsigned_eq_def c_unsigned_sub_def
+      unat_of_nat_eq word_of_nat_eq_0_iff of_nat_diff linorder_not_less
+      unat_gt_0 word_of_nat_less)+
+  apply (metis add.commute assms less_is_non_zero_p1 word_of_nat_less)
+  apply (metis add.commute assms less_is_non_zero_p1 word_of_nat_less)
+  apply (metis add.commute assms less_is_non_zero_p1 word_of_nat_less)
+  apply (simp add: assms unat_of_nat_eq)
+  done
+
 end
 
 section \<open>Fixed-width integer type verification (\<^verbatim>\<open>uint16_t\<close>)\<close>
