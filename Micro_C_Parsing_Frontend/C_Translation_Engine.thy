@@ -5104,43 +5104,57 @@ struct
               if contains_break body orelse contains_continue body orelse loop_var_mutated_or_escaped then
                 translate_general_for ()
               else
+                let
+                  val loop_cty =
+                    (case stmt of
+                       CFor0 (Right (CDecl0 (specs, [((Some declr, _), _)], _)), _, _, _, _) =>
+                         let
+                           val base_cty =
+                             (case C_Ast_Utils.resolve_c_type_full
+                                     (C_Trans_Ctxt.get_typedef_tab tctx) specs of
+                                SOME C_Ast_Utils.CVoid => C_Ast_Utils.CInt
+                              | SOME t => t
+                              | NONE => C_Ast_Utils.CInt)
+                         in
+                           C_Ast_Utils.apply_ptr_depth base_cty
+                             (C_Ast_Utils.pointer_depth_of_declr declr)
+                         end
+                     | _ => C_Ast_Utils.CInt)
+                  val is_unsigned_loop =
+                    not (C_Ast_Utils.is_signed loop_cty) andalso
+                    not (C_Ast_Utils.is_bool loop_cty) andalso
+                    not (C_Ast_Utils.is_ptr loop_cty)
+                  fun build_for_loop start_nat bound_nat =
+                    let
+                      val loop_hol_ty = C_Ast_Utils.hol_type_of loop_cty
+                      val loop_var = Isa_Free (var_name, loop_hol_ty)
+                      val tctx' =
+                        C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param loop_var loop_cty tctx
+                      val body_term = translate_stmt tctx' body
+                      val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
+                    in
+                      C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term)
+                    end
+                in
+                if not is_unsigned_loop then translate_general_for ()
+                else
                 (case (try_translate_pure_nat_expr tctx init_c_expr,
                        try_translate_pure_nat_expr tctx bound_c_expr) of
                    (SOME start_nat, SOME bound_nat) =>
-                     let
-                       val loop_cty =
-                         (case stmt of
-                            CFor0 (Right (CDecl0 (specs, [((Some declr, _), _)], _)), _, _, _, _) =>
-                              let
-                                val base_cty =
-                                  (case C_Ast_Utils.resolve_c_type_full
-                                          (C_Trans_Ctxt.get_typedef_tab tctx) specs of
-                                     SOME C_Ast_Utils.CVoid => C_Ast_Utils.CInt
-                                   | SOME t => t
-                                   | NONE => C_Ast_Utils.CInt)
-                              in
-                                C_Ast_Utils.apply_ptr_depth base_cty
-                                  (C_Ast_Utils.pointer_depth_of_declr declr)
-                              end
-                          | _ => C_Ast_Utils.CInt)
-                     in
-                       if C_Ast_Utils.is_signed loop_cty orelse
-                          C_Ast_Utils.is_bool loop_cty orelse
-                          C_Ast_Utils.is_ptr loop_cty then
-                         translate_general_for ()
-                       else
-                         let
-                           val loop_hol_ty = C_Ast_Utils.hol_type_of loop_cty
-                           val loop_var = Isa_Free (var_name, loop_hol_ty)
-                           val tctx' =
-                             C_Trans_Ctxt.add_var var_name C_Trans_Ctxt.Param loop_var loop_cty tctx
-                           val body_term = translate_stmt tctx' body
-                           val range = C_Term_Build.mk_upt_int_range start_nat bound_nat
-                         in
-                           C_Term_Build.mk_raw_for_loop range (Term.lambda loop_var body_term)
-                         end
+                     build_for_loop start_nat bound_nat
+                 | (SOME start_nat, NONE) =>
+                     (* Bound is not a pure nat — evaluate monadically and use unat as fuel *)
+                     let val (bound_term, bound_cty) = translate_expr tctx bound_c_expr
+                     in if C_Ast_Utils.is_unsigned_int bound_cty then
+                          let val bound_var = Isa_Free ("v__bound", C_Ast_Utils.hol_type_of bound_cty)
+                          in C_Term_Build.mk_bind bound_term
+                               (Term.lambda bound_var
+                                 (build_for_loop start_nat (C_Term_Build.mk_unat bound_var)))
+                          end
+                        else translate_general_for ()
                      end
                  | _ => translate_general_for ())
+                end
               end
           | NONE => translate_general_for ()
         end

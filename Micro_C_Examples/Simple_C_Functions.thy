@@ -934,6 +934,39 @@ micro_c_translate \<open>
 
 thm c_ptr_eq_def
 
+subsection \<open>Arbitrary loop bound\<close>
+
+text \<open>
+  Test that for-loop bounds can be arbitrary unsigned expressions,
+  not just literals or parameters. The bound @{text "n + 1"} is evaluated
+  monadically and its @{text "unat"} value used as the loop range.
+\<close>
+
+micro_c_translate \<open>
+  unsigned int noop_loop(unsigned int n) {
+    for (unsigned int i = 0; i < n + 1; i++) {
+    }
+    return 0;
+  }
+\<close>
+
+thm c_noop_loop_def
+
+definition c_noop_loop_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_noop_loop_contract n \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = 0\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_noop_loop_contract
+
+lemma c_noop_loop_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_noop_loop n \<Turnstile>\<^sub>F c_noop_loop_contract n\<close>
+  apply (crush_boot f: c_noop_loop_def contract: c_noop_loop_contract_def)
+  apply crush_base
+  apply (rule wp_raw_for_loop_framedI'[where INV=\<open>\<lambda>_ _. \<langle>True\<rangle>\<close> and \<tau>=\<open>\<lambda>_. \<bottom>\<close>])
+  apply crush_base
+  done
+
 end
 
 section \<open>Fixed-width integer type verification (\<^verbatim>\<open>uint16_t\<close>)\<close>
