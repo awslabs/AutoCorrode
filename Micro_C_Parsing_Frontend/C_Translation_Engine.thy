@@ -2365,6 +2365,15 @@ struct
                   SOME value => (C_Term_Build.mk_literal_int value, C_Ast_Utils.CInt)
                 | NONE => error ("micro_c_translate: undefined variable: " ^ name)))
         end
+    (* C11 \<section>6.5p2: if a side effect on a scalar object is unsequenced relative
+       to either a different side effect on the same object or a value computation
+       using the same object, the behavior is undefined.
+       C11 \<section>6.5p3: the order of evaluation of subexpressions and the order in
+       which side effects take place are both unspecified (except as specified).
+       Strategy: when both operands have side effects, we use bind2_unseq which
+       leaves evaluation order unspecified. When only one operand has side effects
+       or neither does, we use bind2 (left-to-right). If the operands have
+       unsequenced conflicting accesses to the same variable, we reject. *)
     | translate_expr tctx (CBinary0 (binop, lhs, rhs, _)) =
         let val ctxt = C_Trans_Ctxt.get_ctxt tctx
             val (lhs', lhs_cty) = translate_expr tctx lhs
@@ -4214,7 +4223,8 @@ struct
     in mk_implicit_cast (cond_term, cond_cty, C_Ast_Utils.CBool)
     end
 
-  (* Extract variable declarations as a list of (name, init_term, cty, array_meta, list_backed_ptr_alias) tuples.
+  (* C11 \<section>6.7: declarations; \<section>6.7.9: initialization.
+     Extract variable declarations as a list of (name, init_term, cty, array_meta, list_backed_ptr_alias) tuples.
      Handles multiple declarators in a single CDecl0.
      For pointer declarators (e.g. int *p = &x), the returned cty is CPtr base_cty. *)
   fun translate_decl tctx (CDecl0 (specs, declarators, _)) =
@@ -4605,7 +4615,8 @@ struct
         find_stmt_labels stmt @ find_block_labels rest
     | find_block_labels (_ :: rest) = find_block_labels rest
 
-  (* Translate a compound block, right-folding declarations into nested binds.
+  (* C11 \<section>6.8.2: compound statement (block scope \<section>6.2.1p4).
+     Translate a compound block, right-folding declarations into nested binds.
      Goto support: when goto_refs is non-empty, each statement is guarded to be
      skipped if any active goto flag is set. At a label site, the corresponding
      goto flag is reset (written to 0) and removed from the active list. *)
@@ -4947,8 +4958,10 @@ struct
         end
     | try_bounded_for _ = NONE
 
+  (* C11 \<section>6.8.2: compound statement *)
   and translate_stmt tctx (CCompound0 (_, items, _)) =
         translate_compound_items tctx items
+    (* C11 \<section>6.8.6.4: return statement *)
     | translate_stmt _ (CReturn0 (None, _)) =
         C_Term_Build.mk_return_func C_Term_Build.mk_literal_unit
     | translate_stmt tctx (CReturn0 (Some expr, _)) =
@@ -4957,18 +4970,21 @@ struct
                 SOME ret_cty => mk_implicit_cast (term, expr_cty, ret_cty)
               | NONE => term
         in C_Term_Build.mk_return_func ret_term end
+    (* C11 \<section>6.8.3: expression statement *)
     | translate_stmt tctx (CExpr0 (Some expr, _)) =
         (* Expression statements are evaluated for side effects only.
            Discard the return value by sequencing with unit. *)
         C_Term_Build.mk_sequence (expr_term tctx expr) C_Term_Build.mk_literal_unit
     | translate_stmt _ (CExpr0 (None, _)) =
         C_Term_Build.mk_literal_unit
+    (* C11 \<section>6.8.4.1: if selection statement *)
     | translate_stmt tctx (CIf0 (cond, then_br, Some else_br, _)) =
         C_Term_Build.mk_two_armed_cond
           (ensure_bool_cond tctx cond) (translate_stmt tctx then_br) (translate_stmt tctx else_br)
     | translate_stmt tctx (CIf0 (cond, then_br, None, _)) =
         C_Term_Build.mk_two_armed_cond
           (ensure_bool_cond tctx cond) (translate_stmt tctx then_br) C_Term_Build.mk_literal_unit
+    (* C11 \<section>6.8.5.3: for iteration statement *)
     | translate_stmt tctx (stmt as CFor0 (init_part, cond_opt, step_opt, body, _)) =
         let
           fun translate_general_for () =
@@ -5323,6 +5339,7 @@ struct
               end
           | NONE => translate_general_for ()
         end
+    (* C11 \<section>6.8.5.1/\<section>6.8.5.2: while/do-while iteration statement *)
     | translate_stmt tctx (CWhile0 (cond, body_stmt, is_do_while, _)) =
         let val has_brk = contains_break body_stmt
             val has_cont = contains_continue body_stmt
@@ -5402,6 +5419,7 @@ struct
                          (Term.lambda ref_var t)
              in wrap_ref break_ref (wrap_ref continue_ref loop_term) end
         end
+    (* C11 \<section>6.8.4.2: switch selection statement *)
     | translate_stmt tctx (CSwitch0 (switch_expr, body, _)) =
         let val (switch_term_raw, switch_cty_raw) = translate_expr tctx switch_expr
             val switch_cty = C_Ast_Utils.integer_promote switch_cty_raw
@@ -5488,6 +5506,7 @@ struct
                          (Term.lambda matched_ref (build_groups groups))))
                   end))
         end
+    (* C11 \<section>6.8.6.1: goto statement *)
     | translate_stmt tctx (CGoto0 (ident, _)) =
         let val name = C_Ast_Utils.ident_name ident
             val is_active_target =
@@ -5501,17 +5520,20 @@ struct
                  unsupported ("goto to label in incompatible scope: " ^ name)
            | NONE => unsupported ("goto target not found: " ^ name)
         end
+    (* C11 \<section>6.8.1: labeled statement *)
     | translate_stmt tctx (CLabel0 (_, stmt, _, _)) =
         (* Labels as standalone statements (not in compound block context):
            just translate the labeled statement. The label flag reset is handled
            by translate_compound_items when the label appears in a block. *)
         translate_stmt tctx stmt
+    (* C11 \<section>6.8.6.2: continue statement *)
     | translate_stmt tctx (CCont0 _) =
         (case C_Trans_Ctxt.get_continue_ref tctx of
            SOME cont_ref =>
              C_Term_Build.mk_var_write cont_ref
                (C_Term_Build.mk_literal_num C_Ast_Utils.CUInt 1)
          | NONE => unsupported "continue outside loop")
+    (* C11 \<section>6.8.6.3: break statement *)
     | translate_stmt tctx (CBreak0 _) =
         (case C_Trans_Ctxt.get_break_ref tctx of
            SOME break_ref =>

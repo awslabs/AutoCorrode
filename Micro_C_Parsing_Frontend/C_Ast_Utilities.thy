@@ -856,6 +856,8 @@ struct
   fun list_intersects xs ys =
     List.exists (fn x => List.exists (fn y => x = y) ys) xs
 
+  (* C11 \<section>6.5p2: detect unsequenced conflicting accesses to the same
+     scalar object between two operands. *)
   fun expr_has_unsequenced_ub_risk e0 e1 =
     let
       val r0 = distinct (op =) (expr_reads_vars e0)
