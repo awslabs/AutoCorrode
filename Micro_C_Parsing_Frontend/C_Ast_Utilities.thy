@@ -381,8 +381,7 @@ struct
            so alignment is safely irrelevant. Verified example: C_Misc_Examples.thy. *)
         | accumulate (CAlignSpec0 _) flags = flags
         | accumulate (CFunSpec0 _) flags = flags    (* inline/_Noreturn: silently ignored *)
-        | accumulate (CTypeQual0 (CVolatQual0 _)) _ =
-            error "micro_c_translate: volatile qualifier not supported"
+        | accumulate (CTypeQual0 (CVolatQual0 _)) flags = flags  (* volatile: ignored for now; sound yield-based modeling is a follow-up *)
         | accumulate (CTypeQual0 (CAtomicQual0 _)) _ =
             error "micro_c_translate: _Atomic qualifier not supported (atomic semantics not modeled)"
         | accumulate (CTypeQual0 (CRestrQual0 _)) flags = flags  (* C11 \<section>6.7.3.1: restrict is optimization hint *)

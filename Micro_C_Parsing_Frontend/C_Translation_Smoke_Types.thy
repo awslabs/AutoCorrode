@@ -151,4 +151,21 @@ __int128 smoke_types_i128_negate(__int128 x) {
 
 thm c_smoke_types_i128_negate_def
 
+micro_c_translate addr: nat \<open>
+unsigned int smoke_types_volatile_read(volatile unsigned int *p) {
+  return *p;
+}
+\<close>
+
+thm c_smoke_types_volatile_read_def
+
+micro_c_translate \<open>
+unsigned int smoke_types_volatile_local(unsigned int x) {
+  volatile unsigned int y = x + 1;
+  return y;
+}
+\<close>
+
+thm c_smoke_types_volatile_local_def
+
 end
