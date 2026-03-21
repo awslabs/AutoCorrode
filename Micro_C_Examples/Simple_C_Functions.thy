@@ -894,6 +894,46 @@ lemma c_u_div_zero_spec:
 by (crush_boot f: c_u_div_def contract: c_u_div_zero_contract_def)
    (crush_base simp add: c_unsigned_div_def c_division_by_zero_def c_abort_def)
 
+subsection \<open>NULL pointer literal\<close>
+
+text \<open>
+  Test null pointer comparison: @{text "p == (void*)0"} checks whether a
+  pointer is null via @{text "gref_address"}.
+\<close>
+
+micro_c_translate \<open>
+  unsigned int is_null(unsigned int *p) {
+    if (p == (void*)0)
+      return 1;
+    return 0;
+  }
+\<close>
+
+thm c_is_null_def
+
+definition c_is_null_contract :: \<open>('addr, 'gv, c_uint) Global_Store.ref \<Rightarrow>
+    'gv \<Rightarrow> c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_is_null_contract p pg val \<equiv>
+    let pre  = p \<mapsto>\<langle>\<top>\<rangle> pg\<down>val \<star> \<langle>c_ptr_to_uintptr (\<flat> p) \<noteq> 0\<rangle>;
+        post = \<lambda>r. p \<mapsto>\<langle>\<top>\<rangle> pg\<down>val \<star> \<langle>r = 0\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_is_null_contract
+
+lemma c_is_null_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_is_null p \<Turnstile>\<^sub>F c_is_null_contract p pg val\<close>
+by (crush_boot f: c_is_null_def contract: c_is_null_contract_def)
+   crush_base
+
+micro_c_translate \<open>
+  unsigned int ptr_eq(unsigned int *p, unsigned int *q) {
+    if (p != q)
+      return 0;
+    return 1;
+  }
+\<close>
+
+thm c_ptr_eq_def
+
 end
 
 section \<open>Fixed-width integer type verification (\<^verbatim>\<open>uint16_t\<close>)\<close>

@@ -2293,9 +2293,11 @@ struct
 
   fun mk_ptr_is_null ptr_term =
     let val p = Isa_Free ("v__ptrcmp", isa_dummyT)
+        val raw_p = Isa_Const (\<^const_name>\<open>unwrap_focused\<close>, isa_dummyT --> isa_dummyT) $ p
+        val conv = resolve_required_current_visible_const "c_ptr_to_uintptr"
         val is_null =
           Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool})
-            $ (Isa_Const (\<^const_name>\<open>address\<close>, isa_dummyT --> isa_dummyT) $ p)
+            $ (conv $ raw_p)
             $ Isa_Const (\<^const_name>\<open>Groups.zero_class.zero\<close>, isa_dummyT)
     in C_Term_Build.mk_bind ptr_term (Term.lambda p (C_Term_Build.mk_literal is_null)) end
 
@@ -2436,6 +2438,11 @@ struct
             (* Pointer arithmetic: p + n or n + p via focus_nth *)
             (case (binop, lhs_cty, rhs_cty) of
               (CEqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
+                if is_zero_int_const rhs then
+                  (mk_ptr_is_null lhs', C_Ast_Utils.CBool)
+                else if is_zero_int_const lhs then
+                  (mk_ptr_is_null rhs', C_Ast_Utils.CBool)
+                else
                 let val l = Isa_Free ("v__lptr", isa_dummyT)
                     val r = Isa_Free ("v__rptr", isa_dummyT)
                     val eq_t = Isa_Const (\<^const_name>\<open>HOL.eq\<close>, isa_dummyT --> isa_dummyT --> @{typ bool}) $ l $ r
@@ -2443,6 +2450,21 @@ struct
                     C_Ast_Utils.CBool)
                 end
             | (CNeqOp0, C_Ast_Utils.CPtr _, C_Ast_Utils.CPtr _) =>
+                if is_zero_int_const rhs then
+                  let val b = Isa_Free ("v__isnull", @{typ bool})
+                  in (C_Term_Build.mk_bind (mk_ptr_is_null lhs') (Term.lambda b
+                        (C_Term_Build.mk_literal
+                          (Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool}) $ b))),
+                      C_Ast_Utils.CBool)
+                  end
+                else if is_zero_int_const lhs then
+                  let val b = Isa_Free ("v__isnull", @{typ bool})
+                  in (C_Term_Build.mk_bind (mk_ptr_is_null rhs') (Term.lambda b
+                        (C_Term_Build.mk_literal
+                          (Isa_Const (\<^const_name>\<open>HOL.Not\<close>, @{typ bool} --> @{typ bool}) $ b))),
+                      C_Ast_Utils.CBool)
+                  end
+                else
                 let val l = Isa_Free ("v__lptr", isa_dummyT)
                     val r = Isa_Free ("v__rptr", isa_dummyT)
                     val neq_t =
