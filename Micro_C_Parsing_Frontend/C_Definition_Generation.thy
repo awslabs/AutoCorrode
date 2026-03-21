@@ -167,7 +167,8 @@ struct
           fun subst_ty ty = Term.map_atyps (fn Term.TFree ns => subst_tfree ns | t => t) ty
           val record_fields = List.map (fn (b, ty) => (b, subst_ty ty)) record_fields
           val tyargs =
-            List.map (fn (_, t as Term.TFree (_, sort)) => (NONE, (t, sort))) tfree_subst
+            List.map (fn (_, t as Term.TFree (_, sort)) => (NONE, (t, sort))
+                      | _ => raise Fail "tfree_subst: unexpected non-TFree") tfree_subst
           val lthy' =
             Datatype_Records.record
               (Binding.name tname)
@@ -253,10 +254,8 @@ struct
             HOLogic.mk_number (C_Ast_Utils.hol_type_of cty) 0
       fun init_expr_const_term (C_Ast_Utils.CPtr _) _ =
             Const (\<^const_name>\<open>c_uninitialized\<close>, dummyT)
-        | init_expr_const_term target_cty (C_Ast.CConst0 (C_Ast.CStrConst0 (C_Ast.CString0 (abr_str, _), _))) =
-            (case target_cty of
-               _ =>
-                 error "micro_c_translate: string literal initializer requires char pointer target")
+        | init_expr_const_term _ (C_Ast.CConst0 (C_Ast.CStrConst0 (C_Ast.CString0 (_, _), _))) =
+                 error "micro_c_translate: string literal initializer requires char pointer target"
         | init_expr_const_term target_cty expr =
             HOLogic.mk_number (C_Ast_Utils.hol_type_of target_cty)
               (intinf_to_int_checked "global initializer literal"
@@ -899,7 +898,7 @@ ML \<open>
              | _ => [])
           val (state_ty, abort_ty, prompt_in_ty, prompt_out_ty) =
             (case ref_args of
-               [s, _, _, a, i, o] => (s, a, i, o)
+               [s, _, _, a, pi, po] => (s, a, pi, po)
              | _ => (dummyT, @{typ c_abort}, dummyT, dummyT))
         in
           SOME (Type (\<^type_name>\<open>expression\<close>,
@@ -1029,7 +1028,7 @@ local
   fun collect_load_opts opts =
     let
       fun step (CommonOpt topt) (topts, mopt) = (topt :: topts, mopt)
-        | step (ManifestOpt f) (_, SOME _) = error "micro_c_file: duplicate manifest option"
+        | step (ManifestOpt _) (_, SOME _) = error "micro_c_file: duplicate manifest option"
         | step (ManifestOpt f) (topts, NONE) = (topts, SOME f)
       val (rev_topts, manifest_opt) = fold step opts ([], NONE)
     in (collect_translate_opts (rev rev_topts), manifest_opt) end

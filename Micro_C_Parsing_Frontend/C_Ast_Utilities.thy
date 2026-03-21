@@ -390,7 +390,6 @@ struct
         | accumulate (CTypeQual0 _) flags = flags
         | accumulate (CStorageSpec0 (CExtern0 _)) flags = flags  (* extern: linkage only, safe to ignore *)
         | accumulate (CStorageSpec0 _) flags = flags  (* static/register/typedef: safe to ignore *)
-        | accumulate _ flags = flags
       val (has_signed, has_unsigned, has_char, has_short, _, long_count, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
           (false, false, false, false, false, 0, false, false) specs
@@ -690,11 +689,11 @@ struct
         Symtab.defined pure_tab (ident_name ident)
     | named_call_is_pure _ _ = false
 
-  fun expr_has_side_effect_with pure_tab (CAssign0 _) = true
-    | expr_has_side_effect_with pure_tab (CUnary0 (CPreIncOp0, _, _)) = true
-    | expr_has_side_effect_with pure_tab (CUnary0 (CPostIncOp0, _, _)) = true
-    | expr_has_side_effect_with pure_tab (CUnary0 (CPreDecOp0, _, _)) = true
-    | expr_has_side_effect_with pure_tab (CUnary0 (CPostDecOp0, _, _)) = true
+  fun expr_has_side_effect_with _ (CAssign0 _) = true
+    | expr_has_side_effect_with _ (CUnary0 (CPreIncOp0, _, _)) = true
+    | expr_has_side_effect_with _ (CUnary0 (CPostIncOp0, _, _)) = true
+    | expr_has_side_effect_with _ (CUnary0 (CPreDecOp0, _, _)) = true
+    | expr_has_side_effect_with _ (CUnary0 (CPostDecOp0, _, _)) = true
     | expr_has_side_effect_with pure_tab (CCall0 (f, args, _)) =
         let
           val sub_effects =
@@ -941,22 +940,16 @@ struct
       List.exists (fn fname => fname = field_name)
         (the_default [] (Symtab.lookup array_field_tab struct_name))
 
-    fun expr_is_list_backed_in_env struct_tab array_field_tab env struct_env (CVar0 (ident, _)) =
+    fun expr_is_list_backed_in_env _ _ env _ (CVar0 (ident, _)) =
           env_contains env (ident_name ident)
       | expr_is_list_backed_in_env struct_tab array_field_tab env struct_env (CCast0 (_, e, _)) =
           expr_is_list_backed_in_env struct_tab array_field_tab env struct_env e
-      | expr_is_list_backed_in_env struct_tab array_field_tab env struct_env (CMember0 (base, field_ident, _, _)) =
+      | expr_is_list_backed_in_env _ array_field_tab _ struct_env (CMember0 (base, field_ident, _, _)) =
           (case expr_struct_name struct_env base of
              SOME struct_name =>
                struct_field_is_array_backed array_field_tab struct_name (ident_name field_ident)
            | NONE => false)
       | expr_is_list_backed_in_env _ _ _ _ _ = false
-
-    fun add_decl_struct_bindings struct_names decl struct_env =
-      (case (declr_of_decl decl, struct_name_of_decl struct_names decl) of
-         (SOME declr, SOME sname) =>
-           Symtab.update (declr_name declr, sname) struct_env
-       | _ => struct_env)
 
     fun add_decl_array_bindings decl env =
       (case declr_of_decl decl of
@@ -1289,7 +1282,7 @@ struct
         | _ => NONE)
       ext_decls
 
-  fun cty_needs_parametric_struct parametric_structs (CPtr _) = true
+  fun cty_needs_parametric_struct _ (CPtr _) = true
     | cty_needs_parametric_struct parametric_structs (CStruct sname) =
         Symtab.defined parametric_structs sname
     | cty_needs_parametric_struct parametric_structs (CUnion sname) =
