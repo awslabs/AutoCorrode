@@ -494,32 +494,24 @@ struct
     | extract_struct_type_from_decl _ = NONE
 
   (* Like extract_struct_type_from_decl, but also recognizes typedef names
-     that refer to structs.  E.g. for "mlk_poly *r" where mlk_poly was
-     typedef'd from an anonymous struct, returns SOME "mlk_poly". *)
-  fun extract_struct_type_from_decl_full struct_names (CDecl0 (specs, _, _)) =
-        let fun find_struct [] = NONE
-              | find_struct (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
-                    Some ident, _, _, _), _)) :: _) = SOME (ident_name ident)
-              | find_struct (CTypeSpec0 (CTypeDef0 (ident, _)) :: _) =
+     that refer to known aggregates.  E.g. for "mlk_poly *r" where mlk_poly
+     was typedef'd from an anonymous struct, returns SOME "mlk_poly".
+     Parameterized by tag (CStructTag0 or CUnionTag0). *)
+  fun extract_aggregate_type_from_decl_full tag agg_names (CDecl0 (specs, _, _)) =
+        let fun find_agg [] = NONE
+              | find_agg (CTypeSpec0 (CSUType0 (CStruct0 (tag',
+                    Some ident, _, _, _), _)) :: _) =
+                    if tag' = tag then SOME (ident_name ident) else NONE
+              | find_agg (CTypeSpec0 (CTypeDef0 (ident, _)) :: _) =
                     let val n = ident_name ident
-                    in if List.exists (fn s => s = n) struct_names
+                    in if List.exists (fn s => s = n) agg_names
                        then SOME n else NONE end
-              | find_struct (_ :: rest) = find_struct rest
-        in find_struct specs end
-    | extract_struct_type_from_decl_full _ _ = NONE
+              | find_agg (_ :: rest) = find_agg rest
+        in find_agg specs end
+    | extract_aggregate_type_from_decl_full _ _ _ = NONE
 
-  (* Like extract_struct_type_from_decl_full, but for unions. *)
-  fun extract_union_type_from_decl_full union_names (CDecl0 (specs, _, _)) =
-        let fun find_union [] = NONE
-              | find_union (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0,
-                    Some ident, _, _, _), _)) :: _) = SOME (ident_name ident)
-              | find_union (CTypeSpec0 (CTypeDef0 (ident, _)) :: _) =
-                    let val n = ident_name ident
-                    in if List.exists (fn s => s = n) union_names
-                       then SOME n else NONE end
-              | find_union (_ :: rest) = find_union rest
-        in find_union specs end
-    | extract_union_type_from_decl_full _ _ = NONE
+  val extract_struct_type_from_decl_full = extract_aggregate_type_from_decl_full CStructTag0
+  val extract_union_type_from_decl_full = extract_aggregate_type_from_decl_full CUnionTag0
 
   (* Extract struct definitions (with member lists) from a top-level declaration.
      Returns SOME (struct_name, [field_name, ...]) for struct definitions. *)
@@ -1121,21 +1113,20 @@ struct
      Returns SOME (struct_name, [(field_name, field_type)]) for struct definitions.
      Falls back to CInt for fields whose type cannot be resolved. *)
   (* Extract struct type name from declaration specifiers (for struct-typed fields) *)
-  fun extract_struct_type_from_specs specs =
+  fun extract_aggregate_type_from_specs tag specs =
     case List.find (fn CTypeSpec0 (CSUType0 _) => true | _ => false) specs of
-      SOME (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0, Some ident, _, _, _), _))) =>
-        SOME (ident_name ident)
+      SOME (CTypeSpec0 (CSUType0 (CStruct0 (tag', Some ident, _, _, _), _))) =>
+        if tag' = tag then SOME (ident_name ident) else NONE
     | _ => NONE
 
-  (* Extract union type name from declaration specifiers *)
-  fun extract_union_type_from_specs specs =
-    case List.find (fn CTypeSpec0 (CSUType0 _) => true | _ => false) specs of
-      SOME (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0, Some ident, _, _, _), _))) =>
-        SOME (ident_name ident)
-    | _ => NONE
+  val extract_struct_type_from_specs = extract_aggregate_type_from_specs CStructTag0
+  val extract_union_type_from_specs = extract_aggregate_type_from_specs CUnionTag0
 
-  (* Like extract_struct_type_from_specs, but also recognizes typedef names
-     that refer to known structs. *)
+  (* The _full variants are intentionally kept separate rather than
+     parameterized: extract_struct_type_from_specs_full filters specs to
+     CTypeSpec0 only, while extract_union_type_from_specs_full excludes
+     CTypeQual0 and CStorageSpec0 (a broader filter needed for union
+     declarations that appear with qualifiers/storage specs). *)
   fun extract_struct_type_from_specs_full struct_names specs =
     case extract_struct_type_from_specs specs of
       SOME sn => SOME sn
@@ -1257,30 +1248,39 @@ struct
             | _ => NONE)
           members
 
-  fun extract_struct_def_with_types_from_decl typedef_tab (CDecl0 (specs, declrs, _)) =
-        let fun find_struct_def [] = NONE
-              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+  (* Extract struct or union definitions with field types from a top-level
+     declaration.  Parameterized by tag (CStructTag0 or CUnionTag0). *)
+  fun extract_aggregate_def_with_types_from_decl tag typedef_tab (CDecl0 (specs, declrs, _)) =
+        let fun find_def [] = NONE
+              | find_def (CTypeSpec0 (CSUType0 (CStruct0 (tag',
                     Some ident, Some members, _, _), _)) :: _) =
-                  SOME (ident_name ident, extract_member_field_info typedef_tab members)
-              | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
+                  if tag' = tag
+                  then SOME (ident_name ident, extract_member_field_info typedef_tab members)
+                  else NONE
+              | find_def (CTypeSpec0 (CSUType0 (CStruct0 (tag',
                     None, Some members, _, _), _)) :: _) =
-                  (* Anonymous struct in typedef: get name from declarator *)
-                  if List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
+                  if tag' = tag andalso
+                     List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
                   then (case declrs of
                       [((Some (CDeclr0 (Some td_ident, _, _, _, _)), _), _)] =>
                         SOME (ident_name td_ident,
                               extract_member_field_info typedef_tab members)
                     | _ => NONE)
                   else NONE
-              | find_struct_def (_ :: rest) = find_struct_def rest
-        in find_struct_def specs end
-    | extract_struct_def_with_types_from_decl _ _ = NONE
+              | find_def (_ :: rest) = find_def rest
+        in find_def specs end
+    | extract_aggregate_def_with_types_from_decl _ _ _ = NONE
 
-  fun extract_struct_defs_with_types typedef_tab (CTranslUnit0 (ext_decls, _)) =
+  fun extract_aggregate_defs_with_types tag typedef_tab (CTranslUnit0 (ext_decls, _)) =
     List.mapPartial
-      (fn CDeclExt0 decl => extract_struct_def_with_types_from_decl typedef_tab decl
+      (fn CDeclExt0 decl => extract_aggregate_def_with_types_from_decl tag typedef_tab decl
         | _ => NONE)
       ext_decls
+
+  val extract_struct_def_with_types_from_decl =
+    extract_aggregate_def_with_types_from_decl CStructTag0
+  val extract_struct_defs_with_types =
+    extract_aggregate_defs_with_types CStructTag0
 
   fun cty_needs_parametric_struct _ (CPtr _) = true
     | cty_needs_parametric_struct parametric_structs (CStruct sname) =
@@ -1307,32 +1307,14 @@ struct
       List.map #1 (Symtab.dest final)
     end
 
-  (* Extract union definitions with field types. Mirrors extract_struct_defs_with_types
-     but matches CUnionTag0 instead of CStructTag0. *)
-  fun extract_union_def_with_types_from_decl typedef_tab (CDecl0 (specs, declrs, _)) =
-        let fun find_union_def [] = NONE
-              | find_union_def (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0,
-                    Some ident, Some members, _, _), _)) :: _) =
-                  SOME (ident_name ident, extract_member_field_info typedef_tab members)
-              | find_union_def (CTypeSpec0 (CSUType0 (CStruct0 (CUnionTag0,
-                    None, Some members, _, _), _)) :: _) =
-                  if List.exists (fn CStorageSpec0 (CTypedef0 _) => true | _ => false) specs
-                  then (case declrs of
-                      [((Some (CDeclr0 (Some td_ident, _, _, _, _)), _), _)] =>
-                        SOME (ident_name td_ident,
-                              extract_member_field_info typedef_tab members)
-                    | _ => NONE)
-                  else NONE
-              | find_union_def (_ :: rest) = find_union_def rest
-        in find_union_def specs end
-    | extract_union_def_with_types_from_decl _ _ = NONE
+  val extract_union_def_with_types_from_decl =
+    extract_aggregate_def_with_types_from_decl CUnionTag0
+  val extract_union_defs_with_types =
+    extract_aggregate_defs_with_types CUnionTag0
 
-  fun extract_union_defs_with_types typedef_tab (CTranslUnit0 (ext_decls, _)) =
-    List.mapPartial
-      (fn CDeclExt0 decl => extract_union_def_with_types_from_decl typedef_tab decl
-        | _ => NONE)
-      ext_decls
-
+  (* Struct-only: record defs and array-field tracking.  Unions don't need
+     Isabelle record types (they use a single-field sum representation) and
+     don't participate in list-backed parameter analysis. *)
   fun extract_struct_record_def_from_decl prefix typedef_tab (CDecl0 (specs, declrs, _)) =
         let fun find_struct_def [] = NONE
               | find_struct_def (CTypeSpec0 (CSUType0 (CStruct0 (CStructTag0,
