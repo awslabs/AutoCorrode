@@ -1161,6 +1161,9 @@ struct
         List.mapPartial
           (fn CDecl0 (field_specs, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
                 let val fname = ident_name ident_node
+                    (* C struct/union fields cannot have void type; if resolve_c_type
+                       returns CVoid here, it means the specifiers were parsed as void
+                       (e.g. from an opaque typedef). Fallback to CInt for field layout. *)
                     val base_fty = case resolve_c_type_full typedef_tab field_specs of
                                      SOME CVoid => CInt
                                    | SOME ct => ct
@@ -1237,6 +1240,7 @@ struct
         List.mapPartial
           (fn CDecl0 (field_specs, [((Some (CDeclr0 (Some ident_node, derived, _, _, _)), _), _)], _) =>
                 let val fname = ident_name ident_node
+                    (* CVoid fallback: see comment in extract_member_field_info *)
                     val base_fty = case resolve_c_type_full typedef_tab field_specs of
                                      SOME CVoid => CInt
                                    | SOME ct => ct

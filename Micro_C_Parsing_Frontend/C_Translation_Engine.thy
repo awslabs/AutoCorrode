@@ -1104,6 +1104,12 @@ struct
   fun set_pointer_model model = (current_pointer_model := model)
 
 
+  (* Error conventions:
+     - error "micro_c_translate: ..." = internal translation error or
+       valid-but-impossible state (should not happen with well-formed C)
+     - unsupported "..." = valid C construct that we intentionally
+       do not translate (missing feature) *)
+
   open C_Ast
 
   fun unsupported construct =
