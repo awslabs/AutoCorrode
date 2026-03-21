@@ -890,10 +890,15 @@ struct
         end
     | list_backed_pointer_value_hol_ty _ = NONE
 
-  (* C11 implicit integer promotion cast.
-     Inserts c_scast or c_ucast when from_cty <> to_cty.
-     Cast direction: signed source \<rightarrow> c_scast (sign-extend), unsigned \<rightarrow> c_ucast (zero-extend).
-     Both c_scast/c_ucast are fully polymorphic: 'a word \<rightarrow> ('s, 'b word, ...) expression.
+  (* C11 \<section>6.3.1 (integer conversions): implicit cast for promotions and
+     usual arithmetic conversions.
+     \<section>6.3.1.2: _Bool conversion (scalar != 0 -> true).
+     \<section>6.3.1.3p2: unsigned conversion (modular reduction).
+     \<section>6.3.1.3p3: signed narrowing (implementation-defined; we use c_scast
+       for truncating, c_scast_checked for conservative profile).
+     \<section>6.3.1.4: integer-to-bool and void-cast.
+     Cast direction: signed source -> c_scast (sign-extend),
+     unsigned -> c_ucast (zero-extend).
      Must be defined before 'open C_Ast' to use Const/Free/dummyT. *)
   fun mk_implicit_cast (tm, from_cty, to_cty) =
     let
@@ -1194,6 +1199,9 @@ struct
 
   (* Translate a C binary operator to a HOL function constant, dispatching
      signed vs unsigned based on the operand type.
+     C11 \<section>6.5.5 (multiplicative: *, /, %), \<section>6.5.6 (additive: +, -),
+     \<section>6.5.7 (shifts: <<, >>), \<section>6.5.8 (relational: <, >, <=, >=),
+     \<section>6.5.9 (equality: ==, !=), \<section>6.5.10-12 (bitwise: &, ^, |).
      Arithmetic, comparison and bitwise operations use the overflow-checked
      C operations from C_Numeric_Types which are monadic (they can abort). *)
   fun translate_binop cty CAddOp0 =
@@ -2027,9 +2035,13 @@ struct
     | is_shift_binop CShrOp0 = true
     | is_shift_binop _ = false
 
-  (* C11 compound assignment arithmetic:
-     e1 op= e2 is computed in the same arithmetic type as e1 op e2
-     (with integer promotions/usual conversions), then converted back to e1 type. *)
+  (* C11 \<section>6.5.16.2: compound assignment (e1 op= e2).
+     Computed in the same arithmetic type as (e1 op e2) with integer
+     promotions/usual conversions (\<section>6.3.1.8), then converted back to e1's type.
+     For shifts (\<section>6.5.7): operands are independently promoted; the RHS is
+     additionally cast to the LHS promoted type because our Isabelle shift
+     operations require matching types (semantically safe since unat extracts
+     the numeric value regardless of type width for valid shift counts). *)
   fun prepare_compound_operands lhs_cty rhs_tm rhs_cty binop lhs_old_tm =
     if is_shift_binop binop then
       let
@@ -2122,6 +2134,39 @@ struct
             0 <= n andalso n < two_pow
         end
 
+  (* C11 \<section>6.4.4.1 Table 5: candidate types for integer constants.
+     The type of an integer constant is the first from the candidate list
+     in which its value can be represented.  The candidate list depends on
+     the suffix (U, L, LL) and the representation (decimal vs hex/octal).
+
+     Table 5 encoding — (is_unsigned, is_long, is_longlong, non_decimal) -> candidates:
+       no suffix, decimal:   int, long, long long
+       no suffix, hex/oct:   int, unsigned int, long, unsigned long, long long, unsigned long long
+       U,         any:       unsigned int, unsigned long, unsigned long long
+       L,         decimal:   long, long long
+       L,         hex/oct:   long, unsigned long, long long, unsigned long long
+       UL,        any:       unsigned long, unsigned long long
+       LL,        decimal:   long long
+       LL,        hex/oct:   long long, unsigned long long
+       ULL,       any:       unsigned long long  *)
+  val int_literal_table :
+      (bool * bool * bool * bool * C_Ast_Utils.c_numeric_type list) list =
+    let open C_Ast_Utils in [
+      (* (unsigned, long, longlong, non_decimal, candidates) *)
+      (false, false, false, false, [CInt, CLong, CLongLong]),
+      (false, false, false, true,  [CInt, CUInt, CLong, CULong, CLongLong, CULongLong]),
+      (true,  false, false, false, [CUInt, CULong, CULongLong]),
+      (true,  false, false, true,  [CUInt, CULong, CULongLong]),
+      (false, true,  false, false, [CLong, CLongLong]),
+      (false, true,  false, true,  [CLong, CULong, CLongLong, CULongLong]),
+      (true,  true,  false, false, [CULong, CULongLong]),
+      (true,  true,  false, true,  [CULong, CULongLong]),
+      (false, false, true,  false, [CLongLong]),
+      (false, false, true,  true,  [CLongLong, CULongLong]),
+      (true,  false, true,  false, [CULongLong]),
+      (true,  false, true,  true,  [CULongLong])
+    ] end
+
   fun int_literal_candidates repr (Flags0 bits) =
     let
       val is_unsigned = IntInf.andb (bits, 1) <> 0
@@ -2129,32 +2174,16 @@ struct
       val is_long_long = IntInf.andb (bits, 4) <> 0
       val non_decimal =
         (case repr of DecRepr0 => false | HexRepr0 => true | OctalRepr0 => true)
+      fun matches (u, l, ll, nd, _) =
+        u = is_unsigned andalso l = is_long andalso ll = is_long_long andalso nd = non_decimal
     in
-      case (is_unsigned, is_long, is_long_long, non_decimal) of
-        (false, false, false, false) =>
-          [C_Ast_Utils.CInt, C_Ast_Utils.CLong, C_Ast_Utils.CLongLong]
-      | (false, false, false, true) =>
-          [C_Ast_Utils.CInt, C_Ast_Utils.CUInt,
-           C_Ast_Utils.CLong, C_Ast_Utils.CULong,
-           C_Ast_Utils.CLongLong, C_Ast_Utils.CULongLong]
-      | (true, false, false, _) =>
-          [C_Ast_Utils.CUInt, C_Ast_Utils.CULong, C_Ast_Utils.CULongLong]
-      | (false, true, false, false) =>
-          [C_Ast_Utils.CLong, C_Ast_Utils.CLongLong]
-      | (false, true, false, true) =>
-          [C_Ast_Utils.CLong, C_Ast_Utils.CULong,
-           C_Ast_Utils.CLongLong, C_Ast_Utils.CULongLong]
-      | (true, true, false, _) =>
-          [C_Ast_Utils.CULong, C_Ast_Utils.CULongLong]
-      | (false, false, true, false) =>
-          [C_Ast_Utils.CLongLong]
-      | (false, false, true, true) =>
-          [C_Ast_Utils.CLongLong, C_Ast_Utils.CULongLong]
-      | (true, false, true, _) =>
-          [C_Ast_Utils.CULongLong]
-      | _ => unsupported "unsupported integer literal suffix combination"
+      case List.find matches int_literal_table of
+        SOME (_, _, _, _, candidates) => candidates
+      | NONE => unsupported "unsupported integer literal suffix combination"
     end
 
+  (* C11 \<section>6.4.4.1p5: determine the type of an integer constant by finding
+     the first candidate type that can represent the constant's value. *)
   fun choose_int_literal_type n repr flags =
     let
       fun first_fit [] =
@@ -2411,7 +2440,7 @@ struct
               end
         in
         case binop of
-          (* C logical operators short-circuit and return _Bool *)
+          (* C11 \<section>6.5.13-14: logical AND/OR short-circuit and return _Bool *)
           CLndOp0 =>
             let val lhs_bool = to_bool (lhs', lhs_cty)
                 val rhs_bool = to_bool (rhs', rhs_cty)
@@ -3129,6 +3158,7 @@ struct
                     end
              end
          | NONE => unsupported "unsupported compound operator on array element")
+    (* C11 \<section>6.5.16: simple assignment — value of RHS converted to LHS type *)
     | translate_expr tctx (CAssign0 (CAssignOp0, CVar0 (ident, _), rhs, _)) =
         let val name = C_Ast_Utils.ident_name ident
             val (rhs', rhs_cty) = translate_expr tctx rhs
@@ -3294,6 +3324,7 @@ struct
            | NONE => unsupported "compound assignment or non-variable lhs")
     | translate_expr _ (CAssign0 _) =
         unsupported "non-variable lhs in assignment"
+    (* C11 \<section>6.5.2.2: function call — arguments converted per parameter types *)
     | translate_expr tctx (CCall0 (CVar0 (ident, _), args, _)) =
         let val fname = C_Ast_Utils.ident_name ident
             val arg_terms_typed = List.map (translate_expr tctx) args
@@ -3435,8 +3466,8 @@ struct
                               | _ => unsupported "dereference on non-pointer expression")
             val ctxt = C_Trans_Ctxt.get_ctxt tctx
         in (mk_resolved_deref_expr ctxt result_cty expr', result_cty) end
+    (* C11 \<section>6.5.3.3p4: bitwise complement — operand undergoes integer promotion *)
     | translate_expr tctx (CUnary0 (CCompOp0, expr, _)) =
-        (* ~x : bitwise complement — C11: operand undergoes integer promotion *)
         let val (expr', cty) = translate_expr tctx expr
             val pcty = C_Ast_Utils.integer_promote cty
             val promoted = mk_implicit_cast (expr', cty, pcty)
@@ -3446,8 +3477,8 @@ struct
               else Isa_Const (\<^const_name>\<open>c_unsigned_not\<close>, isa_dummyT)
             val v = Isa_Free ("v__comp", isa_dummyT)
         in (C_Term_Build.mk_bind promoted (Term.lambda v (not_const $ v)), pcty) end
+    (* C11 \<section>6.5.3.3p3: unary minus — operand undergoes integer promotion *)
     | translate_expr tctx (CUnary0 (CMinOp0, expr, _)) =
-        (* -x : unary minus, translate as 0 - x — C11: operand undergoes integer promotion *)
         let val (expr', cty) = translate_expr tctx expr
             val pcty = C_Ast_Utils.integer_promote cty
             val promoted = mk_implicit_cast (expr', cty, pcty)
@@ -3457,21 +3488,23 @@ struct
               then Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT)
               else Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT)
         in (C_Term_Build.mk_bind2 sub_const zero promoted, pcty) end
+    (* C11 \<section>6.5.3.1: prefix increment/decrement *)
     | translate_expr tctx (CUnary0 (CPreIncOp0, expr, _)) =
         translate_inc_dec translate_expr translate_lvalue_location tctx true true expr
+    (* C11 \<section>6.5.2.4: postfix increment/decrement *)
     | translate_expr tctx (CUnary0 (CPostIncOp0, expr, _)) =
         translate_inc_dec translate_expr translate_lvalue_location tctx true false expr
     | translate_expr tctx (CUnary0 (CPreDecOp0, expr, _)) =
         translate_inc_dec translate_expr translate_lvalue_location tctx false true expr
     | translate_expr tctx (CUnary0 (CPostDecOp0, expr, _)) =
         translate_inc_dec translate_expr translate_lvalue_location tctx false false expr
+    (* C11 \<section>6.5.3.3p2: unary plus — operand undergoes integer promotion *)
     | translate_expr tctx (CUnary0 (CPlusOp0, expr, _)) =
-        (* +x : unary plus — C11: operand undergoes integer promotion *)
         let val (expr', cty) = translate_expr tctx expr
             val pcty = C_Ast_Utils.integer_promote cty
         in (mk_implicit_cast (expr', cty, pcty), pcty) end
+    (* C11 \<section>6.5.3.3p5: logical NOT — result is 0 if operand is nonzero, 1 if zero *)
     | translate_expr tctx (CUnary0 (CNegOp0, expr, _)) =
-        (* !x : logical NOT *)
         let val (expr', cty) = translate_expr tctx expr
             val b = mk_implicit_cast (expr', cty, C_Ast_Utils.CBool)
             val v = Isa_Free ("v__neg", @{typ bool})
@@ -3709,8 +3742,8 @@ struct
                   (Term.lambda v (C_Term_Build.mk_literal (accessor_const $ v)))),
               field_cty) end
         end
+    (* C11 \<section>6.5.15: conditional operator (ternary) *)
     | translate_expr tctx (CCond0 (cond, Some then_expr, else_expr, _)) =
-        (* x ? y : z — ternary conditional *)
         let val (then', then_cty) = translate_expr tctx then_expr
             val (else', else_cty) = translate_expr tctx else_expr
             val result_cty =
@@ -3722,8 +3755,10 @@ struct
                  | (C_Ast_Utils.CPtr C_Ast_Utils.CVoid, _) => else_cty
                  | _ => unsupported "ternary with incompatible pointer types")
               else if C_Ast_Utils.is_ptr then_cty orelse C_Ast_Utils.is_ptr else_cty
-              then (* One pointer, one integer — use the pointer type *)
-                if C_Ast_Utils.is_ptr then_cty then then_cty else else_cty
+              then (* C11 \<section>6.5.15p6: pointer with null pointer constant (integer 0) *)
+                if C_Ast_Utils.is_ptr then_cty andalso is_zero_int_const else_expr then then_cty
+                else if C_Ast_Utils.is_ptr else_cty andalso is_zero_int_const then_expr then else_cty
+                else unsupported "ternary mixing pointer with non-null integer (C11 \<section>6.5.15p3 constraint violation)"
               else C_Ast_Utils.usual_arith_conv (then_cty, else_cty)
             val then_cast = mk_implicit_cast (then', then_cty, result_cty)
             val else_cast = mk_implicit_cast (else', else_cty, result_cty)
@@ -3740,7 +3775,10 @@ struct
                  | (C_Ast_Utils.CPtr C_Ast_Utils.CVoid, _) => else_cty
                  | _ => unsupported "GNU ?: with incompatible pointer types")
               else if C_Ast_Utils.is_ptr cond_cty orelse C_Ast_Utils.is_ptr else_cty
-              then if C_Ast_Utils.is_ptr cond_cty then cond_cty else else_cty
+              then (* C11 \<section>6.5.15p6: pointer with null pointer constant *)
+                if C_Ast_Utils.is_ptr cond_cty andalso is_zero_int_const else_expr then cond_cty
+                else if C_Ast_Utils.is_ptr else_cty andalso is_zero_int_const cond then else_cty
+                else unsupported "GNU ?: mixing pointer with non-null integer"
               else C_Ast_Utils.usual_arith_conv (cond_cty, else_cty)
             val cond_v = Isa_Free ("v__condv", isa_dummyT)
             val cond_bool = mk_implicit_cast (C_Term_Build.mk_literal cond_v, cond_cty, C_Ast_Utils.CBool)
@@ -3751,15 +3789,15 @@ struct
                 (C_Term_Build.mk_two_armed_cond cond_bool then_cast else_cast)),
             result_cty)
         end
+    (* C11 \<section>6.4.4.4p10: character constants have type int *)
     | translate_expr _ (CConst0 (CCharConst0 (CChar0 (c, _), _))) =
-        (* C character constants have type int. *)
         (C_Term_Build.mk_literal_num C_Ast_Utils.CInt
            (intinf_to_int_checked "character literal" (integer_of_char c)),
          C_Ast_Utils.CInt)
     | translate_expr _ (CConst0 (CCharConst0 (CChars0 _, _))) =
         unsupported "multi-character constant (implementation-defined in C)"
+    (* C11 \<section>6.4.5: string literals — produce a c_char list with null terminator *)
     | translate_expr _ (CConst0 (CStrConst0 (CString0 (abr_str, _), _))) =
-        (* String literal: produce a c_char list with null terminator *)
         let val s = C_Ast_Utils.abr_string_to_string abr_str
             val char_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CChar
             val bytes = List.map (fn c => HOLogic.mk_number char_ty (Char.ord c))
@@ -3768,6 +3806,7 @@ struct
             val list_term = HOLogic.mk_list char_ty with_null
         in (C_Term_Build.mk_literal list_term, C_Ast_Utils.CPtr C_Ast_Utils.CChar)
         end
+    (* C11 \<section>6.5.17: comma operator — evaluates left-to-right, result is last *)
     | translate_expr _ (CComma0 ([], _)) =
         (C_Term_Build.mk_literal_unit, C_Ast_Utils.CInt)
     | translate_expr tctx (CComma0 (exprs, _)) =
@@ -3778,7 +3817,7 @@ struct
                   let val (rest_e, rest_ty) = fold_comma rest
                   in (C_Term_Build.mk_sequence e rest_e, rest_ty) end
         in fold_comma translated end
-    (* (target_type)expr : type cast *)
+    (* C11 \<section>6.5.4: cast expression — explicit type conversion *)
     | translate_expr tctx (CCast0 (target_decl, source_expr, _)) =
         let val (source_term, source_cty) = translate_expr tctx source_expr
             val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
@@ -3808,7 +3847,7 @@ struct
                | _ => unsupported "cast to non-numeric type")
         in (mk_implicit_cast (source_term, source_cty, target_cty), target_cty)
         end
-    (* sizeof(type) *)
+    (* C11 \<section>6.5.3.4: sizeof operator — yields the size in bytes *)
     | translate_expr tctx (CSizeofType0 (decl, _)) =
         let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
             val cty =

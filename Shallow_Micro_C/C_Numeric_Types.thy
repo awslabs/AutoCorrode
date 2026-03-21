@@ -27,9 +27,14 @@ type_synonym c_uint128 = \<open>128 word\<close>
 section \<open>C signed arithmetic with overflow detection\<close>
 
 text \<open>
-  In C, signed integer overflow is undefined behavior. We model this by
-  aborting with @{const SignedOverflow} via @{const c_abort}. Unsigned
-  arithmetic wraps as in standard word arithmetic.
+  C11 \<section>6.5p5: if an exceptional condition occurs during the evaluation
+  of an expression (that is, if the result is not mathematically defined or
+  not in the range of representable values for its type), the behavior is
+  undefined.  We model signed integer overflow by aborting with
+  @{const SignedOverflow} via @{const c_abort}.
+
+  C11 \<section>6.2.5p9: unsigned arithmetic wraps modulo \<open>2\<^sup>N\<close>, which is
+  exactly the behavior of Isabelle's word arithmetic.
 \<close>
 
 text \<open>
@@ -40,9 +45,11 @@ text \<open>
 \<close>
 
 text \<open>
-  C11 signed integer division truncates toward zero. Isabelle/HOL \<open>div\<close>
-  on @{typ int} is Euclidean (flooring), so we define helper operations with
-  C semantics and use those in signed @{text "/"} and @{text "%"}.
+  C11 \<section>6.5.5p6: when integers are divided, the result of the @{text "/"}
+  operator is the algebraic quotient with any fractional part discarded
+  (truncation toward zero).  Isabelle/HOL \<open>div\<close> on @{typ int} is
+  Euclidean (flooring), so we define helper operations with C semantics
+  and use those in signed @{text "/"} and @{text "%"}.
 \<close>
 
 definition c_trunc_div_int :: \<open>int \<Rightarrow> int \<Rightarrow> int\<close> where
@@ -124,9 +131,9 @@ definition c_signed_mod :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
 section \<open>C unsigned arithmetic (wrapping)\<close>
 
 text \<open>
-  Unsigned arithmetic in C wraps modulo \<open>2^LENGTH('l)\<close>, which is
-  exactly the behavior of Isabelle's word arithmetic. Division by zero is
-  still undefined behavior.
+  C11 \<section>6.2.5p9: unsigned arithmetic wraps modulo \<open>2^LENGTH('l)\<close>,
+  which is exactly the behavior of Isabelle's word arithmetic.
+  C11 \<section>6.5.5p5: division by zero is undefined behavior.
 \<close>
 
 definition c_unsigned_add :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
@@ -171,8 +178,10 @@ definition c_unsigned_mod :: \<open>'l::{len} word \<Rightarrow> 'l word \<Right
 section \<open>C bitwise operations\<close>
 
 text \<open>
-  Bitwise AND, OR, XOR, and NOT have no undefined behavior in C —
-  they operate on the bit representation for both signed and unsigned types.
+  C11 \<section>6.5.10--12 (bitwise AND/XOR/OR): these operators have no
+  undefined behavior --- they operate on the bit representation for both
+  signed and unsigned types.  C11 \<section>6.5.3.3p4 (bitwise NOT, @{text "~"}):
+  integer promotions are performed, then the result is the bitwise complement.
 \<close>
 
 definition c_signed_and :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Rightarrow>
@@ -210,11 +219,12 @@ definition c_unsigned_not :: \<open>'l::{len} word \<Rightarrow>
 section \<open>C shift operations\<close>
 
 text \<open>
-  Shift operations have undefined behavior when the shift amount is
-  greater than or equal to the bit width. Signed left shift additionally
-  has UB for negative operands or when the result overflows.
-  Signed right shift of a negative operand is implementation-defined
-  in C11/C17; we conservatively abort.
+  C11 \<section>6.5.7p3: if the shift count is negative or \<open>\<ge>\<close> the bit width
+  of the promoted left operand, the behavior is undefined.
+  C11 \<section>6.5.7p4: for signed left shift, if the left operand is negative
+  or the result would overflow, the behavior is undefined.
+  C11 \<section>6.5.7p5: for signed right shift of a negative operand, the result
+  is implementation-defined (arithmetic vs logical shift).
 \<close>
 
 definition c_unsigned_shl :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
@@ -271,6 +281,12 @@ definition c_signed_shr_conservative :: \<open>'l::{len} sword \<Rightarrow> 'l 
      else
        literal (word_of_int (sint a div 2 ^ unat b))\<close>
 
+text \<open>
+  C11 \<section>6.5.8--9: relational and equality operators compare values after
+  the usual arithmetic conversions.  The result type is @{typ int} (we use
+  @{typ bool} internally and convert at the translation layer).
+\<close>
+
 section \<open>C unsigned comparison operations\<close>
 
 definition c_unsigned_less :: \<open>'l::{len} word \<Rightarrow> 'l word \<Rightarrow>
@@ -310,9 +326,10 @@ definition c_signed_neq :: \<open>'l::{len} sword \<Rightarrow> 'l sword \<Right
 section \<open>C truthiness conversion\<close>
 
 text \<open>
-  In C, scalar conditions are interpreted as booleans via comparison against zero.
-  These helpers model the implicit conversion used by conditionals and logical
-  operators.
+  C11 \<section>6.3.1.2: when any scalar value is converted to @{text "_Bool"},
+  the result is 0 if the value compares equal to 0; otherwise the result is 1.
+  These helpers model the implicit conversion used by conditionals (\<section>6.5.15)
+  and logical operators (\<section>6.5.13--14).
 \<close>
 
 definition c_signed_truthy :: \<open>'l::{len} sword \<Rightarrow>
@@ -324,6 +341,15 @@ definition c_unsigned_truthy :: \<open>'l::{len} word \<Rightarrow>
   \<open>c_unsigned_truthy a \<equiv> literal (a \<noteq> 0)\<close>
 
 section \<open>C type cast operations\<close>
+
+text \<open>
+  C11 \<section>6.3.1.3 (signed and unsigned integer conversions):
+  \<^item> Conversion to unsigned: value is reduced modulo \<open>2\<^sup>N\<close> (\<section>6.3.1.3p2).
+  \<^item> Conversion to signed where the value cannot be represented: the result
+    is implementation-defined or an implementation-defined signal is raised
+    (\<section>6.3.1.3p3).  We model this with @{text c_scast} (truncating, matching
+    GCC/Clang) and @{text c_scast_checked} (aborting, for the conservative profile).
+\<close>
 
 definition c_ucast :: \<open>'a::{len} word \<Rightarrow> ('s, 'b::{len} word, 'r, 'abort, 'i, 'o) expression\<close> where
   \<open>c_ucast w \<equiv> literal (ucast w)\<close>

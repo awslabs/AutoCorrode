@@ -18,6 +18,42 @@ text \<open>
   which takes a C source string and produces definitions in the local theory.
 \<close>
 
+subsection \<open>Implementation-Defined Behavior\<close>
+
+text \<open>
+  AutoCorrode's C translation depends on several implementation-defined behaviors
+  from the C11 standard.  These are either controlled by the compiler/ABI profile
+  or hardcoded to match universal practice.
+
+  \<^bold>\<open>Controlled by compiler profile\<close> (@{text C_Compiler}):
+  \<^item> \<^bold>\<open>Plain char signedness\<close> (\<section>6.2.5p15): whether @{text char} is signed or
+    unsigned.  Controlled by @{text "char_is_signed"} in the compiler profile.
+    GCC/Clang on x86\_64: signed; GCC/Clang on aarch64: unsigned.
+  \<^item> \<^bold>\<open>Signed right shift\<close> (\<section>6.5.7p5): result of right-shifting a negative
+    signed value.  Controlled by @{text "signed_shr"}: @{text "ArithmeticShift"}
+    (sign-extending, matching GCC/Clang) or @{text "ConservativeShift"} (abort
+    on negative operand).
+  \<^item> \<^bold>\<open>Signed narrowing cast\<close> (\<section>6.3.1.3p3): result of converting a signed
+    value to a narrower signed type when the value is out of range.
+    Controlled by @{text "signed_narrowing"}: @{text "Truncating"} (modular
+    reduction, matching GCC/Clang) or @{text "Checked"} (abort on overflow).
+
+  \<^bold>\<open>Controlled by ABI profile\<close> (@{text C_ABI}):
+  \<^item> \<^bold>\<open>@{text long} bit width\<close>: 64 bits (LP64, LP64-BE) or 32 bits (ILP32, LLP64).
+  \<^item> \<^bold>\<open>Pointer bit width\<close>: 64 bits (LP64, LLP64, LP64-BE) or 32 bits (ILP32).
+  \<^item> \<^bold>\<open>Endianness\<close>: little-endian (default) or big-endian (LP64-BE, ILP32-BE).
+
+  \<^bold>\<open>Hardcoded assumptions\<close>:
+  \<^item> \<^bold>\<open>Two's complement\<close> (\<section>6.2.6.2): assumed for all signed types.  This was
+    implementation-defined in C11/C17 but mandated by C23 (\<section>6.2.6.2p2).
+    All modern compilers and ABIs use two's complement.
+  \<^item> \<^bold>\<open>Integer type widths\<close> (\<section>5.2.4.2.1): @{text "char"}=8, @{text "short"}=16,
+    @{text "int"}=32, @{text "long long"}=64, @{text "__int128"}=128 bits.
+    These match all standard ABIs (LP64, ILP32, LLP64).
+  \<^item> \<^bold>\<open>@{text "sizeof"} result type\<close> (\<section>6.5.3.4p5): @{text "size_t"} is
+    the pointer-width unsigned type from the ABI profile.
+\<close>
+
 subsection \<open>ABI Profiles\<close>
 
 text \<open>

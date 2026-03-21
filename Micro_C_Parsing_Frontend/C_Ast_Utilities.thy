@@ -9,6 +9,25 @@ begin
 
 subsection \<open>AST Utilities\<close>
 
+text \<open>
+  C11 standard sections implemented in this module:
+
+  \<^item> \<^bold>\<open>\<section>6.2.5\<close> (Types): @{text is_signed}, @{text is_unsigned_int}, @{text is_bool}, @{text is_ptr}
+    classify C numeric types by signedness, boolean, and pointer status.
+  \<^item> \<^bold>\<open>\<section>5.2.4.2.1\<close> (Sizes of integer types): @{text bit_width_of} returns the bit width
+    of each integer type, parameterized by the ABI profile for @{text long}/@{text pointer}.
+  \<^item> \<^bold>\<open>\<section>6.3.1.1p1\<close> (Integer conversion rank): @{text type_rank} assigns conversion ranks.
+  \<^item> \<^bold>\<open>\<section>6.3.1.1p2\<close> (Integer promotion): @{text integer_promote} promotes sub-int types to int.
+  \<^item> \<^bold>\<open>\<section>6.3.1.8\<close> (Usual arithmetic conversions): @{text usual_arith_conv} determines the
+    common type for binary arithmetic operations.
+  \<^item> \<^bold>\<open>\<section>6.4.4.1p5\<close> (Integer constant types): @{text int_literal_type} determines the C type
+    of an integer constant from its suffix flags.
+  \<^item> \<^bold>\<open>\<section>6.7.2\<close> (Type specifiers): @{text resolve_c_type} resolves a list of C declaration
+    specifiers into a @{text c_numeric_type}.
+  \<^item> \<^bold>\<open>\<section>7.20\<close> (Integer types \<open><stdint.h>\<close>), \<^bold>\<open>\<section>7.19\<close> (\<open><stddef.h>\<close>):
+    @{text builtin_typedefs} maps fixed-width type names to their @{text c_numeric_type}.
+\<close>
+
 text \<open>Helper functions for extracting information from Isabelle/C's AST nodes.\<close>
 
 ML \<open>
@@ -158,6 +177,11 @@ struct
   fun pointer_int_cty () =
     if C_ABI.pointer_bits (get_abi_profile ()) = 64 then CLong else CInt
 
+  (* C11 \<section>6.2.5p4-6: signed integer types are signed char, short int, int, long int,
+     long long int, and the extended signed types (__int128).
+     \<section>6.2.5p6: unsigned types are the corresponding unsigned variants.
+     \<section>6.2.5p2: _Bool is a separate unsigned integer type.
+     \<section>6.2.5p20: pointer types are derived types, not integer types. *)
   fun is_signed CInt   = true
     | is_signed CSChar  = true
     | is_signed CShort  = true
@@ -180,6 +204,10 @@ struct
                             andalso not (is_ptr cty) andalso cty <> CVoid
                             andalso (case cty of CStruct _ => false | CUnion _ => false | _ => true)
 
+  (* C11 \<section>5.2.4.2.1: minimum widths from <limits.h>.
+     We use exact widths matching standard ABI conventions:
+     char=8, short=16, int=32, long long=64. long and pointer widths
+     are ABI-dependent (queried from the current ABI profile). *)
   fun bit_width_of CChar = SOME 8
     | bit_width_of CSChar = SOME 8
     | bit_width_of CShort = SOME 16
@@ -225,6 +253,10 @@ struct
     | struct_name_of_cty (CPtr (CUnion sname)) = SOME sname
     | struct_name_of_cty _ = NONE
 
+  (* C11 \<section>7.20 <stdint.h>: exact-width integer types (uint8_t, int32_t, etc.)
+     C11 \<section>7.19 <stddef.h>: size_t
+     C11 \<section>7.20.1.4: uintptr_t/intptr_t -- integer types capable of holding a pointer.
+     Mappings are ABI-dependent for pointer-width types (size_t, uintptr_t, intptr_t). *)
   fun builtin_typedefs () =
     let
       val uintptr_cty = pointer_uint_cty ()
@@ -276,8 +308,12 @@ struct
     | type_name_of (CStruct s) = "struct " ^ s
     | type_name_of (CUnion s) = "union " ^ s
 
-  (* Determine C numeric type from integer literal suffix flags.
-     Flags0 of int is a bitfield: bit 0 = unsigned, bit 1 = long, bit 2 = long long. *)
+  (* C11 \<section>6.4.4.1p5: integer constant type from suffix flags.
+     Flags0 of int is a bitfield: bit 0 = unsigned (U suffix),
+     bit 1 = long (L suffix), bit 2 = long long (LL suffix).
+     This simplified version returns the base type from the suffix without
+     considering the constant's value; see choose_int_literal_type in
+     C_Translation_Engine for the full Table 5 lookup. *)
   fun int_literal_type (Flags0 bits) =
     let val is_unsigned = IntInf.andb (bits, 1) <> 0
         val is_long = IntInf.andb (bits, 2) <> 0
@@ -290,7 +326,10 @@ struct
        else CInt
     end
 
-  (* Parse a list of C declaration specifiers into a resolved numeric type.
+  (* C11 \<section>6.7.2 (Type specifiers): resolve a list of C declaration specifiers
+     into a c_numeric_type.  Specifier combinations follow \<section>6.7.2p2.
+     \<section>6.2.5p15: plain char signedness is implementation-defined (compiler profile).
+     \<section>6.7.2.2: enum specifiers treated as int.
      Returns NONE for void, struct types, and other non-numeric specifiers. *)
   fun resolve_c_type specs =
     (* _Bool is a distinct type in C — handle it before the accumulator.
@@ -330,6 +369,10 @@ struct
             error "micro_c_translate: unsupported type specifier"
         | accumulate (CAlignSpec0 _) flags = flags  (* _Alignas: silently ignored *)
         | accumulate (CFunSpec0 _) flags = flags    (* inline/_Noreturn: silently ignored *)
+        | accumulate (CTypeQual0 (CVolatQual0 _)) _ =
+            error "micro_c_translate: volatile qualifier not supported"
+        | accumulate (CTypeQual0 _) flags = flags   (* const/restrict/_Atomic: silently ignored *)
+        | accumulate (CStorageSpec0 _) flags = flags (* static/extern/register: silently ignored *)
         | accumulate _ flags = flags
       val (has_signed, has_unsigned, has_char, has_short, _, long_count, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
@@ -1340,7 +1383,10 @@ struct
       (fn CFDefExt0 fundef => SOME fundef | _ => NONE)
       ext_decls
 
-  (* C11 integer conversion rank (\<section>6.3.1.1) *)
+  (* C11 \<section>6.3.1.1p1: every integer type has an "integer conversion rank".
+     Ranks determine promotion and usual arithmetic conversion behavior.
+     _Bool < char = signed char < short < int < long < long long < __int128.
+     Unsigned types have the same rank as their signed counterparts. *)
   fun type_rank CBool   = 0
     | type_rank CChar   = 1
     | type_rank CSChar  = 1
@@ -1354,13 +1400,29 @@ struct
     | type_rank CULongLong = 5
     | type_rank CInt128    = 6
     | type_rank CUInt128   = 6
-    | type_rank _       = 3  (* default: int rank *)
+    | type_rank (CPtr _) = error "type_rank: pointer type has no integer conversion rank"
+    | type_rank CVoid    = error "type_rank: void type has no integer conversion rank"
+    | type_rank (CStruct _) = error "type_rank: struct type has no integer conversion rank"
+    | type_rank (CUnion _) = error "type_rank: union type has no integer conversion rank"
 
-  (* C11 \<section>6.3.1.1: integer promotion — sub-int types promote to int *)
+  (* C11 \<section>6.3.1.1p2: integer promotion.
+     If an int can represent all values of the original type, the value is
+     converted to int; otherwise to unsigned int. Since all sub-int types
+     (char, short, _Bool) fit in int on all supported ABIs, we always
+     promote to int. Types at int rank or above are unchanged. *)
   fun integer_promote cty =
     if type_rank cty < type_rank CInt then CInt else cty
 
-  (* C11 \<section>6.3.1.8: usual arithmetic conversions for binary ops *)
+  (* C11 \<section>6.3.1.8: usual arithmetic conversions for binary operations.
+     First, integer promotions are performed on both operands. Then:
+     1. If both have the same type, no further conversion.
+     2. If both signed or both unsigned: convert to higher rank.
+     3. If unsigned rank >= signed rank: convert to unsigned type.
+     4. If signed type can represent all values of the unsigned type:
+        convert to the signed type.
+     5. Otherwise: convert both to the unsigned type corresponding to
+        the signed operand's type.
+     Note: floating-point types are not supported (error in resolve_c_type). *)
   fun usual_arith_conv (lty, rty) =
     let val lp = integer_promote lty
         val rp = integer_promote rty
@@ -1379,7 +1441,7 @@ struct
                   else (* rule 3: convert to unsigned type corresponding to signed *)
                     (case s of CLong => CULong | CLongLong => CULongLong
                              | CInt => CUInt | CInt128 => CUInt128 | _ => CUInt)
-              | _ => s  (* fallback: assume signed is wider *)
+              | _ => error "usual_arith_conv: cannot determine bit width for conversion"
          end
     end
 end
