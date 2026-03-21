@@ -137,4 +137,15 @@ unsigned int smoke_adv_stmt_expr(unsigned int a, unsigned int b) {
 
 thm c_smoke_adv_stmt_expr_def
 
+subsection \<open>3D Array Initialization\<close>
+
+micro_c_translate \<open>
+static int smoke_adv_3d[2][2][2] = {{{1,2},{3,4}},{{5,6},{7,8}}};
+int smoke_adv_3d_read(unsigned int i, unsigned int j, unsigned int k) {
+  return smoke_adv_3d[i][j][k];
+}
+\<close>
+
+thm c_smoke_adv_3d_read_def
+
 end

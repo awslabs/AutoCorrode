@@ -4370,41 +4370,61 @@ struct
                           val elem_type = C_Ast_Utils.hol_type_of elem_cty
                       in
                       if C_Ast_Utils.is_ptr elem_cty then
-                        (* 2D array: elements are sub-arrays (CInitList0 inside CInitList0) *)
-                        let val inner_elem_cty =
-                              (case elem_cty of C_Ast_Utils.CPtr inner => inner
-                                | _ => error "micro_c_translate: expected pointer element type for 2D array")
-                            val inner_elem_type = C_Ast_Utils.hol_type_of inner_elem_cty
-                            val inner_zero = HOLogic.mk_number inner_elem_type 0
-                            (* Extract inner array size from second CArrDeclr0 dimension *)
+                        (* N-dimensional array: elements are sub-arrays *)
+                        let (* Extract all array dimension sizes from declarator *)
                             fun all_arr_sizes (CDeclr0 (_, derived, _, _, _)) =
                                   List.mapPartial
                                     (fn CArrDeclr0 (_, CArrSize0 (_, CConst0 (CIntConst0 (CInteger0 (n, _, _), _))), _) =>
                                           SOME (intinf_to_int_checked "array bound" n)
                                       | _ => NONE) derived
                             val arr_sizes = all_arr_sizes declr
+                            (* Build a zero-filled nested array for padding *)
+                            fun build_zero cur_cty [] =
+                                  HOLogic.mk_number (C_Ast_Utils.hol_type_of cur_cty) 0
+                              | build_zero (C_Ast_Utils.CPtr inner_cty) (dim :: rest) =
+                                  let val zero_inner = build_zero inner_cty rest
+                                  in HOLogic.mk_list (fastype_of zero_inner)
+                                       (List.tabulate (dim, fn _ => zero_inner)) end
+                              | build_zero cur_cty (dim :: _) =
+                                  let val ty = C_Ast_Utils.hol_type_of cur_cty
+                                  in HOLogic.mk_list ty
+                                       (List.tabulate (dim, fn _ => HOLogic.mk_number ty 0)) end
+                            (* Recursively build nested array from init list.
+                               cur_cty = element type at this level.
+                               dims = remaining dimension sizes for sub-levels. *)
+                            fun build_nested cur_cty [] items =
+                                  (* Base: scalar elements *)
+                                  let val ty = C_Ast_Utils.hol_type_of cur_cty
+                                      val vals = List.map
+                                        (fn (_, CInitExpr0 (e, _)) => init_scalar_const_term cur_cty e
+                                          | _ => unsupported "complex nested array element") items
+                                  in HOLogic.mk_list ty vals end
+                              | build_nested (C_Ast_Utils.CPtr inner_cty) (dim :: rest) items =
+                                  let val built = List.map
+                                        (fn (_, CInitList0 (sub_inits, _)) =>
+                                              build_nested inner_cty rest sub_inits
+                                          | _ => unsupported "expected nested init list for multi-dim array")
+                                        items
+                                      val zero_inner = build_zero inner_cty rest
+                                      val inner_type = fastype_of zero_inner
+                                      val padded =
+                                        if List.length built < dim
+                                        then built @ List.tabulate (dim - List.length built, fn _ => zero_inner)
+                                        else built
+                                  in HOLogic.mk_list inner_type padded end
+                              | build_nested cur_cty (dim :: _) items =
+                                  (* Base with known dimension: scalar elements with padding *)
+                                  let val ty = C_Ast_Utils.hol_type_of cur_cty
+                                      val vals = List.map
+                                        (fn (_, CInitExpr0 (e, _)) => init_scalar_const_term cur_cty e
+                                          | _ => unsupported "complex nested array element") items
+                                      val padded =
+                                        if List.length vals < dim
+                                        then vals @ List.tabulate (dim - List.length vals, fn _ => HOLogic.mk_number ty 0)
+                                        else vals
+                                  in HOLogic.mk_list ty padded end
                             val outer_size = (case arr_sizes of n :: _ => n | [] => List.length init_list)
-                            val inner_size = (case arr_sizes of _ :: m :: _ => SOME m | _ => NONE)
-                            fun build_inner_list (_, CInitList0 (inits, _)) =
-                                  let val vals = List.map
-                                        (fn (_, CInitExpr0 (e, _)) => init_scalar_const_term inner_elem_cty e
-                                          | _ => unsupported "complex nested array element") inits
-                                      val padded = case inner_size of
-                                          SOME m => if List.length vals > m
-                                            then unsupported "too many elements in inner array"
-                                            else vals @ List.tabulate (m - List.length vals, fn _ => inner_zero)
-                                        | NONE => vals
-                                  in HOLogic.mk_list inner_elem_type padded end
-                              | build_inner_list _ = unsupported "expected inner initializer list for 2D array"
-                            val inner_lists = List.map build_inner_list init_list
-                            val inner_list_type = HOLogic.listT inner_elem_type
-                            val zero_inner = HOLogic.mk_list inner_elem_type
-                                (case inner_size of SOME m => List.tabulate (m, fn _ => inner_zero) | NONE => [])
-                            val padded_outer =
-                              if List.length inner_lists < outer_size
-                              then inner_lists @ List.tabulate (outer_size - List.length inner_lists, fn _ => zero_inner)
-                              else inner_lists
-                            val result = HOLogic.mk_list inner_list_type padded_outer
+                            val result = build_nested elem_cty arr_sizes init_list
                             val arr_meta = SOME (elem_cty, outer_size)
                         in (name, C_Term_Build.mk_literal result, actual_cty, arr_meta, false) end
                       else
