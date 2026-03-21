@@ -4056,19 +4056,6 @@ struct
         end
     | translate_expr _ (CBuiltinExpr0 _) =
         unsupported "GCC builtin expression (only __builtin_types_compatible_p is supported)"
-    | translate_expr tctx (CBuiltinExpr0 (CBuiltinTypesCompatible0 (decl1, decl2, _))) =
-        let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
-            fun resolve_decl (CDecl0 (specs, _, _)) =
-                  C_Ast_Utils.resolve_c_type_full typedef_tab specs
-              | resolve_decl _ = NONE
-            val ty1 = resolve_decl decl1
-            val ty2 = resolve_decl decl2
-            val compatible = (ty1 = ty2 andalso Option.isSome ty1)
-        in (C_Term_Build.mk_literal_num C_Ast_Utils.CInt (if compatible then 1 else 0),
-            C_Ast_Utils.CInt)
-        end
-    | translate_expr _ (CBuiltinExpr0 _) =
-        unsupported "GCC builtin expression (only __builtin_types_compatible_p is supported)"
     | translate_expr _ _ =
         unsupported "expression"
 
