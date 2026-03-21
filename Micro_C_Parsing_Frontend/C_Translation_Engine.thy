@@ -704,21 +704,6 @@ struct
          SOME (Type (\<^type_name>\<open>function_body\<close>, [state_ty, value_ty, abort_ty, in_ty, out_ty]))
      | _ => function_body_type_with_value value_ty)
 
-  fun constrain_expr_arrow arg_ty value_ty tm =
-    (case expr_type_with_value value_ty of
-       SOME expr_ty => Type.constraint (arg_ty --> expr_ty) tm
-     | NONE => tm)
-
-  fun constrain_expr_arrow_from_tm arg_ty value_ty side_tm tm =
-    (case expr_type_from_tm value_ty side_tm of
-       SOME expr_ty => Type.constraint (arg_ty --> expr_ty) tm
-     | NONE => tm)
-
-  fun constrain_function_body_arrow arg_ty value_ty tm =
-    (case function_body_type_with_value value_ty of
-       SOME body_ty => Type.constraint (arg_ty --> body_ty) tm
-     | NONE => tm)
-
   fun constrain_function_body_arrow_from_tm arg_ty value_ty side_tm tm =
     (case function_body_type_from_tm value_ty side_tm of
        SOME body_ty => Type.constraint (arg_ty --> body_ty) tm
@@ -1023,7 +1008,7 @@ struct
       end
     else if C_Ast_Utils.is_ptr from_cty then
       (* pointer -> integer cast via semantic uintptr value, then convert as needed *)
-      let val ctxt = require_current_visible_ctxt ()
+      let val _ = require_current_visible_ctxt ()
           val tm =
             (case pointer_expr_value_hol_ty from_cty of
                SOME ty => constrain_expr_value_type ty tm
@@ -1456,7 +1441,7 @@ struct
        SOME tm => tm
      | NONE => error ("micro_c_translate: missing required interface constant: " ^ short_name))
 
-  fun resolve_pointer_model_const ctxt label opt_name default_name =
+  fun resolve_pointer_model_const ctxt (_ : string) opt_name default_name =
     (case opt_name of
        SOME name => resolve_required_visible_const ctxt name
      | NONE => resolve_required_visible_const ctxt default_name)
@@ -1469,12 +1454,6 @@ struct
 
   fun resolve_ptr_diff_const ctxt =
     resolve_pointer_model_const ctxt "ptr_diff:" (#ptr_diff (!current_pointer_model)) "c_ptr_diff"
-
-  fun resolve_ptr_to_uintptr_const ctxt =
-    resolve_required_visible_const ctxt "c_ptr_to_uintptr"
-
-  fun resolve_uintptr_to_ptr_const ctxt =
-    resolve_required_visible_const ctxt "c_uintptr_to_ptr"
 
   fun mk_resolved_var_alloc_typed ctxt val_hol_type init_expr =
     let val ref_const =
@@ -1956,7 +1935,6 @@ struct
             val a_var = Isa_Free ("v__arr", isa_dummyT)
             val i_var = Isa_Free ("v__idx", isa_dummyT)
             val loc_var = Isa_Free ("v__loc", isa_dummyT)
-            val list_var = Isa_Free ("v__arr_vals", isa_dummyT)
             val deref_expr =
               Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                 $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
@@ -2082,11 +2060,6 @@ struct
     end
 
   fun sizeof_struct fields = #2 (struct_layout fields)
-
-  fun struct_field_offset (fields : (string * C_Ast_Utils.c_numeric_type) list) field_name =
-    (case List.find (fn (name, _, _) => name = field_name) (#1 (struct_layout fields)) of
-       SOME (_, offset, _) => offset
-     | NONE => error ("micro_c_translate: unknown struct field in layout: " ^ field_name))
 
   fun fits_int_literal_cty cty n =
     case cty_bit_width cty of
@@ -3047,7 +3020,6 @@ struct
                  val a_var = Isa_Free ("v__arr", isa_dummyT)
                  val i_var = Isa_Free ("v__idx", isa_dummyT)
                  val loc_var = Isa_Free ("v__loc", isa_dummyT)
-                 val list_var = Isa_Free ("v__arr_vals", isa_dummyT)
                  val deref_expr =
                    Isa_Const (\<^const_name>\<open>Core_Expression.bind\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
                      $ (Isa_Const (\<^const_name>\<open>Core_Expression.literal\<close>, isa_dummyT --> isa_dummyT) $ a_var)
@@ -3162,6 +3134,8 @@ struct
                end
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                error ("micro_c_translate: assignment to parameter: " ^ name)
+           | SOME (C_Trans_Ctxt.ParamListPtr, _, _) =>
+               error ("micro_c_translate: assignment to list-backed pointer parameter: " ^ name)
            | NONE =>
                (case C_Trans_Ctxt.lookup_global_const tctx name of
                   SOME _ =>
@@ -4038,6 +4012,8 @@ struct
                unsupported ("address-of pointer local variable not supported: " ^ name)
            | SOME (C_Trans_Ctxt.Param, _, _) =>
                unsupported ("address-of by-value parameter: " ^ name)
+           | SOME (C_Trans_Ctxt.ParamListPtr, _, _) =>
+               unsupported ("address-of list-backed pointer parameter: " ^ name)
            | NONE =>
                (case C_Trans_Ctxt.lookup_global_const tctx name of
                   SOME (tm, _) =>
