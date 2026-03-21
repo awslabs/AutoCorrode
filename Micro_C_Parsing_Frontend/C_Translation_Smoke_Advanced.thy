@@ -111,4 +111,15 @@ unsigned int smoke_adv_range_lookup(unsigned int i) {
 
 thm c_smoke_adv_range_lookup_def
 
+subsection \<open>Struct Compound Literals\<close>
+
+micro_c_translate addr: nat \<open>
+struct smoke_adv_compound_lit_pt { int x; int y; };
+void smoke_adv_struct_compound_lit(struct smoke_adv_compound_lit_pt *out) {
+  *out = (struct smoke_adv_compound_lit_pt){10, 20};
+}
+\<close>
+
+thm c_smoke_adv_struct_compound_lit_def
+
 end

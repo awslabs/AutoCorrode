@@ -3961,11 +3961,67 @@ struct
                       | NONE => unsupported "compound literal with unsupported type"
                    end
                | _ => unsupported "compound literal with unsupported declaration")
-        in case init_list of
-             [([], CInitExpr0 (expr, _))] =>
+        in case (cty, init_list) of
+             (_, [([], CInitExpr0 (expr, _))]) =>
                (* Scalar compound literal: (type){value} *)
                let val (expr_term, expr_cty) = translate_expr tctx expr
                in (mk_implicit_cast (expr_term, expr_cty, cty), cty) end
+           | (C_Ast_Utils.CStruct struct_name, _) =>
+               (* Struct compound literal: (struct T){field1, field2, ...} *)
+               let val fields =
+                     (case C_Trans_Ctxt.get_struct_fields tctx struct_name of
+                        SOME fs => fs
+                      | NONE => error ("micro_c_translate: unknown struct: " ^ struct_name))
+                   fun find_field_index _ [] _ =
+                         error "micro_c_translate: struct field not found in compound literal"
+                     | find_field_index fname ((n, _) :: rest) i =
+                         if n = fname then i
+                         else find_field_index fname rest (i + 1)
+                   fun resolve_field_desig [] pos = pos
+                     | resolve_field_desig [CMemberDesig0 (ident, _)] _ =
+                         find_field_index (C_Ast_Utils.ident_name ident) fields 0
+                     | resolve_field_desig _ _ =
+                         unsupported "complex designator in struct compound literal"
+                   fun collect_field_items [] _ = []
+                     | collect_field_items ((desigs, CInitExpr0 (e, _)) :: rest) pos =
+                         let val idx = resolve_field_desig desigs pos
+                         in (idx, SOME e, NONE) :: collect_field_items rest (idx + 1) end
+                     | collect_field_items ((desigs, CInitList0 (inner_list, _)) :: rest) pos =
+                         let val idx = resolve_field_desig desigs pos
+                         in (idx, NONE, SOME inner_list) :: collect_field_items rest (idx + 1) end
+                   val field_items = collect_field_items init_list 0
+                   val ctxt_inner = C_Trans_Ctxt.get_ctxt tctx
+                   val make_name = "make_" ^ (!current_decl_prefix) ^ struct_name
+                   val make_const =
+                     Proof_Context.read_const {proper = true, strict = false}
+                       ctxt_inner make_name
+                   fun default_for_field (_, field_cty) =
+                     (case field_cty of
+                        C_Ast_Utils.CPtr elem_cty =>
+                          HOLogic.mk_list (C_Ast_Utils.hol_type_of elem_cty) []
+                      | _ => HOLogic.mk_number (C_Ast_Utils.hol_type_of field_cty) 0)
+                   val init_exprs = List.map (fn (idx, e_opt, _) =>
+                       let val (_, field_cty) = List.nth (fields, idx)
+                       in case e_opt of
+                            SOME e =>
+                              let val (raw, raw_cty) = translate_expr tctx e
+                              in mk_implicit_cast (raw, raw_cty, field_cty) end
+                          | NONE => unsupported "nested init list in struct compound literal"
+                       end) field_items
+                   val n = List.length init_exprs
+                   val vars = List.tabulate (n,
+                       fn i => Isa_Free ("v__slit_" ^ Int.toString i, isa_dummyT))
+                   val base_vals = List.map default_for_field fields
+                   val filled = ListPair.foldl
+                     (fn ((idx, _, _), var, arr) => nth_map idx (K var) arr)
+                     base_vals (field_items, vars)
+                   val struct_term = List.foldl (fn (v, acc) => acc $ v)
+                         make_const filled
+                   val result = C_Term_Build.mk_literal struct_term
+               in (ListPair.foldr
+                    (fn (expr, var, acc) =>
+                      C_Term_Build.mk_bind expr (Term.lambda var acc))
+                    result (init_exprs, vars), cty) end
            | _ => unsupported "compound literal with complex initializer"
         end
     | translate_expr tctx (CGenericSelection0 (ctrl_expr, assoc_list, _)) =

@@ -227,6 +227,17 @@ lemma c_range_test_spec [crush_specs]:
 by (crush_boot f: c_range_test_def contract: c_range_test_contract_def)
    crush_base
 
+subsection \<open>Struct Compound Literal\<close>
+
+micro_c_translate addr: nat \<open>
+  struct compound_lit_pair { int x; int y; };
+  void compound_lit_write(struct compound_lit_pair *out) {
+    *out = (struct compound_lit_pair){3, 7};
+  }
+\<close>
+
+thm c_compound_lit_write_def
+
 end
 
 end
