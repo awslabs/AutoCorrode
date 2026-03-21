@@ -270,6 +270,15 @@ struct
         ("__int128_t", CInt128), ("__uint128_t", CUInt128) ]
     end
 
+  (* Map c_numeric_type to Isabelle/HOL fixed-width word types.
+     Type synonyms are defined in C_Numeric_Types.thy and are always
+     fixed-width: c_int = 32 sword, c_long = 64 sword, etc.
+     ABI variation is handled here, not in the type synonyms:
+       - CLong/CULong map to c_int/c_uint on ILP32, c_long/c_ulong on LP64
+       - CLongLong/CULongLong always map to c_long/c_ulong (= 64-bit)
+       - CChar is always unsigned (8 word); resolve_c_type returns CSChar
+         when the compiler profile has char_is_signed=true
+     Pointer, struct, and union types use dummyT for type inference. *)
   fun hol_type_of CBool   = @{typ bool}
     | hol_type_of CInt    = \<^typ>\<open>c_int\<close>
     | hol_type_of CUInt   = \<^typ>\<open>c_uint\<close>

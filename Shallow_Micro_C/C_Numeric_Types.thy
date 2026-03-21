@@ -13,6 +13,16 @@ text \<open>
   use @{typ "'l sword"} (from Word\_Lib).
 \<close>
 
+text \<open>
+  These type synonyms are fixed-width and do not vary with ABI.
+  ABI-dependent sizing (e.g.\ @{text long} being 32-bit on ILP32
+  vs 64-bit on LP64) is handled by @{text hol_type_of} in
+  @{text C_Ast_Utilities}, which maps @{text CLong} to
+  @{text c_int} or @{text c_long} depending on the ABI profile.
+  The @{text sizeof} correctness in translated code follows from
+  this indirection: the Isabelle type always matches the ABI's
+  bit width for the C type.
+\<close>
 type_synonym c_char  = \<open>8 word\<close>
 type_synonym c_schar = \<open>8 sword\<close>
 type_synonym c_short = \<open>16 sword\<close>
