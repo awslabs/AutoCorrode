@@ -402,7 +402,8 @@ struct
       List.concat (List.map from_ext_decl ext_decls)
     end
 
-  fun process_translation_unit tu lthy =
+  (* Phase 1: Reset mutable translation state and read configuration refs. *)
+  fun setup_translation_state () =
     let
       val _ = C_Translate.defined_func_consts := Symtab.empty
       val _ = C_Translate.defined_func_fuels := Symtab.empty
@@ -410,22 +411,18 @@ struct
       val _ = C_Translate.current_struct_array_fields := Symtab.empty
       val decl_prefix = !current_decl_prefix
       val abi_profile = !current_abi_profile
-      val {functions = manifest_functions, types = manifest_types} = !current_manifest
+      val manifest = !current_manifest
       val _ = C_Ast_Utils.set_abi_profile abi_profile
       val _ = C_Translate.set_decl_prefix decl_prefix
       val _ = C_Translate.set_ref_universe_types (!current_ref_addr_ty) (!current_ref_gv_ty)
-      fun mk_name_filter NONE = NONE
-        | mk_name_filter (SOME xs) =
-            SOME (List.foldl (fn (x, tab) => Symtab.update (x, ()) tab) Symtab.empty xs)
-      val func_filter = mk_name_filter manifest_functions
-      val type_filter = mk_name_filter manifest_types
-      fun keep_func name =
-        (case func_filter of NONE => true | SOME tab => Symtab.defined tab name)
-      fun keep_type name =
-        (case type_filter of NONE => true | SOME tab => Symtab.defined tab name)
+    in (decl_prefix, abi_profile, manifest) end
+
+  (* Phase 2: Extract struct, union, enum, and typedef definitions from the
+     translation unit.  Returns all type-level tables needed by later phases. *)
+  fun extract_type_definitions decl_prefix keep_type tu =
+    let
       val builtin_typedefs = C_Ast_Utils.builtin_typedefs ()
-      (* Extract struct definitions to build the struct field registry.
-         Use fold/update to allow user typedefs to override builtins. *)
+      (* Use fold/update to allow user typedefs to override builtins. *)
       val typedef_defs_early =
         builtin_typedefs @ C_Ast_Utils.extract_typedefs tu
       val typedef_tab_early = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
@@ -456,14 +453,12 @@ struct
       val _ = List.app (fn (uname, fields) =>
         writeln ("Registered union: " ^ uname ^ " with fields: " ^
                  String.concatWith ", " (List.map #1 fields))) union_defs
-      (* Extract enum constant definitions *)
       val enum_defs = List.filter (fn (n, _) => keep_type n) (C_Ast_Utils.extract_enum_defs tu)
       val enum_tab = Symtab.make enum_defs
       val _ = if null enum_defs then () else
         List.app (fn (name, value) =>
           writeln ("Registered enum constant: " ^ name ^ " = " ^
                    Int.toString value)) enum_defs
-      (* Extract typedef mappings *)
       val typedef_defs =
         builtin_typedefs @ C_Ast_Utils.extract_typedefs tu
       val typedef_tab = List.foldl (fn ((n, v), tab) => Symtab.update (n, v) tab)
@@ -485,12 +480,21 @@ struct
                  else ()
               end
           | _ => ()) all_ext_decls
+    in
+      { struct_tab = struct_tab, union_names = union_names,
+        struct_record_defs = struct_record_defs,
+        struct_array_field_tab = struct_array_field_tab,
+        enum_tab = enum_tab, typedef_tab = typedef_tab }
+    end
+
+  (* Phase 3: Extract function definitions, compute signatures, topologically
+     sort by call dependencies, and identify pure functions. *)
+  fun extract_and_order_functions keep_func typedef_tab tu =
+    let
       val fundefs_raw =
         List.filter
           (fn C_Ast.CFunDef0 (_, declr, _, _, _) => keep_func (C_Ast_Utils.declr_name declr))
           (C_Ast_Utils.extract_fundefs tu)
-      (* Pre-register all function signatures so calls to later-defined
-         functions are translated with the correct result and argument types. *)
       fun param_cty_of_decl pdecl =
             (case pdecl of
                C_Ast.CDecl0 (specs, _, _) =>
@@ -602,6 +606,18 @@ struct
         (fn ((n, (_, ptys)), tab) => Symtab.update (n, ptys) tab)
         Symtab.empty signatures
       val func_param_types = Unsynchronized.ref func_param_table
+    in
+      { fundefs = fundefs, fundefs_raw = fundefs_raw,
+        param_cty_of_decl = param_cty_of_decl,
+        func_ret_types = func_ret_types,
+        func_param_types = func_param_types }
+    end
+
+  (* Phase 4: Determine which pointer parameters are list-backed (passed as
+     arrays at all call sites).  Updates the global list_backed_param_modes ref. *)
+  fun analyze_list_backed_params struct_tab struct_array_field_tab union_names
+        param_cty_of_decl fundefs_raw =
+    let
       val all_struct_names = Symtab.keys struct_tab
       fun has_static_storage specs =
         List.exists (fn C_Ast.CStorageSpec0 (C_Ast.CStatic0 _) => true | _ => false) specs
@@ -615,6 +631,7 @@ struct
            SOME (C_Ast.CDeclr0 (_, derived, _, _, _)) =>
              List.exists (fn C_Ast.CArrDeclr0 _ => true | _ => false) derived
          | NONE => false)
+      fun fundef_name (C_Ast.CFunDef0 (_, declr, _, _, _)) = C_Ast_Utils.declr_name declr
       val list_backed_alias_envs =
         List.foldl
           (fn (fdef, tab) =>
@@ -702,7 +719,41 @@ struct
               Symtab.update (fname, modes) tab
             end)
           Symtab.empty fundefs_raw
-      val _ = C_Translate.current_list_backed_param_modes := list_backed_param_modes
+    in
+      C_Translate.current_list_backed_param_modes := list_backed_param_modes
+    end
+
+  (* Orchestrator: runs phases 1-4 then generates definitions. *)
+  fun process_translation_unit tu lthy =
+    let
+      (* Phase 1: Setup *)
+      val (decl_prefix, abi_profile, manifest) = setup_translation_state ()
+      val {functions = manifest_functions, types = manifest_types} = manifest
+      fun mk_name_filter NONE = NONE
+        | mk_name_filter (SOME xs) =
+            SOME (List.foldl (fn (x, tab) => Symtab.update (x, ()) tab) Symtab.empty xs)
+      val func_filter = mk_name_filter manifest_functions
+      val type_filter = mk_name_filter manifest_types
+      fun keep_func name =
+        (case func_filter of NONE => true | SOME tab => Symtab.defined tab name)
+      fun keep_type name =
+        (case type_filter of NONE => true | SOME tab => Symtab.defined tab name)
+
+      (* Phase 2: Type extraction *)
+      val { struct_tab, union_names, struct_record_defs,
+            struct_array_field_tab, enum_tab, typedef_tab } =
+        extract_type_definitions decl_prefix keep_type tu
+
+      (* Phase 3: Function extraction and ordering *)
+      val { fundefs, fundefs_raw, param_cty_of_decl,
+            func_ret_types, func_param_types } =
+        extract_and_order_functions keep_func typedef_tab tu
+
+      (* Phase 4: List-backed parameter analysis *)
+      val _ = analyze_list_backed_params struct_tab struct_array_field_tab
+                union_names param_cty_of_decl fundefs_raw
+
+      (* Phase 5: Generate type and global definitions *)
       val lthy =
         List.foldl (fn (sdef, lthy_acc) => ensure_struct_record decl_prefix sdef lthy_acc)
           lthy struct_record_defs
@@ -728,7 +779,7 @@ struct
            datatype package obligations. *)
         define_abi_metadata decl_prefix abi_profile lthy
     in
-      (* Translate and define each function one at a time, so that later
+      (* Phase 6: Translate and define each function one at a time, so that later
          functions can reference earlier ones via Syntax.check_term. *)
       List.foldl (fn (fundef, lthy) =>
         let val (name, term) = C_Translate.translate_fundef
