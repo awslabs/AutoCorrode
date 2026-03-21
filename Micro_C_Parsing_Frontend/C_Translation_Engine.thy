@@ -4004,8 +4004,37 @@ struct
         in (C_Term_Build.mk_literal_num C_Ast_Utils.CInt (if compatible then 1 else 0),
             C_Ast_Utils.CInt)
         end
+    | translate_expr tctx (CBuiltinExpr0 (CBuiltinOffsetOf0 (decl, desigs, _))) =
+        let val typedef_tab = C_Trans_Ctxt.get_typedef_tab tctx
+            val struct_names = C_Trans_Ctxt.get_struct_names tctx
+            val struct_name =
+              (case decl of
+                 CDecl0 (specs, _, _) =>
+                   (case C_Ast_Utils.extract_struct_type_from_specs_full struct_names specs of
+                      SOME sn => sn
+                    | NONE =>
+                        (case C_Ast_Utils.resolve_c_type_full typedef_tab specs of
+                           SOME (C_Ast_Utils.CStruct sn) => sn
+                         | _ => unsupported "__builtin_offsetof on non-struct type"))
+               | _ => unsupported "__builtin_offsetof with unsupported declaration")
+            fun walk_offset _ [] = unsupported "__builtin_offsetof with empty designators"
+              | walk_offset sn [CMemberDesig0 (field_ident, _)] =
+                  raw_struct_field_offset tctx sn (C_Ast_Utils.ident_name field_ident)
+              | walk_offset sn (CMemberDesig0 (field_ident, _) :: rest) =
+                  let val fname = C_Ast_Utils.ident_name field_ident
+                      val base = raw_struct_field_offset tctx sn fname
+                      val fields = the (C_Trans_Ctxt.get_struct_fields tctx sn)
+                      val field_cty = the (AList.lookup (op =) fields fname)
+                  in case field_cty of
+                       C_Ast_Utils.CStruct inner_sn => base + walk_offset inner_sn rest
+                     | _ => unsupported "__builtin_offsetof with non-struct intermediate field"
+                  end
+              | walk_offset _ _ = unsupported "__builtin_offsetof with array designator"
+            val offset = walk_offset struct_name desigs
+            val size_cty = C_Ast_Utils.pointer_uint_cty ()
+        in (C_Term_Build.mk_literal_num size_cty offset, size_cty) end
     | translate_expr _ (CBuiltinExpr0 _) =
-        unsupported "GCC builtin expression (only __builtin_types_compatible_p is supported)"
+        unsupported "GCC builtin expression (only __builtin_types_compatible_p and __builtin_offsetof are supported)"
     | translate_expr _ _ =
         unsupported "expression"
 

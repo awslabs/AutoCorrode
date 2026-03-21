@@ -88,4 +88,16 @@ smoke_adv_al_size_t smoke_adv_alignof_int(void) {
 
 thm c_smoke_adv_alignof_int_def
 
+subsection \<open>__builtin_offsetof\<close>
+
+micro_c_translate \<open>
+struct smoke_adv_offset_pair { int x; int y; };
+typedef unsigned long smoke_adv_off_size_t;
+smoke_adv_off_size_t smoke_adv_offsetof(void) {
+  return __builtin_offsetof(struct smoke_adv_offset_pair, y);
+}
+\<close>
+
+thm c_smoke_adv_offsetof_def
+
 end

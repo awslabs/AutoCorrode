@@ -184,6 +184,28 @@ lemma c_register_add_spec [crush_specs]:
 by (crush_boot f: c_register_add_def contract: c_register_add_contract_def)
    (crush_base simp add: c_unsigned_add_def)
 
+subsection \<open>Builtin Offsetof\<close>
+
+micro_c_translate \<open>
+  struct offset_test { int a; int b; };
+  typedef unsigned long offset_size_t;
+  offset_size_t offset_of_b(void) {
+    return __builtin_offsetof(struct offset_test, b);
+  }
+\<close>
+
+definition c_offset_of_b_contract :: \<open>('s::{sepalg}, c_ulong, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_offset_of_b_contract \<equiv>
+    let pre  = \<langle>True\<rangle>;
+        post = \<lambda>r. \<langle>r = 4\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_offset_of_b_contract
+
+lemma c_offset_of_b_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_offset_of_b \<Turnstile>\<^sub>F c_offset_of_b_contract\<close>
+by (crush_boot f: c_offset_of_b_def contract: c_offset_of_b_contract_def)
+   crush_base
+
 end
 
 end
