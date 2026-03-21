@@ -1032,6 +1032,16 @@ local
         | step (ManifestOpt f) (topts, NONE) = (topts, SOME f)
       val (rev_topts, manifest_opt) = fold step opts ([], NONE)
     in (collect_translate_opts (rev rev_topts), manifest_opt) end
+
+  (* Register a source file dependency, tolerating duplicate registrations
+     (e.g. the same C file loaded with different manifests). *)
+  fun provide_source_file (src_path, digest) lthy =
+    Local_Theory.background_theory
+      (fn thy => Resources.provide (src_path, digest) thy
+         handle ERROR msg =>
+           if String.isSubstring "Duplicate use of source file" msg
+           then thy
+           else error msg) lthy
 in
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>micro_c_file\<close>
@@ -1050,15 +1060,8 @@ val _ =
         val context' = C_Module.exec_eval source (Context.Theory thy)
         val thy' = Context.theory_of context'
 
-        (* Step 2: Register file dependency so Isabelle rebuilds if file changes.
-           Allow the same source file to be used across multiple micro_c_file
-           invocations (e.g. with different manifests for layered extraction). *)
-        val lthy = Local_Theory.background_theory
-                     (fn thy => Resources.provide (src_path, digest) thy
-                        handle ERROR msg =>
-                          if String.isSubstring "Duplicate use of source file" msg
-                          then thy
-                          else error msg) lthy
+        (* Step 2: Register file dependency so Isabelle rebuilds if file changes. *)
+        val lthy = provide_source_file (src_path, digest) lthy
 
         (* Optional manifest file controlling which functions/types are extracted. *)
         val (manifest, lthy) =
@@ -1068,13 +1071,7 @@ val _ =
                let
                  val {src_path = m_src, lines = m_lines, digest = m_digest, ...} : Token.file =
                    get_manifest_file thy
-                 val lthy' =
-                   Local_Theory.background_theory
-                     (fn thy => Resources.provide (m_src, m_digest) thy
-                        handle ERROR msg =>
-                          if String.isSubstring "Duplicate use of source file" msg
-                          then thy
-                          else error msg) lthy
+                 val lthy' = provide_source_file (m_src, m_digest) lthy
                in
                  (parse_manifest_text (cat_lines m_lines), lthy')
                end)
