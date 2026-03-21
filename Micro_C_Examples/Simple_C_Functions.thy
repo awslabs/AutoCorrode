@@ -1184,7 +1184,8 @@ locale c_uint_arr_verification_ctx =
       c_ptr_to_uintptr c_uintptr_to_ptr +
     reference reference_types +
     ref_c_uint: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_prism +
-    ref_c_uint_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_list_prism
+    ref_c_uint_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_list_prism +
+    ref_c_uint_list_list: reference_allocatable reference_types _ _ _ _ _ _ _ c_uint_list_list_prism
   for c_ptr_add :: \<open>('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
   and c_ptr_shift_signed :: \<open>('addr, 'gv) gref \<Rightarrow> int \<Rightarrow> nat \<Rightarrow> ('addr, 'gv) gref\<close>
   and c_ptr_diff :: \<open>('addr, 'gv) gref \<Rightarrow> ('addr, 'gv) gref \<Rightarrow> nat \<Rightarrow> int\<close>
@@ -1198,10 +1199,12 @@ locale c_uint_arr_verification_ctx =
       'o prompt_output \<Rightarrow> unit\<close>
   and c_uint_prism :: \<open>('gv, c_uint) prism\<close>
   and c_uint_list_prism :: \<open>('gv, c_uint list) prism\<close>
+  and c_uint_list_list_prism :: \<open>('gv, c_uint list list) prism\<close>
 begin
 
 adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint.new
 adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint_list.new
+adhoc_overloading store_reference_const \<rightleftharpoons> ref_c_uint_list_list.new
 adhoc_overloading store_update_const \<rightleftharpoons> update_fun
 
 micro_c_translate \<open>
@@ -1575,6 +1578,27 @@ micro_c_translate \<open>
 \<close>
 
 thm c_inc_arr_elem_def
+
+micro_c_translate \<open>
+  unsigned int mat_read(void) {
+    unsigned int mat[2][3] = {{1,2,3},{4,5,6}};
+    return mat[1][2];
+  }
+\<close>
+
+thm c_mat_read_def
+
+definition c_mat_read_contract :: \<open>('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_mat_read_contract \<equiv>
+    let pre  = can_alloc_reference;
+        post = \<lambda>r. can_alloc_reference \<star> \<langle>r = 6\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_mat_read_contract
+
+lemma c_mat_read_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_mat_read \<Turnstile>\<^sub>F c_mat_read_contract\<close>
+by (crush_boot f: c_mat_read_def contract: c_mat_read_contract_def)
+   crush_base
 
 end
 

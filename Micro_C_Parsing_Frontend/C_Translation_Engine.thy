@@ -3572,8 +3572,22 @@ struct
                | _ => false)
             val value_term = C_Term_Build.mk_literal nth_term
             val value_term = mk_index_guard idx_p_cty i_var list_var value_term
+            fun is_nested_index (CIndex0 _) = true
+              | is_nested_index _ = false
         in
-          if use_raw_pointer_indexing tctx arr_expr then
+          if is_nested_index arr_expr then
+            (* Nested index: arr is a value (sub-list from outer index), not a ref.
+               Just apply nth directly without dereferencing. *)
+            (mk_pair_eval unseq_index arr_term idx_term a_var i_var
+               (let
+                  val direct_nth =
+                    Isa_Const (\<^const_name>\<open>nth\<close>, isa_dummyT --> isa_dummyT --> isa_dummyT)
+                      $ a_var $ (C_Term_Build.mk_unat i_var)
+                  val direct_term = C_Term_Build.mk_literal direct_nth
+                  val direct_term = mk_index_guard idx_p_cty i_var a_var direct_term
+                in direct_term end),
+             elem_cty)
+          else if use_raw_pointer_indexing tctx arr_expr then
             let
               val loc_expr = mk_raw_ptr_loc_expr ctxt unseq_index arr_term idx_term_raw idx_cty elem_cty (is_nonnegative_int_const idx_expr)
               val deref_loc =
@@ -4269,6 +4283,47 @@ struct
                       let val elem_cty =
                             if ptr_depth > 0 then C_Ast_Utils.apply_ptr_depth cty (ptr_depth - 1) else cty
                           val elem_type = C_Ast_Utils.hol_type_of elem_cty
+                      in
+                      if C_Ast_Utils.is_ptr elem_cty then
+                        (* 2D array: elements are sub-arrays (CInitList0 inside CInitList0) *)
+                        let val inner_elem_cty =
+                              (case elem_cty of C_Ast_Utils.CPtr inner => inner
+                                | _ => error "micro_c_translate: expected pointer element type for 2D array")
+                            val inner_elem_type = C_Ast_Utils.hol_type_of inner_elem_cty
+                            val inner_zero = HOLogic.mk_number inner_elem_type 0
+                            (* Extract inner array size from second CArrDeclr0 dimension *)
+                            fun all_arr_sizes (CDeclr0 (_, derived, _, _, _)) =
+                                  List.mapPartial
+                                    (fn CArrDeclr0 (_, CArrSize0 (_, CConst0 (CIntConst0 (CInteger0 (n, _, _), _))), _) =>
+                                          SOME (intinf_to_int_checked "array bound" n)
+                                      | _ => NONE) derived
+                            val arr_sizes = all_arr_sizes declr
+                            val outer_size = (case arr_sizes of n :: _ => n | [] => List.length init_list)
+                            val inner_size = (case arr_sizes of _ :: m :: _ => SOME m | _ => NONE)
+                            fun build_inner_list (_, CInitList0 (inits, _)) =
+                                  let val vals = List.map
+                                        (fn (_, CInitExpr0 (e, _)) => init_scalar_const_term inner_elem_cty e
+                                          | _ => unsupported "complex nested array element") inits
+                                      val padded = case inner_size of
+                                          SOME m => if List.length vals > m
+                                            then unsupported "too many elements in inner array"
+                                            else vals @ List.tabulate (m - List.length vals, fn _ => inner_zero)
+                                        | NONE => vals
+                                  in HOLogic.mk_list inner_elem_type padded end
+                              | build_inner_list _ = unsupported "expected inner initializer list for 2D array"
+                            val inner_lists = List.map build_inner_list init_list
+                            val inner_list_type = HOLogic.listT inner_elem_type
+                            val zero_inner = HOLogic.mk_list inner_elem_type
+                                (case inner_size of SOME m => List.tabulate (m, fn _ => inner_zero) | NONE => [])
+                            val padded_outer =
+                              if List.length inner_lists < outer_size
+                              then inner_lists @ List.tabulate (outer_size - List.length inner_lists, fn _ => zero_inner)
+                              else inner_lists
+                            val result = HOLogic.mk_list inner_list_type padded_outer
+                            val arr_meta = SOME (elem_cty, outer_size)
+                        in (name, C_Term_Build.mk_literal result, actual_cty, arr_meta, false) end
+                      else
+                      let
                           (* Resolve position for each element: designators set explicit index,
                              positional elements use sequential position *)
                           fun resolve_desig_idx [] pos = pos
@@ -4334,6 +4389,7 @@ struct
                                SOME n => SOME (elem_cty, n)
                              | NONE => NONE)
                       in (name, init_term, actual_cty, arr_meta, false) end
+                      end
                      else (case actual_cty of
                         C_Ast_Utils.CStruct struct_name =>
                           let val fields =
