@@ -367,12 +367,20 @@ struct
         | accumulate (CTypeSpec0 (CTypeDef0 _)) flags = flags
         | accumulate (CTypeSpec0 _) _ =
             error "micro_c_translate: unsupported type specifier"
-        | accumulate (CAlignSpec0 _) flags = flags  (* _Alignas: silently ignored *)
+        (* C11 \<section>6.7.5: _Alignas affects memory layout alignment but not computation
+           semantics. Our translation does not model byte-level local variable layout,
+           so alignment is safely irrelevant. Verified example: C_Misc_Examples.thy. *)
+        | accumulate (CAlignSpec0 _) flags = flags
         | accumulate (CFunSpec0 _) flags = flags    (* inline/_Noreturn: silently ignored *)
         | accumulate (CTypeQual0 (CVolatQual0 _)) _ =
             error "micro_c_translate: volatile qualifier not supported"
-        | accumulate (CTypeQual0 _) flags = flags   (* const/restrict/_Atomic: silently ignored *)
-        | accumulate (CStorageSpec0 _) flags = flags (* static/extern/register: silently ignored *)
+        | accumulate (CTypeQual0 (CAtomicQual0 _)) _ =
+            error "micro_c_translate: _Atomic qualifier not supported (atomic semantics not modeled)"
+        | accumulate (CTypeQual0 (CRestrQual0 _)) flags = flags  (* C11 \<section>6.7.3.1: restrict is optimization hint *)
+        | accumulate (CTypeQual0 (CConstQual0 _)) flags = flags  (* C11 \<section>6.7.3: const has no runtime effect *)
+        | accumulate (CTypeQual0 _) flags = flags
+        | accumulate (CStorageSpec0 (CExtern0 _)) flags = flags  (* extern: linkage only, safe to ignore *)
+        | accumulate (CStorageSpec0 _) flags = flags  (* static/register/typedef: safe to ignore *)
         | accumulate _ flags = flags
       val (has_signed, has_unsigned, has_char, has_short, _, long_count, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
