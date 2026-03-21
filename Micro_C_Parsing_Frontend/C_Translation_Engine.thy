@@ -1197,82 +1197,52 @@ struct
       normalize_ref_universe_type tctx (expr_value_type alloc_expr)
     end
 
-  (* Translate a C binary operator to a HOL function constant, dispatching
-     signed vs unsigned based on the operand type.
-     C11 \<section>6.5.5 (multiplicative: *, /, %), \<section>6.5.6 (additive: +, -),
-     \<section>6.5.7 (shifts: <<, >>), \<section>6.5.8 (relational: <, >, <=, >=),
-     \<section>6.5.9 (equality: ==, !=), \<section>6.5.10-12 (bitwise: &, ^, |).
+  (* C11 \<section>6.5: binary operator dispatch table.
+     Maps each C binary operator to its (signed, unsigned) Isabelle constants.
+     \<section>6.5.5: multiplicative [*, /, %]  \<section>6.5.6: additive [+, -]
+     \<section>6.5.7: shifts (<<, >>)           \<section>6.5.8: relational (<, >, <=, >=)
+     \<section>6.5.9: equality (==, !=)         \<section>6.5.10-12: bitwise (&, ^, |)
      Arithmetic, comparison and bitwise operations use the overflow-checked
-     C operations from C_Numeric_Types which are monadic (they can abort). *)
-  fun translate_binop cty CAddOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_add\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_add\<close>, isa_dummyT))
-    | translate_binop cty CSubOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_sub\<close>, isa_dummyT))
-    | translate_binop cty CMulOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_mul\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_mul\<close>, isa_dummyT))
-    | translate_binop cty CDivOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_div\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_div\<close>, isa_dummyT))
-    | translate_binop cty CRmdOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_mod\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_mod\<close>, isa_dummyT))
-    | translate_binop cty CLeOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_less\<close>, isa_dummyT))
-    | translate_binop cty CLeqOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_le\<close>, isa_dummyT))
-    | translate_binop cty CGrOp0 =  (* reversed operands *)
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_less\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_less\<close>, isa_dummyT))
-    | translate_binop cty CGeqOp0 =  (* reversed operands *)
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_le\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_le\<close>, isa_dummyT))
-    | translate_binop cty CEqOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_eq\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_eq\<close>, isa_dummyT))
-    | translate_binop cty CNeqOp0 =
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_neq\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_neq\<close>, isa_dummyT))
-    | translate_binop cty CAndOp0 = (* bitwise AND *)
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_and\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_and\<close>, isa_dummyT))
-    | translate_binop cty CXorOp0 = (* bitwise XOR *)
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_xor\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_xor\<close>, isa_dummyT))
-    | translate_binop cty COrOp0 = (* bitwise OR *)
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_or\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_or\<close>, isa_dummyT))
-    | translate_binop cty CShlOp0 = (* left shift *)
-        if C_Ast_Utils.is_signed cty
-        then Monadic (Isa_Const (\<^const_name>\<open>c_signed_shl\<close>, isa_dummyT))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shl\<close>, isa_dummyT))
-    | translate_binop cty CShrOp0 = (* right shift *)
-        if C_Ast_Utils.is_signed cty
-        then (case #signed_shr (C_Compiler.get_compiler_profile ()) of
-                C_Compiler.ArithmeticShift =>
-                  Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr\<close>, isa_dummyT))
-              | C_Compiler.ConservativeShift =>
-                  Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr_conservative\<close>, isa_dummyT)))
-        else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shr\<close>, isa_dummyT))
-    | translate_binop _ _ = unsupported "unsupported binary operator"
+     C operations from C_Numeric_Types which are monadic (they can abort).
+     Note: CGrOp0/CGeqOp0 reuse less/le with reversed operands (handled at call site). *)
+  val binop_table = [
+      (CAddOp0,  (\<^const_name>\<open>c_signed_add\<close>,  \<^const_name>\<open>c_unsigned_add\<close>)),
+      (CSubOp0,  (\<^const_name>\<open>c_signed_sub\<close>,  \<^const_name>\<open>c_unsigned_sub\<close>)),
+      (CMulOp0,  (\<^const_name>\<open>c_signed_mul\<close>,  \<^const_name>\<open>c_unsigned_mul\<close>)),
+      (CDivOp0,  (\<^const_name>\<open>c_signed_div\<close>,  \<^const_name>\<open>c_unsigned_div\<close>)),
+      (CRmdOp0,  (\<^const_name>\<open>c_signed_mod\<close>,  \<^const_name>\<open>c_unsigned_mod\<close>)),
+      (CLeOp0,   (\<^const_name>\<open>c_signed_less\<close>, \<^const_name>\<open>c_unsigned_less\<close>)),
+      (CLeqOp0,  (\<^const_name>\<open>c_signed_le\<close>,   \<^const_name>\<open>c_unsigned_le\<close>)),
+      (CGrOp0,   (\<^const_name>\<open>c_signed_less\<close>, \<^const_name>\<open>c_unsigned_less\<close>)),  (* reversed operands *)
+      (CGeqOp0,  (\<^const_name>\<open>c_signed_le\<close>,   \<^const_name>\<open>c_unsigned_le\<close>)),  (* reversed operands *)
+      (CEqOp0,   (\<^const_name>\<open>c_signed_eq\<close>,   \<^const_name>\<open>c_unsigned_eq\<close>)),
+      (CNeqOp0,  (\<^const_name>\<open>c_signed_neq\<close>,  \<^const_name>\<open>c_unsigned_neq\<close>)),
+      (CAndOp0,  (\<^const_name>\<open>c_signed_and\<close>,  \<^const_name>\<open>c_unsigned_and\<close>)),
+      (CXorOp0,  (\<^const_name>\<open>c_signed_xor\<close>,  \<^const_name>\<open>c_unsigned_xor\<close>)),
+      (COrOp0,   (\<^const_name>\<open>c_signed_or\<close>,   \<^const_name>\<open>c_unsigned_or\<close>)),
+      (CShlOp0,  (\<^const_name>\<open>c_signed_shl\<close>,  \<^const_name>\<open>c_unsigned_shl\<close>))
+    ]
+  fun translate_binop cty op0 =
+    let
+      fun lookup [] = NONE
+        | lookup ((op', pair) :: rest) =
+            if op' = op0 then SOME pair else lookup rest
+    in
+      case lookup binop_table of
+        SOME (s, u) =>
+          Monadic (Isa_Const (if C_Ast_Utils.is_signed cty then s else u, isa_dummyT))
+      | NONE =>
+          (* C11 \<section>6.5.7p5: signed right shift is implementation-defined *)
+          if op0 = CShrOp0 then
+            if C_Ast_Utils.is_signed cty
+            then (case #signed_shr (C_Compiler.get_compiler_profile ()) of
+                    C_Compiler.ArithmeticShift =>
+                      Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr\<close>, isa_dummyT))
+                  | C_Compiler.ConservativeShift =>
+                      Monadic (Isa_Const (\<^const_name>\<open>c_signed_shr_conservative\<close>, isa_dummyT)))
+            else Monadic (Isa_Const (\<^const_name>\<open>c_unsigned_shr\<close>, isa_dummyT))
+          else unsupported "unsupported binary operator"
+    end
 
   (* Check if a given aggregate name refers to a union (not a struct). *)
   fun is_union_aggregate name =
