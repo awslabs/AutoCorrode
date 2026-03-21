@@ -385,28 +385,26 @@ struct
       val (has_signed, has_unsigned, has_char, has_short, _, long_count, has_void, has_struct) =
         List.foldl (fn (spec, flags) => accumulate spec flags)
           (false, false, false, false, false, 0, false, false) specs
+      (* C11 \<section>6.7.2p2: resolve accumulated specifier flags to a c_numeric_type.
+         Pattern order follows the standard's specifier combination table. *)
+      fun resolve_from_flags (_, _, _, _, _, _, true, _) = SOME CVoid       (* void *)
+        | resolve_from_flags (_, _, _, _, _, _, _, true) = NONE             (* struct/union *)
+        | resolve_from_flags (_, true,  true, _, _, _, _, _) = SOME CChar   (* unsigned char *)
+        | resolve_from_flags (true, _,  true, _, _, _, _, _) = SOME CSChar  (* signed char *)
+        | resolve_from_flags (_, _,     true, _, _, _, _, _) =              (* plain char *)
+            if #char_is_signed (C_Compiler.get_compiler_profile ())
+            then SOME CSChar else SOME CChar
+        | resolve_from_flags (_, true,  _, true, _, _, _, _) = SOME CUShort (* unsigned short *)
+        | resolve_from_flags (_, _,     _, true, _, _, _, _) = SOME CShort  (* short *)
+        | resolve_from_flags (_, true,  _, _, _, 128, _, _) = SOME CUInt128 (* unsigned __int128 *)
+        | resolve_from_flags (_, _,     _, _, _, 128, _, _) = SOME CInt128  (* __int128 *)
+        | resolve_from_flags (_, us, _, _, _, lc, _, _) =                    (* int/long/long long *)
+            if lc >= 2 then (if us then SOME CULongLong else SOME CLongLong)  (* long long *)
+            else if lc = 1 then (if us then SOME CULong else SOME CLong)      (* long *)
+            else if us then SOME CUInt                                        (* unsigned int *)
+            else SOME CInt  (* int, signed, signed int, or bare specifiers *)
     in
-      if has_void then SOME CVoid
-      else if has_struct then NONE
-      else if has_char then
-        if has_unsigned then SOME CChar  (* unsigned char = c_char = 8 word *)
-        else if has_signed then SOME CSChar
-        else if #char_is_signed (C_Compiler.get_compiler_profile ()) then SOME CSChar else SOME CChar  (* compiler: option controls plain-char signedness *)
-
-      else if has_short then
-        if has_unsigned then SOME CUShort
-        else SOME CShort
-      else if long_count = 128 then  (* __int128 *)
-        if has_unsigned then SOME CUInt128
-        else SOME CInt128
-      else if long_count >= 2 then  (* long long *)
-        if has_unsigned then SOME CULongLong
-        else SOME CLongLong
-      else if long_count = 1 then
-        if has_unsigned then SOME CULong
-        else SOME CLong
-      else if has_unsigned then SOME CUInt
-      else SOME CInt  (* int, signed, signed int, or bare specifiers *)
+      resolve_from_flags (has_signed, has_unsigned, has_char, has_short, false, long_count, has_void, has_struct)
     end
 
   (* Extract numeric type from a declaration *)
