@@ -100,4 +100,15 @@ smoke_adv_off_size_t smoke_adv_offsetof(void) {
 
 thm c_smoke_adv_offsetof_def
 
+subsection \<open>Range Designators in Array Initializers\<close>
+
+micro_c_translate \<open>
+static unsigned int smoke_adv_range_init[8] = { [2 ... 5] = 42 };
+unsigned int smoke_adv_range_lookup(unsigned int i) {
+  return smoke_adv_range_init[i];
+}
+\<close>
+
+thm c_smoke_adv_range_lookup_def
+
 end

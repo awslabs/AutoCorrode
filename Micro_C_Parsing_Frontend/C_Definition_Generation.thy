@@ -345,15 +345,22 @@ struct
                     val actual_cty = C_Ast_Utils.apply_ptr_depth base_cty ptr_depth
                     val elem_cty =
                       if ptr_depth > 0 then C_Ast_Utils.apply_ptr_depth base_cty (ptr_depth - 1) else base_cty
-                    fun resolve_desig_idx [] pos = pos
-                      | resolve_desig_idx [C_Ast.CArrDesig0 (C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (n, _, _), _)), _)] _ =
-                          intinf_to_int_checked "global array designator" n
-                      | resolve_desig_idx _ _ =
+                    fun expand_desig [] pos init_item = [(pos, init_item)]
+                      | expand_desig [C_Ast.CArrDesig0 (C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (n, _, _), _)), _)] _ init_item =
+                          [(intinf_to_int_checked "global array designator" n, init_item)]
+                      | expand_desig [C_Ast.CRangeDesig0 (
+                            C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (lo_n, _, _), _)),
+                            C_Ast.CConst0 (C_Ast.CIntConst0 (C_Ast.CInteger0 (hi_n, _, _), _)), _)] _ init_item =
+                          let val lo = intinf_to_int_checked "range designator lo" lo_n
+                              val hi = intinf_to_int_checked "range designator hi" hi_n
+                          in List.tabulate (hi - lo + 1, fn i => (lo + i, init_item)) end
+                      | expand_desig _ _ _ =
                           error "micro_c_translate: complex designator in global array initializer"
                     fun collect_indices [] _ = []
                       | collect_indices ((desigs, init_item) :: rest) pos =
-                          let val idx = resolve_desig_idx desigs pos
-                          in (idx, init_item) :: collect_indices rest (idx + 1) end
+                          let val items = expand_desig desigs pos init_item
+                              val next_pos = #1 (List.last items) + 1
+                          in items @ collect_indices rest next_pos end
                     val indexed_items = collect_indices init_list 0
                     val declared_size = array_decl_size declr
                     val arr_size =

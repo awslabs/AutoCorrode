@@ -206,6 +206,27 @@ lemma c_offset_of_b_spec [crush_specs]:
 by (crush_boot f: c_offset_of_b_def contract: c_offset_of_b_contract_def)
    crush_base
 
+subsection \<open>Range Designators\<close>
+
+micro_c_translate \<open>
+  static unsigned int range_arr[4] = { [0 ... 1] = 10, [2 ... 3] = 20 };
+  unsigned int range_test(unsigned int i) {
+    return range_arr[i];
+  }
+\<close>
+
+definition c_range_test_contract :: \<open>c_uint \<Rightarrow> ('s::{sepalg}, c_uint, 'b) function_contract\<close> where
+  [crush_contracts]: \<open>c_range_test_contract i \<equiv>
+    let pre  = \<langle>i = 0\<rangle>;
+        post = \<lambda>r. \<langle>r = 10\<rangle>
+     in make_function_contract pre post\<close>
+ucincl_auto c_range_test_contract
+
+lemma c_range_test_spec [crush_specs]:
+  shows \<open>\<Gamma>; c_range_test i \<Turnstile>\<^sub>F c_range_test_contract i\<close>
+by (crush_boot f: c_range_test_def contract: c_range_test_contract_def)
+   crush_base
+
 end
 
 end

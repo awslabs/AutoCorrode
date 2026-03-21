@@ -4343,14 +4343,21 @@ struct
                       let
                           (* Resolve position for each element: designators set explicit index,
                              positional elements use sequential position *)
-                          fun resolve_desig_idx [] pos = pos
-                            | resolve_desig_idx [CArrDesig0 (CConst0 (CIntConst0 (CInteger0 (n, _, _), _)), _)] _ =
-                                intinf_to_int_checked "array designator" n
-                            | resolve_desig_idx _ _ = unsupported "complex designator in array initializer"
+                          fun expand_desig [] pos e = [(pos, e)]
+                            | expand_desig [CArrDesig0 (CConst0 (CIntConst0 (CInteger0 (n, _, _), _)), _)] _ e =
+                                [(intinf_to_int_checked "array designator" n, e)]
+                            | expand_desig [CRangeDesig0 (
+                                  CConst0 (CIntConst0 (CInteger0 (lo_n, _, _), _)),
+                                  CConst0 (CIntConst0 (CInteger0 (hi_n, _, _), _)), _)] _ e =
+                                let val lo = intinf_to_int_checked "range designator lo" lo_n
+                                    val hi = intinf_to_int_checked "range designator hi" hi_n
+                                in List.tabulate (hi - lo + 1, fn i => (lo + i, e)) end
+                            | expand_desig _ _ _ = unsupported "complex designator in array initializer"
                           fun collect_indices [] _ = []
                             | collect_indices ((desigs, CInitExpr0 (e, _)) :: rest) pos =
-                                let val idx = resolve_desig_idx desigs pos
-                                in (idx, e) :: collect_indices rest (idx + 1) end
+                                let val items = expand_desig desigs pos e
+                                    val next_pos = #1 (List.last items) + 1
+                                in items @ collect_indices rest next_pos end
                             | collect_indices _ _ = unsupported "complex array initializer element"
                           val indexed_items = collect_indices init_list 0
                           val has_designators = List.exists (fn (desigs, _) => not (null desigs)) init_list
