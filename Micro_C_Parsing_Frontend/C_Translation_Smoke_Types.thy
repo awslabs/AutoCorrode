@@ -135,4 +135,20 @@ unsigned int smoke_types_register(register unsigned int x) {
 
 thm c_smoke_types_register_def
 
+micro_c_translate \<open>
+unsigned __int128 smoke_types_u128_add(unsigned __int128 a, unsigned __int128 b) {
+  return a + b;
+}
+\<close>
+
+thm c_smoke_types_u128_add_def
+
+micro_c_translate \<open>
+__int128 smoke_types_i128_negate(__int128 x) {
+  return 0 - x;
+}
+\<close>
+
+thm c_smoke_types_i128_negate_def
+
 end
