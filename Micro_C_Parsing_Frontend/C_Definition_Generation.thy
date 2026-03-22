@@ -327,6 +327,31 @@ struct
             init_expr_const_term target_cty expr
         | init_value_term (C_Ast_Utils.CStruct sname) (C_Ast.CInitList0 (init_list, _)) =
             init_struct_const_term sname init_list
+        | init_value_term target_cty (C_Ast.CInitList0 (init_list, _)) =
+            (* Sub-array initializer: build a list of recursively initialized elements *)
+            let
+              val elem_hol_ty = C_Ast_Utils.hol_type_of target_cty
+              fun collect [] _ = []
+                | collect (([], item) :: rest) pos =
+                    (pos, item) :: collect rest (pos + 1)
+                | collect ((desigs, item) :: rest) _ =
+                    let val idx =
+                      (case desigs of
+                         [C_Ast.CArrDesig0 (C_Ast.CConst0 (C_Ast.CIntConst0
+                            (C_Ast.CInteger0 (n, _, _), _)), _)] =>
+                           intinf_to_int_checked "sub-array designator" n
+                       | _ => error "micro_c_translate: complex designator in nested array initializer")
+                    in (idx, item) :: collect rest (idx + 1) end
+              val indexed = collect init_list 0
+              val arr_size =
+                List.foldl (fn ((i, _), acc) => Int.max (acc, i + 1)) 0 indexed
+              val zero = default_const_term target_cty
+              val base = List.tabulate (arr_size, fn _ => zero)
+              val filled = List.foldl
+                (fn ((i, item), acc) =>
+                  nth_map i (K (init_value_term target_cty item)) acc)
+                base indexed
+            in HOLogic.mk_list elem_hol_ty filled end
         | init_value_term _ _ =
             error "micro_c_translate: unsupported non-constant global initializer shape"
       fun process_decl specs declarators =
