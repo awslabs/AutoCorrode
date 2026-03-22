@@ -12,7 +12,7 @@ I/P consists of three components:
   Bash.Server forwarding, ML statistics monitoring, and PIDE message
   interception.
 - **`configure-remote.py`** — Setup and configuration tool. Installs Isabelle
-  on the remote, syncs poly binaries and heaps, and generates the jEdit
+  on the remote, syncs poly binaries and heaps, and generates the Isabelle
   flags needed to enable the proxy.
 - **`ip_plugin/`** — Isabelle/jEdit plugin providing a status bar widget
   (remote host + throughput) and ML heap monitoring for proxied sessions.
@@ -39,6 +39,9 @@ isabelle-remote() {
 # 3. Configure and launch jEdit with the remote prover
 isabelle-remote ubuntu@host
 isabelle jedit -l HOL $ISABELLE_REMOTE
+
+# The same flags also work with isabelle build:
+isabelle build $ISABELLE_REMOTE -d . MySession
 ```
 
 The `setup` subcommand installs AFP components on the remote by default (`Word_Lib`).
@@ -46,6 +49,41 @@ You can override this with the `--components` flag. For example,
 `--components Word_Lib Isabelle_C` would install both `Word_Lib` and `Isabelle_C`.
 To skip AFP installation entirely, pass `--components` with no arguments.
 Note: `--components` is only available on the `setup` subcommand, not `run`.
+
+## Usage Modes
+
+The `$ISABELLE_REMOTE` flags set Isabelle's `process_policy` option, which wraps
+any Poly/ML invocation through the proxy. This mechanism is not specific to
+jEdit — it applies to any Isabelle command that spawns a prover process.
+
+### Interactive (jEdit)
+
+This is the primary use case. The proxy interposes on the PIDE channel between
+local jEdit/Scala and a remote Poly/ML, forwarding all protocol messages with
+path rewriting. The `ip_plugin/` provides a jEdit status bar widget showing
+the remote host and throughput.
+
+### Batch builds (`isabelle build`)
+
+Supported. The proxy handles `build_session` PIDE messages: it rsyncs local
+session sources to the remote, rewrites `session_directories` paths, and after
+a successful build copies the heap back to the local machine. Usage:
+
+```bash
+isabelle build $ISABELLE_REMOTE -d . MySession
+```
+
+### With I/Q
+
+Works transparently. I/Q operates at the jEdit/Scala layer above the PIDE
+channel and is unaffected by proxying.
+
+### With I/R
+
+Supported via automatic SSH tunnel. When I/R starts inside a proxied session,
+the proxy intercepts the `IR_Repl.port` PIDE protocol message, sets up an SSH
+local port forward to the remote I/R listener, and rewrites the port so that
+I/R appears to be running locally. No user configuration is needed.
 
 ## Setup Scripts
 

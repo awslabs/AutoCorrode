@@ -1637,6 +1637,48 @@ def main():
             logger.warning(f"Local component {name} ({lc}) has no match on remote")
 
     argv_rewrites.sort(key=lambda x: -len(x[0]))
+
+    synced_dirs = set()  # local dirs rsync'd to the remote by this proxy run
+
+    # Sync --use files to the remote.
+    # repl.py passes -f ir/*.ML which become --use <local_path> in the poly
+    # argv.  Those files don't exist on the remote, so we rsync them and add
+    # a path rewrite for the common parent.  We check against synced_dirs
+    # (not argv_rewrites) to avoid re-syncing already-copied directories.
+    use_files = []
+    i = 0
+    while i < len(poly_argv):
+        if poly_argv[i] == "--use" and i + 1 < len(poly_argv):
+            use_files.append(poly_argv[i + 1])
+            i += 2
+        else:
+            i += 1
+    uncovered = []
+    for f in use_files:
+        if not os.path.isfile(f):
+            continue
+        if not any(f.startswith(d) for d in synced_dirs):
+            uncovered.append(os.path.abspath(f))
+    if uncovered:
+        common_parent = os.path.commonpath(uncovered)
+        if os.path.isfile(common_parent):
+            common_parent = os.path.dirname(common_parent)
+        remote_use_dir = ssh_run_stdout(host, "mktemp", "-d", "/tmp/isabelle-proxy-use-XXXXXX")
+        # Build list of relative paths for rsync --files-from
+        rel_paths = [os.path.relpath(f, common_parent) for f in uncovered]
+        files_list = "\n".join(rel_paths) + "\n"
+        subprocess.run(
+            ["rsync", "-az", "--files-from=-",
+             "-e", "ssh " + " ".join(ssh_control_flags()),
+             common_parent + "/", f"{host}:{remote_use_dir}/"],
+            input=files_list.encode(), check=True)
+        logger.info(f"Synced {len(uncovered)} --use files to {host}:{remote_use_dir}/")
+        for rp in rel_paths:
+            logger.debug(f"  {rp}")
+        synced_dirs.add(common_parent)
+        argv_rewrites.append((common_parent, remote_use_dir))
+        argv_rewrites.sort(key=lambda x: -len(x[0]))
+
     mgmt.rewrites = argv_rewrites
     logger.debug(f"argv_rewrites ({len(argv_rewrites)} entries):")
     for old, new in argv_rewrites:

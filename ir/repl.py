@@ -563,6 +563,10 @@ class PolyMLProcess:
                     "-o", f"bash_process_password={bash_server.password}"]
         if redirect:
             cmd.append("-r")
+        # Forward ISABELLE_REMOTE options (e.g. process_policy for I/P remote execution)
+        isabelle_remote = os.environ.get("ISABELLE_REMOTE", "")
+        if isabelle_remote:
+            cmd += shlex.split(isabelle_remote)
         # Load order: tcp_handler, ir, ml_repl (ml_repl wires them together)
         cmd += ["-f", os.path.join(ml_dir, "tcp_handler.ML"),
                 "-f", os.path.join(ml_dir, "ir.ML"),

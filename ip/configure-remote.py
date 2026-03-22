@@ -16,7 +16,7 @@ Subcommands:
                  with a fresh rebuild installation and build of poly and the
                  Pure + HOL heap.
 
-  run HOST     Print jEdit flags to use for enabling ML proxy.
+  run HOST     Print Isabelle flags for enabling the ML proxy.
 
                Verifies local poly/heaps match the remote before emitting flags.
 
@@ -53,7 +53,7 @@ Setup-only options:
 Run-only options:
 
   --sync-all-heaps         Sync all local heaps to the remote before printing
-                           jEdit flags.
+                           Isabelle flags.
   --minheap MB             Override Poly/ML --minheap (minimum heap size).
   --maxheap MB             Override Poly/ML --maxheap (maximum heap size).
   --gcthreads N            Override Poly/ML --gcthreads (GC thread count).
@@ -79,7 +79,7 @@ Examples:
   configure-remote.py setup ubuntu@host --ml-platform aarch64-ubuntu \
      --copy-from-local --sync-all-heaps
 
-  # Print jEdit flags
+  # Print Isabelle flags (for jedit or build)
   configure-remote.py run ubuntu@host --ml-platform aarch64-ubuntu
 
   # List local platforms:
@@ -91,8 +91,8 @@ Examples:
 Shell alias:
 
   The following alias makes ./configure-remote.py more convenient to use.
-  Put it in your .zshrc or equivalent and then invoke pass $ISABELLE_REMOTE
-  to invocations of `isabelle jedit`.
+  Put it in your .zshrc or equivalent and then pass $ISABELLE_REMOTE
+  to invocations of `isabelle jedit` or `isabelle build`.
 
 ``
   # Isabelle remote ML prover
