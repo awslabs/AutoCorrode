@@ -4,6 +4,7 @@ theory C_Definition_Generation
   keywords "micro_c_translate" :: thy_decl
        and "micro_c_file" :: thy_decl
        and "prefix:" and "manifest:" and "addr:" and "gv:" and "abi:" and "compiler:"
+       and "verbose"
 begin
 
 subsection \<open>Definition Generation\<close>
@@ -17,6 +18,7 @@ structure C_Def_Gen : sig
   val set_ref_universe_types : typ -> typ -> unit
   val set_ref_abort_type : typ option -> unit
   val set_pointer_model : C_Translate.pointer_model -> unit
+  val set_verbose : bool -> unit
   val define_c_function : string -> string -> term -> local_theory -> local_theory
   val process_translation_unit : C_Ast.nodeInfo C_Ast.cTranslationUnit
                                  -> local_theory -> local_theory
@@ -35,6 +37,8 @@ struct
     Unsynchronized.ref (TFree ("'gv", []))
   val current_pointer_model : C_Translate.pointer_model Unsynchronized.ref =
     Unsynchronized.ref {ptr_add = SOME "c_ptr_add", ptr_shift_signed = SOME "c_ptr_shift_signed", ptr_diff = SOME "c_ptr_diff"}
+  val current_verbose : bool Unsynchronized.ref = Unsynchronized.ref false
+  fun set_verbose v = (current_verbose := v)
 
   fun set_decl_prefix pfx = (current_decl_prefix := pfx)
   fun set_manifest m = (current_manifest := m)
@@ -92,6 +96,65 @@ struct
               (Term.list_comb (Const (c, dummyT), args'), "const: " ^ c)
           | _ => (morphed_lhs, "registered term")
         end
+      (* Verbose tracing: report extra type variables after definition.
+         Note: used_tfrees is computed inside the registered_term let block
+         above, so we recompute it here for the verbose check. *)
+      val verbose_used_tfrees =
+        let val (_, args) = Term.strip_comb morphed_lhs
+            val non_type = List.filter
+              (fn Const (n, Type ("itself", _)) => n <> \<^const_name>\<open>Pure.type\<close> | _ => true) args
+        in List.foldl (fn (a, acc) => Term.add_tfrees a acc) [] non_type |> map fst end
+      val _ =
+        if !current_verbose then
+          let
+            val all_tvars = Term.add_tvars term' []
+            val all_tfrees = Term.add_tfrees term' []
+            val extra_tfrees = List.filter
+              (fn (n, _) => not (member (op =) verbose_used_tfrees n)) all_tfrees
+          in
+            if null all_tvars andalso null extra_tfrees then ()
+            else
+              (writeln ("  [verbose] " ^ full_name ^ " type diagnostics:");
+               List.app (fn ((n, idx), sort) =>
+                 writeln ("    TVar: ?" ^ n ^ "." ^ Int.toString idx ^
+                          " :: " ^ @{make_string} sort)) all_tvars;
+               List.app (fn (n, sort) =>
+                 writeln ("    extra TFree: " ^ n ^
+                          " :: " ^ @{make_string} sort)) extra_tfrees;
+               (* Find sub-terms that introduce each extra type variable *)
+               let
+                 val extra_names = map fst extra_tfrees @ map (fst o fst) all_tvars
+                 fun has_extra_tyvar t =
+                   let val tvs = Term.add_tfrees t [] |> map fst
+                       val tvars = Term.add_tvars t [] |> map (fst o fst)
+                   in List.exists (fn n => member (op =) extra_names n) tvs orelse
+                      List.exists (fn n => member (op =) extra_names n) tvars
+                   end
+                 fun trace_subterms _ (t as Abs (x, T, body)) =
+                       if has_extra_tyvar (Abs (x, T, Term.dummy_pattern (type_of body)))
+                          andalso not (has_extra_tyvar body)
+                       then writeln ("    source: lambda " ^ x ^ " :: " ^
+                                     Syntax.string_of_typ_global @{theory} T)
+                       else trace_subterms 0 body
+                   | trace_subterms depth (f $ x) =
+                       if depth < 3 then
+                         (trace_subterms (depth + 1) f;
+                          trace_subterms (depth + 1) x)
+                       else ()
+                   | trace_subterms _ (Free (n, T)) =
+                       if has_extra_tyvar (Free (n, T))
+                       then writeln ("    source: Free " ^ n ^ " :: " ^
+                                     Syntax.string_of_typ_global @{theory} T)
+                       else ()
+                   | trace_subterms _ (Const (n, T)) =
+                       if has_extra_tyvar (Const (n, T))
+                       then writeln ("    source: Const " ^ n ^ " :: " ^
+                                     Syntax.string_of_typ_global @{theory} T)
+                       else ()
+                   | trace_subterms _ _ = ()
+               in trace_subterms 0 term' end)
+          end
+        else ()
       val _ =
         (C_Translate.defined_func_consts :=
            Symtab.update (full_name, registered_term) (! C_Translate.defined_func_consts);
@@ -898,6 +961,7 @@ ML \<open>
     | TranslatePtrShiftSigned of string
     | TranslatePtrDiff of string
     | TranslateCompiler of string
+    | TranslateVerbose
   val parse_abi_ident = Scan.one (Token.ident_with (K true)) >> Token.content_of
   val parse_abi_dash =
       Scan.one (fn tok => Token.is_kind Token.Sym_Ident tok andalso Token.content_of tok = "-") >> K ()
@@ -921,17 +985,20 @@ ML \<open>
       || (parse_ptr_shift_signed_key |-- Parse.name >> TranslatePtrShiftSigned)
       || (parse_ptr_diff_key |-- Parse.name >> TranslatePtrDiff)
       || (parse_compiler_key |-- parse_abi_name >> TranslateCompiler)
+      || (Parse.$$$ "verbose" >> K TranslateVerbose)
 
   type translate_opts = {
     prefix: string option, addr: string option, gv: string option,
     abi: string option,
     ptr_add: string option, ptr_shift_signed: string option, ptr_diff: string option,
-    compiler: string option
+    compiler: string option,
+    verbose: bool
   }
 
   val empty_opts : translate_opts = {
     prefix = NONE, addr = NONE, gv = NONE, abi = NONE,
-    ptr_add = NONE, ptr_shift_signed = NONE, ptr_diff = NONE, compiler = NONE
+    ptr_add = NONE, ptr_shift_signed = NONE, ptr_diff = NONE, compiler = NONE,
+    verbose = false
   }
 
   fun set_once _ NONE v = SOME v
@@ -940,36 +1007,43 @@ ML \<open>
   fun apply_translate_opt (TranslatePrefix v) (r : translate_opts) =
         {prefix = set_once "prefix" (#prefix r) v, addr = #addr r, gv = #gv r, abi = #abi r,
          ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
-         ptr_diff = #ptr_diff r, compiler = #compiler r}
+         ptr_diff = #ptr_diff r, compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslateAddrTy v) (r : translate_opts) =
         {prefix = #prefix r, addr = set_once "addr" (#addr r) v, gv = #gv r, abi = #abi r,
          ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
-         ptr_diff = #ptr_diff r, compiler = #compiler r}
+         ptr_diff = #ptr_diff r, compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslateGvTy v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = set_once "gv" (#gv r) v, abi = #abi r,
          ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
-         ptr_diff = #ptr_diff r, compiler = #compiler r}
+         ptr_diff = #ptr_diff r, compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslateAbi v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = set_once "abi" (#abi r) v,
          ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
-         ptr_diff = #ptr_diff r, compiler = #compiler r}
+         ptr_diff = #ptr_diff r, compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslatePtrAdd v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
          ptr_add = set_once "ptr_add" (#ptr_add r) v,
-         ptr_shift_signed = #ptr_shift_signed r, ptr_diff = #ptr_diff r, compiler = #compiler r}
+         ptr_shift_signed = #ptr_shift_signed r, ptr_diff = #ptr_diff r,
+         compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslatePtrShiftSigned v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
          ptr_add = #ptr_add r,
          ptr_shift_signed = set_once "ptr_shift_signed" (#ptr_shift_signed r) v,
-         ptr_diff = #ptr_diff r, compiler = #compiler r}
+         ptr_diff = #ptr_diff r, compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslatePtrDiff v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
          ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
-         ptr_diff = set_once "ptr_diff" (#ptr_diff r) v, compiler = #compiler r}
+         ptr_diff = set_once "ptr_diff" (#ptr_diff r) v,
+         compiler = #compiler r, verbose = #verbose r}
     | apply_translate_opt (TranslateCompiler v) (r : translate_opts) =
         {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
          ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
-         ptr_diff = #ptr_diff r, compiler = set_once "compiler" (#compiler r) v}
+         ptr_diff = #ptr_diff r, compiler = set_once "compiler" (#compiler r) v,
+         verbose = #verbose r}
+    | apply_translate_opt TranslateVerbose (r : translate_opts) =
+        {prefix = #prefix r, addr = #addr r, gv = #gv r, abi = #abi r,
+         ptr_add = #ptr_add r, ptr_shift_signed = #ptr_shift_signed r,
+         ptr_diff = #ptr_diff r, compiler = #compiler r, verbose = true}
 
   fun collect_translate_opts opts =
     fold apply_translate_opt opts empty_opts
@@ -1016,6 +1090,7 @@ ML \<open>
       val _ = C_Def_Gen.set_ref_universe_types addr_ty gv_ty
       val _ = C_Def_Gen.set_ref_abort_type expr_constraint
       val _ = C_Def_Gen.set_pointer_model pointer_model
+      val _ = C_Def_Gen.set_verbose (#verbose opts)
     in () end
 
 val _ =
