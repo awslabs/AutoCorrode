@@ -807,8 +807,10 @@ struct
        SOME ty => ty
      | NONE => isa_dummyT)
 
-  (* Untyped void* cast helper: keep prism target type polymorphic so later
-     context (e.g. indexing vs scalar dereference) can resolve it. *)
+  (* Untyped void* cast helper: keep prism target type fully polymorphic so
+     later context (e.g. indexing vs scalar dereference) can resolve it.
+     Used for T*\<rightarrow>U* reinterprets where the intermediate void* step
+     should not fix the target prism. *)
   fun mk_cast_from_void_untyped void_ptr_term =
     let val cast_const = Const (\<^const_name>\<open>c_cast_from_void\<close>, dummyT)
         val prism_const = Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, dummyT)
@@ -969,13 +971,21 @@ struct
                 C_Ast_Utils.CStruct _ => mk_cast_from_void to_inner tm
               | C_Ast_Utils.CUnion _ => mk_cast_from_void to_inner tm
               | _ =>
-                  let val cast_term = mk_cast_from_void_untyped tm
-                      val target_ty =
-                        (case pointer_expr_value_hol_ty to_cty of
-                           SOME ty => ty
-                         | NONE => isa_dummyT)
-                  in if target_ty = isa_dummyT then cast_term
-                     else constrain_expr_value_type target_ty cast_term
+                  let val target_ty = C_Ast_Utils.hol_type_of to_inner
+                      val prism_ty = Type (\<^type_name>\<open>prism\<close>, [!current_ref_gv_ty, target_ty])
+                      val prism_const = Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, prism_ty)
+                      val cast_const = Const (\<^const_name>\<open>c_cast_from_void\<close>,
+                            prism_ty --> dummyT --> dummyT)
+                      val v = Free ("v__void_cast", dummyT)
+                      val cast_term = constrain_expr_side_types
+                            (C_Term_Build.mk_bind tm
+                              (Term.lambda v (C_Term_Build.mk_literal (cast_const $ prism_const $ v))))
+                      val target_ptr_ty =
+                            (case pointer_expr_value_hol_ty to_cty of
+                               SOME ty => ty
+                             | NONE => isa_dummyT)
+                  in if target_ptr_ty = isa_dummyT then cast_term
+                     else constrain_expr_value_type target_ptr_ty cast_term
                   end)
            (* T* -> untyped : strip focus *)
            else if is_void_like to_inner then
@@ -998,10 +1008,7 @@ struct
              in if void_ptr_ty = isa_dummyT then cast_term
                 else constrain_expr_value_type void_ptr_ty cast_term
              end
-           (* T* -> U* where neither is void/union:
-              reinterpret through void* so the resulting focused reference
-              carries U's prism (byte-level view), rather than leaving the
-              term at type T* while only changing the tracked C type. *)
+           (* T* -> U* reinterpret through void *)
            else if from_inner = to_inner then tm
            else
              let val tm' =
@@ -1805,7 +1812,10 @@ struct
                                val target_ty = C_Ast_Utils.hol_type_of inner
                                val prism_ty = Isa_Type (\<^type_name>\<open>prism\<close>, [!current_ref_gv_ty, target_ty])
                                val prism_const = Isa_Const (\<^const_name>\<open>c_void_cast_prism_for\<close>, prism_ty)
-                               val cast_const = Isa_Const (\<^const_name>\<open>c_cast_from_void\<close>, isa_dummyT)
+                               val focused_ty = Isa_Type (\<^type_name>\<open>focused\<close>,
+                                     [isa_dummyT, !current_ref_gv_ty, target_ty])
+                               val cast_const = Isa_Const (\<^const_name>\<open>c_cast_from_void\<close>,
+                                     prism_ty --> isa_dummyT --> focused_ty)
                              in
                                cast_const $ prism_const $ old_var
                              end)
@@ -3401,8 +3411,19 @@ struct
                    else
                      let
                        val arg_tys = List.map expr_value_type arg_terms
+                       (* Pin the return type to function_body with the
+                          locale's side types so funcall's shared type
+                          variables unify across function and arguments.
+                          Use TVars (not TFrees) so names from
+                          current_ref_expr_constraint unify with the
+                          potentially-renamed TFrees of locale params. *)
+                       val fn_result_ty =
+                         if ret_value_ty = isa_dummyT then isa_dummyT
+                         else Isa_Type (\<^type_name>\<open>function_body\<close>,
+                                [isa_dummyT, ret_value_ty, @{typ c_abort},
+                                 isa_dummyT, isa_dummyT])
                        val fn_ty = Library.foldr (fn (a_ty, acc_ty) => a_ty --> acc_ty)
-                         (arg_tys, isa_dummyT)
+                         (arg_tys, fn_result_ty)
                      in
                        Type.constraint fn_ty fref_fueled
                      end
@@ -5905,20 +5926,37 @@ struct
             (mk_resolved_var_alloc ctxt false_lit)
             (Term.lambda ref_var b))
         body_term goto_refs
-      (* If an expression type constraint is set, constrain the body so that
-         type inference resolves state/abort/prompt to the locale's types instead of
-         leaving them as unconstrained variables that get fixated to rigid TFrees. *)
+      (* Constrain body side types from locale *)
       val body_term =
         (case !current_ref_expr_constraint of
            NONE => body_term
          | SOME expr_ty => Type.constraint expr_ty body_term)
-      val body_term =
+      (* Pin value AND return type.  FunctionBody requires value=return.
+         For pointer-returning functions, also check pointer_expr_value_hol_ty. *)
+      fun ret_hol_ty_of ret_cty =
         (case ret_cty of
-           C_Ast_Utils.CVoid => constrain_known_expr_value_type @{typ unit} body_term
+           C_Ast_Utils.CPtr _ => NONE
          | _ =>
              (case C_Ast_Utils.cty_to_record_typ (!current_decl_prefix) ret_cty of
-                SOME ty => constrain_known_expr_value_type ty body_term
-              | NONE => body_term))
+                SOME ty => SOME ty
+              | NONE =>
+                  let val ty = C_Ast_Utils.hol_type_of ret_cty
+                  in if ty = isa_dummyT then NONE else SOME ty end))
+      val body_term =
+        let val ret_ty_opt =
+              (case ret_cty of
+                 C_Ast_Utils.CVoid => SOME @{typ unit}
+               | _ => ret_hol_ty_of ret_cty)
+        in case ret_ty_opt of
+             SOME ret_ty =>
+               (case fastype_of body_term of
+                  Term.Type (ename, [s, _, _, a, i, o]) =>
+                    Type.constraint
+                      (Term.Type (ename, [s, ret_ty, ret_ty, a, i, o]))
+                      body_term
+                | _ => constrain_known_expr_value_type ret_ty body_term)
+           | NONE => body_term
+        end
       val fn_term = C_Term_Build.mk_function_body body_term
       (* Wrap in lambdas for each parameter *)
       val fn_term = List.foldr

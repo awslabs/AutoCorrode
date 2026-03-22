@@ -343,7 +343,15 @@ struct
             end
         | default_const_term cty =
             HOLogic.mk_number (C_Ast_Utils.hol_type_of cty) 0
-      fun init_expr_const_term (C_Ast_Utils.CPtr _) _ =
+      fun init_expr_const_term (C_Ast_Utils.CPtr _)
+              (C_Ast.CConst0 (C_Ast.CStrConst0 (C_Ast.CString0 (abr_str, _), _))) =
+            let val s = C_Ast_Utils.abr_string_to_string abr_str
+                val char_ty = C_Ast_Utils.hol_type_of C_Ast_Utils.CChar
+                val bytes = List.map (fn c => HOLogic.mk_number char_ty (Char.ord c))
+                              (String.explode s)
+                val with_null = bytes @ [HOLogic.mk_number char_ty 0]
+            in HOLogic.mk_list char_ty with_null end
+        | init_expr_const_term (C_Ast_Utils.CPtr _) _ =
             Const (\<^const_name>\<open>c_uninitialized\<close>, dummyT)
         | init_expr_const_term _ (C_Ast.CConst0 (C_Ast.CStrConst0 (C_Ast.CString0 (_, _), _))) =
                  error "micro_c_translate: string literal initializer requires char pointer target"
@@ -1089,6 +1097,7 @@ ML \<open>
           SOME (Type (\<^type_name>\<open>expression\<close>,
             [state_ty, dummyT, dummyT, abort_ty, prompt_in_ty, prompt_out_ty]))
         end
+
       val _ = C_Def_Gen.set_decl_prefix prefix
       val _ = C_Def_Gen.set_abi_profile abi_profile
       val _ = C_Compiler.set_compiler_profile compiler_profile
