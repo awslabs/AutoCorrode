@@ -99,11 +99,16 @@ struct
       (* Verbose tracing: report extra type variables after definition.
          Note: used_tfrees is computed inside the registered_term let block
          above, so we recompute it here for the verbose check. *)
+      (* Collect locale TFrees from the expression type constraint + morphed args *)
       val verbose_used_tfrees =
         let val (_, args) = Term.strip_comb morphed_lhs
-            val non_type = List.filter
-              (fn Const (n, Type ("itself", _)) => n <> \<^const_name>\<open>Pure.type\<close> | _ => true) args
-        in List.foldl (fn (a, acc) => Term.add_tfrees a acc) [] non_type |> map fst end
+            val from_args =
+              List.foldl (fn (a, acc) => Term.add_tfrees a acc) [] args |> map fst
+            val from_constraint =
+              Term.add_tfreesT (!current_ref_addr_ty) []
+              @ Term.add_tfreesT (!current_ref_gv_ty) []
+              |> map fst
+        in distinct (op =) (from_args @ from_constraint) end
       val _ =
         if !current_verbose then
           let
@@ -130,14 +135,14 @@ struct
                    in List.exists (fn n => member (op =) extra_names n) tvs orelse
                       List.exists (fn n => member (op =) extra_names n) tvars
                    end
-                 fun trace_subterms _ (t as Abs (x, T, body)) =
-                       if has_extra_tyvar (Abs (x, T, Term.dummy_pattern (type_of body)))
-                          andalso not (has_extra_tyvar body)
-                       then writeln ("    source: lambda " ^ x ^ " :: " ^
-                                     Syntax.string_of_typ_global @{theory} T)
-                       else trace_subterms 0 body
+                 fun trace_subterms _ (Abs (x, T, body)) =
+                       (if Term.add_tfreesT T [] |> List.exists (fn (n, _) => member (op =) extra_names n)
+                        then writeln ("    source: lambda " ^ x ^ " :: " ^
+                                      Syntax.string_of_typ_global @{theory} T)
+                        else ();
+                        trace_subterms 0 body)
                    | trace_subterms depth (f $ x) =
-                       if depth < 3 then
+                       if depth < 20 then
                          (trace_subterms (depth + 1) f;
                           trace_subterms (depth + 1) x)
                        else ()
