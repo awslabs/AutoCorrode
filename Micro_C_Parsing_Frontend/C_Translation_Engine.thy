@@ -2533,7 +2533,21 @@ struct
                   mk_raw_ptr_add rhs' lhs' lhs_cty elem_cty (is_nonnegative_int_const lhs)
                 else
                   mk_list_ptr_add rhs' lhs' lhs_cty elem_cty
-            | (CSubOp0, C_Ast_Utils.CPtr elem_cty, C_Ast_Utils.CPtr _) =>
+            | (CSubOp0, C_Ast_Utils.CPtr elem_cty, rhs_sub_cty) =>
+                if not (C_Ast_Utils.is_ptr rhs_sub_cty) then
+                  (* ptr - int: negate the integer and use pointer addition *)
+                  let val neg_rhs =
+                        C_Term_Build.mk_bind2
+                          (Isa_Const (\<^const_name>\<open>c_signed_sub\<close>, isa_dummyT))
+                          (C_Term_Build.mk_literal_num rhs_sub_cty 0)
+                          rhs'
+                  in
+                    if uses_raw_pointer_model () andalso not (expr_is_list_backed_array tctx lhs) then
+                      mk_raw_ptr_add lhs' neg_rhs rhs_sub_cty elem_cty false
+                    else
+                      mk_list_ptr_add lhs' neg_rhs rhs_sub_cty elem_cty
+                  end
+                else
                 let val isa_ty = C_Ast_Utils.hol_type_of elem_cty
                     val itself_ty = Isa_Type (\<^type_name>\<open>itself\<close>, [isa_ty])
                     val type_term = Isa_Const (\<^const_name>\<open>Pure.type\<close>, itself_ty)
