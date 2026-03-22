@@ -63,10 +63,33 @@ struct
       val (registered_term, head_desc) =
         let
           val (head, args) = Term.strip_comb morphed_lhs
+          (* Replace phantom TYPE args whose type variable became schematic
+             (TVar) with TYPE(unit).  This prevents "Illegal schematic type
+             variable" errors in callers that reference this constant.
+             Only phantom TYPE args are affected — TFree TYPE args (locale
+             parameters) and non-TYPE args are preserved. *)
+          val non_type_args =
+            List.filter (fn Const (n, Type ("itself", _)) =>
+                              n <> \<^const_name>\<open>Pure.type\<close>
+                          | _ => true) args
+          val used_tfrees =
+            List.foldl (fn (a, acc) => Term.add_tfrees a acc) [] non_type_args
+            |> map fst
+          fun fix_type_arg (Const (n, Type ("itself", [TFree (tv, _)]))) =
+                if n = \<^const_name>\<open>Pure.type\<close> andalso
+                   not (member (op =) used_tfrees tv)
+                then Const (n, Type ("itself", [@{typ unit}]))
+                else Const (n, Type ("itself", [TFree (tv, @{sort type})]))
+            | fix_type_arg (Const (n, Type ("itself", [TVar _]))) =
+                if n = \<^const_name>\<open>Pure.type\<close>
+                then Const (n, Type ("itself", [@{typ unit}]))
+                else Const (n, Type ("itself", [@{typ unit}]))
+            | fix_type_arg arg = arg
+          val args' = map fix_type_arg args
         in
           case head of
             Term.Const (c, _) =>
-              (Term.list_comb (Const (c, dummyT), args), "const: " ^ c)
+              (Term.list_comb (Const (c, dummyT), args'), "const: " ^ c)
           | _ => (morphed_lhs, "registered term")
         end
       val _ =
