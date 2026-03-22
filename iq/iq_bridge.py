@@ -27,8 +27,6 @@ class MCPBridgeWithReconnect:
         self.isabelle_socket = None
         self.connected = False
         self.last_forward_error: Optional[str] = None
-        token = os.environ.get("IQ_MCP_AUTH_TOKEN", "").strip()
-        self.auth_token = token if token else None
         self.server_host = os.environ.get("IQ_MCP_BRIDGE_HOST", "localhost").strip() or "localhost"
         self.server_port = self._parse_positive_int_env("IQ_MCP_BRIDGE_PORT", 8765)
         self.response_timeout_sec = float(self._parse_positive_int_env("IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC", 300))
@@ -203,9 +201,6 @@ class MCPBridgeWithReconnect:
 
     def forward_to_isabelle(self, request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Forward request to Isabelle server with automatic reconnection."""
-        if self.auth_token and "auth_token" not in request:
-            request["auth_token"] = self.auth_token
-
         method = request.get('method', 'unknown')
 
         # Check if this is a notification (no 'id' field)

@@ -22,7 +22,7 @@ I/P consists of three components:
 ```bash
 # 1. Install Isabelle on the remote and sync heaps
 ./configure-remote.py setup ubuntu@host --ml-platform aarch64-ubuntu \
-  --local-isabelle-home YOUR_ISABELLE_INSTALLATION
+  --local-isabelle YOUR_ISABELLE_INSTALLATION
 
 # 2. Add the shell helper to .zshrc / .bashrc, replacing AUTOCORRODE_HOME accordingly:
 
@@ -61,14 +61,24 @@ The proxy supports overriding Poly/ML runtime options:
 isabelle-remote ubuntu@host --minheap 48000 --maxheap 80000 --threads 16
 ```
 
+- `--threads N` sets the exact thread count (overrides `--maxthreads`).
+- `--maxthreads N` caps threads at `N` but will not exceed the remote machine's
+  CPU count (default: 16).
+
 See `configure-remote.py --help` and the module docstring of `ml_proxy.py`
 for full documentation.
+
+## Security
+
+All remote communication uses SSH. The proxy does not expose any
+network listeners beyond the local Isabelle/PIDE session. Authentication
+and encryption are delegated to the SSH transport.
 
 ## Heap management
 
 To make effective use of I/P on a single project, you need to maintain multiple
 checkouts/worktrees that the difference local/proxied Isabelle instances are run on. However,
-multiple worktrees stand in conflicts with the default of a single (ML-platform, session)-indexed
+multiple worktrees conflict with the default of a single (ML-platform, session)-indexed
 heap storage.
 
 ### Changing the heap store
@@ -117,8 +127,8 @@ fi
 ```
 
 in your `settings`, for example, any path starting with the expanded forms of
-`$ISABELLE_PROEJCT_HOME` or `$AFP_COMPONENT_BASE` would be contracted to the symbolic file names
-starting with `$ISABELLE_PROJECT_HOME/` or `$AFP_COMPONENT_BASE/`, respectively. In particular, if
+`$ISABELLE_PROJECT_BASE` or `$AFP_COMPONENT_BASE` would be contracted to the symbolic file names
+starting with `$ISABELLE_PROJECT_BASE/` or `$AFP_COMPONENT_BASE/`, respectively. In particular, if
 you set these environment variables to the base directories of your checkouts (and potentially their
 individual component directories, in case they are duplicate), then the generated heaps won't have
 worktree-specific filenames in them anymore and are therefore amenable for reuse across worktrees.
@@ -163,8 +173,8 @@ fi
 * When working in a worktree of your project, make sure that you set `$ISABELLE_PROJECT_BASE` to
 the base of the worktree, and `$AFP_COMPONENT_BASE` to where you store the AFP components. Finally,
 set `ISABELLE_HEAP_SUFFIX` if you want to use a separate heap directory: E.g.
-`export ISABELLE_HEAP_SUFFIX=A` would look for and update heaps in `$ISABELLE_USER_HOME/heaps-A`
-instead of the default `$ISABELLE_USER_HOME/heaps`.
+`export ISABELLE_HEAP_SUFFIX=A` would look for and update heaps in `$ISABELLE_HOME_USER/heaps-A`
+instead of the default `$ISABELLE_HOME_USER/heaps`.
 
 * Use `heap-mgr` to manage multiple heap directories, and `heap-mgr find -- {your isabelle command}`
 to find the most suitable heap directory for a build you want to do.

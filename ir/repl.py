@@ -11,6 +11,10 @@ TCP connections on localhost. Clients send commands as single lines
 by a sentinel line "<<DONE>>\\n". Multiple commands can be sent on the
 same connection. Commands are serialized across all clients.
 
+Authentication: TCP clients must send the server token as the
+first line after connecting; the server responds with "OK\\n" or
+"ERR: authentication failed\\n".
+
 Note: The I/R REPL operates at the Isar level. A session (created
 via Ir.init) starts in the context of a named theory — there is
 no need to issue 'theory' commands. Steps are Isar commands such as
@@ -21,10 +25,16 @@ The server operator gets a management console on stdin/stdout:
   - Everything else is sent to the REPL directly
 
 Management commands:
-  /connections   Show number of open client connections
-  /verbosity N   Set verbosity 0-3 (0=off, 1=body, 2=headers, 3=hex)
+  /connections   Show open client connections with stats
+  /info          Show server status summary
+  /verbosity N   Set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)
+  /show_types    Toggle type annotations in output
   /quit          Shut down the server
   /help          Show available commands
+
+Environment variables:
+  IR_AUTH_TOKEN        Override the TCP server token (default: random)
+  IR_REPL_AUTH_TOKEN   ML_Repl token (for --expect-ml mode)
 
 Usage:
     python3 repl.py [--port PORT] [--isabelle PATH] [--session SESSION]
@@ -39,6 +49,8 @@ import re
 import select
 import shlex
 import signal
+import hmac
+import secrets
 import socket
 import subprocess
 import sys
@@ -521,16 +533,21 @@ class PolyMLProcess:
         )
 
     def read_actual_port(self, timeout=60):
-        """Read stdout until Tcp_Handler reports its port. Updates self.port."""
+        """Read stdout until Tcp_Handler reports its port and token.
+        Updates self.port and self.token."""
         import re
+        self.token = None
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and self.alive():
             line = self.proc.stdout.readline().decode("utf-8", errors="replace")
             if not line:
                 break
-            m = re.search(r"Tcp_Handler: listening on 127\.0\.0\.1:(\d+)", line)
+            m = re.search(
+                r'Tcp_Handler: listening on 127\.0\.0\.1:(\d+)'
+                r'(?: \(token "([^"]*)"\))?', line)
             if m:
                 self.port = int(m.group(1))
+                self.token = m.group(2)
                 return self.port
         return None
 
@@ -561,6 +578,8 @@ class PolyMLProcess:
         if self.port:
             try:
                 s = socket.create_connection(("127.0.0.1", self.port), timeout=2)
+                if self.token:
+                    s.sendall((self.token + "\n").encode())
                 s.sendall(b"ML_Repl.stop ();\n")
                 s.close()
             except Exception:
@@ -592,15 +611,18 @@ class PolyMLConnection:
     The "done" message signals end of output for a command.
     """
 
-    def __init__(self, host="127.0.0.1", port=9146):
+    def __init__(self, host="127.0.0.1", port=9146, token=None):
         self.host = host
         self.port = port
+        self.token = token
         self.sock = None
         self._buf = b""
 
     def connect(self):
         self.sock = socket.create_connection((self.host, self.port))
         self._buf = b""
+        if self.token:
+            self.sock.sendall((self.token + "\n").encode())
 
     def _read_exact(self, n):
         """Read exactly n bytes from socket, using internal buffer."""
@@ -707,6 +729,7 @@ class Server:
                  session=None, directory=None):
         self.poly = poly
         self.host = host
+        self.token = os.environ.get("IR_AUTH_TOKEN", "").strip() or secrets.token_urlsafe(24)
         self.mgmt_output = mgmt_output or print
         self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -817,9 +840,30 @@ class Server:
         buf = b""
         cmd_lines = []
         logged_connect = False
+        disconnect_reason = "closed by client"
         with self.clients_lock:
             peer = self.clients[client]["peer"] if client in self.clients else "?"
         try:
+            # Token authentication: first line must match self.token
+            auth_buf = b""
+            while b"\n" not in auth_buf:
+                chunk = client.recv(4096)
+                if not chunk:
+                    disconnect_reason = "closed during auth (no data)"
+                    return
+                auth_buf += chunk
+            auth_line, buf = auth_buf.split(b"\n", 1)
+            received_token = auth_line.decode("utf-8", errors="replace")
+            if not hmac.compare_digest(received_token, self.token):
+                client.sendall(b"ERR: authentication failed\n")
+                disconnect_reason = "authentication failed"
+                preview = received_token[:8] + "..." if len(received_token) > 8 else received_token
+                self.log(f"{YELLOW}[auth] {peer} authentication failed "
+                         f"(received {len(received_token)} bytes: "
+                         f"{preview!r}){RST}")
+                return
+            client.sendall(b"OK\n")
+
             while True:
                 chunk = client.recv(4096)
                 if not chunk:
@@ -856,6 +900,7 @@ class Server:
                         if not self.poly.alive():
                             msg = f"ERR: Poly/ML process terminated\n{SENTINEL}\n"
                             client.sendall(msg.encode("utf-8"))
+                            disconnect_reason = "Poly/ML process terminated"
                             self.running = False
                             return
                         self.log_input(f"[{peer}]", command)
@@ -870,17 +915,30 @@ class Server:
                             self.clients[client]["commands"] += 1
                             self.clients[client]["bytes_out"] += len(response)
                             self.clients[client]["last_active"] = time.time()
-        except (ConnectionResetError, BrokenPipeError):
-            pass
+        except (ConnectionResetError, BrokenPipeError) as e:
+            disconnect_reason = f"connection reset ({e})"
+        except EOFError as e:
+            disconnect_reason = f"ML backend connection closed ({e})"
+            self.log(f"{RED}[!] {peer} command failed: ML backend connection "
+                     f"closed{RST}")
+        except OSError as e:
+            disconnect_reason = f"OS error ({e})"
+        except Exception as e:
+            disconnect_reason = f"{type(e).__name__}: {e}"
+            self.log(f"{RED}[!] {peer} unexpected error: "
+                     f"{type(e).__name__}: {e}{RST}")
         finally:
             with self.clients_lock:
                 info = self.clients.pop(client, None)
             client.close()
             if logged_connect:
-                peer = info["peer"] if info else "unknown"
-                self.log(f"{RED}[-] {peer} disconnected ({self.num_clients} total){RST}")
+                peer_str = info["peer"] if info else peer
+                cmds = info["commands"] if info else 0
+                self.log(f"{RED}[-] {peer_str} disconnected: {disconnect_reason} "
+                         f"(cmds={cmds}, {self.num_clients} remaining){RST}")
+            elif disconnect_reason != "closed by client":
+                self.log(f"{DIM}[probe] {peer} {disconnect_reason}{RST}")
             elif info and info.get("bytes_in", 0) > 0:
-                # Received data but no valid command — log for debugging
                 self.log(f"{DIM}[probe] {peer} sent {info['bytes_in']}B, no command{RST}")
 
     def client_info(self):
@@ -1115,20 +1173,35 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                 out(apply_transforms(console_transforms, body))
             server.log_output("[this]", kind, props, body)
         server.log_input("[this]", command)
-        output = server.poly.send_streaming(command, on_msg)
+        try:
+            output = server.poly.send_streaming(command, on_msg)
+        except EOFError as e:
+            out(f"{RED}ERR: ML backend connection closed: {e}{RST}")
+            out(f"{DIM}The Poly/ML process may have crashed. "
+                f"Check if it is still running.{RST}")
+            return False
+        except OSError as e:
+            out(f"{RED}ERR: connection error: {e}{RST}")
+            return False
+        except Exception as e:
+            out(f"{RED}ERR: {type(e).__name__}: {e}{RST}")
+            return False
     # Update completer from command output
     if completer:
-        if command.startswith("Ir.theories"):
-            completer.learn_theories(output)
-        elif command.startswith("Ir.load_theory"):
-            refresh = server.poly.send("Ir.theories ();")
-            completer.learn_theories(refresh)
-        elif command.startswith("Ir.repls"):
-            completer.learn_repls(output)
-        elif command.startswith("Ir.source"):
-            m = re.match(r'Ir\.source\s+"([^"]+)"', command)
-            if m:
-                completer.learn_source(m.group(1), output)
+        try:
+            if command.startswith("Ir.theories"):
+                completer.learn_theories(output)
+            elif command.startswith("Ir.load_theory"):
+                refresh = server.poly.send("Ir.theories ();")
+                completer.learn_theories(refresh)
+            elif command.startswith("Ir.repls"):
+                completer.learn_repls(output)
+            elif command.startswith("Ir.source"):
+                m = re.match(r'Ir\.source\s+"([^"]+)"', command)
+                if m:
+                    completer.learn_source(m.group(1), output)
+        except (EOFError, OSError) as e:
+            out(f"{DIM}Completer refresh failed: {e}{RST}")
     return False
 
 
@@ -1212,6 +1285,7 @@ class MgmtSocketServer:
         if os.path.exists(sock_path):
             os.unlink(sock_path)
         self.sock.bind(sock_path)
+        os.chmod(sock_path, 0o600)
         self.sock.listen(4)
         self.running = True
 
@@ -1464,8 +1538,6 @@ def main():
                    help="Show info about a running ML_Repl and exit")
     p.add_argument("--kill-server", action="store_true",
                    help="Show info about a running ML_Repl, stop it, and exit")
-    p.add_argument("--host", default="127.0.0.1",
-                   help="Host address to bind the TCP server on (default: 127.0.0.1)")
     p.add_argument("--mcp", action="store_true",
                    help="Start mcp_server.py in the background (streamable-http by default)")
     p.add_argument("--mcp-options", default="--transport streamable-http",
@@ -1473,7 +1545,8 @@ def main():
     p.add_argument("--daemon", action="store_true",
                    help="Run in daemon mode: mgmt console on Unix socket instead of stdin")
     p.add_argument("--expect-ml", action="store_true",
-                   help="Require an existing ML_Repl (retry, never start own Poly/ML)")
+                   help="Require an existing ML_Repl (retry, never start own Poly/ML). "
+                        "Set IR_REPL_AUTH_TOKEN to provide the ML_Repl token.")
     p.add_argument("--attach", action="store_true",
                    help="Attach to a running daemon's mgmt console")
     p.add_argument("--kill-daemon", action="store_true",
@@ -1597,7 +1670,8 @@ def main():
 
     if args.expect_ml:
         # --expect-ml: connect to an already-running ML_Repl
-        conn = PolyMLConnection(port=args.poly_ml_port)
+        ml_token = os.environ.get("IR_REPL_AUTH_TOKEN", "").strip() or None
+        conn = PolyMLConnection(port=args.poly_ml_port, token=ml_token)
         for attempt in range(60):
             try:
                 conn.connect()
@@ -1656,7 +1730,7 @@ def main():
                   f"reporting port{RST}", file=sys.stderr)
             poly.close()
             sys.exit(1)
-        conn = PolyMLConnection(port=actual_port)
+        conn = PolyMLConnection(port=actual_port, token=poly.token)
 
         # Wait for ML_Repl TCP port to become available
         for attempt in range(300):  # up to 60s
@@ -1698,14 +1772,17 @@ def main():
     signal.signal(signal.SIGTERM, _signal_cleanup)
     signal.signal(signal.SIGHUP, _signal_cleanup)
 
-    server = Server(conn, args.port, host=args.host,
+    server = Server(conn, args.port, host="127.0.0.1",
                     session=args.session, directory=args.dir)
     mgmt_output = server.mgmt_output
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
 
+    # Token must be printed before the port line: IQExploreDockable's
+    # reader loop exits as soon as it finds the port pattern.
+    print(f"IR_Repl.token: {server.token}", flush=True)
     mgmt_output(f"{GREEN}● REPL ready.{RST} Waiting for connections on "
-                f"{BOLD}{args.host}:{server.port}{RST}")
+                f"{BOLD}127.0.0.1:{server.port}{RST}")
 
     mcp_proc = None
     if args.mcp:
@@ -1738,7 +1815,7 @@ def main():
                                     f"Install dependencies: "
                                     f"pip install -r {req_path}{RST}")
                         mgmt_output(f"{DIM}   REPL is still available on "
-                                    f"{args.host}:{server.port}{RST}")
+                                    f"127.0.0.1:{server.port}{RST}")
                     elif not started and "running on" in line.lower():
                         started = True
                         mgmt_output(f"{DIM}[MCP]{RST} {line}")
@@ -1752,7 +1829,7 @@ def main():
             if rc != 0:
                 mgmt_output(f"{RED}⚠️  MCP server exited (rc={rc}){RST}")
                 mgmt_output(f"{DIM}   REPL is still available on "
-                            f"{args.host}:{server.port}{RST}")
+                            f"127.0.0.1:{server.port}{RST}")
 
         threading.Thread(target=_mcp_log_reader, daemon=True).start()
 
@@ -1790,8 +1867,8 @@ def main():
                         f"Install dependencies for the full experience: "
                         f"pip install -r {req_path}{RST}")
         mgmt_output(f"{DIM}Running in server-only mode. "
-                    f"Connect on {args.host}:{server.port}, "
-                    f"e.g. nc {args.host} {server.port}{RST}")
+                    f"Connect on 127.0.0.1:{server.port}, "
+                    f"e.g. nc 127.0.0.1 {server.port}{RST}")
         try:
             accept_thread.join()
         except KeyboardInterrupt:

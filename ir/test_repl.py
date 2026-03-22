@@ -55,13 +55,29 @@ def send_recv(sock, cmd, timeout=5):
         sock.settimeout(old)
 
 
-def connect(port, retries=120, delay=2.0, proc=None):
+def authenticate(sock, token):
+    """Send token as first line and expect OK response."""
+    if token:
+        sock.sendall((token + "\n").encode())
+        buf = b""
+        sock.settimeout(5)
+        while b"\n" not in buf:
+            chunk = sock.recv(1024)
+            if not chunk:
+                raise RuntimeError("Connection closed during auth")
+            buf += chunk
+        if not buf.startswith(b"OK"):
+            raise RuntimeError(f"Auth failed: {buf!r}")
+
+
+def connect(port, retries=120, delay=2.0, proc=None, token=""):
     """Connect to the server, retrying until ready."""
     for i in range(retries):
         if proc is not None and proc.poll() is not None:
             raise RuntimeError(f"Server process exited (rc={proc.returncode})")
         try:
             s = socket.create_connection(("127.0.0.1", port), timeout=5)
+            authenticate(s, token)
             return s
         except (ConnectionRefusedError, OSError):
             time.sleep(delay)
@@ -114,7 +130,8 @@ def main():
     repl_py = os.path.join(SCRIPT_DIR, "repl.py")
     proc = None  # only set if we start our own repl.py
 
-    # Try connecting to an already-running repl.py
+    # Try connecting to an already-running repl.py (no token — only works
+    # with servers started without auth, e.g. older versions)
     try:
         sock = socket.create_connection(("127.0.0.1", args.port), timeout=2)
         # Quick probe: does it speak the sentinel protocol?
@@ -152,17 +169,35 @@ def main():
         proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
 
     t0 = time.time()
+    token = ""
 
     try:
         if proc is not None:
+            # Read token from repl.py stdout
+            import re
+            deadline = time.time() + 300
+            while time.time() < deadline:
+                line = proc.stdout.readline().decode("utf-8", errors="replace")
+                if not line:
+                    break
+                m = re.search(r'IR_Repl\.token: (\S+)', line)
+                if m:
+                    token = m.group(1)
+                    break
+            # Drain stdout in background to avoid blocking
+            def _drain():
+                for _ in proc.stdout:
+                    pass
+            threading.Thread(target=_drain, daemon=True).start()
+
             try:
-                sock = connect(port, proc=proc)
+                sock = connect(port, proc=proc, token=token)
             except RuntimeError:
                 elapsed = time.time() - t0
                 print(f"{_CLEAR_LINE}  {_SYM_FAIL} server failed to start "
@@ -179,7 +214,7 @@ def main():
             print(f"{_CLEAR_LINE}  {_SYM_OK} connected "
                   f"{_DIM}({elapsed:.1f}s){_RESET}")
         else:
-            sock = connect(port)
+            sock = connect(port, token=token)
 
         # -- Single-client tests --
         print(f"\n{_BOLD}Running{_RESET} single-client tests")
@@ -496,7 +531,7 @@ def main():
         sock.close()
 
         # Cleanup from single-client tests
-        cleanup_sock = connect(port)
+        cleanup_sock = connect(port, token=token)
         send_recv(cleanup_sock, 'Ir.remove "t1";')
         cleanup_sock.close()
 
@@ -505,8 +540,8 @@ def main():
 
         def test_concurrent_clients():
             """Two clients send commands concurrently; both get valid responses."""
-            s1 = connect(port)
-            s2 = connect(port)
+            s1 = connect(port, token=token)
+            s2 = connect(port, token=token)
             results = [None, None]
             errors = [None, None]
 
@@ -540,11 +575,11 @@ def main():
 
         def test_client_disconnect():
             """A client disconnects; server stays alive for new clients."""
-            s1 = connect(port)
+            s1 = connect(port, token=token)
             send_recv(s1, 'Ir.help ();')
             s1.close()
             time.sleep(0.5)
-            s2 = connect(port)
+            s2 = connect(port, token=token)
             out = send_recv(s2, 'Ir.help ();')
             assert "Ir.init" in out
             s2.close()

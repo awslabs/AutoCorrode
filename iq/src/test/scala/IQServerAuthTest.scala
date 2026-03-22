@@ -8,21 +8,21 @@ object IQServerAuthTest {
     if (!condition) throw new RuntimeException(message)
   }
 
+  private val TestToken = "test-token"
+
   private def mkServer(
       root: java.nio.file.Path,
-      token: Option[String]
+      token: String = TestToken
   ): IQServer = {
     mkServerWithBackend(root, token, None)
   }
 
   private def mkServerWithBackend(
       root: java.nio.file.Path,
-      token: Option[String],
+      token: String = TestToken,
       capabilityBackend: Option[IQCapabilityBackend]
   ): IQServer = {
     val config = IQServerSecurityConfig(
-      bindHost = "127.0.0.1",
-      allowRemoteBind = false,
       authToken = token,
       allowedMutationRoots = List(root),
       allowedReadRoots = List(root),
@@ -33,58 +33,6 @@ object IQServerAuthTest {
       securityConfig = config,
       capabilityBackendOverride = capabilityBackend
     )
-  }
-
-  private def testUnauthorizedRequestReturnsErrorWithId(): Unit = {
-    val root = Files.createTempDirectory("iq-server-auth-root").toRealPath()
-    val server = mkServer(root, Some("secret-token"))
-    val request = """{"jsonrpc":"2.0","id":"req-1","method":"initialize"}"""
-    val response = server.processRequestForTest(request)
-
-    assertThat(response.nonEmpty, "unauthorized request with id should return an error response")
-    val payload = response.get
-    assertThat(payload.contains("Unauthorized request"), s"missing unauthorized message: $payload")
-    assertThat(payload.contains("req-1"), s"response should preserve request id: $payload")
-  }
-
-  private def testUnauthorizedNotificationReturnsNone(): Unit = {
-    val root = Files.createTempDirectory("iq-server-auth-notify-root").toRealPath()
-    val server = mkServer(root, Some("secret-token"))
-    val request = """{"jsonrpc":"2.0","method":"notifications/initialized"}"""
-    val response = server.processRequestForTest(request)
-    assertThat(response.isEmpty, s"unauthorized notification must not receive response: $response")
-  }
-
-  private def testAuthorizedRequestAcceptsTopLevelToken(): Unit = {
-    val root = Files.createTempDirectory("iq-server-auth-top-token-root").toRealPath()
-    val server = mkServer(root, Some("secret-token"))
-    val request =
-      """{"jsonrpc":"2.0","id":"req-2","method":"initialize","auth_token":"secret-token"}"""
-    val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "authorized initialize request should return response")
-    val payload = response.get
-    assertThat(payload.contains("\"result\""), s"expected successful result payload: $payload")
-    assertThat(!payload.contains("Unauthorized request"), s"request should not be rejected: $payload")
-  }
-
-  private def testAuthorizedRequestAcceptsParamsToken(): Unit = {
-    val root = Files.createTempDirectory("iq-server-auth-params-token-root").toRealPath()
-    val server = mkServer(root, Some("secret-token"))
-    val request =
-      """{"jsonrpc":"2.0","id":"req-3","method":"tools/list","params":{"auth_token":"secret-token"}}"""
-    val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "authorized tools/list request should return response")
-    val payload = response.get
-    assertThat(payload.contains("\"result\""), s"expected successful tools/list result payload: $payload")
-  }
-
-  private def testNoAuthConfiguredAllowsRequests(): Unit = {
-    val root = Files.createTempDirectory("iq-server-auth-disabled-root").toRealPath()
-    val server = mkServer(root, None)
-    val request = """{"jsonrpc":"2.0","id":"req-4","method":"initialize"}"""
-    val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "request should pass when auth token is disabled")
-    assertThat(response.get.contains("\"result\""), s"expected successful result payload: ${response.get}")
   }
 
   private def testInternalToolFailurePreservesRequestId(): Unit = {
@@ -98,7 +46,7 @@ object IQServerAuthTest {
         throw new RuntimeException("forced-test-failure")
       }
     }
-    val server = mkServerWithBackend(root, None, Some(crashingBackend))
+    val server = mkServerWithBackend(root, capabilityBackend = Some(crashingBackend))
     val request =
       """{"jsonrpc":"2.0","id":"req-internal-1","method":"tools/call","params":{"name":"explore","arguments":{"query":"sledgehammer","command_selection":"current"}}}"""
     val response = server.processRequestForTest(request)
@@ -121,7 +69,7 @@ object IQServerAuthTest {
 
   private def testToolsListIncludesResolveCommandTarget(): Unit = {
     val root = Files.createTempDirectory("iq-server-tools-list-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request = """{"jsonrpc":"2.0","id":"req-tools","method":"tools/list"}"""
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "tools/list should return response")
@@ -170,7 +118,7 @@ object IQServerAuthTest {
 
   private def testResolveCommandTargetRejectsInvalidSelection(): Unit = {
     val root = Files.createTempDirectory("iq-server-resolve-invalid-target-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-resolve-invalid","method":"tools/call","params":{"name":"resolve_command_target","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
@@ -182,7 +130,7 @@ object IQServerAuthTest {
 
   private def testResolveCommandTargetRequiresPathAndOffsetForFileOffset(): Unit = {
     val root = Files.createTempDirectory("iq-server-resolve-file-offset-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-resolve-missing","method":"tools/call","params":{"name":"resolve_command_target","arguments":{"command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
@@ -197,7 +145,7 @@ object IQServerAuthTest {
 
   private def testGetContextInfoRejectsInvalidSelection(): Unit = {
     val root = Files.createTempDirectory("iq-server-context-invalid-target-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-context-invalid","method":"tools/call","params":{"name":"get_context_info","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
@@ -209,7 +157,7 @@ object IQServerAuthTest {
 
   private def testGetContextInfoRequiresFileOffsetParameters(): Unit = {
     val root = Files.createTempDirectory("iq-server-context-file-offset-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-context-missing","method":"tools/call","params":{"name":"get_context_info","arguments":{"command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
@@ -224,7 +172,7 @@ object IQServerAuthTest {
 
   private def testGetEntitiesRequiresPath(): Unit = {
     val root = Files.createTempDirectory("iq-server-entities-missing-path-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-entities-missing","method":"tools/call","params":{"name":"get_entities","arguments":{}}}"""
     val response = server.processRequestForTest(request)
@@ -239,7 +187,7 @@ object IQServerAuthTest {
 
   private def testGetTypeAtSelectionRejectsInvalidSelection(): Unit = {
     val root = Files.createTempDirectory("iq-server-type-invalid-target-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-type-invalid","method":"tools/call","params":{"name":"get_type_at_selection","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
@@ -251,7 +199,7 @@ object IQServerAuthTest {
 
   private def testGetProofBlocksSelectionRequiresFileOffsetParameters(): Unit = {
     val root = Files.createTempDirectory("iq-server-proof-blocks-selection-file-offset-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-proof-blocks-selection-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{"scope":"selection","command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
@@ -266,7 +214,7 @@ object IQServerAuthTest {
 
   private def testGetProofBlocksRequiresPath(): Unit = {
     val root = Files.createTempDirectory("iq-server-proof-blocks-missing-path-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-proof-blocks-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{"scope":"file"}}}"""
     val response = server.processRequestForTest(request)
@@ -281,7 +229,7 @@ object IQServerAuthTest {
 
   private def testGetDefinitionsRequiresNames(): Unit = {
     val root = Files.createTempDirectory("iq-server-definitions-missing-names-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-defs-missing","method":"tools/call","params":{"name":"get_definitions","arguments":{"command_selection":"current"}}}"""
     val response = server.processRequestForTest(request)
@@ -296,7 +244,7 @@ object IQServerAuthTest {
 
   private def testGetDiagnosticsRejectsInvalidSeverity(): Unit = {
     val root = Files.createTempDirectory("iq-server-diagnostics-invalid-severity-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-diag-bad-severity","method":"tools/call","params":{"name":"get_diagnostics","arguments":{"severity":"info"}}}"""
     val response = server.processRequestForTest(request)
@@ -311,7 +259,7 @@ object IQServerAuthTest {
 
   private def testGetDiagnosticsFileScopeRequiresPath(): Unit = {
     val root = Files.createTempDirectory("iq-server-diagnostics-file-scope-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-diag-missing-path","method":"tools/call","params":{"name":"get_diagnostics","arguments":{"severity":"error","scope":"file"}}}"""
     val response = server.processRequestForTest(request)
@@ -326,7 +274,7 @@ object IQServerAuthTest {
 
   private def testServerAuthorizeMutationPathRespectsRoots(): Unit = {
     val root = Files.createTempDirectory("iq-server-authz-mutation-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val inside = root.resolve("ok").resolve("Demo.thy").toString
     val outside = root.resolve("..").resolve("escape.thy").normalize().toString
 
@@ -342,7 +290,7 @@ object IQServerAuthTest {
 
   private def testServerAuthorizeReadPathRespectsRoots(): Unit = {
     val root = Files.createTempDirectory("iq-server-authz-read-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val inside = root.resolve("session").resolve("Theory.thy").toString
     val outside = root.resolve("..").resolve("outside.thy").normalize().toString
 
@@ -358,7 +306,7 @@ object IQServerAuthTest {
 
   private def testInvalidRequestMethodTypeRejected(): Unit = {
     val root = Files.createTempDirectory("iq-server-invalid-method-type-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request = """{"jsonrpc":"2.0","id":"req-invalid-method","method":123}"""
     val response = server.processRequestForTest(request)
     assertThat(response.nonEmpty, "invalid method type should return error response")
@@ -372,7 +320,7 @@ object IQServerAuthTest {
 
   private def testOpenFileRejectsInvalidBooleanParam(): Unit = {
     val root = Files.createTempDirectory("iq-server-open-file-bool-root").toRealPath()
-    val server = mkServer(root, None)
+    val server = mkServer(root)
     val request =
       """{"jsonrpc":"2.0","id":"req-open-bool","method":"tools/call","params":{"name":"open_file","arguments":{"path":"demo.thy","create_if_missing":"maybe"}}}"""
     val response = server.processRequestForTest(request)
@@ -385,12 +333,57 @@ object IQServerAuthTest {
     )
   }
 
+  private def testAuthenticateToolAcceptsCorrectToken(): Unit = {
+    val root = Files.createTempDirectory("iq-server-auth-tool-ok-root").toRealPath()
+    val server = mkServer(root)
+    val request =
+      s"""{"jsonrpc":"2.0","id":"req-auth-ok","method":"tools/call","params":{"name":"authenticate","arguments":{"token":"$TestToken"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "authenticate with correct token should return response")
+    val payload = response.get
+    assertThat(payload.contains("\"result\""), s"expected success result: $payload")
+    assertThat(payload.contains("Authenticated successfully"), s"expected success message: $payload")
+  }
+
+  private def testAuthenticateToolRejectsWrongToken(): Unit = {
+    val root = Files.createTempDirectory("iq-server-auth-tool-bad-root").toRealPath()
+    val server = mkServer(root)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-auth-bad","method":"tools/call","params":{"name":"authenticate","arguments":{"token":"wrong-token"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "authenticate with wrong token should return error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertThat(payload.contains("Invalid authentication token"), s"expected invalid token message: $payload")
+  }
+
+  private def testAuthenticateToolRejectsMissingToken(): Unit = {
+    val root = Files.createTempDirectory("iq-server-auth-tool-missing-root").toRealPath()
+    val server = mkServer(root)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-auth-missing","method":"tools/call","params":{"name":"authenticate","arguments":{}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "authenticate with missing token should return error")
+    val payload = response.get
+    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+  }
+
+  private def testToolsListIncludesAuthenticate(): Unit = {
+    val root = Files.createTempDirectory("iq-server-auth-tool-list-root").toRealPath()
+    val server = mkServer(root)
+    val request = """{"jsonrpc":"2.0","id":"req-tools-auth","method":"tools/list"}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "tools/list should return response")
+    val payload = response.get
+    assertThat(payload.contains("\"name\":\"authenticate\""),
+      s"tools/list should include authenticate tool: $payload")
+  }
+
   def main(args: Array[String]): Unit = {
-    testUnauthorizedRequestReturnsErrorWithId()
-    testUnauthorizedNotificationReturnsNone()
-    testAuthorizedRequestAcceptsTopLevelToken()
-    testAuthorizedRequestAcceptsParamsToken()
-    testNoAuthConfiguredAllowsRequests()
+    testAuthenticateToolAcceptsCorrectToken()
+    testAuthenticateToolRejectsWrongToken()
+    testAuthenticateToolRejectsMissingToken()
+    testToolsListIncludesAuthenticate()
     testInternalToolFailurePreservesRequestId()
     testToolsListIncludesResolveCommandTarget()
     testResolveCommandTargetRejectsInvalidSelection()

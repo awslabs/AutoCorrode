@@ -12,7 +12,7 @@ import java.net.Socket
   *
   * Protocol: send "command;\n", read lines until "<<DONE>>\n".
   */
-class IRClient(host: String = "127.0.0.1", port: Int = 9147) {
+class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "") {
 
   private val Sentinel = "<<DONE>>"
 
@@ -24,6 +24,13 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147) {
     socket = new Socket(host, port)
     out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream, "UTF-8"), true)
     in = new BufferedReader(new InputStreamReader(socket.getInputStream, "UTF-8"))
+    if (token.nonEmpty) {
+      out.println(token)
+      out.flush()
+      val response = in.readLine()
+      if (response == null || !response.startsWith("OK"))
+        throw new java.io.IOException("REPL authentication failed")
+    }
   }
 
   def isConnected: Boolean = socket != null && !socket.isClosed

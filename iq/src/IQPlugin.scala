@@ -11,6 +11,7 @@ object IQPlugin {
     * plugins (e.g. Isabelle Assistant) running in the same JVM. Non-persistent:
     * cleared on JVM exit and on plugin stop. */
   val PORT_PROPERTY = "iq.mcp.port"
+  val AUTH_TOKEN_PROPERTY = "iq.mcp.auth.token"
 
   private val DEFAULT_PORT = 8765
   private val MAX_PORT_SCAN = 100
@@ -20,8 +21,14 @@ object IQPlugin {
   /** Port reported by ML_Repl via PIDE protocol message. */
   @volatile var mlReplPort: Option[Int] = None
 
+  /** Token reported by ML_Repl via PIDE protocol message. */
+  @volatile var mlReplToken: Option[String] = None
+
   /** Port of the I/R REPL (repl.py), set by IQExploreDockable on connect. */
   @volatile var irReplPort: Option[Int] = None
+
+  /** Auth token of the I/R REPL (repl.py), set by IQExploreDockable on connect. */
+  @volatile var irReplToken: Option[String] = None
 
   /** Actual bound port of the I/Q MCP server, set after successful start. */
   @volatile var mcpPort: Option[Int] = None
@@ -37,6 +44,14 @@ object IQPlugin {
   def restartServerFromSettings(): Unit = {
     instance.foreach(_.restartServerFromSettings())
   }
+
+  /** Number of TCP clients currently connected to the I/Q MCP server. */
+  def activeClientCount: Int =
+    instance.flatMap(_.currentServer).map(_.getActiveClientCount).getOrElse(0)
+
+  /** Number of clients that have completed the auth handshake. */
+  def authenticatedClientCount: Int =
+    instance.flatMap(_.currentServer).map(_.getAuthenticatedClientCount).getOrElse(0)
 
   /** Append a status widget name to the status bar if not already present. */
   def activateWidget(name: String): Unit = {
@@ -59,6 +74,11 @@ object IQPlugin {
   class IR_Repl_Handler extends Session.Protocol_Handler {
     private def handle_port(msg: Prover.Protocol_Output): Boolean = {
       msg.properties match {
+        case List(_, ("port", isabelle.Value.Int(port)), ("token", tok)) =>
+          mlReplPort = Some(port)
+          mlReplToken = Some(tok)
+          Output.writeln("IQPlugin: ML_Repl port = " + port)
+          true
         case List(_, ("port", isabelle.Value.Int(port))) =>
           mlReplPort = Some(port)
           Output.writeln("IQPlugin: ML_Repl port = " + port)
@@ -74,6 +94,7 @@ object IQPlugin {
 
 class IQPlugin extends EBPlugin {
   private var iqServer: Option[IQServer] = None
+  def currentServer: Option[IQServer] = iqServer
 
   override def start(): Unit = {
     // Plugin initialization
@@ -103,6 +124,7 @@ class IQPlugin extends EBPlugin {
         iqServer = Some(new IQServer(port = tryPort, securityConfig = securityConfig))
         iqServer.foreach(_.start())
         System.setProperty(IQPlugin.PORT_PROPERTY, tryPort.toString)
+        System.setProperty(IQPlugin.AUTH_TOKEN_PROPERTY, securityConfig.authToken)
         started = true
         IQPlugin.mcpPort = Some(tryPort)
         Output.writeln(s"Isabelle/Q Server started successfully on port $tryPort")
@@ -141,6 +163,7 @@ class IQPlugin extends EBPlugin {
     iqServer = None
     IQPlugin.mcpPort = None
     System.clearProperty(IQPlugin.PORT_PROPERTY)
+    System.clearProperty(IQPlugin.AUTH_TOKEN_PROPERTY)
 
     // Stop I/R daemon
     IQExploreDockable.shutdown()

@@ -2,7 +2,6 @@
    SPDX-License-Identifier: MIT */
 
 import java.io.File
-import java.net.InetAddress
 import java.nio.file.{Files, Path, Paths}
 
 import scala.util.Try
@@ -11,30 +10,19 @@ import scala.util.Try
  * Security configuration and helper utilities for the I/Q MCP server.
  */
 case class IQServerSecurityConfig(
-  bindHost: String,
-  allowRemoteBind: Boolean,
-  authToken: Option[String],
+  authToken: String,
   allowedMutationRoots: List[Path],
   allowedReadRoots: List[Path],
   maxClientThreads: Int
 )
 
 object IQSecurity {
-  private val BindHostEnv = "IQ_MCP_BIND_HOST"
-  private val AllowRemoteBindEnv = "IQ_MCP_ALLOW_REMOTE_BIND"
-  private val AuthTokenEnv = "IQ_MCP_AUTH_TOKEN"
+  private val AuthTokenEnv = "IQ_AUTH_TOKEN"
   private val AllowedRootsEnv = "IQ_MCP_ALLOWED_ROOTS"
   private val AllowedReadRootsEnv = "IQ_MCP_ALLOWED_READ_ROOTS"
   private val MaxClientThreadsEnv = "IQ_MCP_MAX_CLIENT_THREADS"
 
-  private val TrueValues = Set("1", "true", "yes", "on")
-  private val DefaultBindHost = "127.0.0.1"
   private val DefaultMaxClientThreads = 16
-
-  private def parseBoolean(value: String, defaultValue: Boolean): Boolean = {
-    val normalized = value.trim.toLowerCase
-    if (normalized.isEmpty) defaultValue else TrueValues.contains(normalized)
-  }
 
   private def canonicalizePath(path: Path): Path = {
     val absolute = if (path.isAbsolute) path else path.toAbsolutePath
@@ -83,9 +71,8 @@ object IQSecurity {
     def nonEmpty(value: Option[String]): Option[String] =
       value.map(_.trim).filter(_.nonEmpty)
 
-    val bindHost = readEnv(BindHostEnv).map(_.trim).filter(_.nonEmpty).getOrElse(DefaultBindHost)
-    val allowRemoteBind = readEnv(AllowRemoteBindEnv).exists(v => parseBoolean(v, defaultValue = false))
     val authToken = readEnv(AuthTokenEnv).map(_.trim).filter(_.nonEmpty)
+      .getOrElse(java.util.UUID.randomUUID().toString)
 
     val configuredMutationRoots =
       parsePathList(nonEmpty(readEnv(AllowedRootsEnv)).orElse(nonEmpty(readUiMutationRoots())))
@@ -103,8 +90,6 @@ object IQSecurity {
       math.max(2, parsePositiveInt(readEnv(MaxClientThreadsEnv), DefaultMaxClientThreads))
 
     IQServerSecurityConfig(
-      bindHost = bindHost,
-      allowRemoteBind = allowRemoteBind,
       authToken = authToken,
       allowedMutationRoots = allowedMutationRoots,
       allowedReadRoots = allowedReadRoots,
@@ -140,20 +125,6 @@ object IQSecurity {
 
   def resolveReadPath(rawPath: String, allowedRoots: List[Path]): Either[String, Path] = {
     resolveAuthorizedPath(rawPath, allowedRoots, "read")
-  }
-
-  def resolveBindAddress(bindHost: String): Either[String, InetAddress] = {
-    Try(InetAddress.getByName(bindHost.trim))
-      .toEither
-      .left
-      .map(ex => s"Failed to resolve bind host '$bindHost': ${ex.getMessage}")
-  }
-
-  def isTokenAuthorized(expectedToken: Option[String], providedToken: Option[String]): Boolean = {
-    expectedToken match {
-      case None => true
-      case Some(expected) => providedToken.exists(_.trim == expected)
-    }
   }
 
   def redactAuthToken(jsonLine: String): String = {

@@ -262,7 +262,7 @@ Tool execution is gated by a per-tool permission system with four levels:
 
 Defaults are conservative: read-only tools are `Allow`, I/Q compute tools are `Ask at First Use`, and side-effecting tools (`edit_theory`, `create_theory`, `open_theory`) are `Ask Always`.
 
-Permission prompts include the target resource and a sanitized argument summary so the user can approve with concrete context. Sensitive argument names (for example `*_token`, `*_secret`, `*_password`) are redacted in the prompt summary.
+Permission prompts include the target resource and a sanitized argument summary so the user can approve with concrete context. Sensitive argument names — those containing `token`, `secret`, `password`, `auth`, `credential`, or `api_key` — are redacted in the prompt summary.
 
 Additional safety checks:
 
@@ -349,8 +349,8 @@ Access via **Plugins → Plugin Options → Isabelle Assistant** or `:set` in ch
 | `verify_suggestions` | true | Verify proofs via I/Q |
 | `use_sledgehammer` | false | Run sledgehammer in parallel with suggestions |
 | `sledgehammer_timeout` | 15000 | Sledgehammer timeout (ms) |
-| `quickcheck_timeout` | 10000 | Quickcheck timeout (ms) |
-| `nitpick_timeout` | 10000 | Nitpick timeout (ms) |
+| `quickcheck_timeout` | 5000 | Quickcheck timeout (ms) |
+| `nitpick_timeout` | 5000 | Nitpick timeout (ms) |
 | `max_verify_candidates` | 5 | Max suggestions to verify |
 | `find_theorems_limit` | 20 | Max theorems for context |
 | `find_theorems_timeout` | 10000 | Find theorems timeout (ms) |

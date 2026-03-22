@@ -5,7 +5,7 @@
    written by ml_proxy.py (modeled after Status_Widget.Java_GUI).
 
    Also registers a PIDE protocol handler for:
-     ("function", "proxy_log")      — body text appended to the log panel
+     ("function", "proxy_log")      — acknowledged (no-op)
      ("function", "proxy_ml_stats") — remote ML statistics forwarding
 */
 
@@ -15,23 +15,11 @@ import isabelle.jedit.PIDE
 import org.gjt.sp.jedit.{EBMessage, EBPlugin, jEdit}
 
 
-/* Shared state: log listeners and proxy stats file path. */
+/* Shared state: proxy stats file path and host. */
 object ProxyState {
   /* Set once at startup; empty if no proxy detected. */
   @volatile var stats_file: String = ""
   @volatile var proxy_host: String = ""
-
-  private var logListeners: List[String => Unit] = Nil
-
-  def addLogListener(f: String => Unit): Unit = synchronized { logListeners ::= f }
-  def removeLogListener(f: String => Unit): Unit = synchronized {
-    logListeners = logListeners.filterNot(_ eq f)
-  }
-
-  def notifyLog(text: String): Unit = {
-    val ls = synchronized { logListeners }
-    GUI_Thread.later { ls.foreach(_(text)) }
-  }
 }
 
 
@@ -41,10 +29,7 @@ class ProxyProtocolHandler extends Session.Protocol_Handler {
 
   override def init(session: Session): Unit = { this.session = session }
 
-  private def handle_log(msg: Prover.Protocol_Output): Boolean = {
-    ProxyState.notifyLog(msg.text)
-    true
-  }
+  private def handle_log(msg: Prover.Protocol_Output): Boolean = true
 
   private def handle_ml_stats(msg: Prover.Protocol_Output): Boolean = {
     if (session != null) {

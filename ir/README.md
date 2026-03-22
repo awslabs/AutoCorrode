@@ -12,15 +12,6 @@ An MCP wrapper ([mcp_server.py](mcp_server.py)) is provided exposing I/R to AI a
 
 ## Quick Start
 
-### Option A: Docker (no prerequisites)
-
-```bash
-docker build -t isabelle-repl:standalone -f ir/docker/Dockerfile.standalone .
-docker run --rm -it -p 9148:9148 isabelle-repl:standalone
-```
-
-### Option B: Local
-
 Requires: Isabelle, Python 3, and `pip install -r ir/requirements.txt`.
 
 ```bash
@@ -29,20 +20,17 @@ python3 ./ir/repl.py \
   --session HOL --mcp
 ```
 
-Either way, you should see:
+You should see:
 
 ```
 Starting Bash.Server...
 ● Bash.Server ready at 127.0.0.1:64595
-Starting Isabelle console (session=HOL)...
-● Isabelle console ready.
-Loading .../ir.ML...
+Starting Isabelle ML_process (session=HOL)...
+  Loading heap + ML_Repl...
+● ML_Repl ready on 127.0.0.1:9146
+IR_Repl.token: <token>
 ● REPL ready. Waiting for connections on 127.0.0.1:9147
 Starting MCP server...
-[MCP] INFO:     Started server process [4002]
-[MCP] INFO:     Waiting for application startup.
-[MCP] StreamableHTTP session manager started
-[MCP] INFO:     Application startup complete.
 [MCP] INFO:     Uvicorn running on http://127.0.0.1:9148 (Press CTRL+C to quit)
 ● MCP server started
 ```
@@ -109,6 +97,21 @@ When an MCP client connects successfully, you should see:
 [MCP] Processing request of type ListPromptsRequest
 ```
 
+## Security
+
+All TCP listeners bind exclusively to `127.0.0.1` (localhost).
+
+**Token authentication:** TCP clients must send the authentication token as the first line after connecting. The server responds with `OK\n` on success or `ERR: authentication failed\n` on failure. The token is printed to stdout on startup (`IR_Repl.token: <token>`).
+
+Environment variables:
+
+- `IR_AUTH_TOKEN`: Authentication token for the I/R daemon TCP server (default: randomly generated). Clients (including IRClient) must send this as the first line after connecting.
+- `IR_REPL_AUTH_TOKEN`: Authentication token for the ML_Repl TCP connection (used with `--expect-ml`).
+
+**MCP server authentication:** The MCP server (port 9148) does not have HTTP-level authentication. Instead, MCP clients must call the `connect` tool with the I/R daemon token (from `IR_AUTH_TOKEN` or printed on startup) before any other tool will function. Tools called before `connect` return an error.
+
+**Threat model:** The security model aims to protect against unauthorized access from remote hosts and from other local OS users. It does not try to protect against malicious processes running as the same OS user.
+
 ## Management Console
 
 When running in interactive mode, the operator gets a management console on stdin/stdout.
@@ -116,8 +119,10 @@ Lines starting with `/` are management commands; everything else is sent to the 
 
 Available commands:
 
-- `/connections` — Show number of open client connections
-- `/verbosity N` — Set verbosity 0–3 (0=off, 1=body, 2=headers, 3=hex)
+- `/connections` — Show open client connections with stats
+- `/info` — Show server status summary (session, ports, uptime, clients, verbosity)
+- `/verbosity [N]` — Set verbosity 0–3 (0=off, 1=non-empty, 2=all messages, 3=all+hex). Without argument, cycles through levels.
+- `/show_types` — Toggle display of type annotations in output
 - `/quit` — Shut down the server
 - `/help` — Show available commands
 
@@ -235,7 +240,7 @@ together when I/R is integrated into Isabelle/Scala and I/Q:
 │     :                    :                 │      dispatched        │
 │     :                    :  ┌──────────────┴───────────────────┐    │
 │     :                    :  │  ML_Repl (ml_repl.ML)            │    │
-│     :                    :  │  TCP listener :9146              │    │
+│     :                    :  │  TCP listener (token-auth)       │    │
 │     :                    :  │  ◄── (1) started by IR_Repl.start│    │
 │     :                    :  │  ◄── (8) stopped by IR_Repl.stop │    │
 │     :                    :  └──────────────▲───────────────────┘    │
@@ -250,8 +255,8 @@ together when I/R is integrated into Isabelle/Scala and I/Q:
 │                                                               │
 │  ┌──────────────────┐  ┌───────────────┐  ┌───────────────┐   │
 │  │ I/R REPL TCP     │  │ Connection    │  │ I/R Mgmt      │   │
-│  │ Server (:9147)   │  │ to ML_Repl    │  │ Console       │   │
-│  │                  │  │ (:9146)       │  │ (Unix socket) │   │
+│  │ Server           │  │ to ML_Repl    │  │ Console       │   │
+│  │ (token-auth)     │  │ (token-auth)  │  │ (Unix socket) │   │
 │  └────────┬─────────┘  └───────────────┘  └──────┬────────┘   │
 │           │                                      │            │
 │       (4) │ spawns                               │            │
@@ -266,24 +271,28 @@ together when I/R is integrated into Isabelle/Scala and I/Q:
             ▼                                      ▼
       ┌──────────────────┐               ┌───────────────────┐
       │  I/R MCP Client  │               │     repl.py       │
-      │  (e.g. Claude,   │               │ Mangement console │
+      │  (e.g. Claude,   │               │ Management console│
       │    Bedrock)      │               │    (Debugging)    │
       └──────────────────┘               └───────────────────┘
 
 Startup:
-  (1) I/Q sends "IR_Repl.start" → ML_Repl opens single TCP REPL at :9146
-  (2) I/Q spawns repl.py --daemon
-  (3) repl.py daemon connects to ML_Repl on :9146,
+  (1) I/Q sends "IR_Repl.start" → ML_Repl opens token-authenticated
+      TCP REPL (port dynamically assigned)
+  (2) I/Q spawns repl.py --daemon, passing ML_Repl token
+      via IR_REPL_AUTH_TOKEN env var.  The daemon generates
+      its own client-facing token and prints it to stdout.
+  (3) repl.py daemon authenticates with ML_Repl via token,
   (4) repl.py daemon multiplexes raw TCP REPL into
-      - TCP (:9147)
-      - MCP (:9148)
-      - Management Console (:socket)
-  (5) IRClient connects to daemon on :9147 via TCP;
-      I/R functionality wrapped in Scala API IRScala
+      - TCP (token-auth, default port 9147)
+      - MCP (optional, via --mcp)
+      - Management Console (Unix socket)
+  (5) I/Q reads the daemon token from stdout, then IRClient
+      authenticates with daemon via token on TCP;
+      I/R functionality wrapped in Scala API
 
 Command flow:
-  (6a) IRClient sends command to daemon via :9147
-       → daemon forwards to ML_Repl via :9146
+  (6a) IRClient sends command to daemon via TCP
+       → daemon forwards to ML_Repl
   (6b) ML_Repl dispatches Ir.* commands to I/R module
   (6c) I/R evaluates Isar commands via the prover kernel
   (6d) Output channels (normally directed at Isabelle/Scala)

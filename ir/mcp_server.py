@@ -62,13 +62,26 @@ class ReplClient:
         self.port = port
         self.sock: socket.socket | None = None
 
-    def connect(self, host: str | None = None, port: int | None = None):
+    def connect(self, host: str | None = None, port: int | None = None,
+                token: str | None = None):
         self.disconnect()
         if host is not None:
             self.host = host
         if port is not None:
             self.port = port
         self.sock = socket.create_connection((self.host, self.port))
+        if token:
+            self.sock.sendall((token + "\n").encode())
+            response = b""
+            while b"\n" not in response:
+                chunk = self.sock.recv(1024)
+                if not chunk:
+                    raise RuntimeError("Connection closed during auth handshake")
+                response += chunk
+            if not response.startswith(b"OK"):
+                self.sock.close()
+                self.sock = None
+                raise RuntimeError("REPL authentication failed")
 
     def disconnect(self):
         if self.sock is not None:
@@ -180,9 +193,10 @@ mcp = FastMCP("I/R REPL",
 
 repl = ReplClient()
 
-@mcp.tool(description="Connect to the I/R REPL server. Call this before using any other tool. Can also reconnect after a dropped connection.")
-def connect(port: int = 9147, host: str = "127.0.0.1") -> str:
-    repl.connect(host, port)
+
+@mcp.tool(description="Connect to the I/R REPL server. Call this before using any other tool. Can also reconnect after a dropped connection. If the token is not provided to you, use the IR_AUTH_TOKEN environment variable if set.")
+def connect(token: str, port: int = 9147) -> str:
+    repl.connect("127.0.0.1", port, token)
     return f"Connected to {repl.host}:{repl.port}\n\n{session_info()}"
 
 @mcp.tool(description="Disconnect from the I/R REPL server.")
@@ -397,12 +411,10 @@ def main():
                    default="stdio")
     p.add_argument("--port", type=int, default=9148,
                    help="Port for SSE/streamable-http transport (default: 9148)")
-    p.add_argument("--host", default="127.0.0.1",
-                   help="Host address to bind on (default: 127.0.0.1)")
     args = p.parse_args()
 
     if args.transport in ("sse", "streamable-http"):
-        mcp.settings.host = args.host
+        mcp.settings.host = "127.0.0.1"
         mcp.settings.port = args.port
         mcp.run(transport=args.transport)
     else:

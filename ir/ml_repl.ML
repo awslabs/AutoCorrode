@@ -191,7 +191,7 @@ fun start port =
      NONE)
   else
   let
-    val (actual_port, accept_loop) = Tcp_Handler.start port
+    val (actual_port, _, accept_loop) = Tcp_Handler.start port
     val ir_group = Future.new_group NONE
     val _ = Synchronized.change server_group_id (K (Task_Queue.group_id ir_group))
     val _ = Synchronized.change Tcp_Handler.handler (K eval_handler)
@@ -210,9 +210,11 @@ end;
 
 (* PIDE protocol command for starting I/R from jEdit *)
 
-fun report_port port =
+fun report_port port token =
   Output.protocol_message
-    [Markup.function "IR_Repl.port", ("port", Value.print_int port)] [];
+    [Markup.function "IR_Repl.port",
+     ("port", Value.print_int port),
+     ("token", token)] [];
 
 val _ =
   Protocol_Command.define "IR_Repl.start"
@@ -226,7 +228,9 @@ val _ =
       in
         case ML_Repl.start port of
           SOME (actual_port, _) =>
-            (report_port actual_port;
+            (case Tcp_Handler.token () of
+              SOME pw => report_port actual_port pw
+            | NONE => ();
              Output.writeln ("IR_Repl: started on port " ^ string_of_int actual_port))
         | NONE =>
             Output.writeln "IR_Repl: already running"

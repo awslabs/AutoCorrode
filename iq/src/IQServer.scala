@@ -548,6 +548,10 @@ class IQServer(
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
   private val clientAddressTL = new ThreadLocal[String]()
   private val activeClientCount = new AtomicInteger(0)
+  private val authenticatedClientCount = new AtomicInteger(0)
+
+  def getActiveClientCount: Int = activeClientCount.get()
+  def getAuthenticatedClientCount: Int = authenticatedClientCount.get()
 
   /**
    * Gets the current timestamp formatted as HH:mm:ss.SSS
@@ -561,10 +565,6 @@ class IQServer(
   private def currentClientAddress(): String = {
     Option(clientAddressTL.get()).getOrElse("unknown")
   }
-
-  private def getProvidedAuthToken(
-      request: IQProtocol.JsonRpcRequest
-  ): Option[String] = IQProtocol.extractAuthToken(request)
 
   private def logSecurityEvent(message: String): Unit = {
     safeOutput(s"I/Q Server [SECURITY]: $message")
@@ -802,26 +802,16 @@ class IQServer(
    */
   def start(): Unit = {
     try {
-      val bindAddress: InetAddress = IQSecurity.resolveBindAddress(securityConfig.bindHost) match {
-        case Right(address) => address
-        case Left(errorMessage) => throw new IllegalArgumentException(errorMessage)
-      }
-      if (!securityConfig.allowRemoteBind && !bindAddress.isLoopbackAddress) {
-        throw new IllegalArgumentException(
-          s"Refusing to bind to non-loopback host '${securityConfig.bindHost}'. " +
-          "Set IQ_MCP_ALLOW_REMOTE_BIND=true to opt in explicitly."
-        )
-      }
+      val bindAddress = InetAddress.getByName("127.0.0.1")
 
       serverSocket = Some(new ServerSocket(port, 50, bindAddress))
       isRunning = true
 
-      val authEnabled = securityConfig.authToken.isDefined
       val mutationRoots = securityConfig.allowedMutationRoots.map(_.toString).mkString(", ")
       val readRoots = securityConfig.allowedReadRoots.map(_.toString).mkString(", ")
       Output.writeln(
-        s"I/Q Server starting on ${bindAddress.getHostAddress}:$port " +
-        s"(allow_remote_bind=${securityConfig.allowRemoteBind}, auth_enabled=$authEnabled, max_client_threads=${securityConfig.maxClientThreads})"
+        s"I/Q Server starting on 127.0.0.1:$port " +
+        s"(max_client_threads=${securityConfig.maxClientThreads})"
       )
       logSecurityEvent(s"Allowed mutation roots: $mutationRoots")
       logSecurityEvent(s"Allowed read roots: $readRoots")
@@ -891,6 +881,7 @@ class IQServer(
   */
   private def handleClient(clientSocket: Socket): Unit = {
     var registeredClient = false
+    var registeredAuthenticated = false
     try {
       clientAddressTL.set(Option(clientSocket.getRemoteSocketAddress).map(_.toString).getOrElse("unknown"))
 
@@ -902,75 +893,88 @@ class IQServer(
 
       val clientCount = activeClientCount.incrementAndGet()
       registeredClient = true
-      IQCommunicationLogger.updateClientStatus(clientCount > 0)
+      val clientAddr = Option(clientSocket.getRemoteSocketAddress).map(_.toString).getOrElse("unknown")
+      IQCommunicationLogger.updateClientStatus(clientCount > 0, clientCount, clientAddr)
 
       val reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream))
       // Use a larger buffer for the PrintWriter to handle large responses
       val writer = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream), 65536), true)
+      var clientAuthenticated = false
+
+      def sendResponse(response: String): Unit = {
+        if (IQCommunicationLogger.isLoggingEnabled)
+          IQCommunicationLogger.logCommunication(
+            s"${getTimestamp()} [SEND] ${IQSecurity.redactAuthToken(response)}")
+        writer.println(response)
+        writer.flush()
+      }
 
       Iterator
         .continually(reader.readLine())
         .takeWhile(_ != null)
         .foreach { line =>
         try {
-          val redactedLine = IQSecurity.redactAuthToken(line)
+          if (IQCommunicationLogger.isLoggingEnabled)
+            IQCommunicationLogger.logCommunication(
+              s"${getTimestamp()} [RECV] ${IQSecurity.redactAuthToken(line)}")
 
-          // Log incoming request if logging is enabled
-          if (IQCommunicationLogger.isLoggingEnabled) {
-            IQCommunicationLogger.logCommunication(s"${getTimestamp()} [RECV] $redactedLine")
-          }
+          val requestOpt = try {
+            IQProtocol.decodeJsonRpcRequest(JSON.parse(line)).toOption
+          } catch { case _: Exception => None }
 
-          processRequest(line) match {
-            case Some(response) =>
-              Output.writeln(s"I/Q Server: Sending response of length ${response.length} chars")
-              if (response.length > 10000) {
-                Output.writeln(s"I/Q Server: Large response preview: ${response.take(200)}...${response.takeRight(200)}")
-              }
+          val method = requestOpt.map(_.method).getOrElse("")
+          val id = requestOpt.flatMap(_.id)
+          val isNotification = id.isEmpty
 
-              // Log outgoing response if logging is enabled
-              if (IQCommunicationLogger.isLoggingEnabled) {
-                IQCommunicationLogger.logCommunication(s"${getTimestamp()} [SEND] ${IQSecurity.redactAuthToken(response)}")
-              }
+          // A) Public methods: always allowed, regardless of auth state.
+          if (Set("initialize", "tools/list", "ping").contains(method)
+              || method.startsWith("notifications/")) {
+            processRequest(line).foreach(sendResponse)
 
-              // Send response with detailed logging
-              val responseBytes = (response + "\n").getBytes("UTF-8")
-              Output.writeln(s"I/Q Server: About to send ${responseBytes.length} bytes")
+          // B) Not yet authenticated: only accept the authenticate tool call.
+          } else if (!clientAuthenticated) {
+            val authenticated = for {
+              req <- requestOpt
+              tc <- IQProtocol.decodeToolCall(req).toOption
+              if tc.toolName == IQToolName.Authenticate
+              token <- tc.arguments.collectFirst { case ("token", v: String) => v }
+              if java.security.MessageDigest.isEqual(
+                   token.getBytes("UTF-8"),
+                   securityConfig.authToken.getBytes("UTF-8"))
+            } yield true
 
-              writer.println(response)
-              writer.flush() // Ensure response is sent immediately
+            authenticated match {
+              case Some(true) =>
+                clientAuthenticated = true
+                registeredAuthenticated = true
+                authenticatedClientCount.incrementAndGet()
+                logSecurityEvent(s"ALLOW authenticate client=${currentClientAddress()}")
+                id.foreach { requestId =>
+                  sendResponse(formatSuccessResponse(requestId, Map[String, Any](
+                    "content" -> List(Map("type" -> "text",
+                      "text" -> "Authenticated successfully")))))
+                }
+              case _ =>
+                logSecurityEvent(
+                  s"DENY unauthenticated request method='$method' client=${currentClientAddress()}")
+                if (!isNotification)
+                  sendResponse(formatErrorResponse(id, ErrorCodes.INVALID_REQUEST,
+                    "Not authenticated \u2014 call the 'authenticate' tool first"))
+            }
 
-              Output.writeln(s"I/Q Server: Response sent and flushed (${responseBytes.length} bytes)")
-            case None =>
-              Output.writeln(s"I/Q Server: No response needed (notification)")
-          }
-
-          // Verify the writer is still valid
-          if (writer.checkError()) {
-            Output.writeln("I/Q Server: WARNING - Writer error detected after sending response")
+          // C) Authenticated: handle normally.
           } else {
-            Output.writeln("I/Q Server: Writer status OK after sending response")
+            processRequest(line).foreach(sendResponse)
           }
         } catch {
           case ex: Exception =>
-            val errorResponse =
-              formatErrorResponse(
-                None,
-                ErrorCodes.INTERNAL_ERROR,
-                s"Internal error: ${throwableMessage(ex)}"
-              )
-            writer.println(errorResponse)
-            writer.flush()
+            sendResponse(formatErrorResponse(None, ErrorCodes.INTERNAL_ERROR,
+              s"Internal error: ${throwableMessage(ex)}"))
           case err: LinkageError =>
-            safeOutput(s"I/Q Server: Linkage error while handling request: ${throwableMessage(err)}")
+            safeOutput(s"I/Q Server: Linkage error: ${throwableMessage(err)}")
             err.printStackTrace()
-            val errorResponse =
-              formatErrorResponse(
-                None,
-                ErrorCodes.INTERNAL_ERROR,
-                s"Internal linkage error: ${throwableMessage(err)}"
-              )
-            writer.println(errorResponse)
-            writer.flush()
+            sendResponse(formatErrorResponse(None, ErrorCodes.INTERNAL_ERROR,
+              s"Internal linkage error: ${throwableMessage(err)}"))
         }
       }
     } catch {
@@ -984,13 +988,17 @@ class IQServer(
         clientSocket.close()
         Output.writeln("MCP Client disconnected")
 
+        if (registeredAuthenticated) {
+          val r = authenticatedClientCount.decrementAndGet()
+          if (r < 0) authenticatedClientCount.set(0)
+        }
         if (registeredClient) {
           val remaining = activeClientCount.decrementAndGet()
           val clampedRemaining = if (remaining < 0) {
             activeClientCount.set(0)
             0
           } else remaining
-          IQCommunicationLogger.updateClientStatus(clampedRemaining > 0)
+          IQCommunicationLogger.updateClientStatus(clampedRemaining > 0, clampedRemaining, "")
         }
       } catch {
         case _: Exception => // Ignore close errors
@@ -1052,19 +1060,6 @@ class IQServer(
       requestIdForError = id
 
       safeOutput(s"I/Q Server: Parsed method='$method', id=$id")
-
-      val providedToken = getProvidedAuthToken(request)
-      if (!IQSecurity.isTokenAuthorized(securityConfig.authToken, providedToken)) {
-        logSecurityEvent(
-          s"DENY unauthorized request method='$method' id=$id client=${currentClientAddress()}"
-        )
-        return id match {
-          case Some(requestId) =>
-            Some(formatErrorResponse(Some(requestId), ErrorCodes.INVALID_REQUEST, "Unauthorized request"))
-          case None =>
-            None
-        }
-      }
 
       id match {
         case Some(requestId) =>
@@ -1182,6 +1177,21 @@ class IQServer(
         case Right(value) => value
         case Left(error) => return Left(error)
       }
+      // Authenticate is handled at the connection level in handleClient;
+      // this branch handles it when reached via processRequestForTest or
+      // when a client that is already authenticated calls it again.
+      if (toolCall.toolName == IQToolName.Authenticate) {
+        val token = toolCall.arguments.collectFirst { case ("token", v: String) => v }
+        return token match {
+          case Some(t) if java.security.MessageDigest.isEqual(
+            t.getBytes("UTF-8"), securityConfig.authToken.getBytes("UTF-8")) =>
+            Right(wrapToolCallResult(Map(
+              "content" -> List(Map("type" -> "text", "text" -> "Authenticated successfully")))))
+          case _ =>
+            Left((ErrorCodes.INVALID_REQUEST, "Invalid authentication token"))
+        }
+      }
+
       val params = IQToolParams.fromMap(extractArguments(toolCall.arguments))
       safeOutput(
         s"I/Q Server: Extracted tool='${toolCall.toolName.wire}', params=${params.toMap}"
@@ -1312,6 +1322,20 @@ class IQServer(
         "'file_offset': requires 'path' and 'offset'. " +
         "'file_pattern': requires 'path' and 'pattern'."
     val tools = List(
+      Map(
+        "name" -> "authenticate",
+        "description" -> "Authenticate with the I/Q MCP server. Must be called before any other tool. If the token is not provided to you, use the IQ_AUTH_TOKEN environment variable if set.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "token" -> Map(
+              "type" -> "string",
+              "description" -> "The authentication token for the I/Q server. Unless it is provided to you, use the IQ_AUTH_TOKEN environment variable if set."
+            )
+          ),
+          "required" -> List("token")
+        )
+      ),
       Map(
         "name" -> "list_files",
         "description" -> "List all files tracked by Isabelle, both open and non-open, with detailed information",
@@ -1865,6 +1889,51 @@ class IQServer(
               "description" -> "Optional path to a specific file to save. If omitted, saves all modified dirty buffers that pass mutation-root policy."
             )
           ),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_file_stats",
+        "description" -> "Get processing statistics for a file: line count, entity count, processing status, error and warning counts.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "Path to the target theory file."
+            )
+          ),
+          "required" -> List("path"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_processing_status",
+        "description" -> "Get current PIDE processing status of a file: counts of unprocessed, running, finished, and failed commands.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "Path to the target theory file."
+            )
+          ),
+          "required" -> List("path"),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "get_sorry_positions",
+        "description" -> "Get positions of sorry and oops placeholders in a file, with line numbers and enclosing proof context.",
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "path" -> Map(
+              "type" -> "string",
+              "description" -> "Path to the target theory file."
+            )
+          ),
+          "required" -> List("path"),
           "additionalProperties" -> false
         )
       )

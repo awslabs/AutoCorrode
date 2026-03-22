@@ -17,8 +17,9 @@ signature TCP_HANDLER =
 sig
   val handler : (string -> BinIO.outstream -> unit) Synchronized.var
   val is_running : unit -> bool
-  val start : int -> int * (unit -> unit)
+  val start : int -> int * string * (unit -> unit)
   val stop : unit -> unit
+  val token : unit -> string option
 end;
 
 structure Tcp_Handler : TCP_HANDLER =
@@ -30,6 +31,38 @@ val handler : (string -> BinIO.outstream -> unit) Synchronized.var =
 
 val server_socket : Socket.passive INetSock.stream_sock option Synchronized.var =
   Synchronized.var "Tcp_Handler.socket" NONE;
+
+val server_token : string option Synchronized.var =
+  Synchronized.var "Tcp_Handler.token" NONE;
+
+fun token () = Synchronized.value server_token;
+
+(* Constant-time string comparison to avoid timing side-channels.
+   XORs every byte pair and ORs results together — never short-circuits. *)
+fun constant_time_equal a b =
+  if size a <> size b then false
+  else
+    let
+      fun go i acc =
+        if i >= size a then acc
+        else go (i + 1)
+          (Word8.orb (acc, Word8.xorb (
+            Word8.fromInt (Char.ord (String.sub (a, i))),
+            Word8.fromInt (Char.ord (String.sub (b, i))))))
+    in go 0 (Word8.fromInt 0) = Word8.fromInt 0 end;
+
+(* Generate a random hex token from /dev/urandom. *)
+fun generate_token () =
+  let
+    val stream = BinIO.openIn "/dev/urandom"
+    val bytes = BinIO.inputN (stream, 24)
+    val _ = BinIO.closeIn stream
+    fun byte_hex b =
+      let val s = Word8.fmt StringCvt.HEX b
+      in if String.size s < 2 then "0" ^ s else s end
+  in String.translate (str o Char.toLower)
+       (String.concat (Word8Vector.foldr (fn (b, acc) => byte_hex b :: acc) [] bytes))
+  end;
 
 (* Wrap an accepted socket into BinIO streams, following Socket_IO.make_streams. *)
 fun make_streams socket =
@@ -69,6 +102,13 @@ fun make_streams socket =
 fun serve_client socket =
   let
     val (in_stream, out_stream) = make_streams socket
+    fun check_token () =
+      case Synchronized.value server_token of
+        NONE => true
+      | SOME expected =>
+          (case Byte_Message.read_line in_stream of
+            NONE => false
+          | SOME line_bytes => constant_time_equal (Bytes.content line_bytes) expected)
     fun loop () =
       case Byte_Message.read_line in_stream of
         NONE => ()
@@ -79,10 +119,10 @@ fun serve_client socket =
                let val h = Synchronized.value handler
                in h line out_stream; loop () end
           end
-  in loop ()
+  in if check_token () then loop () else ()
+  end
      handle OS.SysErr _ => ()
-          | IO.Io _ => ()
-  end;
+          | IO.Io _ => ();
 
 (* Accept loop: one client at a time until socket is closed. *)
 fun accept_loop () =
@@ -115,14 +155,18 @@ fun start port =
           Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, port))
       val _ = Socket.listen (ssock, 1)
       val (_, actual_port) = INetSock.fromAddr (Socket.Ctl.getSockName ssock)
+      val tok = generate_token ()
       val _ = Synchronized.change server_socket (K (SOME ssock))
-      val _ = writeln ("Tcp_Handler: listening on 127.0.0.1:" ^ string_of_int actual_port)
-  in (actual_port, accept_loop) end;
+      val _ = Synchronized.change server_token (K (SOME tok))
+      val _ = writeln ("Tcp_Handler: listening on 127.0.0.1:" ^
+                        string_of_int actual_port ^ " (token " ^ quote tok ^ ")")
+  in (actual_port, tok, accept_loop) end;
 
 fun stop () =
-  Synchronized.change server_socket (fn old =>
+  (Synchronized.change server_socket (fn old =>
     (case old of SOME s => (Socket.close s handle OS.SysErr _ => ()) | NONE => ();
      NONE));
+   Synchronized.change server_token (K NONE));
 
 fun is_running () = is_some (Synchronized.value server_socket);
 

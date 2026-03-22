@@ -16,6 +16,7 @@ trait IQCapabilityBackend {
 }
 
 enum IQToolName(val wire: String) {
+  case Authenticate extends IQToolName("authenticate")
   case ListFiles extends IQToolName("list_files")
   case GetCommandInfo extends IQToolName("get_command_info")
   case GetDocumentInfo extends IQToolName("get_document_info")

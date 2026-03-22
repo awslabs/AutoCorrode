@@ -123,6 +123,9 @@ object IQExploreDockable {
     val pb = new ProcessBuilder("python3", replPy, "--daemon", "--expect-ml",
       "--poly-ml-port", mlPort.toString,
       "--isabelle", isabellePath)
+    IQPlugin.mlReplToken.foreach { tok =>
+      pb.environment().put("IR_REPL_AUTH_TOKEN", tok)
+    }
     pb.redirectErrorStream(true)
     val cmdLine = pb.command().toArray.mkString(" ")
     daemonProcess = Some(pb.start())
@@ -135,10 +138,16 @@ object IQExploreDockable {
       val reader = new java.io.BufferedReader(
         new java.io.InputStreamReader(proc.getInputStream))
       val portPattern = """Waiting for connections on \S+:(\d+)""".r
+      val tokenPattern = """IR_Repl\.token: (\S+)""".r
       var replPort: Option[Int] = None
+      var replToken: String = ""
       var line: String = null
       var eof = false
-      while (replPort.isEmpty && !eof) {
+      var extraLines = 0
+      // Wait for both port and token.  Once the port is found, read
+      // up to 5 more lines so the token is captured even if it comes
+      // after the port line.
+      while ((replPort.isEmpty || (replToken.isEmpty && extraLines < 5)) && !eof) {
         line = reader.readLine()
         if (line == null) {
           eof = true
@@ -148,15 +157,20 @@ object IQExploreDockable {
           onStatus("repl.py: " + clean)
           portPattern.findFirstMatchIn(clean).foreach(m =>
             replPort = Some(m.group(1).toInt))
+          tokenPattern.findFirstMatchIn(clean).foreach(m =>
+            replToken = m.group(1))
+          if (replPort.isDefined && replToken.isEmpty)
+            extraLines += 1
         }
       }
       replPort match {
         case Some(port) =>
           onStatus("repl.py listening on port " + port)
           IQPlugin.irReplPort = Some(port)
+          IQPlugin.irReplToken = if (replToken.nonEmpty) Some(replToken) else None
           IQPlugin.activateWidget("ir-repl-status")
           try {
-            val client = new IRClient(port = port)
+            val client = new IRClient(port = port, token = replToken)
             client.connect()
             ir = Some(client)
             onStatus("IRClient connected on port " + port)

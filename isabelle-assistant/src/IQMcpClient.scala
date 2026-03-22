@@ -52,7 +52,32 @@ object IQMcpClient {
       s.setSoTimeout(socketTimeout)
       val r = new BufferedReader(new InputStreamReader(s.getInputStream, StandardCharsets.UTF_8))
       val w = new PrintWriter(new OutputStreamWriter(s.getOutputStream, StandardCharsets.UTF_8), true)
+      authenticateConnection(r, w)
       (s, r, w)
+    }
+
+    /** Send the authenticate tool call on a freshly opened TCP connection. */
+    private def authenticateConnection(reader: BufferedReader, writer: PrintWriter): Unit = {
+      resolveAuthToken().foreach { token =>
+        val request = Map(
+          "jsonrpc" -> "2.0",
+          "id" -> nextRequestId(),
+          "method" -> "tools/call",
+          "params" -> Map(
+            "name" -> "authenticate",
+            "arguments" -> Map("token" -> token)
+          )
+        )
+        writer.println(JSON.Format(request))
+        val response = reader.readLine()
+        if (response == null)
+          throw new java.io.IOException("Connection closed during I/Q authentication")
+        JSON.parse(response) match {
+          case JSON.Object(obj) if obj.contains("error") =>
+            throw new java.io.IOException("I/Q authentication failed")
+          case _ => // success
+        }
+      }
     }
     
     def withConnection[T](timeoutMs: Long)(f: (BufferedReader, PrintWriter) => T): T = {
@@ -121,13 +146,11 @@ object IQMcpClient {
       connection match {
         case Some((_, reader, writer)) =>
           try {
-            val tokenOpt = authTokenFromEnv()
             val request = Map(
               "jsonrpc" -> "2.0",
               "id" -> nextRequestId(),
               "method" -> "ping"
-            ) ++ tokenOpt.map("auth_token" -> _)
-            
+            )
             writer.println(JSON.Format(request))
             val response = reader.readLine()
             // Ping returns {"result":{"status":"ok"}} not the tool_call format
@@ -170,10 +193,16 @@ object IQMcpClient {
     s"assistant-${requestCounter.incrementAndGet()}"
 
   private def authTokenFromEnv(): Option[String] =
-    Option(Isabelle_System.getenv("IQ_MCP_AUTH_TOKEN"))
+    Option(Isabelle_System.getenv("IQ_AUTH_TOKEN"))
       .map(_.trim)
       .filter(_.nonEmpty)
 
+  /** Resolve the I/Q auth token: prefer the in-JVM system property set by the
+    * I/Q plugin, fall back to the IQ_AUTH_TOKEN environment variable. */
+  private def resolveAuthToken(): Option[String] =
+    Option(System.getProperty("iq.mcp.auth.token"))
+      .map(_.trim).filter(_.nonEmpty)
+      .orElse(authTokenFromEnv())
 
   private def decodeJsonValue(value: Any): Any = value match {
     case JSON.Object(obj) => obj.view.mapValues(decodeJsonValue).toMap
@@ -309,23 +338,12 @@ object IQMcpClient {
       return Left("Tool name is required")
     }
 
-    val tokenOpt = authTokenFromEnv()
-    val params = tokenOpt match {
-      case Some(token) =>
-        Map("name" -> toolName, "arguments" -> arguments, "auth_token" -> token)
-      case None =>
-        Map("name" -> toolName, "arguments" -> arguments)
-    }
-    val baseRequest = Map(
+    val request = Map(
       "jsonrpc" -> "2.0",
       "id" -> nextRequestId(),
       "method" -> "tools/call",
-      "params" -> params
+      "params" -> Map("name" -> toolName, "arguments" -> arguments)
     )
-    val request = tokenOpt match {
-      case Some(token) => baseRequest + ("auth_token" -> token)
-      case None => baseRequest
-    }
 
     try {
       connectionPool.withConnection(timeoutMs) { (reader, writer) =>
@@ -659,13 +677,11 @@ object IQMcpClient {
   def ping(timeoutMs: Long = 500L): Boolean = {
     try {
       connectionPool.withConnection(timeoutMs) { (reader, writer) =>
-        val tokenOpt = authTokenFromEnv()
         val request = Map(
           "jsonrpc" -> "2.0",
           "id" -> nextRequestId(),
           "method" -> "ping"
-        ) ++ tokenOpt.map("auth_token" -> _)
-
+        )
         writer.println(JSON.Format(request))
         val responseLine = reader.readLine()
 
