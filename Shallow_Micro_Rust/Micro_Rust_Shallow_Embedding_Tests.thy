@@ -1754,6 +1754,22 @@ begin
 value \<open>\<lbrakk> y.field3.field1 \<rbrakk>\<close>
 end
 
+subsubsection\<open>Declaring \<^verbatim>\<open>micro_rust_record\<close>s in locales\<close>
+locale micro_rust_record_locale_test =
+  fixes answer :: \<open>64 word\<close>
+  assumes \<open>answer = 42\<close>
+begin
+
+datatype_record foobar =
+  field5 :: \<open>64 word\<close>
+  field6 :: \<open>64 word\<close>
+micro_rust_record foobar
+
+term \<open>\<lambda> x :: foobar. \<lbrakk> x.field5 + x.field6 \<rbrakk>\<close>
+term \<open>\<lambda> x :: ('addr, 'fv, foobar) ref. \<lbrakk> *x.field5 + *x.field6 \<rbrakk>\<close>
+
+end
+
 subsubsection\<open>Field Assignment Through Lenses\<close>
 
 context

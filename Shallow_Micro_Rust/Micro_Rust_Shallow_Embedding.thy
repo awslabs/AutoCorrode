@@ -214,8 +214,11 @@ ML\<open>
 
    (* Mimicking "instance {rec_name} :: (type, type, ...) localizable .." *)
    fun instantiate_localizable_class rec_name (ctxt : Proof.context) =
-     let val typeargs = generic_type_arguments ctxt rec_name in
-     ((Class.instance_arity_cmd ([rec_name], typeargs, @{class localizable})
+     let val typeargs = generic_type_arguments ctxt rec_name
+         val full_tyname = Proof_Context.read_type_name {proper = true, strict = false} ctxt rec_name
+                           |> Term.dest_Type |> fst
+     in
+     ((Class.instance_arity_cmd ([full_tyname], typeargs, @{class localizable})
        #> Proof.global_default_proof
        #> Proof_Context.theory_of)
       |> Local_Theory.background_theory) ctxt
@@ -223,8 +226,10 @@ ML\<open>
 \<close>
 
 ML\<open>
-   fun register_lens_with_micro_rust rec_name field =
-      notation_nano_rust "field" (lens_name rec_name field, field)
+   fun register_lens_with_micro_rust rec_name field lthy =
+      let val name = lens_name rec_name field
+          val full_name = Local_Theory.full_name lthy (Binding.name name)
+      in notation_nano_rust "field" (full_name, field) lthy end
    fun register_lenses_with_micro_rust rec_name thy =
       let val fields = get_fields rec_name thy in fold (register_lens_with_micro_rust rec_name) fields thy end
 
