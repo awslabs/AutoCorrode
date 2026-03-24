@@ -211,15 +211,22 @@ def session_info() -> str:
     if not repl.connected:
         return "Not connected. Call `connect` first."
     info = repl.send('/info')
-    session = dir_ = ""
+    session = dir_ = heap_db = ""
     for line in info.splitlines():
         line = line.strip()
         if line.startswith("session"):
             session = line.split("=", 1)[1].strip()
         elif line.startswith("dir"):
             dir_ = line.split("=", 1)[1].strip()
+        elif line.startswith("heap_db"):
+            heap_db = line.split("=", 1)[1].strip()
     theories = apply_transforms(repl.send('Ir.theories ();'))
-    return f"Session name: {session}\nSession directory: {dir_}\n\nAvailable theories:\n{theories}"
+    result = f"Session name: {session}\nSession directory: {dir_}"
+    if heap_db and heap_db != "(none)":
+        result += f"\nHeap DB: {heap_db}"
+        result += "\n\nHeap DB commands available: source_files, timings, source_map, init_at_line"
+    result += f"\n\nAvailable theories:\n{theories}"
+    return result
 
 @mcp.tool(description=(
     "Show server status including the Isabelle session name, "
@@ -392,6 +399,48 @@ def set_auto_replay(enabled: int) -> str:
 @mcp.tool(description="Show the I/R help text.")
 def help() -> str:
     return repl.send("Ir.help ();")
+
+@mcp.tool(description=(
+    "List source files recorded in the heap database. "
+    "With check=True (default), verifies each file's SHA1 digest against the filesystem "
+    "to detect files that have changed since the heap was built."))
+def source_files(check: bool = True) -> str:
+    cmd = "/sources --check" if check else "/sources"
+    return repl.send(cmd)
+
+@mcp.tool(description=(
+    "Show the slowest commands from the heap build. "
+    "Useful for identifying proof bottlenecks before starting refactoring. "
+    "Returns per-command timing (with file:line) and per-file aggregation."))
+def timings(top_n: int = 20, theory: str = "") -> str:
+    cmd = f"/timings --top {top_n}"
+    if theory:
+        cmd += f" --theory {theory}"
+    return repl.send(cmd)
+
+@mcp.tool(description=(
+    "Get the segment-to-line-number mapping for a theory. "
+    "Shows each segment's index, source line number, command keyword, "
+    "and build timing (if available from the heap DB). "
+    "Use this to understand a theory's structure before using init()."))
+def source_map(theory_name: str) -> str:
+    return repl.send(f'/source-map "{theory_name}"')
+
+
+@mcp.tool(description=(
+    "Create a REPL at a specific line in a source file. "
+    "This is the easiest way to start working at a particular source location — "
+    "it automatically resolves the file and line number to the correct theory and "
+    "segment index, then creates the REPL there. "
+    "The theory_or_file argument can be a theory name (e.g. 'MySession.Foo') "
+    "or a file suffix (e.g. 'Foo.thy')."))
+def init_at_line(id: str, theory_or_file: str, line: int) -> str:
+    resolution = repl.send(f'/resolve "{theory_or_file}" {line}')
+    spec = resolution.strip()
+    if not spec or spec.startswith("ERR") or spec.startswith("No ") or \
+       spec.startswith("Cannot") or spec.startswith("Usage"):
+        return spec
+    return repl.send(f"Ir.init {ml_str(id)} [{ml_str(spec)}];")
 
 @mcp.tool(description="Send a raw ML expression to the Poly/ML console. Use for anything not covered by other tools. The expression must end with a semicolon.")
 def raw_ml(ml_code: str) -> str:

@@ -25,12 +25,20 @@ Filters:
 """
 
 import argparse
-import hashlib
 import os
 import re
 import sqlite3
-import subprocess
 import sys
+
+# Import shared utilities from ir/heap_info.py
+_ir_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ir")
+sys.path.insert(0, _ir_dir)
+from heap_info import (
+    isabelle_getenv, resolve_path, file_sha1, is_system_source,
+    decompress_blob, parse_yxml_records, decode_yxml_props, fmt_time,
+    SourceChecker, file_lines, offset_to_line,
+    _isabelle_env_cache,
+)
 
 # ANSI colors
 GREEN = "\033[32m"
@@ -40,210 +48,6 @@ CYAN = "\033[36m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
-
-try:
-    import zstandard
-    HAS_ZSTD = True
-except ImportError:
-    HAS_ZSTD = False
-
-
-# --- File resolution and digest checking ---
-
-_isabelle_env_cache = {}
-
-def isabelle_getenv(var):
-    """Resolve an Isabelle environment variable. Checks os.environ first, then 'isabelle getenv'."""
-    if var not in _isabelle_env_cache:
-        val = os.environ.get(var, "")
-        if not val:
-            try:
-                r = subprocess.run(
-                    [os.environ.get("ISABELLE_TOOL", "isabelle"), "getenv", "-b", var],
-                    capture_output=True, text=True, timeout=5)
-                val = r.stdout.strip()
-            except Exception:
-                val = ""
-        _isabelle_env_cache[var] = val
-    return _isabelle_env_cache[var]
-
-
-def resolve_path(name):
-    """Resolve symbolic Isabelle path to filesystem path. Returns None if unresolvable."""
-    if name.startswith("~~/"):
-        return None  # ISABELLE_HOME files don't change
-    if name.startswith("~/"):
-        return os.path.expanduser(name)
-    if name.startswith("$"):
-        slash = name.find("/")
-        if slash < 0:
-            return None
-        var = name[1:slash]
-        base = isabelle_getenv(var)
-        return os.path.join(base, name[slash + 1:]) if base else None
-    if name.startswith("/"):
-        return name
-    return None
-
-
-_file_content_cache = {}
-
-
-def file_sha1(path):
-    """Compute SHA1 of a file, or None if unreadable."""
-    try:
-        return hashlib.sha1(open(path, "rb").read()).hexdigest()
-    except OSError:
-        return None
-
-
-def file_lines(path):
-    """Get cached symbol-offset-to-line table for a file.
-
-    Isabelle uses symbol offsets where \\<name> counts as 1 symbol.
-    Returns list of symbol offsets at each line start, or None.
-    """
-    if path not in _file_content_cache:
-        try:
-            content = open(path, "r", errors="replace").read()
-            line_starts = [0]  # symbol offset at start of each line
-            sym = 0
-            i = 0
-            while i < len(content):
-                if content[i] == "\n":
-                    sym += 1
-                    line_starts.append(sym)
-                elif content[i] == "\\" and i + 1 < len(content) and content[i + 1] == "<":
-                    end = content.find(">", i)
-                    if end >= 0:
-                        i = end
-                    sym += 1
-                else:
-                    sym += 1
-                i += 1
-            _file_content_cache[path] = line_starts
-        except OSError:
-            _file_content_cache[path] = None
-    return _file_content_cache[path]
-
-
-def offset_to_line(path, offset):
-    """Convert 1-based Isabelle symbol offset to 1-based line number."""
-    line_starts = file_lines(path)
-    if line_starts is None:
-        return None
-    offset = int(offset)
-    # Binary search for the last line_start <= offset
-    lo, hi = 0, len(line_starts) - 1
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        if line_starts[mid] <= offset:
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo + 1
-
-
-class SourceChecker:
-    """Check source file digests against filesystem."""
-    def __init__(self, conn, session):
-        self.rows = conn.execute(
-            "SELECT name, digest FROM isabelle_sources WHERE session_name=? ORDER BY name",
-            (session,)).fetchall()
-        self._checked = {}  # name -> (resolved_path, matches)
-        # Pre-resolve all $VAR prefixes so env vars are populated
-        for name, _ in self.rows:
-            if name.startswith("$"):
-                slash = name.find("/")
-                if slash > 0:
-                    isabelle_getenv(name[1:slash])
-
-    def check(self, name, digest):
-        if name not in self._checked:
-            path = resolve_path(name)
-            if path and os.path.isfile(path):
-                actual = file_sha1(path)
-                self._checked[name] = (path, actual == digest)
-            else:
-                self._checked[name] = (path, None)  # None = can't check
-        return self._checked[name]
-
-    def get_line(self, name, offset):
-        """Get line number for a file+offset, only if digest matches."""
-        entry = self._checked.get(name)
-        if not entry:
-            # Try to check it
-            for n, d in self.rows:
-                if n == name:
-                    self.check(n, d)
-                    break
-            entry = self._checked.get(name)
-        if entry and entry[1] is True and entry[0]:
-            return offset_to_line(entry[0], offset)
-        return None
-
-_SYSTEM_PREFIXES = ("~~/src/Pure/", "~~/src/HOL/", "~~/src/Tools/")
-
-def is_system_source(name):
-    return any(name.startswith(p) for p in _SYSTEM_PREFIXES)
-
-
-def decompress_blob(blob):
-    if not blob:
-        return ""
-    if blob[:4] == b'\x28\xb5\x2f\xfd':  # zstd magic
-        if not HAS_ZSTD:
-            return None  # signal missing dependency
-        data = zstandard.ZstdDecompressor().decompress(blob, max_output_size=50*1024*1024)
-        return data.decode("utf-8", errors="replace")
-    # Try raw YXML
-    return blob.decode("utf-8", errors="replace") if isinstance(blob, bytes) else blob
-
-
-def parse_yxml_records(text):
-    """Parse YXML-encoded list of property records."""
-    if not text:
-        return []
-    records = []
-    for entry in text.split("\x05\x06\x05"):
-        props = {}
-        for part in entry.split("\x06"):
-            part = part.strip("\x05:").strip()
-            if "=" in part:
-                k, v = part.split("=", 1)
-                if k:
-                    props[k] = v
-        if props:
-            records.append(props)
-    return records
-
-
-def decode_yxml_props(data):
-    if not data:
-        return {}
-    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
-    props = {}
-    for part in text.split("\x06"):
-        part = part.strip("\x05:").strip()
-        if "=" in part:
-            k, v = part.split("=", 1)
-            if k:
-                props[k] = v
-    return props
-
-
-def fmt_time(secs_str):
-    try:
-        s = float(secs_str)
-    except (ValueError, TypeError):
-        return str(secs_str)
-    if s < 60:
-        return f"{s:.1f}s"
-    m, s = divmod(s, 60)
-    if m < 60:
-        return f"{int(m)}m {s:.0f}s"
-    h, m = divmod(m, 60)
-    return f"{int(h)}h {int(m)}m {s:.0f}s"
 
 
 def fmt_size(nbytes):
@@ -747,7 +551,7 @@ def main():
         # Show resolved environment variables
         if _isabelle_env_cache:
             print(f"\n  {BOLD}Environment:{RESET}")
-            for var, val in sorted(_isabelle_env_cache.items()):
+            for (var, _bin), val in sorted(_isabelle_env_cache.items()):
                 if val:
                     print(f"    {var} = {val}")
                 else:

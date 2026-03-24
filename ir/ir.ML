@@ -39,6 +39,7 @@ sig
   val theories : unit -> unit
   val load_theory : string -> unit
   val source : string -> int -> int -> unit
+  val source_map : string -> int -> int -> unit
   val sledgehammer : int -> unit
   val sledgehammer_state : (Proof.state * int) option Synchronized.var
   val sledgehammer_result : string Synchronized.var
@@ -143,6 +144,50 @@ fun source thy_name start stop =
                          "  " ^ indent ^ render_span kws full_spans span)
              else ();
              pr (i + 1) rest)
+            end
+  in pr 0 segs end;
+
+(* Output segment index to source position mapping.
+   Each non-ignored segment produces a fixed-width line:
+     idx  keyword  line  offset  file
+   Used by repl.py to build line-number navigation.
+   start_line/stop_line filter by source line number (0 = from start, ~1 = to end). *)
+fun source_map thy_name start_line stop_line =
+  let val segs = find_source thy_name
+      val {show_ignored = incl, ...} = get_cfg ()
+      fun first_pos (Command_Span.Span (_, toks)) =
+        case List.find (fn tok =>
+          is_some (Position.line_of (Token.pos_of tok))) toks of
+          SOME tok => Token.pos_of tok | NONE => Position.none
+      fun first_keyword (Command_Span.Span (_, toks)) =
+        case toks of
+          (tok :: _) => Token.unparse tok
+        | _ => ""
+      (* Resolve ~N: find the max line number in all segments *)
+      val max_line = fold (fn seg => fn acc =>
+        let val ln = the_default 0 (Position.line_of (first_pos (#span (seg : Document_Output.segment))))
+        in Int.max (acc, ln) end) segs 0
+      val start' = if start_line < 0 then Int.max (0, max_line + 1 + start_line) else start_line
+      val stop' = if stop_line < 0 then max_line + 1 + stop_line else stop_line
+      val _ = out ("  idx  keyword                 line  offset  file")
+      val _ = out ("-----  --------------------  ------  ------  " ^
+                   "----------------------------------------")
+      fun pr _ [] = ()
+        | pr i (seg :: rest) =
+            let val span = #span (seg : Document_Output.segment)
+                val pos = first_pos span
+                val ln = the_default 0 (Position.line_of pos)
+                val ign = is_ignored span
+            in (if ln >= start' andalso ln <= stop' then
+                  (if not ign orelse incl then
+                    out (StringCvt.padLeft #" " 5 (string_of_int i) ^ "  " ^
+                         StringCvt.padRight #" " 20 (first_keyword span) ^ "  " ^
+                         StringCvt.padLeft #" " 6 (string_of_int ln) ^ "  " ^
+                         StringCvt.padLeft #" " 6 (string_of_int (the_default 0 (Position.offset_of pos))) ^ "  " ^
+                         the_default "" (Position.file_of pos))
+                  else ())
+                else ());
+               pr (i + 1) rest
             end
   in pr 0 segs end;
 
@@ -595,6 +640,7 @@ fun help () = out
   \  theories ()   list loaded theories (heap + load_theory)\n\
   \  load_theory s  load theory by name, e.g. \"HOL-Library.Multiset\"\n\
   \  source thy s e   list command spans (s e = range, ~N = from end)\n\
+\  source_map thy s e  segment-to-position map (s e = line range, ~N from end)\n\
   \  config f           update config: color, show_ignored, full_spans,\n\
   \                     show_theory_in_source, auto_replay\n\
   \  help ()            this help\n\

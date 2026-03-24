@@ -94,6 +94,7 @@ IR_CMDS = {
     'Ir.theories':  '()  — list all theories loaded in the session',
     'Ir.load_theory': 'name  — load theory by name, e.g. "HOL-Library.Multiset"',
     'Ir.source':       'thy start stop  — list theory commands (start/stop are 0-based, ~N from end)',
+    'Ir.source_map':   'thy start stop  — segment-to-position map (start/stop 0-based, ~N from end)',
     'Ir.sledgehammer':   'secs  — run sledgehammer on current proof goal with timeout',
     'Ir.timeout':        'secs  — set step timeout (0=unlimited, default 5s)',
     'Ir.explode':        'idx  — split multi-command step idx into individual steps',
@@ -101,6 +102,10 @@ IR_CMDS = {
     'Ir.back':           '()  — revert last step (synonym for truncate ~1)',
     'Ir.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
     'Ir.help':           '()  — show full help text',
+    '/sources':               'list source files from heap DB with verification status',
+    '/timings':               '[--top N] [--theory "NAME"]  — command timing hotspots',
+    '/source-map':            '"THEORY"  — segment-to-line mapping with timing',
+    '/resolve':               '"THEORY" LINE  — find theory:segment for a location',
     '/connections':           'show open client connections',
     '/verbosity':             'set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)',
     '/show_types':            'toggle display of type annotations',
@@ -129,6 +134,7 @@ IR_SIGS = {
     'Ir.theories': ([], 'list all theories loaded in the session'),
     'Ir.load_theory': (['name'], 'load theory by name, e.g. "HOL-Library.Multiset"'),
     'Ir.source':      (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
+    'Ir.source_map':  (['thy', 'start', 'stop'], 'segment-to-position map (start/stop 0-based, ~N from end)'),
     'Ir.sledgehammer':  (['secs'], 'run sledgehammer on current proof goal with timeout'),
     'Ir.timeout':       (['secs'], 'set step timeout (0=unlimited, default 5s)'),
     'Ir.explode':       (['idx'], 'split multi-command step idx into individual steps'),
@@ -136,6 +142,10 @@ IR_SIGS = {
     'Ir.back':          ([], 'revert last step (synonym for truncate ~1)'),
     'Ir.config':        (['f'], 'update config (color, show_ignored, full_spans, auto_replay)'),
     'Ir.help':          ([], 'show full help text'),
+    '/sources':         ([], 'list source files from heap DB with verification status'),
+    '/timings':         (['--top N', '--theory "NAME"'], 'command timing hotspots'),
+    '/source-map':      (['"THEORY"'], 'segment-to-line mapping with timing'),
+    '/resolve':         (['"THEORY"', 'LINE'], 'find theory:segment for location'),
 }
 
 if _HAVE_PROMPT_TOOLKIT:
@@ -156,6 +166,8 @@ class _DynWordCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                 yield Completion(w, start_position=-len(word))
 
 
+
+
 class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
     """Grammar-based completer for the I/R REPL.
 
@@ -171,9 +183,11 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
         if not _HAVE_PROMPT_TOOLKIT:
             return
 
-        # Grammar for all Ir.* commands.
+        # Grammar for all Ir.* commands and /-commands.
         # The prompt_toolkit grammar compiler ignores whitespace and supports
         # (?P<name>...) for named variables that get their own completer.
+        # Variable 'thy' uses quote escape/unescape for ML-style "Theory" args.
+        # Variable 'uthy' is unquoted, for /-commands that take plain theory/file args.
         g = grammar_compile(
             r"""
                 (
@@ -187,6 +201,8 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                         \]?
                 |
                     (?P<cmd>Ir\.load_theory) \s+ (?P<thy>"[^"]*")
+                |
+                    (?P<cmd>Ir\.source_map) \s+ (?P<thy>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<num>[^\s]+)
                 |
                     (?P<cmd>Ir\.source) \s+ (?P<thy>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<num>[^\s]+)
                 |
@@ -213,6 +229,18 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                     (?P<cmd>Ir\.explode)      \s+ (?P<num>[^\s]+)
                 |
                     (?P<cmd>Ir\.find_theorems) \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
+                |
+                    # /-commands with quoted arguments
+                    (?P<cmd>/source-map) \s+ (?P<thy>"[^"]*")
+                |
+                    (?P<cmd>/resolve) \s+ (?P<thy>"[^"]*") \s+ (?P<num>[^\s]+)
+                |
+                    # /timings with various flag combinations
+                    (?P<cmd>/timings) \s+ --top \s+ (?P<num>[^\s]+) \s+ --theory \s+ (?P<thy>"[^"]*")
+                |
+                    (?P<cmd>/timings) \s+ --top \s+ (?P<num>[^\s]+)
+                |
+                    (?P<cmd>/timings) \s+ --theory \s+ (?P<thy>"[^"]*")
                 |
                     # No-arg commands and slash commands
                     (?P<cmd>[^\s]+)
@@ -582,7 +610,7 @@ class PolyMLProcess:
         return self.proc.poll() is None
 
     def close(self):
-        # Send ML_Repl.stop() via a fresh TCP connection to shut down cleanly
+        # Step 1: Ask ML_Repl to stop gracefully via TCP
         if self.port:
             try:
                 s = socket.create_connection(("127.0.0.1", self.port), timeout=2)
@@ -592,15 +620,21 @@ class PolyMLProcess:
                 s.close()
             except Exception:
                 pass
-            # Wait briefly for the process to exit on its own
             try:
-                self.proc.wait(timeout=3)
+                self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        # If still alive, force kill
+        # Step 2: SIGTERM to process group (catchable — lets ml_proxy cleanup run)
         if self.proc.poll() is None:
-            self.proc.kill()
-            self.proc.wait(timeout=5)
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+            except OSError:
+                self.proc.terminate()
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print("WARNING: Poly/ML process did not exit after SIGTERM",
+                      flush=True)
 
 
 class PolyMLConnection:
@@ -734,11 +768,13 @@ class Server:
     """TCP server that serializes client commands to the Poly/ML process."""
 
     def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None,
-                 session=None, directory=None):
+                 session=None, directory=None, heap_info=None,
+                 remote_host=None):
         self.poly = poly
         self.host = host
         self.token = os.environ.get("IR_AUTH_TOKEN", "").strip() or secrets.token_urlsafe(24)
         self.mgmt_output = mgmt_output or print
+        self.remote_host = remote_host
         self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -759,6 +795,8 @@ class Server:
         self._start_time = time.time()
         self.session = session
         self.directory = directory
+        self.heap_info = heap_info
+        self._source_maps = {}  # theory -> {seg_idx: {keyword, line, offset, file}}
 
     def log(self, msg):
         """Print from background thread — patch_stdout handles redisplay."""
@@ -822,6 +860,288 @@ class Server:
         else:
             self.log(f"{CYAN}{ctx}{RST} {DIM}<<<{RST} {colored_tag}")
 
+    def _build_source_map(self, theory):
+        """Build segment->position mapping for a theory via Ir.source_map.
+        Returns {seg_idx: {keyword, line, offset, file}} or None."""
+        if theory in self._source_maps:
+            return self._source_maps[theory]
+        with self.lock:
+            raw = self.poly.send(f'Ir.source_map "{theory}" 0 ~1;')
+        result = {}
+        for line in strip_yxml(raw).splitlines():
+            # Format: idx(5)  keyword(20)  line(6)  offset(6)  file
+            m = re.match(r'\s*(\d+)\s+(\S+)\s+(\d+)\s+(\d+)\s+(\S+)', line)
+            if m:
+                try:
+                    result[int(m.group(1))] = {
+                        "keyword": m.group(2),
+                        "line": int(m.group(3)),
+                        "offset": int(m.group(4)),
+                        "file": m.group(5).strip(),
+                    }
+                except ValueError:
+                    continue
+        if result:
+            self._source_maps[theory] = result
+        return result if result else None
+
+    # Regex patterns for /-command argument parsing.
+    # All string arguments use mandatory "..." quoting.
+    _RE_QUOTED = r'"([^"]*)"'
+    _RE_SOURCE_MAP = None   # compiled lazily
+    _RE_RESOLVE = None
+    _RE_READ = None
+    _RE_TIMINGS_TOP = None
+    _RE_TIMINGS_THEORY = None
+
+    @staticmethod
+    def _parse_slash(text, pattern, usage):
+        """Match a /-command against a regex. Returns the match or an error string."""
+        m = re.match(pattern, text.strip())
+        if not m:
+            # Give a specific hint if the user forgot quotes or added semicolons
+            hint = ""
+            if ";" in text:
+                hint = "\n  (/-commands don't use trailing semicolons)"
+            elif '"' not in text and pattern.find('"') >= 0:
+                hint = "\n  (string arguments require double quotes)"
+            return None, f"Usage: {usage}{hint}"
+        return m, None
+
+    def _handle_local_command(self, text, ansi=False):
+        """Handle a /-prefixed command locally. Returns response string or None.
+        ansi=True for the management console (YXML→ANSI), False for TCP (YXML→plain)."""
+        stripped = text.strip()
+        cmd = stripped.split()[0].lower() if stripped else ""
+
+        if cmd == "/info":
+            return self.info_text(ansi=ansi)
+        if cmd == "/sources":
+            return self._cmd_sources(stripped, ansi=ansi)
+        if cmd == "/timings":
+            return self._cmd_timings(stripped)
+        if cmd == "/source-map":
+            return self._cmd_source_map(stripped, ansi=ansi)
+        if cmd == "/resolve":
+            return self._cmd_resolve(stripped)
+        return None  # not a local command
+
+    def _cmd_sources(self, text, ansi=False):
+        if not self.heap_info:
+            return "No heap DB available"
+        sources = self.heap_info.source_files()
+        verified = sum(1 for s in sources if s["status"] == "verified")
+        changed = sum(1 for s in sources if s["status"] == "changed")
+        missing = sum(1 for s in sources if s["status"] == "missing")
+        unresolved = sum(1 for s in sources if s["status"] == "unresolved")
+
+        B = BOLD if ansi else ""
+        D = DIM if ansi else ""
+        G = GREEN if ansi else ""
+        R = RED if ansi else ""
+        C = CYAN if ansi else ""
+        X = RST if ansi else ""
+
+        # Header: DB path
+        lines = [f"{D}Source: {self.heap_info.db_path}{X}"]
+
+        # Resolved env vars
+        env_vars = self.heap_info.resolved_env_vars()
+        if env_vars:
+            lines.append("")
+            for var, val in sorted(env_vars.items()):
+                lines.append(f"  {C}${var}{X} = {val}")
+
+        # Summary
+        lines.append("")
+        parts = []
+        if verified:
+            parts.append(f"{G}{verified} ✓ (up to date){X}")
+        if changed:
+            parts.append(f"{R}{changed} ✗ (out of sync){X}")
+        if missing:
+            parts.append(f"{R}{missing} ✗ (not present){X}")
+        if unresolved:
+            parts.append(f"{D}{unresolved} ? (unresolved){X}")
+        lines.append(f"{B}{len(sources)}{X} files: {', '.join(parts)}")
+
+        # Group by directory, sort by directory
+        by_dir = {}
+        # Find common prefix to strip from display
+        common_prefix = ""
+        for var in sorted(env_vars):
+            common_prefix = f"${var}/"
+            break  # use first (typically only) env var
+        for s in sources:
+            name = s["name"]
+            slash = name.rfind("/")
+            if slash >= 0:
+                d, f = name[:slash], name[slash + 1:]
+            else:
+                d, f = "", name
+            by_dir.setdefault(d, []).append((f, s["status"]))
+
+        # Compute column widths
+        max_dir = 0
+        max_file = 0
+        for d, files in by_dir.items():
+            display_d = d.replace(common_prefix, "", 1) if common_prefix else d
+            max_dir = max(max_dir, len(display_d))
+            for fname, _ in files:
+                max_file = max(max_file, len(fname))
+        dir_w = min(max_dir, 45)
+        file_w = min(max_file, 50)
+
+        # Table header
+        lines.append("")
+        lines.append(f"  {B}{'Directory':{dir_w}s}{X}  {B}{'File':{file_w}s}{X}")
+        lines.append(f"  {'─' * dir_w}  {'─' * file_w}  ──")
+
+        # Table rows — directory shown only on first row of each group
+        for d in sorted(by_dir):
+            display_d = d.replace(common_prefix, "", 1) if common_prefix else d
+            first = True
+            for fname, status in sorted(by_dir[d]):
+                if status == "verified":
+                    icon = f"{G}✓{X}"
+                elif status == "changed":
+                    icon = f"{R}✗{X}"
+                elif status == "missing":
+                    icon = f"{R}!{X}"
+                else:
+                    icon = f"{D}?{X}"
+                dir_col = f"{D}{display_d:{dir_w}s}{X}" if first else " " * dir_w
+                lines.append(f"  {dir_col}  {fname:{file_w}s}  {icon}")
+                first = False
+        return "\n".join(lines)
+
+    def _cmd_timings(self, text):
+        if not self.heap_info:
+            return "No heap DB available"
+        top_n = 20
+        file_filter = None
+        m = re.search(r'--top\s+(\d+)', text)
+        if m:
+            top_n = int(m.group(1))
+        m = re.search(r'--theory\s+"([^"]*)"', text)
+        if m:
+            file_filter = m.group(1)
+        return self.heap_info.timing_hotspots(
+            top_n=top_n, file_filter=file_filter)
+
+    def _cmd_source_map(self, text, ansi=False):
+        m, err = self._parse_slash(
+            text, r'/source-map\s+"([^"]*)"$',
+            '/source-map "THEORY"')
+        if err:
+            return err
+        theory = m.group(1)
+
+        # Get position map (segment idx -> line, offset, file)
+        seg_map = self._build_source_map(theory)
+        if not seg_map:
+            return (f"No source map for {theory} "
+                    "(rebuild with record_theories=true?)")
+
+        # Get the rich Ir.source output (YXML markup)
+        with self.lock:
+            raw_source = self.poly.send(f'Ir.source "{theory}" 0 ~1;')
+
+        # Get timing data
+        timing_by_offset = {}
+        if self.heap_info:
+            timing_by_offset = self.heap_info.timing_by_offset()
+
+        # Transform pipeline: YXML → ANSI (console) or plain text (TCP)
+        transforms = console_transforms if ansi else tcp_transforms
+
+        # Merge: transform each Ir.source line, prepend line numbers,
+        # append timing.  Ir.source lines look like "  42  definition ..."
+        # We strip the segment index from display and re-pad it for
+        # consistent alignment regardless of Ir.source/YXML quirks.
+        max_idx = max(seg_map.keys()) if seg_map else 0
+        idx_width = max(4, len(str(max_idx)))
+        # Fixed column: line(6) + " " (2) + idx(N) + " " (2) + timing(8) + " " (2)
+        timing_w = 8  # "  1.23s " or 8 spaces
+        result_lines = []
+        for source_line in raw_source.splitlines():
+            plain = strip_yxml(source_line).lstrip()
+            display = apply_transforms(transforms, source_line)
+            idx_match = re.match(r'(\d+)\s', plain)
+            if idx_match:
+                idx = int(idx_match.group(1))
+                # Strip original index prefix from display, re-pad
+                display_stripped = re.sub(
+                    r'^\s*\d+\s{1,2}', '', display.lstrip())
+                idx_str = str(idx).rjust(idx_width)
+                seg = seg_map.get(idx)
+                if seg:
+                    ln = f"L{seg['line']:5d}"
+                    elapsed = timing_by_offset.get(
+                        (seg["file"], seg["offset"]))
+                    timing_col = f"{elapsed:6.2f}s " if elapsed else " " * timing_w
+                else:
+                    ln = "      "
+                    timing_col = " " * timing_w
+                result_lines.append(
+                    f"{ln} C{idx_str}  {timing_col}{display_stripped}")
+            else:
+                pad = " " * (6 + 1 + 1 + idx_width + 2 + timing_w)
+                result_lines.append(f"{pad}{display.lstrip()}")
+        return "\n".join(result_lines)
+
+    def _cmd_resolve(self, text):
+        m, err = self._parse_slash(
+            text, r'/resolve\s+"([^"]*)"\s+(\d+)$',
+            '/resolve "THEORY" LINE')
+        if err:
+            return err
+        target = m.group(1)
+        line_num = int(m.group(2))
+
+        theory = None
+        if ".thy" in target.lower():
+            # File pattern — find matching theory
+            with self.lock:
+                raw = self.poly.send("Ir.theories ();")
+            theory_names = [l.strip() for l in
+                            strip_yxml(raw).splitlines() if l.strip()]
+            stem = os.path.splitext(os.path.basename(target))[0]
+            for t in theory_names:
+                if t.endswith("." + stem) or t == stem:
+                    theory = t
+                    break
+            if not theory:
+                for t in theory_names:
+                    smap = self._build_source_map(t)
+                    if smap:
+                        for s in smap.values():
+                            if target.lower() in s["file"].lower():
+                                theory = t
+                                break
+                    if theory:
+                        break
+            if not theory:
+                return f"Cannot find theory for file '{target}'"
+        else:
+            theory = target
+
+        seg_map = self._build_source_map(theory)
+        if not seg_map:
+            return (f"No source map for {theory} "
+                    "(rebuild with record_theories=true?)")
+
+        best_idx = None
+        best_line = 0
+        for idx, s in seg_map.items():
+            if s["line"] <= line_num and s["line"] > best_line:
+                best_line = s["line"]
+                best_idx = idx
+        if best_idx is None:
+            return f"No segment at or before line {line_num} in {theory}"
+        return f"{theory}:{best_idx}"
+
+
     def serve_forever(self):
         self.sock.settimeout(1.0)
         while self.running:
@@ -883,17 +1203,19 @@ class Server:
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
                     text = line.decode("utf-8")
-                    # Intercept /info before command accumulation
-                    if not cmd_lines and text.strip() == "/info":
-                        response = (self.info_text(ansi=False) +
-                                    "\n" + SENTINEL + "\n").encode("utf-8")
-                        client.sendall(response)
-                        with self.clients_lock:
-                            if client in self.clients:
-                                self.clients[client]["commands"] += 1
-                                self.clients[client]["bytes_out"] += len(response)
-                                self.clients[client]["last_active"] = time.time()
-                        continue
+                    # Intercept /-commands before command accumulation
+                    if not cmd_lines and text.strip().startswith("/"):
+                        local_result = self._handle_local_command(text)
+                        if local_result is not None:
+                            response = (local_result +
+                                        "\n" + SENTINEL + "\n").encode("utf-8")
+                            client.sendall(response)
+                            with self.clients_lock:
+                                if client in self.clients:
+                                    self.clients[client]["commands"] += 1
+                                    self.clients[client]["bytes_out"] += len(response)
+                                    self.clients[client]["last_active"] = time.time()
+                            continue
                     cmd_lines.append(text)
                     if not text.rstrip().endswith(";"):
                         continue
@@ -965,11 +1287,15 @@ class Server:
         n = self.num_clients
         labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
         d = self.directory or "(none)"
+        db = self.heap_info.db_path if self.heap_info else "(none)"
+        rh = self.remote_host
         if ansi:
             lines = [
                 f"{BOLD}Server info:{RST}",
                 f"  session   = {CYAN}{self.session}{RST}",
                 f"  dir       = {CYAN}{d}{RST}",
+                f"  heap_db   = {CYAN}{db}{RST}",
+                f"  remote    = {CYAN}{rh}{RST}" if rh else f"  remote    = {DIM}(local){RST}",
                 f"  listen    = {CYAN}127.0.0.1:{self.port}{RST}",
                 f"  ml_repl   = {CYAN}127.0.0.1:{self.poly.port}{RST}",
                 f"  uptime    = {h}h {m}m {s}s",
@@ -981,6 +1307,8 @@ class Server:
                 "Server info:",
                 f"  session   = {self.session}",
                 f"  dir       = {d}",
+                f"  heap_db   = {db}",
+                f"  remote    = {rh}" if rh else "  remote    = (local)",
                 f"  listen    = 127.0.0.1:{self.port}",
                 f"  ml_repl   = 127.0.0.1:{self.poly.port}",
                 f"  uptime    = {h}h {m}m {s}s",
@@ -1058,12 +1386,14 @@ def make_toolbar(completer):
         # cursor position to pick the right one.
         var_to_params = {}  # varname -> [param_idx, ...]
         for i, p in enumerate(params):
-            if p in ('"thy"', '["thy"]', 'name', 'thy'):
+            if p in ('"thy"', '["thy"]', 'name', 'thy',
+                     '"THEORY"', '"THEORY"', '"FILE"'):
                 var_to_params.setdefault('thy', []).append(i)
             elif p == 'id':
                 var_to_params.setdefault('sid', []).append(i)
                 var_to_params.setdefault('rid', []).append(i)
-            elif p in ('idx', 'state_idx', 'secs', 'start', 'stop', 'n', 'cmd_id'):
+            elif p in ('idx', 'state_idx', 'secs', 'start', 'stop',
+                        'n', 'cmd_id', 'LINE', 'START', 'END'):
                 var_to_params.setdefault('num', []).append(i)
             elif p in ('"isar text"', '"text"', '"query"', 'path', 'node'):
                 var_to_params.setdefault('sid', []).append(i)
@@ -1131,6 +1461,10 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                         f"in={c['bytes_in']}B out={c['bytes_out']}B")
         elif cmd == "/info":
             out(server.info_text(ansi=True))
+        elif cmd in ("/sources", "/timings", "/source-map", "/resolve"):
+            result = server._handle_local_command(stripped, ansi=True)
+            if result is not None:
+                out(result)
         elif cmd == "/quit":
             return True
         elif cmd == "/verbosity":
@@ -1161,6 +1495,12 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
             out(f"  {YELLOW}/show_types{RST}      Toggle type annotations (currently {types_state})")
             out(f"  {YELLOW}/quit{RST}            Shut down the server")
             out(f"  {YELLOW}/help{RST}            This help")
+            if server.heap_info:
+                out(f"\n{BOLD}Heap DB commands:{RST}")
+                out(f"  {YELLOW}/sources{RST}                        List/verify source files")
+                out(f"  {YELLOW}/timings [--top N]{RST}              Command timing hotspots")
+                out(f"  {YELLOW}/source-map \"THEORY\"{RST}            Segment-to-line mapping")
+                out(f"  {YELLOW}/resolve \"THEORY\" LINE{RST}  Find theory:segment for location")
             out("Anything else is sent to the REPL.")
         else:
             out(f"{RED}Unknown command: {cmd}{RST} (try /help)")
@@ -1224,9 +1564,11 @@ def console_loop(server, session, output_fn=None):
     out = output_fn or server.mgmt_output
     cmd_lines = []
     last_interrupt = 0
+    host_prefix = (f"<ansicyan>[{server.remote_host}]</ansicyan>"
+                   if server.remote_host else "")
     while server.running:
         try:
-            prompt = HTML("<b><ansicyan>%&gt;</ansicyan></b> ") if not cmd_lines \
+            prompt = HTML(f"{host_prefix}<b><ansicyan>%&gt;</ansicyan></b> ") if not cmd_lines \
                 else HTML("<ansigray>.. </ansigray>")
             line = session.prompt(prompt, bottom_toolbar=make_toolbar(session.completer))
             last_interrupt = 0
@@ -1534,6 +1876,14 @@ def main():
                    help="Path to Isabelle executable (auto-detected if not provided)")
     p.add_argument("--session", default="HOL")
     p.add_argument("--dir", default=None)
+    p.add_argument("--heaps", default=None,
+                   help="Heaps base directory (overrides auto-discovery)")
+    p.add_argument("--no-heap-db", action="store_true",
+                   help="Disable heap DB integration (source verification, timings)")
+    p.add_argument("--repl-only", action="store_true",
+                   help="Plain REPL mode: skip heap DB, source matching, and other extras")
+    p.add_argument("--kill-orphaned-processes", action="store_true",
+                   help="Kill orphaned remote Bash.Server processes (>6h old, PPID=1)")
     p.add_argument("-v", "--verbose", action="store_true",
                    help="Print the command being invoked")
     p.add_argument("--no-bash-server", action="store_true",
@@ -1563,6 +1913,8 @@ def main():
                    help="Unix socket path for --daemon/--attach "
                         "(default: auto-derived from TCP port)")
     args = p.parse_args()
+    if args.repl_only:
+        args.no_heap_db = True
 
     # Find Isabelle installation
     try:
@@ -1707,6 +2059,46 @@ def main():
             """Startup log: plain in daemon mode, styled otherwise."""
             print(msg, flush=True)
 
+        # Detect remote execution via ISABELLE_REMOTE
+        remote_host = None
+        isa_remote_env = os.environ.get("ISABELLE_REMOTE", "")
+        if isa_remote_env:
+            m = re.search(r'--host\s+(\S+)', isa_remote_env)
+            if m:
+                remote_host = m.group(1)
+                _log(f"Remote: {remote_host}" if quiet else
+                     f"{CYAN}● Remote execution: {BOLD}{remote_host}{RST}")
+                # Check for orphaned Bash.Server process trees (>6h old, PPID=1).
+                # Only match setsid (tree root), not descendants.
+                try:
+                    result = subprocess.run(
+                        ["ssh", remote_host,
+                         "ps -eo pid,ppid,etimes,comm "
+                         "| awk '$2==1 && $3>21600 && $4==\"setsid\" {print $1}'"],
+                        capture_output=True, text=True, timeout=10)
+                    orphan_pids = [p for p in result.stdout.strip().split() if p]
+                    if orphan_pids:
+                        n = len(orphan_pids)
+                        if args.kill_orphaned_processes:
+                            # Kill process groups (setsid makes PID == PGID)
+                            kill_cmd = "kill -- " + " ".join(f"-{p}" for p in orphan_pids) + " 2>/dev/null"
+                            subprocess.run(
+                                ["ssh", remote_host, kill_cmd],
+                                capture_output=True, timeout=10)
+                            _log(f"Killed {n} orphaned Bash.Server tree(s) on {remote_host}"
+                                 if quiet else
+                                 f"{YELLOW}Killed {n} orphaned Bash.Server tree(s) "
+                                 f"on {remote_host}{RST}")
+                        else:
+                            _log(f"WARNING: {n} orphaned Bash.Server tree(s) on {remote_host} "
+                                 f"(use --kill-orphaned-processes to clean up)"
+                                 if quiet else
+                                 f"{YELLOW}WARNING: {n} orphaned Bash.Server tree(s) "
+                                 f"on {remote_host} "
+                                 f"(use --kill-orphaned-processes to clean up){RST}")
+                except Exception:
+                    pass
+
         if not args.no_bash_server:
             _log("Starting Bash.Server..." if quiet else
                  f"{BOLD}Starting Bash.Server...{RST}")
@@ -1774,17 +2166,83 @@ def main():
              f"{GREEN}● ML_Repl ready on "
              f"127.0.0.1:{poly.port}{RST}")
 
+    # Heap DB integration
+    heap_info = None
+    if not args.no_heap_db:
+        try:
+            from heap_info import HeapInfo
+            # Ask the running ML process for its platform (e.g. "arm64_32-darwin").
+            # ML_System.platform is reliable; isabelle getenv ML_PLATFORM is not
+            # (empty outside a running Isabelle process).
+            # Determine the ML platform directory name.
+            # Remote case (ISABELLE_REMOTE set): parse ML_platform from it,
+            # because the ML process only knows the remote platform name.
+            # Local case: ML_System.platform is correct.
+            ml_system = subprocess.check_output(
+                [args.isabelle, "getenv", "-b", "ML_SYSTEM"],
+                text=True, timeout=10).strip()
+            isa_remote = os.environ.get("ISABELLE_REMOTE", "")
+            m = re.search(r'-o\s+ML_platform=(\S+)', isa_remote)
+            if m:
+                ml_platform = m.group(1)
+            else:
+                ml_platform = strip_yxml(conn.send(
+                    'val _ = writeln (ML_System.platform);')).strip()
+            ml_identifier = (ml_system + "_" + ml_platform
+                             ) if ml_system and ml_platform else ""
+            heap_info = HeapInfo.discover(args.session, args.isabelle,
+                                          ml_identifier=ml_identifier,
+                                          heaps_dir=args.heaps)
+            if heap_info:
+                _log(f"Heap DB: {heap_info.db_path}" if quiet else
+                     f"{GREEN}● Heap DB: {heap_info.db_path}{RST}")
+                missing_vars = heap_info.unresolved_env_vars()
+                if missing_vars:
+                    for var in sorted(missing_vars):
+                        _log(f"WARNING: ${var} is not set — "
+                             f"source files using it cannot be resolved. "
+                             f"Set it with: export {var}=/path/to/sources"
+                             if quiet else
+                             f"{YELLOW}WARNING: ${var} is not set — "
+                             f"source files using it cannot be resolved. "
+                             f"Set it with: export {var}=/path/to/sources{RST}")
+                else:
+                    sources = heap_info.source_files()
+                    verified = sum(1 for s in sources
+                                   if s["status"] == "verified")
+                    changed = sum(1 for s in sources
+                                  if s["status"] == "changed")
+                    if changed:
+                        _log(f"Sources: {verified} verified, "
+                             f"{changed} changed since heap build"
+                             if quiet else
+                             f"{YELLOW}Sources: {verified} verified, "
+                             f"{changed} changed since heap build{RST}")
+                    elif verified:
+                        _log(f"Sources: {verified} verified" if quiet else
+                             f"{DIM}Sources: {verified} verified{RST}")
+            else:
+                _log("No heap DB found" if quiet else
+                     f"{DIM}No heap DB found "
+                     f"(timing/source features unavailable){RST}")
+        except Exception as e:
+            _log(f"Heap DB error: {e}" if quiet else
+                 f"{YELLOW}Heap DB error: {e}{RST}")
+
     def _signal_cleanup(signum, frame):
         if poly:
             poly.close()
         if bash_server:
             bash_server.close()
+        if heap_info:
+            heap_info.close()
         sys.exit(128 + signum)
     signal.signal(signal.SIGTERM, _signal_cleanup)
     signal.signal(signal.SIGHUP, _signal_cleanup)
 
     server = Server(conn, args.port, host="127.0.0.1",
-                    session=args.session, directory=args.dir)
+                    session=args.session, directory=args.dir,
+                    heap_info=heap_info, remote_host=remote_host)
     mgmt_output = server.mgmt_output
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
@@ -1887,7 +2345,7 @@ def main():
     else:
         histfile = os.path.expanduser("~/.ir_repl_history")
         completer = IrCompleter()
-        # Seed completer with loaded theories
+        # Seed completer with loaded theories and source files
         with server.lock:
             completer.learn_theories(server.poly.send("Ir.theories ();"))
         session = PromptSession(history=FileHistory(histfile), completer=completer,
@@ -1898,19 +2356,26 @@ def main():
         except KeyboardInterrupt:
             pass
 
-    mgmt_output("Shutting down...")
+    mgmt_output(f"{DIM}Shutting down...{RST}")
     if mcp_proc and mcp_proc.poll() is None:
+        mgmt_output(f"{DIM}  stopping MCP server...{RST}")
         mcp_proc.terminate()
         try:
             mcp_proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             mcp_proc.kill()
+    mgmt_output(f"{DIM}  closing TCP server...{RST}")
     server.shutdown()
+    mgmt_output(f"{DIM}  closing ML connection...{RST}")
     conn.close()
     if poly:
+        mgmt_output(f"{DIM}  stopping Poly/ML process...{RST}")
         poly.close()
     if bash_server:
+        mgmt_output(f"{DIM}  stopping Bash.Server...{RST}")
         bash_server.close()
+    if heap_info:
+        heap_info.close()
 
 
 if __name__ == "__main__":
