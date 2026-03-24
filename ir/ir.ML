@@ -21,18 +21,16 @@ sig
 
   val init : string -> string list -> unit
   val init_from_document : string -> string -> int -> unit
-  val fork : string -> int -> unit
-  val focus : string -> unit
-  val step : string -> unit
-  val step_file : string -> unit
-  val show : unit -> unit
-  val state : int -> unit
-  val text : unit -> unit
-  val edit : int -> string -> unit
-  val replay : unit -> unit
-  val truncate : int -> unit
-  val back : unit -> unit
-  val merge : unit -> unit
+  val fork : string -> string -> int -> unit
+  val step : string -> string -> unit
+  val show : string -> unit
+  val state : string -> int -> unit
+  val text : string -> unit
+  val edit : string -> int -> string -> unit
+  val replay : string -> unit
+  val truncate : string -> int -> unit
+  val back : string -> unit
+  val merge : string -> unit
 
   val remove : string -> unit
   val repls : unit -> unit
@@ -40,10 +38,10 @@ sig
   val load_theory : string -> unit
   val source : string -> int -> int -> unit
   val source_map : string -> int -> int -> unit
-  val sledgehammer : int -> unit
+  val sledgehammer : string -> int -> unit
   val sledgehammer_state : (Proof.state * int) option Synchronized.var
   val sledgehammer_result : string Synchronized.var
-  val find_theorems : int -> string -> unit
+  val find_theorems : string -> int -> string -> unit
   val timeout : int -> unit
   val is_interactive_session : unit -> bool
   val help : unit -> unit
@@ -223,17 +221,10 @@ val sledgehammer_result : string Synchronized.var =
 val repl_tab : repl Symtab.table Synchronized.var
   = Synchronized.var "Ir.repls" Symtab.empty;
 
-val current_repl : string Synchronized.var
-  = Synchronized.var "Ir.current_repl" "";
-
 fun the_repl id =
   case Symtab.lookup (Synchronized.value repl_tab) id of
     SOME r => r
   | NONE => error ("No REPL " ^ quote id);
-
-fun the_current () =
-  let val id = Synchronized.value current_repl
-  in if id = "" then error "No current REPL" else (id, the_repl id) end;
 
 fun update_repl id r =
   Synchronized.change repl_tab (Symtab.update (id, r));
@@ -303,8 +294,7 @@ fun init id specs =
                 Toplevel.make_state (SOME thy)) end
       val r : repl = {origin = origin, base_state = st, steps = []}
   in update_repl id r;
-     Synchronized.change current_repl (K id);
-     out ("Created REPL " ^ quote id ^ ", set as current")
+     out ("Created REPL " ^ quote id)
   end;
 
 fun init_from_document id node_name command_id =
@@ -330,18 +320,16 @@ fun init_from_document id node_name command_id =
     val r : repl = {origin = From_Document (node_name, command_id),
                     base_state = toplevel_st, steps = []}
   in update_repl id r;
-     Synchronized.change current_repl (K id);
      out ("Created REPL " ^ quote id ^ " from document " ^ quote node_name ^
           " command " ^ string_of_int command_id ^
-          (if Toplevel.is_proof toplevel_st then " [proof]" else " [theory]") ^
-          ", set as current")
+          (if Toplevel.is_proof toplevel_st then " [proof]" else " [theory]"))
   end;
 
-fun fork id state_idx =
-  let val _ = if Symtab.defined (Synchronized.value repl_tab) id
-              then error ("REPL " ^ quote id ^ " already exists")
+fun fork new_id parent_id state_idx =
+  let val _ = if Symtab.defined (Synchronized.value repl_tab) new_id
+              then error ("REPL " ^ quote new_id ^ " already exists")
               else ()
-      val (pid, parent) = the_current ()
+      val parent = the_repl parent_id
       val steps = #steps parent
       val n = length steps
       (* Use same indexing as state: 0=base, 1=after step 0, ... *)
@@ -350,20 +338,14 @@ fun fork id state_idx =
                else if i >= 1 andalso i <= n then #post_state (nth steps (i - 1))
                else error ("State " ^ string_of_int state_idx ^ " out of range (0.." ^
                            string_of_int n ^ ")")
-      val r : repl = {origin = From_REPL (pid, i), base_state = st, steps = []}
-  in update_repl id r;
-     Synchronized.change current_repl (K id);
-     out ("Forked REPL " ^ quote id ^ " from " ^ quote pid ^
-          " at state " ^ string_of_int i ^ ", set as current")
+      val r : repl = {origin = From_REPL (parent_id, i), base_state = st, steps = []}
+  in update_repl new_id r;
+     out ("Forked REPL " ^ quote new_id ^ " from " ^ quote parent_id ^
+          " at state " ^ string_of_int i)
   end;
 
-fun focus id =
-  (ignore (the_repl id);
-   Synchronized.change current_repl (K id);
-   out ("Focused on REPL " ^ quote id));
-
-fun step text =
-  let val (id, r) = the_current ()
+fun step id text =
+  let val r = the_repl id
       val pre = last_state r
       val post = exec_text text pre
       val s : repl_step = {text = text, pre_state = pre, post_state = post, stale = false}
@@ -373,13 +355,10 @@ fun step text =
      out (pretty_state post)
   end;
 
-fun step_file path = step (File.read (Path.explode path));
-
-fun state state_idx =
-  let val (_, r) = the_current ()
+fun state id state_idx =
+  let val r = the_repl id
       val steps = #steps r
       val n = length steps
-      (* state 0 = base, state 1 = after step 0, ..., state n = after step n-1 *)
       val i = if state_idx < 0 then n + 1 + state_idx else state_idx
       val st = if i = 0 then #base_state r
                else if i >= 1 andalso i <= n then #post_state (nth steps (i - 1))
@@ -387,9 +366,8 @@ fun state state_idx =
                            string_of_int n ^ ")")
   in out (pretty_state st) end;
 
-fun show () =
-  let val (id, r) = the_current ()
-      val cur_id = Synchronized.value current_repl
+fun show id =
+  let val r = the_repl id
       val orig = case #origin r of
           From_Theory t => "theory " ^ t
         | From_Segment (t, i) => t ^ ":" ^ string_of_int i
@@ -397,7 +375,6 @@ fun show () =
         | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i
       val n = length (#steps r)
       val _ = out ("REPL " ^ quote id ^
-                   (if id = cur_id then " (current)" else "") ^
                    " (" ^ string_of_int n ^ " steps, from " ^ orig ^ ")")
       val _ = out ("  base  level=" ^ string_of_int (Toplevel.level (#base_state r)))
       val thy = Toplevel.theory_of (#base_state r)
@@ -412,13 +389,13 @@ fun show () =
             end
   in pr 0 (#steps r) end;
 
-fun text () =
-  let val (_, r) = the_current ()
+fun text id =
+  let val r = the_repl id
       val t = map #text (#steps r)
   in out (String.concatWith "\n" t) end;
 
-fun replay () =
-  let val (id, r) = the_current ()
+fun replay id =
+  let val r = the_repl id
       fun go _ [] acc = rev acc
         | go prev_post (s :: rest) acc =
             if #stale (s : repl_step) then
@@ -433,8 +410,8 @@ fun replay () =
      out ("Replayed " ^ string_of_int (length (filter #stale (#steps r))) ^ " stale steps")
   end;
 
-fun edit idx new_text =
-  let val (id, r) = the_current ()
+fun edit id idx new_text =
+  let val r = the_repl id
       val steps = #steps r
       val _ = if idx < 0 orelse idx >= length steps
               then error ("Step " ^ string_of_int idx ^ " out of range") else ()
@@ -451,11 +428,11 @@ fun edit idx new_text =
   in update_repl id r';
      out ("Edited step " ^ string_of_int idx ^ ", " ^
           string_of_int (length after_steps) ^ " subsequent steps marked stale");
-     if #auto_replay (get_cfg ()) andalso not (null after_steps) then replay () else ()
+     if #auto_replay (get_cfg ()) andalso not (null after_steps) then replay id else ()
   end;
 
-fun truncate raw_idx =
-  let val (id, r) = the_current ()
+fun truncate id raw_idx =
+  let val r = the_repl id
       val steps = #steps r
       val n = length steps
       val idx = if raw_idx < 0 then n + raw_idx - 1 else raw_idx
@@ -477,25 +454,22 @@ fun truncate raw_idx =
           string_of_int dropped ^ " steps")
   end;
 
-fun back () = truncate ~1;
+fun back id = truncate id ~1;
 
-fun merge () =
-  let val (id, r) = the_current ()
+fun merge id =
+  let val r = the_repl id
       val (pid, pidx) =
         case #origin r of
           From_REPL (p, i) => (p, i)
         | _ => error ("REPL " ^ quote id ^ " is not a sub-REPL")
       val merged_text = String.concatWith "\n" (map #text (#steps r))
-      (* Switch to parent, edit the step at the fork point *)
       val _ = Synchronized.change repl_tab (Symtab.delete_safe id)
-      val _ = Synchronized.change current_repl (K pid)
-      (* pidx is state index; step pidx has pre_state = state pidx *)
       val target = pidx
   in if target < length (#steps (the_repl pid))
-     then (edit target merged_text;
+     then (edit pid target merged_text;
            out ("Merged " ^ quote id ^ " into " ^ quote pid ^
                 " (replaced step " ^ string_of_int target ^ ")"))
-     else (step merged_text;
+     else (step pid merged_text;
            out ("Merged " ^ quote id ^ " into " ^ quote pid ^
                 " (appended as new step)"))
   end;
@@ -510,17 +484,11 @@ fun remove id =
       val to_remove = id :: filter is_descendant all_ids
       val _ = List.app (fn rid =>
         Synchronized.change repl_tab (Symtab.delete_safe rid)) to_remove
-      val _ = if member (op =) to_remove (Synchronized.value current_repl)
-              then (Synchronized.change current_repl (K "");
-                    out "Current REPL was removed. Use Ir.focus or Ir.init to select another.")
-              else ()
   in out ("Removed " ^ commas (map quote to_remove)) end;
 
 fun repls () =
-  let val cur_id = Synchronized.value current_repl
-  in Symtab.fold (fn (id, r : repl) => fn () =>
+  Symtab.fold (fn (id, r : repl) => fn () =>
     let val n = length (#steps r)
-        val is_cur = id = cur_id
         val orig = case #origin r of
             From_Theory t => "theory " ^ t
           | From_Segment (t, i) => t ^ ":" ^ string_of_int i
@@ -530,9 +498,8 @@ fun repls () =
         val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
             (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
             ", from " ^ orig ^ ")"
-    in out (if is_cur then "  > " ^ desc else "    " ^ desc)
-    end) (Synchronized.value repl_tab) ()
-  end;
+    in out ("    " ^ desc)
+    end) (Synchronized.value repl_tab) ();
 
 (* Lists theories in the initial heap plus those loaded via load_theory. *)
 fun theories () =
@@ -556,12 +523,9 @@ fun load_theory name =
 
 (* Sledgehammer via compiler bridge *)
 
-fun find_theorems max_results query =
-  let val st = last_state (snd (the_current ()))
-  in if not (Toplevel.is_theory st orelse Toplevel.is_proof st)
-     then out "Unknown context"
-     else
-  let val ctxt = Toplevel.context_of st
+fun find_theorems id max_results query =
+  let val st = last_state (the_repl id)
+      val ctxt = Toplevel.context_of st
       val opt_goal = try (fn () => #goal (Proof.simple_goal (Toplevel.proof_of st))) ()
       val criteria = Find_Theorems.read_query Position.none query
       val limit = if max_results > 0 then SOME max_results else NONE
@@ -576,11 +540,10 @@ fun find_theorems max_results query =
              (if returned < found
               then " (" ^ string_of_int returned ^ " displayed)" else ""))
       val lines = map (fn t => Pretty.string_of (Find_Theorems.pretty_thm ctxt t)) theorems
-  in out (tally ^ ":\n" ^ String.concatWith "\n" (rev lines)) end
-  end;
+  in out (tally ^ ":\n" ^ String.concatWith "\n" (rev lines)) end;
 
-fun sledgehammer timeout_secs =
-  let val st = last_state (snd (the_current ()))
+fun sledgehammer id timeout_secs =
+  let val st = last_state (the_repl id)
       val prf = Toplevel.proof_of st
       val thy = Toplevel.theory_of st
       (* Sledgehammer structures are loaded by HOL/Sledgehammer.thy, which is
@@ -615,62 +578,57 @@ fun sledgehammer timeout_secs =
 fun help () = out
   "=== I/R API ===\n\
   \\n\
-  \  Sessions start in the context of a named theory -- do NOT issue\n\
-  \  'theory' commands. Steps are Isar: lemma, definition, fun, by, etc.\n\
+  \  All REPL operations take an explicit REPL id.\n\
   \\n\
-  \  init id [specs]    create REPL from [\"Theory\"], [\"Theory:idx\"],\n\
-  \                     or [\"T1\",\"T2\",...] (merges theories)\n\
-  \  fork id state_idx  fork sub-REPL from current at state (~1=latest)\n\
-  \  focus id           switch current REPL\n\
-  \  step \"isar text\"   append step to current REPL\n\
-  \  step_file path     append step from file (supports unicode)\n\
-  \  show ()            describe current REPL (origin, steps, staleness)\n\
-  \  state idx          show Toplevel.state (0=base, 1=after step 0, ~1=latest)\n\
-  \  text ()            print concatenated text of current REPL\n\
-  \  edit idx \"text\"    edit step, replay if auto_replay=true\n\
-  \  replay ()          re-execute stale steps\n\
-  \  truncate idx       discard steps after idx (negative: ~N = revert last N steps)\n\
-  \  back ()            revert last step (synonym for truncate ~1)\n\
-  \  merge ()           inline current sub-REPL into parent\n\
-  \  sledgehammer secs  run sledgehammer on current proof state\n\
-  \  find_theorems n q  search theorems (n=max results, 0=unlimited)\n\
-  \  timeout secs       set step timeout (0=unlimited, default 5s)\n\
-  \  remove id          remove REPL and its sub-REPLs\n\
-  \  repls ()           list all REPLs\n\
-  \  theories ()   list loaded theories (heap + load_theory)\n\
-  \  load_theory s  load theory by name, e.g. \"HOL-Library.Multiset\"\n\
-  \  source thy s e   list command spans (s e = range, ~N = from end)\n\
-\  source_map thy s e  segment-to-position map (s e = line range, ~N from end)\n\
-  \  config f           update config: color, show_ignored, full_spans,\n\
-  \                     show_theory_in_source, auto_replay\n\
-  \  help ()            this help\n\
+  \  init id [specs]         create REPL from [\"Theory\"], [\"Theory:idx\"],\n\
+  \                          or [\"T1\",\"T2\",...] (merges theories)\n\
+  \  fork id new_id state_idx  fork sub-REPL from id at state (~1=latest)\n\
+  \  step id \"isar text\"    append step to REPL\n\
+  \  show id                describe REPL (origin, steps, staleness)\n\
+  \  state id idx           show Toplevel.state (0=base, ~1=latest)\n\
+  \  text id                print concatenated text of REPL\n\
+  \  edit id idx \"text\"     edit step, replay if auto_replay=true\n\
+  \  replay id              re-execute stale steps\n\
+  \  truncate id idx        discard steps after idx (~N = revert last N)\n\
+  \  back id                revert last step (synonym for truncate ~1)\n\
+  \  merge id               inline sub-REPL into parent\n\
+  \  sledgehammer id secs   run sledgehammer on proof state\n\
+  \  find_theorems id n q   search theorems (n=max, 0=unlimited)\n\
+  \  timeout secs           set step timeout (0=unlimited, default 5s)\n\
+  \  remove id              remove REPL and its sub-REPLs\n\
+  \  repls ()               list all REPLs\n\
+  \  theories ()            list loaded theories\n\
+  \  load_theory s          load theory by name\n\
+  \  source thy s e         list command spans\n\
+  \  source_map thy s e     segment-to-position map\n\
+  \  config f               update config\n\
+  \  help ()                this help\n\
   \\n\
   \=== Quick start ===\n\
   \\n\
-  \  Ir.init \"R\" [\"MySession.MyTheory\"];\n\
-  \  Ir.step \"lemma \\\"True\\\"\";\n\
-  \  Ir.step \"by simp\";\n\
-  \  Ir.show ();\n\
-  \  Ir.state ~1;\n\
+  \  Ir.init \"R\" [\"Main\"];\n\
+  \  Ir.step \"R\" \"lemma \\\"True\\\"\";\n\
+  \  Ir.step \"R\" \"by simp\";\n\
+  \  Ir.show \"R\";\n\
+  \  Ir.state \"R\" ~1;\n\
   \\n\
   \=== Forking and merging ===\n\
   \\n\
-  \  Ir.step \"lemma \\\"P\\\"\";\n\
-  \  Ir.step \"sorry\";\n\
-  \  Ir.fork \"S\" 1;          (* fork from state before sorry *)\n\
-  \  Ir.step \"by auto\";\n\
-  \  Ir.merge ();             (* replace sorry with proof *)\n\
+  \  Ir.step \"R\" \"lemma \\\"P\\\"\";\n\
+  \  Ir.step \"R\" \"sorry\";\n\
+  \  Ir.fork \"R\" \"S\" 1;       (* fork from state before sorry *)\n\
+  \  Ir.step \"S\" \"by auto\";\n\
+  \  Ir.merge \"S\";             (* replace sorry with proof *)\n\
   \\n\
   \=== Editing ===\n\
   \\n\
-  \  Ir.edit 0 \"lemma \\\"Q\\\"\";  (* edit first step, replays rest *)\n\
-  \  Ir.truncate 1;             (* keep only steps 0 and 1 *)\n\
+  \  Ir.edit \"R\" 0 \"lemma \\\"Q\\\"\";  (* edit first step *)\n\
+  \  Ir.truncate \"R\" 1;             (* keep only steps 0 and 1 *)\n\
   \\n\
   \=== Segments (record_theories) ===\n\
   \\n\
-  \  Ir.source \"MySession.MyTheory\" 0 ~1;  (* all *)\n\
-  \  Ir.source \"MySession.MyTheory\" 0 10;  (* first 11 *)\n\
-  \  Ir.init \"R\" [\"MySession.MyTheory:42\"];    (* from source 42 *)";
+  \  Ir.source \"MySession.MyTheory\" 0 ~1;\n\
+  \  Ir.init \"R\" [\"MySession.MyTheory:42\"];";
 
 end;
 

@@ -7,15 +7,48 @@ Usage: python3 test_repl.py [--isabelle PATH] [--session SESSION] [--dir DIR]
 """
 import argparse
 import os
+import random
 import signal
 import socket
 import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SENTINEL = "<<DONE>>"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def find_isabelle(isabelle_arg=None):
+    """Find Isabelle installation (same logic as repl.py)."""
+    candidates = []
+    if isabelle_arg:
+        expanded = os.path.expanduser(isabelle_arg)
+        if os.path.isdir(expanded):
+            candidates.extend([
+                os.path.join(expanded, "bin", "isabelle"),
+                os.path.join(expanded, "isabelle"),
+            ])
+        else:
+            candidates.append(expanded)
+    else:
+        if sys.platform == "darwin":
+            candidates.extend([
+                "/Applications/Isabelle2025-2.app/bin/isabelle",
+                os.path.expanduser("~/Isabelle2025-2.app/bin/isabelle"),
+                os.path.expanduser("~/Isabelle2025-2-experimental.app/bin/isabelle"),
+            ])
+        else:
+            candidates.extend([
+                os.path.expanduser("~/Isabelle2025-2/bin/isabelle"),
+            ])
+    for c in candidates:
+        if os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    raise RuntimeError(
+        f"Isabelle not found. Tried: {', '.join(candidates)}\n"
+        f"Use --isabelle to specify the path.")
 
 # ANSI
 _RED = "\033[31m"
@@ -113,40 +146,257 @@ def run_test(name, fn):
         return False
 
 
+def q(s):
+    """ML-quote a string."""
+    return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"'
+
+
+def core_tests(sock, prefix):
+    """Generate reusable core tests. Returns list of (name, fn) pairs.
+
+    Each test is self-contained: creates REPLs with {prefix}_ prefixed IDs
+    and removes them afterwards. Can be run concurrently with different
+    prefixes on separate connections.
+    """
+    r = f"{prefix}_r"   # shared REPL for sequential tests
+    tests = []
+
+    def test_help():
+        out = send_recv(sock, 'Ir.help ();')
+        assert "Ir.init" in out, f"Expected help text, got:\n{out}"
+    tests.append(("help", test_help))
+
+    def test_theories():
+        out = send_recv(sock, 'Ir.theories ();')
+        assert "Main" in out, f"Expected Main theory, got:\n{out}"
+    tests.append(("theories", test_theories))
+
+    def test_init_show():
+        send_recv(sock, f'Ir.init {q(r)} ["Main"];')
+        out = send_recv(sock, f'Ir.show {q(r)};')
+        assert r in out, f"Expected REPL {r}, got:\n{out}"
+    tests.append(("init_show", test_init_show))
+
+    def test_step():
+        out = send_recv(sock, f'Ir.step {q(r)} "lemma dummy: True by simp";')
+        assert "theorem dummy: True" in out, f"Unexpected output:\n{out}"
+    tests.append(("step", test_step))
+
+    def test_state():
+        send_recv(sock, f'Ir.step {q(r)} "lemma foo: True";')
+        out = send_recv(sock, f'Ir.state {q(r)} ~1;')
+        assert "goal (1 subgoal):" in out, f"Unexpected state:\n{out}"
+    tests.append(("state", test_state))
+
+    def test_text():
+        out = send_recv(sock, f'Ir.text {q(r)};')
+        assert "lemma" in out, f"Expected lemma text, got:\n{out}"
+    tests.append(("text", test_text))
+
+    def test_edit_replay():
+        send_recv(sock, f'Ir.edit {q(r)} 0 "lemma True by auto";')
+        send_recv(sock, f'Ir.replay {q(r)};')
+    tests.append(("edit_replay", test_edit_replay))
+
+    def test_fork_merge():
+        fr = f"{prefix}_fork"
+        send_recv(sock, f'Ir.fork {q(r)} {q(fr)} 0;')
+        send_recv(sock, f'Ir.step {q(fr)} "lemma True by auto";')
+        send_recv(sock, f'Ir.merge {q(fr)};')
+    tests.append(("fork_merge", test_fork_merge))
+
+    def test_truncate_negative():
+        t = f"{prefix}_trn"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma a: True by simp";')
+        send_recv(sock, f'Ir.step {q(t)} "lemma b: True by simp";')
+        send_recv(sock, f'Ir.step {q(t)} "lemma c: True by simp";')
+        out = send_recv(sock, f'Ir.truncate {q(t)} ~1;')
+        assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+        out = send_recv(sock, f'Ir.truncate {q(t)} ~1;')
+        assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "1 step" in out, f"Expected 1 step, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("truncate_negative", test_truncate_negative))
+
+    def test_truncate_negative_multi():
+        t = f"{prefix}_trn2"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma a: True by simp";')
+        send_recv(sock, f'Ir.step {q(t)} "lemma b: True by simp";')
+        send_recv(sock, f'Ir.step {q(t)} "lemma c: True by simp";')
+        out = send_recv(sock, f'Ir.truncate {q(t)} ~2;')
+        assert "dropped 2" in out, f"Expected dropped 2, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "1 step" in out, f"Expected 1 step, got:\n{out}"
+        out = send_recv(sock, f'Ir.truncate {q(t)} ~1;')
+        assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "0 step" in out, f"Expected 0 steps, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("truncate_negative_multi", test_truncate_negative_multi))
+
+    def test_back():
+        t = f"{prefix}_bk"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma x: True by simp";')
+        send_recv(sock, f'Ir.step {q(t)} "lemma y: True by simp";')
+        out = send_recv(sock, f'Ir.back {q(t)};')
+        assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "1 step" in out, f"Expected 1 step, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("back", test_back))
+
+    def test_back_to_empty():
+        t = f"{prefix}_bke"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma z: True by simp";')
+        out = send_recv(sock, f'Ir.back {q(t)};')
+        assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "0 step" in out, f"Expected 0 steps, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("back_to_empty", test_back_to_empty))
+
+    def test_repls():
+        out = send_recv(sock, 'Ir.repls ();')
+        assert r in out, f"Expected {r} in repls, got:\n{out}"
+    tests.append(("repls", test_repls))
+
+    def test_remove():
+        t = f"{prefix}_tmp"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("remove", test_remove))
+
+    def test_config():
+        send_recv(sock, 'Ir.config (fn c => '
+                  '{color = false, show_ignored = #show_ignored c, '
+                  'full_spans = #full_spans c, '
+                  'show_theory_in_source = #show_theory_in_source c, '
+                  'auto_replay = #auto_replay c});')
+    tests.append(("config", test_config))
+
+    def test_multiline_step():
+        t = f"{prefix}_ml1"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.step {q(t)} "lemma ml_test: True\\nby simp";')
+        assert "ml_test" in out, f"Expected ml_test theorem, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("multiline_step", test_multiline_step))
+
+    def test_multiline_step_raw_newline():
+        t = f"{prefix}_ml2"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.step {q(t)} "lemma ml_raw: True\nby simp";')
+        assert "ml_raw" in out, f"Expected ml_raw theorem, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("multiline_step_raw_newline", test_multiline_step_raw_newline))
+
+    def test_ft_name():
+        t = f"{prefix}_ft1"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.find_theorems {q(t)} 3 "name: conjI";')
+        assert "conjI" in out, f"Expected conjI, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("ft_name", test_ft_name))
+
+    def test_ft_after_step():
+        t = f"{prefix}_ft2"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma {prefix}_lem: True by simp";')
+        out = send_recv(sock, f'Ir.find_theorems {q(t)} 3 "name: {prefix}_lem";')
+        assert f"{prefix}_lem" in out, f"Expected {prefix}_lem, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("ft_after_step", test_ft_after_step))
+
+    def test_ft_pattern():
+        t = f"{prefix}_ftp"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.find_theorems {q(t)} 3 "\\\"(_ + _) + _ = _ + (_ + _)\\\"";')
+        assert "add_ac" in out, f"Expected add_ac, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("ft_pattern", test_ft_pattern))
+
+    def test_ft_simp():
+        t = f"{prefix}_fts"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.find_theorems {q(t)} 5 "simp:\\\"_ + _\\\"";')
+        assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("ft_simp", test_ft_simp))
+
+    def test_ft_solves():
+        t = f"{prefix}_ftso"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma test_goal: True";')
+        out = send_recv(sock, f'Ir.find_theorems {q(t)} 5 "solves";')
+        assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
+        send_recv(sock, f'Ir.step {q(t)} "by simp";')
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("ft_solves", test_ft_solves))
+
+    def test_ft_negation():
+        t = f"{prefix}_ftn"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.find_theorems {q(t)} 5 "-name:conjI";')
+        assert "conjI" not in out, f"Expected no conjI, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("ft_negation", test_ft_negation))
+
+    # Cleanup: remove the shared REPL
+    def cleanup():
+        send_recv(sock, f'Ir.remove {q(r)};')
+    tests.append(("cleanup", cleanup))
+
+    return tests
+
+
 def main():
     p = argparse.ArgumentParser(description="Test repl.py TCP server")
-    p.add_argument("--isabelle", default=os.environ.get(
-        "ISABELLE", "isabelle"))
+    p.add_argument("--isabelle", default=None,
+                   help="Path to Isabelle executable (auto-detected if not provided)")
     p.add_argument("--session", default="HOL")
     p.add_argument("--dir", default=None)
     p.add_argument("--server-only", action="store_true",
                    help="Pass --server-only to repl.py")
     p.add_argument("--port", type=int, default=9147,
                    help="Port to probe for an existing repl.py (default: 9147)")
+    p.add_argument("--token", default=None,
+                   help="Auth token for an existing repl.py (reads IR_AUTH_TOKEN env if not set)")
     p.add_argument("--require-source", action="store_true",
                    help="Fail if source commands are not available")
+    p.add_argument("--stress-runs", type=int, default=100,
+                   help="Number of core test suite runs in the stress test (default: 100)")
+    p.add_argument("--stress-clients", type=int, default=20,
+                   help="Max concurrent clients in the stress test (default: 20)")
+    p.add_argument("--stress-drop-pct", type=int, default=10,
+                   help="Percentage of stress runs that randomly drop the connection (default: 10)")
     args = p.parse_args()
+
+    try:
+        args.isabelle = find_isabelle(args.isabelle)
+    except RuntimeError as e:
+        print(f"{_SYM_FAIL} {e}", file=sys.stderr)
+        sys.exit(1)
 
     repl_py = os.path.join(SCRIPT_DIR, "repl.py")
     proc = None  # only set if we start our own repl.py
+    ext_token = args.token or os.environ.get("IR_AUTH_TOKEN", "")
 
-    # Try connecting to an already-running repl.py (no token — only works
-    # with servers started without auth, e.g. older versions)
+    # Try connecting to an already-running repl.py
     try:
         sock = socket.create_connection(("127.0.0.1", args.port), timeout=2)
+        authenticate(sock, ext_token)
         # Quick probe: does it speak the sentinel protocol?
-        sock.sendall(b'Ir.help ();\n')
-        buf = b""
-        sock.settimeout(10)
-        while SENTINEL.encode() not in buf:
-            chunk = sock.recv(4096)
-            if not chunk:
-                raise ConnectionError("closed")
-            buf += chunk
-        if b"Ir.init" not in buf:
+        out = send_recv(sock, 'Ir.help ();', timeout=10)
+        if "Ir.init" not in out:
             raise ConnectionError("not an I/R server")
         sock.close()
         port = args.port
+        token = ext_token
         print(f"{_SYM_OK} Connected to existing repl.py on port {port}",
               flush=True)
     except (ConnectionRefusedError, ConnectionError, OSError, socket.timeout):
@@ -170,12 +420,13 @@ def main():
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             start_new_session=True,
         )
 
     t0 = time.time()
-    token = ""
+    if proc is not None:
+        token = ""  # will be read from stdout
 
     try:
         if proc is not None:
@@ -202,6 +453,12 @@ def main():
                 elapsed = time.time() - t0
                 print(f"{_CLEAR_LINE}  {_SYM_FAIL} server failed to start "
                       f"{_DIM}({elapsed:.1f}s){_RESET}")
+                # Show stderr for debugging
+                if proc.stderr:
+                    err = proc.stderr.read().decode("utf-8", errors="replace")
+                    if err.strip():
+                        for line in err.strip().splitlines()[:20]:
+                            print(f"    {_DIM}{line}{_RESET}")
                 if proc.poll() is None:
                     os.killpg(proc.pid, signal.SIGTERM)
                     try:
@@ -216,120 +473,13 @@ def main():
         else:
             sock = connect(port, token=token)
 
-        # -- Single-client tests --
+        # -- Core tests (reusable across single/multi-client contexts) --
         print(f"\n{_BOLD}Running{_RESET} single-client tests")
 
-        tests = []
+        for name, fn in core_tests(sock, "s"):
+            run_test(name, fn)
 
-        def test_help():
-            out = send_recv(sock, 'Ir.help ();')
-            assert "Ir.init" in out, f"Expected help text, got:\n{out}"
-
-        tests.append(test_help)
-
-        def test_theories():
-            out = send_recv(sock, 'Ir.theories ();')
-            assert "Main" in out, f"Expected Main theory, got:\n{out}"
-
-        tests.append(test_theories)
-
-        def test_init_show():
-            send_recv(sock, 'Ir.init "t1" ["Main"];')
-            out = send_recv(sock, 'Ir.show ();')
-            assert "t1" in out, f"Expected REPL t1, got:\n{out}"
-
-        tests.append(test_init_show)
-
-        def test_step():
-            out = send_recv(sock, 'Ir.step "lemma dummy: True by simp";')
-            assert "theorem dummy: True" in out, f"Unexpected output: \n{out}"
-
-        tests.append(test_step)
-
-        def test_state():
-            send_recv(sock, 'Ir.step "lemma foo: True";')
-            out = send_recv(sock, 'Ir.state ~1;')
-            assert "goal (1 subgoal):", f"Unexpected state:\n{out}"
-
-        tests.append(test_state)
-
-        def test_text():
-            out = send_recv(sock, 'Ir.text ();')
-            assert "lemma" in out, f"Expected lemma text, got:\n{out}"
-
-        tests.append(test_text)
-
-        def test_edit_replay():
-            send_recv(sock, 'Ir.edit 0 "lemma True by auto";')
-            send_recv(sock, 'Ir.replay ();')
-
-        tests.append(test_edit_replay)
-
-        def test_fork_focus_merge():
-            send_recv(sock, 'Ir.fork "t2" 0;')
-            send_recv(sock, 'Ir.focus "t2";')
-            send_recv(sock, 'Ir.step "lemma True by auto";')
-            send_recv(sock, 'Ir.merge ();')
-
-        tests.append(test_fork_focus_merge)
-
-        def test_truncate_negative():
-            send_recv(sock, 'Ir.init "trn" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma a: True by simp";')
-            send_recv(sock, 'Ir.step "lemma b: True by simp";')
-            send_recv(sock, 'Ir.step "lemma c: True by simp";')
-            out = send_recv(sock, 'Ir.truncate ~1;')
-            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
-            out = send_recv(sock, 'Ir.truncate ~1;')
-            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
-            out = send_recv(sock, 'Ir.show ();')
-            assert "1 step" in out, f"Expected 1 step, got:\n{out}"
-            send_recv(sock, 'Ir.remove "trn";')
-        tests.append(test_truncate_negative)
-
-        def test_truncate_negative_multi():
-            send_recv(sock, 'Ir.init "trn2" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma a: True by simp";')
-            send_recv(sock, 'Ir.step "lemma b: True by simp";')
-            send_recv(sock, 'Ir.step "lemma c: True by simp";')
-            out = send_recv(sock, 'Ir.truncate ~2;')
-            assert "dropped 2" in out, f"Expected dropped 2, got:\n{out}"
-            out = send_recv(sock, 'Ir.show ();')
-            assert "1 step" in out, f"Expected 1 step, got:\n{out}"
-            # Now truncate ~1 to empty
-            out = send_recv(sock, 'Ir.truncate ~1;')
-            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
-            out = send_recv(sock, 'Ir.show ();')
-            assert "0 step" in out, f"Expected 0 steps, got:\n{out}"
-            send_recv(sock, 'Ir.remove "trn2";')
-        tests.append(test_truncate_negative_multi)
-
-        def test_back():
-            send_recv(sock, 'Ir.init "bk" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma x: True by simp";')
-            send_recv(sock, 'Ir.step "lemma y: True by simp";')
-            out = send_recv(sock, 'Ir.back ();')
-            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
-            out = send_recv(sock, 'Ir.show ();')
-            assert "1 step" in out, f"Expected 1 step, got:\n{out}"
-            send_recv(sock, 'Ir.remove "bk";')
-        tests.append(test_back)
-
-        def test_back_to_empty():
-            send_recv(sock, 'Ir.init "bke" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma z: True by simp";')
-            out = send_recv(sock, 'Ir.back ();')
-            assert "dropped 1" in out, f"Expected dropped 1, got:\n{out}"
-            out = send_recv(sock, 'Ir.show ();')
-            assert "0 step" in out, f"Expected 0 steps, got:\n{out}"
-            send_recv(sock, 'Ir.remove "bke";')
-        tests.append(test_back_to_empty)
-
-        def test_repls():
-            out = send_recv(sock, 'Ir.repls ();')
-            assert "t1" in out, f"Expected t1 in repls, got:\n{out}"
-
-        tests.append(test_repls)
+        # -- Single-client-only tests (expensive / global side effects) --
 
         def test_source():
             if args.require_source:
@@ -337,239 +487,62 @@ def main():
                 assert "Main" in out, f"Expected source output, got:\n{out}"
             else:
                 send_recv(sock, 'Ir.source "Main" 0 3 handle ERROR _ => ();')
-
-        tests.append(test_source)
-
-        def test_remove():
-            send_recv(sock, 'Ir.init "tmp" ["Main"];')
-            send_recv(sock, 'Ir.remove "tmp";')
-
-        tests.append(test_remove)
-
-        def test_config():
-            send_recv(sock, 'Ir.config (fn c => '
-                      '{color = false, show_ignored = #show_ignored c, '
-                      'full_spans = #full_spans c, '
-                      'show_theory_in_source = #show_theory_in_source c, '
-                      'auto_replay = #auto_replay c});')
-
-        tests.append(test_config)
-
-        def test_multiline_step():
-            """Multi-line Isar text sent as escaped ML string (via MCP path)."""
-            send_recv(sock, 'Ir.init "ml1" ["Main"];')
-            # Multi-line: lemma + proof on separate lines, escaped as ML string
-            out = send_recv(sock, 'Ir.step "lemma ml_test: True\\nby simp";')
-            assert "ml_test" in out, f"Expected ml_test theorem, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ml1";')
-
-        tests.append(test_multiline_step)
-
-        def test_multiline_step_raw_newline():
-            """Multi-line Isar text with raw newline (TCP multi-line accumulation)."""
-            send_recv(sock, 'Ir.init "ml2" ["Main"];')
-            # Raw newline: TCP handler accumulates lines until ;
-            out = send_recv(sock, 'Ir.step "lemma ml_raw: True\nby simp";')
-            assert "ml_raw" in out, f"Expected ml_raw theorem, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ml2";')
-
-        tests.append(test_multiline_step_raw_newline)
-
-        # -- find_theorems tests --
-        def test_ft_single_theory_immediate_library():
-            send_recv(sock, 'Ir.init "ft1" ["Main"];')
-            out = send_recv(sock, 'Ir.find_theorems 3 "name: conjI";')
-            assert "conjI" in out, f"Expected conjI, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ft1";')
-
-        tests.append(test_ft_single_theory_immediate_library)
-
-        def test_ft_single_theory_after_lemma_library():
-            send_recv(sock, 'Ir.init "ft2" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma ft2_lem: True by simp";')
-            out = send_recv(sock, 'Ir.find_theorems 3 "name: conjI";')
-            assert "conjI" in out, f"Expected conjI, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ft2";')
-
-        tests.append(test_ft_single_theory_after_lemma_library)
-
-        def test_ft_single_theory_after_lemma_repl_fact():
-            send_recv(sock, 'Ir.init "ft3" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma ft3_lem: True by simp";')
-            out = send_recv(sock, 'Ir.find_theorems 3 "name: ft3_lem";')
-            assert "ft3_lem" in out, f"Expected ft3_lem, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ft3";')
-
-        tests.append(test_ft_single_theory_after_lemma_repl_fact)
-
-        def test_ft_multi_theory_immediate_library():
-            send_recv(sock, 'Ir.init "ft4" ["Main", "Complex_Main"];')
-            out = send_recv(sock, 'Ir.find_theorems 3 "name: conjI";')
-            assert "conjI" in out, f"Expected conjI, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ft4";')
-
-        tests.append(test_ft_multi_theory_immediate_library)
-
-        def test_ft_multi_theory_after_lemma_repl_fact():
-            send_recv(sock, 'Ir.init "ft5" ["Main", "Complex_Main"];')
-            send_recv(sock, 'Ir.step "lemma ft5_lem: True by simp";')
-            out = send_recv(sock, 'Ir.find_theorems 3 "name: ft5_lem";')
-            assert "ft5_lem" in out, f"Expected ft5_lem, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ft5";')
-
-        tests.append(test_ft_multi_theory_after_lemma_repl_fact)
-
-        def test_ft_pattern():
-            send_recv(sock, 'Ir.init "ftp" ["Main"];')
-            out = send_recv(sock, 'Ir.find_theorems 3 "\\\"(_ + _) + _ = _ + (_ + _)\\\"";')
-            assert "add_ac" in out, f"Expected add_ac, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ftp";')
-        tests.append(test_ft_pattern)
-
-        def test_ft_simp():
-            """Test simp: search for simplification rules."""
-            send_recv(sock, 'Ir.init "fts" ["Main"];')
-            out = send_recv(sock, 'Ir.find_theorems 5 "simp:\\\"_ + _\\\"";')
-            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
-            send_recv(sock, 'Ir.remove "fts";')
-        tests.append(test_ft_simp)
-
-
-
-        def test_ft_solves():
-            """Test solves: search for rules that solve goals."""
-            send_recv(sock, 'Ir.init "ftso" ["Main"];')
-            send_recv(sock, 'Ir.step "lemma test_goal: True";')
-            out = send_recv(sock, 'Ir.find_theorems 5 "solves";')
-            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
-            send_recv(sock, 'Ir.step "by simp";')
-            send_recv(sock, 'Ir.remove "ftso";')
-        tests.append(test_ft_solves)
-
-        def test_ft_negation():
-            """Test negation with - prefix."""
-            send_recv(sock, 'Ir.init "ftn" ["Main"];')
-            out = send_recv(sock, 'Ir.find_theorems 5 "-name:conjI";')
-            assert "conjI" not in out, f"Expected no conjI, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ftn";')
-        tests.append(test_ft_negation)
-
-        def test_ft_combined_modes():
-            """Test combining multiple search criteria."""
-            send_recv(sock, 'Ir.init "ftc" ["Main"];')
-            # Try combining name and pattern
-            out = send_recv(sock, 'Ir.find_theorems 5 "name:add \\\"_ + _\\\"";')
-            # Should find theorems with 'add' in name and containing + pattern
-            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ftc";')
-        tests.append(test_ft_combined_modes)
-
-        def test_ft_combined_with_negation():
-            """Test combining positive and negative criteria."""
-            send_recv(sock, 'Ir.init "ftcn" ["Main"];')
-            # Find theorems with + but not containing 'mult'
-            out = send_recv(sock, 'Ir.find_theorems 5 "\\\"_ + _\\\" -name:mult";')
-            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ftcn";')
-        tests.append(test_ft_combined_with_negation)
-
-        def test_ft_simp_with_term():
-            """Test simp with specific term."""
-            send_recv(sock, 'Ir.init "ftst" ["Main"];')
-            out = send_recv(sock, 'Ir.find_theorems 5 "simp:\\\"True\\\"";')
-            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ftst";')
-        tests.append(test_ft_simp_with_term)
-
-        def test_ft_multiple_patterns():
-            """Test multiple pattern criteria."""
-            send_recv(sock, 'Ir.init "ftmp" ["Main"];')
-            # Look for theorems containing both + and =
-            out = send_recv(sock, 'Ir.find_theorems 5 "\\\"_ + _\\\" \\\"_ = _\\\"";')
-            assert "theorem" in out or "lemma" in out, f"Expected theorems, got:\n{out}"
-            send_recv(sock, 'Ir.remove "ftmp";')
-        tests.append(test_ft_multiple_patterns)
+        run_test("source", test_source)
 
         def test_load_theory():
-            """load_theory loads a theory not in the heap, making it available for init."""
             out = send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";', timeout=300)
             assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
-            # It should now appear in theories listing
             out = send_recv(sock, 'Ir.theories ();')
             assert "Multiset" in out, f"Expected Multiset in theories, got:\n{out}"
-            # And we should be able to init a REPL on it
             send_recv(sock, 'Ir.init "lt1" ["HOL-Library.Multiset"];')
-            out = send_recv(sock, 'Ir.step "term \\"{#} :: nat multiset\\"";')
+            out = send_recv(sock, 'Ir.step "lt1" "term \\"{#} :: nat multiset\\"";')
             assert "multiset" in out, f"Expected multiset type, got:\n{out}"
             send_recv(sock, 'Ir.remove "lt1";')
-
-        tests.append(test_load_theory)
+        run_test("load_theory", test_load_theory)
 
         def test_load_theory_source():
-            """load_theory with record_theories records segments for source/init."""
             send_recv(sock, 'Ir.load_theory "HOL-Library.Multiset";', timeout=300)
             out = send_recv(sock, 'Ir.source "HOL-Library.Multiset" 0 5;')
             assert "Multiset" in out, f"Expected Multiset in source, got:\n{out}"
-            # Init from a segment in the dynamically loaded theory
             send_recv(sock, 'Ir.init "lts1" ["HOL-Library.Multiset:4"];')
-            out = send_recv(sock, 'Ir.show ();')
+            out = send_recv(sock, 'Ir.show "lts1";')
             assert "Multiset:4" in out, f"Expected origin Multiset:4, got:\n{out}"
             send_recv(sock, 'Ir.remove "lts1";')
-
-        tests.append(test_load_theory_source)
+        run_test("load_theory_source", test_load_theory_source)
 
         def test_load_theory_already_loaded():
-            """load_theory on an already-loaded theory is a no-op."""
             out = send_recv(sock, 'Ir.load_theory "Main";', timeout=20)
             assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
-
-        tests.append(test_load_theory_already_loaded)
-
-        for t in tests:
-            run_test(t.__name__, t)
+        run_test("load_theory_already_loaded", test_load_theory_already_loaded)
 
         sock.close()
-
-        # Cleanup from single-client tests
-        cleanup_sock = connect(port, token=token)
-        send_recv(cleanup_sock, 'Ir.remove "t1";')
-        cleanup_sock.close()
 
         # -- Multi-client tests --
         print(f"\n{_BOLD}Running{_RESET} multi-client tests")
 
-        def test_concurrent_clients():
-            """Two clients send commands concurrently; both get valid responses."""
+        def test_concurrent_core_suites():
+            """Two clients run the full core test suite concurrently."""
             s1 = connect(port, token=token)
             s2 = connect(port, token=token)
-            results = [None, None]
             errors = [None, None]
 
-            def client(idx, sock, cmd):
+            def run_suite(idx, s, prefix):
                 try:
-                    results[idx] = send_recv(sock, cmd)
+                    for _name, fn in core_tests(s, prefix):
+                        fn()
                 except Exception as e:
                     errors[idx] = e
 
-            send_recv(s1, 'Ir.init "mc1" ["Main"];')
-            send_recv(s1, 'Ir.init "mc2" ["Main"];')
-
-            t1 = threading.Thread(target=client,
-                                  args=(0, s1, 'Ir.focus "mc1"; Ir.theories ();'))
-            t2 = threading.Thread(target=client,
-                                  args=(1, s2, 'Ir.focus "mc2"; Ir.theories ();'))
+            t1 = threading.Thread(target=run_suite, args=(0, s1, "c1"))
+            t2 = threading.Thread(target=run_suite, args=(1, s2, "c2"))
             t1.start()
             t2.start()
-            t1.join(timeout=60)
-            t2.join(timeout=60)
+            t1.join(timeout=120)
+            t2.join(timeout=120)
 
             for i in range(2):
                 if errors[i]:
                     raise errors[i]
-                assert results[i] is not None, f"Client {i} got no result"
-
-            send_recv(s1, 'Ir.remove "mc1";')
-            send_recv(s1, 'Ir.remove "mc2";')
             s1.close()
             s2.close()
 
@@ -584,8 +557,111 @@ def main():
             assert "Ir.init" in out
             s2.close()
 
-        for t in [test_concurrent_clients, test_client_disconnect]:
+        for t in [test_concurrent_core_suites, test_client_disconnect]:
             run_test(t.__name__, t)
+
+        # -- Stress tests --
+        n_runs = args.stress_runs
+        max_clients = args.stress_clients
+        drop_pct = args.stress_drop_pct
+        print(f"\n{_BOLD}Running{_RESET} stress tests "
+              f"{_DIM}({n_runs} runs, {max_clients} max concurrent, "
+              f"{drop_pct}% rude disconnects){_RESET}")
+
+        def test_stress():
+            """Run N core test suites across a thread pool, verifying all pass."""
+            ok = 0
+            errs = []
+            lock = threading.Lock()
+
+            def run_one(i):
+                nonlocal ok
+                time.sleep(random.uniform(0, 2))
+                s = connect(port, token=token)
+                try:
+                    for _name, fn in core_tests(s, f"st{i}"):
+                        fn()
+                    with lock:
+                        ok += 1
+                except Exception as e:
+                    with lock:
+                        errs.append((i, e))
+                finally:
+                    s.close()
+
+            with ThreadPoolExecutor(max_workers=max_clients) as pool:
+                futures = [pool.submit(run_one, i) for i in range(n_runs)]
+                for f in as_completed(futures):
+                    f.result()  # propagate unexpected executor errors
+
+            if errs:
+                summary = "; ".join(f"run {i}: {e}" for i, e in errs[:5])
+                if len(errs) > 5:
+                    summary += f" ... and {len(errs) - 5} more"
+                raise AssertionError(
+                    f"{len(errs)}/{n_runs} runs failed: {summary}")
+
+        def test_rude_disconnect():
+            """Clients randomly drop connections mid-request; server stays healthy."""
+            ok = 0
+            drops = 0
+            errs = []
+            lock = threading.Lock()
+
+            def run_one(i):
+                nonlocal ok, drops
+                should_drop = random.random() < (drop_pct / 100.0)
+                time.sleep(random.uniform(0, 2))
+                s = connect(port, token=token)
+                try:
+                    tests = core_tests(s, f"rd{i}")
+                    if should_drop and len(tests) > 2:
+                        # Run a few tests, then close the socket mid-suite
+                        cutoff = random.randint(1, len(tests) - 2)
+                        for _name, fn in tests[:cutoff]:
+                            fn()
+                        s.close()
+                        with lock:
+                            drops += 1
+                        return
+                    for _name, fn in tests:
+                        fn()
+                    with lock:
+                        ok += 1
+                except (ConnectionResetError, BrokenPipeError, EOFError, OSError):
+                    # Expected for rude disconnects
+                    with lock:
+                        drops += 1
+                except Exception as e:
+                    with lock:
+                        errs.append((i, e))
+                finally:
+                    try:
+                        s.close()
+                    except Exception:
+                        pass
+
+            with ThreadPoolExecutor(max_workers=max_clients) as pool:
+                futures = [pool.submit(run_one, i) for i in range(n_runs)]
+                for f in as_completed(futures):
+                    f.result()
+
+            if errs:
+                summary = "; ".join(f"run {i}: {e}" for i, e in errs[:5])
+                if len(errs) > 5:
+                    summary += f" ... and {len(errs) - 5} more"
+                raise AssertionError(
+                    f"{len(errs)}/{n_runs} runs failed ({drops} planned drops): "
+                    f"{summary}")
+
+            # After the chaos, verify the server is still healthy
+            probe = connect(port, token=token)
+            out = send_recv(probe, 'Ir.help ();')
+            assert "Ir.init" in out, f"Server unhealthy after stress: {out}"
+            probe.close()
+
+        run_test("stress", test_stress)
+        run_test("rude_disconnect", test_rude_disconnect)
 
     finally:
         if proc is not None and proc.poll() is None:

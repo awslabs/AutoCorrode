@@ -17,50 +17,58 @@
 structure ML_Repl =
 struct
 
-(** Server group tracking **)
+(** Per-connection output routing **)
 
-val server_group_id : int Synchronized.var =
-  Synchronized.var "ML_Repl.server_group_id" 0;
+(* Routing table: maps connection group IDs to their message functions.
+   Each TCP connection registers its group + Message_Channel.message here.
+   Worker threads find their connection's channel by walking the group
+   ancestry via Task_Queue.str_of_groups — the same technique previously
+   used by is_server_context() for a single global. *)
+val connection_messages :
+    (int * (string -> Properties.T -> XML.body list -> unit)) list Synchronized.var =
+  Synchronized.var "ML_Repl.connection_messages" [];
 
-fun is_server_context () =
-  let val gid = Synchronized.value server_group_id
-  in if gid = 0 then false
-     else case Future.worker_group () of
-            NONE => false
-          | SOME group =>
-              String.isSubstring (string_of_int gid)
-                (Task_Queue.str_of_groups group)
-  end;
+(* Find the message function for the current worker's connection.
+   Walks the group chain: if any ancestor group has a registered entry
+   in connection_messages, return its message function. *)
+fun find_connection_message () =
+  case Future.worker_group () of
+    NONE => NONE
+  | SOME group =>
+      let
+        val table = Synchronized.value connection_messages
+        val gs = Task_Queue.str_of_groups group
+        fun lookup [] = NONE
+          | lookup ((gid, msg) :: rest) =
+              if String.isSubstring (string_of_int gid) gs
+              then SOME msg else lookup rest
+      in lookup table end;
+
+fun is_server_context () = is_some (find_connection_message ());
 
 
 (** Lazy Private_Output wrapping **)
 
 val wrapped : bool Synchronized.var = Synchronized.var "ML_Repl.wrapped" false;
 
-(* The current message function, set per-connection in eval_handler.
-   Between connections this is a no-op.  We use a Synchronized var so
-   that worker threads spawned during eval (e.g. by Thy_Info.use_theories)
-   can find the active message channel. *)
-val current_message :
-      (string -> Properties.T -> XML.body list -> unit) Synchronized.var =
-  Synchronized.var "ML_Repl.current_message" (fn _ => fn _ => fn _ => ());
-
 fun install_wrappers () =
   Synchronized.change wrapped (fn already =>
     if already then true
     else
       let
-        (* Build capture functions that delegate to current_message.
+        (* Build capture functions that delegate to the calling thread's
+           connection message function via find_connection_message().
            These match isabelle_process.ML's message_context exactly. *)
         fun standard_message props name ss =
           if forall (fn s => s = "") ss then ()
           else
-            let
-              val msg = Synchronized.value current_message
-              val pos_props =
-                if exists Markup.position_property props then props
-                else props @ Position.properties_of (Position.thread_data ());
-            in msg name pos_props [XML.blob ss] end;
+            case find_connection_message () of
+              NONE => ()
+            | SOME msg =>
+                let val pos_props =
+                      if exists Markup.position_property props then props
+                      else props @ Position.properties_of (Position.thread_data ())
+                in msg name pos_props [XML.blob ss] end;
 
         val serial_props = Markup.serial_properties o serial;
 
@@ -81,8 +89,9 @@ fun install_wrappers () =
         fun cap_error (i, ss) =
           standard_message (Markup.serial_properties i) Markup.errorN ss;
         fun cap_system ss =
-          let val msg = Synchronized.value current_message
-          in msg Markup.systemN [] [XML.blob ss] end;
+          case find_connection_message () of
+            NONE => ()
+          | SOME msg => msg Markup.systemN [] [XML.blob ss];
         fun cap_status ss =
           standard_message [] Markup.statusN ss;
         fun cap_report ss =
@@ -111,39 +120,35 @@ fun install_wrappers () =
       end);
 
 
-(** Eval handler **)
+(** Server lifecycle **)
 
-fun eval_handler line out_stream =
+(* Priority for I/R futures: negative so that interactive jEdit work
+   (which runs at pri >= 0) always takes precedence over REPL evaluation. *)
+val ir_pri = ~1;
+
+(* The top-level I/R group.  All connection groups are children of this.
+   Stored in a Synchronized var so connection_serve can access it. *)
+val ir_group_var : Future.group option Synchronized.var =
+  Synchronized.var "ML_Repl.ir_group" NONE;
+
+
+(** Per-connection handler **)
+
+(* Evaluate a single ML command within a command sub-group.
+   The sub-group is a child of conn_group, so worker threads spawned
+   during eval will find the connection's message function via
+   find_connection_message(). After eval, we join all pending tasks
+   in the command group to ensure all output is flushed before "done". *)
+fun eval_in_group conn_group message line =
   let
-    val _ = install_wrappers ()
-
-    (* Create a Message_Channel for this evaluation.  This gives us
-       PIDE-identical framing and a dedicated writer thread. *)
-    val channel = Message_Channel.make out_stream
-    val message = Message_Channel.message channel
-
-    (* Install as the active message function for worker threads. *)
-    val _ = Synchronized.change current_message (K message)
+    val cmd_group = Future.new_group (SOME conn_group)
 
     val trimmed = #1 (Substring.splitr Char.isSpace (Substring.full line))
     val has_semi = Substring.isSuffix ";" trimmed
 
     val _ = if has_semi then ()
             else message Markup.errorN (Markup.serial_properties 0)
-                   [XML.blob ["command must end with \";\""]];
-
-    (* Debug: hexdump of input line to /tmp/ml_repl_hexdump.log *)
-    (* val _ = let val f = TextIO.openAppend "/tmp/ml_repl_hexdump.log" *)
-    (*             fun hex c = let val n = Char.ord c *)
-    (*                         in (if n < 16 then "0" else "") ^ Int.fmt StringCvt.HEX n end *)
-    (*             fun go i = *)
-    (*               if i >= size line then () *)
-    (*               else let val chunk = String.substring (line, i, Int.min (16, size line - i)) *)
-    (*                        val hexs = String.concatWith " " (map hex (String.explode chunk)) *)
-    (*                        val ascii = String.implode (map (fn c => if Char.ord c >= 32 andalso Char.ord c < 127 then c else #".") (String.explode chunk)) *)
-    (*                    in TextIO.output (f, hexs ^ "  " ^ ascii ^ "\n"); go (i + 16) end *)
-    (*         in TextIO.output (f, "ML_Repl hexdump (" ^ string_of_int (size line) ^ " bytes):\n"); *)
-    (*            go 0; TextIO.closeOut f end *)
+                   [XML.blob ["command must end with \";\""]]
 
     (* Auto-correct double backslashes in symbol escapes *)
     val line =
@@ -163,27 +168,62 @@ fun eval_handler line out_stream =
              ML_Compiler.eval (ML_Compiler.verbose true ML_Compiler.flags)
                Position.none (ML_Lex.tokenize line)) ()
 
-    val result =
-      Print_Mode.with_modes [Print_Mode.PIDE] do_eval ()
-
-    val _ = case result of
+    (* Fork eval into cmd_group so output routing works.
+       Workers in cmd_group are descendants of conn_group, so
+       find_connection_message() finds the right channel. *)
+    val eval_future = (singleton o Future.forks)
+      {name = "ir_eval", group = SOME cmd_group,
+       deps = [], pri = ir_pri, interrupts = true}
+      (fn () =>
+        let val result = Print_Mode.with_modes [Print_Mode.PIDE] do_eval ()
+        in case result of
               Exn.Res _ => ()
             | Exn.Exn exn =>
                 message Markup.errorN (Markup.serial_properties 0)
                   [XML.blob [Runtime.exn_message exn]]
+        end)
+
+    (* Join the eval future. ML_Compiler.eval is synchronous and
+       Toplevel.command_exception joins parallel proofs, so this
+       suffices to ensure all output is flushed before "done". *)
+    val _ = ignore (Future.join_result eval_future)
   in
-    (* Reset message function, then send "done" and shut down the channel. *)
-    Synchronized.change current_message (K (fn _ => fn _ => fn _ => ()));
-    message "done" [] [];
+    message "done" [] []
+  end;
+
+(* Per-connection handler registered as Tcp_Handler.connection_handler.
+   Creates a persistent Message_Channel and group for the connection,
+   registers in the routing table, runs a sequential read-eval loop,
+   and cleans up on disconnect. *)
+fun connection_serve in_stream out_stream =
+  let
+    val _ = install_wrappers ()
+    val ir_group =
+      case Synchronized.value ir_group_var of
+        SOME g => g
+      | NONE => error "ML_Repl.connection_serve: server not started"
+    val conn_group = Future.new_group (SOME ir_group)
+    val channel = Message_Channel.make out_stream
+    val message = Message_Channel.message channel
+    val gid = Task_Queue.group_id conn_group
+    val _ = Synchronized.change connection_messages (cons (gid, message))
+    fun loop () =
+      case Byte_Message.read_line in_stream of
+        NONE => ()
+      | SOME line_bytes =>
+          let val line = Bytes.content line_bytes
+          in if line = "" then loop ()
+             else (eval_in_group conn_group message line; loop ())
+          end
+  in
+    loop ()
+      handle OS.SysErr _ => ()
+           | IO.Io _ => ();
+    Synchronized.change connection_messages
+      (filter (fn (g, _) => g <> gid));
     Message_Channel.shutdown channel
   end;
 
-
-(** Server lifecycle **)
-
-(* Priority for I/R futures: negative so that interactive jEdit work
-   (which runs at pri >= 0) always takes precedence over REPL evaluation. *)
-val ir_pri = ~1;
 
 fun start port =
   if Tcp_Handler.is_running () then
@@ -193,8 +233,9 @@ fun start port =
   let
     val (actual_port, _, accept_loop) = Tcp_Handler.start port
     val ir_group = Future.new_group NONE
-    val _ = Synchronized.change server_group_id (K (Task_Queue.group_id ir_group))
-    val _ = Synchronized.change Tcp_Handler.handler (K eval_handler)
+    val _ = Synchronized.change ir_group_var (K (SOME ir_group))
+    val _ = Synchronized.change Tcp_Handler.connection_handler
+              (K (SOME connection_serve))
   in
     SOME (actual_port, (singleton o Future.forks)
       {name = "ml_repl_accept", group = SOME ir_group,
@@ -204,7 +245,8 @@ fun start port =
 
 fun stop () =
   (Tcp_Handler.stop ();
-   Synchronized.change server_group_id (K 0));
+   Synchronized.change ir_group_var (K NONE);
+   Synchronized.change connection_messages (K []));
 
 end;
 

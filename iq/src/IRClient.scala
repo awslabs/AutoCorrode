@@ -4,11 +4,12 @@
 import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWriter}
 import java.net.Socket
 
-/** Persistent TCP client for the I/R REPL server (repl.py).
+/** Ephemeral TCP client for the I/R REPL server (repl.py).
   *
-  * Maintains a single TCP connection and provides both a raw send method
-  * and typed Scala methods for each Ir.* command. Commands are serialized
-  * (not thread-safe; callers must synchronize if sharing across threads).
+  * Opens a fresh TCP connection per send() call — desync is structurally
+  * impossible since there is no persistent pipe for stale responses.
+  * Provides both a raw send method and typed Scala methods for each
+  * Ir.* command.
   *
   * Protocol: send "command;\n", read lines until "<<DONE>>\n".
   */
@@ -16,51 +17,55 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
 
   private val Sentinel = "<<DONE>>"
 
-  private var socket: Socket = _
-  private var out: PrintWriter = _
-  private var in: BufferedReader = _
-
+  /** Verify reachability (called by IQExploreDockable on startup). */
   def connect(): Unit = {
-    socket = new Socket(host, port)
-    out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream, "UTF-8"), true)
-    in = new BufferedReader(new InputStreamReader(socket.getInputStream, "UTF-8"))
-    if (token.nonEmpty) {
-      out.println(token)
-      out.flush()
-      val response = in.readLine()
-      if (response == null || !response.startsWith("OK"))
-        throw new java.io.IOException("REPL authentication failed")
-    }
+    val sock = new Socket(host, port)
+    sock.close()
   }
 
-  def isConnected: Boolean = socket != null && !socket.isClosed
-
-  def close(): Unit = {
-    if (socket != null) {
-      try { socket.close() } catch { case _: Exception => }
-      socket = null
-    }
+  /** Check server reachability. */
+  def isConnected: Boolean = {
+    try {
+      val sock = new Socket(host, port)
+      sock.close()
+      true
+    } catch { case _: Exception => false }
   }
 
-  /** Send a raw ML expression and return the output. The trailing semicolon
-    * is added automatically if missing. */
+  /** No-op: connections are per-call. */
+  def close(): Unit = {}
+
+  /** Send a raw ML expression and return the output. Opens a fresh TCP
+    * connection, authenticates, sends the command, reads until the sentinel,
+    * and closes. The trailing semicolon is added automatically if missing. */
   def send(command: String): String = {
-    if (!isConnected) throw new IllegalStateException("Not connected — call connect() first")
-    val cmd = if (command.trim.endsWith(";")) command.trim else command.trim + ";"
-    out.println(cmd)
-    out.flush()
-    val sb = new StringBuilder
-    var line = in.readLine()
-    while (line != null && line != Sentinel) {
-      if (sb.nonEmpty) sb.append('\n')
-      sb.append(line)
-      line = in.readLine()
+    val sock = new Socket(host, port)
+    try {
+      val out = new PrintWriter(new OutputStreamWriter(sock.getOutputStream, "UTF-8"), true)
+      val in = new BufferedReader(new InputStreamReader(sock.getInputStream, "UTF-8"))
+      if (token.nonEmpty) {
+        out.println(token)
+        out.flush()
+        val response = in.readLine()
+        if (response == null || !response.startsWith("OK"))
+          throw new java.io.IOException("REPL authentication failed")
+      }
+      val cmd = if (command.trim.endsWith(";")) command.trim else command.trim + ";"
+      out.println(cmd)
+      out.flush()
+      val sb = new StringBuilder
+      var line = in.readLine()
+      while (line != null && line != Sentinel) {
+        if (sb.nonEmpty) sb.append('\n')
+        sb.append(line)
+        line = in.readLine()
+      }
+      if (line == null)
+        throw new java.io.IOException("Connection closed by server")
+      sb.toString
+    } finally {
+      sock.close()
     }
-    if (line == null) {
-      close()
-      throw new java.io.IOException("Connection closed by server")
-    }
-    sb.toString
   }
 
   // -- Helpers for ML argument quoting --
@@ -69,26 +74,19 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
   private def ql(ss: List[String]): String = "[" + ss.map(q).mkString(", ") + "]"
   private def mlInt(n: Int): String = if (n < 0) "~" + (-n).toString else n.toString
 
-  // -- Typed API --
+  // -- Typed API: all REPL operations take an explicit repl id --
 
   /** Create a new REPL importing the given theories. */
-  def init(id: String, theories: List[String] = Nil): String =
-    send(s"Ir.init ${q(id)} ${ql(theories)}")
+  def init(repl: String, theories: List[String] = Nil): String =
+    send(s"Ir.init ${q(repl)} ${ql(theories)}")
 
   /** Create a REPL from a PIDE document state (node + command id via I/Q). */
-  def initFromDocument(id: String, node: String, commandId: Int): String =
-    send(s"Ir.init_from_document ${q(id)} ${q(node)} ${mlInt(commandId)}")
+  def initFromDocument(repl: String, node: String, commandId: Int): String =
+    send(s"Ir.init_from_document ${q(repl)} ${q(node)} ${mlInt(commandId)}")
 
-  /** Create a REPL from a source location, resolving to node + command id via IQUtils.
-    *
-    * Supports the same selection modes as I/Q:
-    *   - File + offset: {{{ initFromSourceLocation("r", file="/path/to/Foo.thy", offset=42) }}}
-    *   - File + pattern: {{{ initFromSourceLocation("r", file="Foo.thy", pattern="lemma foo") }}}
-    *
-    * File paths are auto-completed against open documents in Isabelle/jEdit.
-    */
+  /** Create a REPL from a source location, resolving to node + command id via IQUtils. */
   def initFromSourceLocation(
-    id: String,
+    repl: String,
     file: String,
     offset: Option[Int] = None,
     pattern: Option[String] = None
@@ -105,51 +103,48 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       case Right(resolved) =>
         val node = resolved.command.node_name.node
         val cmdId = resolved.command.id.toInt
-        initFromDocument(id, node, cmdId)
+        initFromDocument(repl, node, cmdId)
       case Left(err) => s"Error: $err"
     }
   }
 
-  /** Fork a new REPL from the current one at the given state index. */
-  def fork(id: String, stateIdx: Int): String =
-    send(s"Ir.fork ${q(id)} ${mlInt(stateIdx)}")
+  /** Fork a new REPL from repl at the given state index. */
+  def fork(repl: String, newRepl: String, stateIdx: Int): String =
+    send(s"Ir.fork ${q(repl)} ${q(newRepl)} ${mlInt(stateIdx)}")
 
-  /** Switch to the REPL with the given id. */
-  def focus(id: String): String =
-    send(s"Ir.focus ${q(id)}")
+  /** Execute Isar text as the next step. */
+  def step(repl: String, isarText: String): String =
+    send(s"Ir.step ${q(repl)} ${q(isarText)}")
 
-  /** Execute Isar text as the next step in the current REPL. */
-  def step(isarText: String): String =
-    send(s"Ir.step ${q(isarText)}")
-
-  /** Execute Isar text from a file as the next step. */
-  def stepFile(path: String): String =
-    send(s"Ir.step_file ${q(path)}")
-
-  /** Show current REPL: origin, steps, staleness. */
-  def show(): String = send("Ir.show ()")
+  /** Show REPL: origin, steps, staleness. */
+  def show(repl: String): String = send(s"Ir.show ${q(repl)}")
 
   /** Show proof state at step idx (0=base, ~1=latest). */
-  def state(idx: Int): String = send(s"Ir.state ${mlInt(idx)}")
+  def state(repl: String, idx: Int): String =
+    send(s"Ir.state ${q(repl)} ${mlInt(idx)}")
 
-  /** Print concatenated Isar text of current REPL. */
-  def text(): String = send("Ir.text ()")
+  /** Print concatenated Isar text. */
+  def text(repl: String): String = send(s"Ir.text ${q(repl)}")
 
   /** Replace step idx, mark later steps stale. */
-  def edit(idx: Int, isarText: String): String =
-    send(s"Ir.edit ${mlInt(idx)} ${q(isarText)}")
+  def edit(repl: String, idx: Int, isarText: String): String =
+    send(s"Ir.edit ${q(repl)} ${mlInt(idx)} ${q(isarText)}")
 
   /** Re-execute all stale steps. */
-  def replay(): String = send("Ir.replay ()")
+  def replay(repl: String): String = send(s"Ir.replay ${q(repl)}")
 
   /** Keep steps 0..idx, discard the rest. */
-  def truncate(idx: Int): String = send(s"Ir.truncate ${mlInt(idx)}")
+  def truncate(repl: String, idx: Int): String =
+    send(s"Ir.truncate ${q(repl)} ${mlInt(idx)}")
 
-  /** Inline current sub-REPL back into its parent. */
-  def merge(): String = send("Ir.merge ()")
+  /** Revert last step. */
+  def back(repl: String): String = send(s"Ir.back ${q(repl)}")
+
+  /** Inline sub-REPL back into its parent. */
+  def merge(repl: String): String = send(s"Ir.merge ${q(repl)}")
 
   /** Delete REPL and all its sub-REPLs. */
-  def remove(id: String): String = send(s"Ir.remove ${q(id)}")
+  def remove(repl: String): String = send(s"Ir.remove ${q(repl)}")
 
   /** List all REPLs with step counts and origins. */
   def repls(): String = send("Ir.repls ()")
@@ -165,23 +160,17 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
     send(s"Ir.source ${q(thy)} ${mlInt(start)} ${mlInt(stop)}")
 
   /** Run sledgehammer with the given timeout in seconds. */
-  def sledgehammer(secs: Int): String = send(s"Ir.sledgehammer ${mlInt(secs)}")
+  def sledgehammer(repl: String, secs: Int): String =
+    send(s"Ir.sledgehammer ${q(repl)} ${mlInt(secs)}")
 
   /** Set step timeout (0=unlimited). */
   def timeout(secs: Int): String = send(s"Ir.timeout ${mlInt(secs)}")
 
-  /** Split multi-command step idx into individual steps. */
-  def explode(idx: Int): String = send(s"Ir.explode ${mlInt(idx)}")
-
   /** Search theorems (n=max results, 0=unlimited). */
-  def findTheorems(n: Int, query: String): String =
-    send(s"Ir.find_theorems ${mlInt(n)} ${q(query)}")
+  def findTheorems(repl: String, n: Int, query: String): String =
+    send(s"Ir.find_theorems ${q(repl)} ${mlInt(n)} ${q(query)}")
 
-  /** Revert last step. */
-  def back(): String = send("Ir.back ()")
-
-  /** Update config. The argument is an ML record update function, e.g.
-    * {{{ irClient.config("(fn c => {c with color = false})") }}} */
+  /** Update config. */
   def config(f: String): String = send(s"Ir.config $f")
 
   /** Show full ML-side help text. */
@@ -200,31 +189,28 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       |  send("Ir.help ();")                Send any ML expression (auto-appends ;)
       |
       |REPL lifecycle:
-      |  init("id", List("thy1"))           Create REPL importing theories
-      |  initFromDocument("id", node, cid)  Create REPL from PIDE document state
-      |  initFromSourceLocation("id",       Create REPL from source location:
+      |  init("r", List("Main"))            Create REPL importing theories
+      |  initFromDocument("r", node, cid)   Create REPL from PIDE document state
+      |  initFromSourceLocation("r",        Create REPL from source location:
       |    file="Foo.thy", offset=42)         by file + character offset, or
       |    file="Foo.thy",                    by file + unique text pattern
       |    pattern="lemma foo")
-      |  fork("id", stateIdx)               Fork from current REPL at state index
-      |  focus("id")                        Switch to REPL
-      |  remove("id")                       Delete REPL and sub-REPLs
+      |  fork("r", "s", stateIdx)           Fork new REPL from r at state index
+      |  remove("r")                        Delete REPL and sub-REPLs
       |  repls()                            List all REPLs
       |
       |Stepping (failed steps leave REPL unchanged — don't call back() after a failure):
-      |  step("lemma \"True\" by simp")     Execute Isar text as next step
-      |  stepFile("/path/to/file")          Execute Isar from file
-      |  back()                             Revert last successful step
-      |  edit(idx, "new text")              Replace step at index
-      |  replay()                           Re-execute stale steps
-      |  truncate(idx)                      Keep steps 0..idx
-      |  explode(idx)                       Split multi-command step
-      |  merge()                            Inline sub-REPL into parent
+      |  step("r", "lemma \"True\"")        Execute Isar text as next step
+      |  back("r")                          Revert last successful step
+      |  edit("r", idx, "new text")         Replace step at index
+      |  replay("r")                        Re-execute stale steps
+      |  truncate("r", idx)                 Keep steps 0..idx
+      |  merge("r")                         Inline sub-REPL into parent
       |
       |Inspection:
-      |  show()                             Current REPL info
-      |  state(idx)                         Proof state at step (~1 = latest)
-      |  text()                             Concatenated Isar text
+      |  show("r")                          REPL info
+      |  state("r", idx)                    Proof state at step (~1 = latest)
+      |  text("r")                          Concatenated Isar text
       |
       |Theories:
       |  theories()                         List loaded theories
@@ -232,8 +218,8 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       |  source("thy", start, stop)         List theory commands
       |
       |Proof tools:
-      |  sledgehammer(30)                   Run sledgehammer (timeout in secs)
-      |  findTheorems(10, "name: *map*")    Search theorems
+      |  sledgehammer("r", 30)              Run sledgehammer (timeout in secs)
+      |  findTheorems("r", 10, "name: *")   Search theorems
       |  timeout(10)                        Set step timeout (0 = unlimited)
       |
       |Config:

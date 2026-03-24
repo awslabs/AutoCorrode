@@ -77,29 +77,26 @@ except ImportError:
 
 IR_CMDS = {
     'Ir.init':           'id ["thy"]  — create REPL "id" importing theories',
-    'Ir.init_from_document': 'id "node" cmd_id  — create REPL from PIDE document state (node+id via I/Q)',
-    'Ir.fork':           'id state_idx  — fork new REPL from current at given state (0=base, ~1=latest)',
-    'Ir.focus':          'id  — switch to REPL "id"',
-    'Ir.step':           '"isar text"  — execute Isar text as next step in current REPL',
-    'Ir.step_file':      'path  — execute Isar text from file as next step',
-    'Ir.show':           '()  — show current REPL: origin, steps, staleness',
-    'Ir.state':          'idx  — show proof state at step idx in current REPL (0=base, ~1=latest)',
-    'Ir.text':           '()  — print concatenated Isar text of current REPL',
-    'Ir.edit':           'idx "text"  — replace step idx in current REPL, mark later steps stale',
-    'Ir.replay':         '()  — re-execute all stale steps in current REPL',
-    'Ir.truncate':       'idx  — keep steps 0..idx in current REPL, discard the rest',
-    'Ir.merge':          '()  — inline current sub-REPL back into its parent',
-    'Ir.remove':         'id  — delete REPL "id" and all its sub-REPLs',
-    'Ir.repls':           '()  — list all REPLs with step counts and origins',
-    'Ir.theories':  '()  — list all theories loaded in the session',
-    'Ir.load_theory': 'name  — load theory by name, e.g. "HOL-Library.Multiset"',
-    'Ir.source':       'thy start stop  — list theory commands (start/stop are 0-based, ~N from end)',
-    'Ir.source_map':   'thy start stop  — segment-to-position map (start/stop 0-based, ~N from end)',
-    'Ir.sledgehammer':   'secs  — run sledgehammer on current proof goal with timeout',
+    'Ir.init_from_document': 'id "node" cmd_id  — create REPL from PIDE document state',
+    'Ir.fork':           'id new_id state_idx  — fork sub-REPL from id at state (~1=latest)',
+    'Ir.step':           'id "isar text"  — execute Isar text as next step',
+    'Ir.show':           'id  — show REPL: origin, steps, staleness',
+    'Ir.state':          'id idx  — show proof state at step idx (0=base, ~1=latest)',
+    'Ir.text':           'id  — print concatenated Isar text',
+    'Ir.edit':           'id idx "text"  — replace step idx, mark later steps stale',
+    'Ir.replay':         'id  — re-execute all stale steps',
+    'Ir.truncate':       'id idx  — keep steps 0..idx, discard the rest',
+    'Ir.merge':          'id  — inline sub-REPL back into its parent',
+    'Ir.remove':         'id  — delete REPL and all its sub-REPLs',
+    'Ir.repls':          '()  — list all REPLs with step counts and origins',
+    'Ir.theories':       '()  — list all theories loaded in the session',
+    'Ir.load_theory':    'name  — load theory by name, e.g. "HOL-Library.Multiset"',
+    'Ir.source':         'thy start stop  — list theory commands (start/stop 0-based, ~N from end)',
+    'Ir.source_map':     'thy start stop  — segment-to-position map (start/stop 0-based, ~N from end)',
+    'Ir.sledgehammer':   'id secs  — run sledgehammer on proof state with timeout',
     'Ir.timeout':        'secs  — set step timeout (0=unlimited, default 5s)',
-    'Ir.explode':        'idx  — split multi-command step idx into individual steps',
-    'Ir.find_theorems':  'n "query"  — search theorems (n=max results, 0=unlimited)',
-    'Ir.back':           '()  — revert last step (synonym for truncate ~1)',
+    'Ir.find_theorems':  'id n "query"  — search theorems (n=max results, 0=unlimited)',
+    'Ir.back':           'id  — revert last step (synonym for truncate ~1)',
     'Ir.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
     'Ir.help':           '()  — show full help text',
     '/sources':               'list source files from heap DB with verification status',
@@ -117,29 +114,26 @@ IR_CMDS = {
 # Structured signatures: (params_list, description)
 IR_SIGS = {
     'Ir.init':          (['id', '["thy"]'], 'create REPL "id" importing theories'),
-    'Ir.init_from_document': (['id', 'node', 'cmd_id'], 'create REPL from PIDE document state (node+id via I/Q)'),
-    'Ir.fork':          (['id', 'state_idx'], 'fork new REPL from current at given state (0=base, ~1=latest)'),
-    'Ir.focus':         (['id'], 'switch to REPL "id"'),
-    'Ir.step':          (['"isar text"'], 'execute Isar text as next step in current REPL'),
-    'Ir.step_file':     (['path'], 'execute Isar text from file as next step'),
-    'Ir.show':          ([], 'show current REPL: origin, steps, staleness'),
-    'Ir.state':         (['idx'], 'show proof state at step idx in current REPL (0=base, ~1=latest)'),
-    'Ir.text':          ([], 'print concatenated Isar text of current REPL'),
-    'Ir.edit':          (['idx', '"text"'], 'replace step idx in current REPL, mark later steps stale'),
-    'Ir.replay':        ([], 're-execute all stale steps in current REPL'),
-    'Ir.truncate':      (['idx'], 'keep steps 0..idx in current REPL, discard the rest'),
-    'Ir.merge':         ([], 'inline current sub-REPL back into its parent'),
-    'Ir.remove':        (['id'], 'delete REPL "id" and all its sub-REPLs'),
-    'Ir.repls':          ([], 'list all REPLs with step counts and origins'),
-    'Ir.theories': ([], 'list all theories loaded in the session'),
-    'Ir.load_theory': (['name'], 'load theory by name, e.g. "HOL-Library.Multiset"'),
-    'Ir.source':      (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
-    'Ir.source_map':  (['thy', 'start', 'stop'], 'segment-to-position map (start/stop 0-based, ~N from end)'),
-    'Ir.sledgehammer':  (['secs'], 'run sledgehammer on current proof goal with timeout'),
+    'Ir.init_from_document': (['id', 'node', 'cmd_id'], 'create REPL from PIDE document state'),
+    'Ir.fork':          (['id', 'new_id', 'state_idx'], 'fork sub-REPL from id at state (~1=latest)'),
+    'Ir.step':          (['id', '"isar text"'], 'execute Isar text as next step'),
+    'Ir.show':          (['id'], 'show REPL: origin, steps, staleness'),
+    'Ir.state':         (['id', 'idx'], 'show proof state at step idx (0=base, ~1=latest)'),
+    'Ir.text':          (['id'], 'print concatenated Isar text'),
+    'Ir.edit':          (['id', 'idx', '"text"'], 'replace step idx, mark later steps stale'),
+    'Ir.replay':        (['id'], 're-execute all stale steps'),
+    'Ir.truncate':      (['id', 'idx'], 'keep steps 0..idx, discard the rest'),
+    'Ir.merge':         (['id'], 'inline sub-REPL back into its parent'),
+    'Ir.remove':        (['id'], 'delete REPL and all its sub-REPLs'),
+    'Ir.repls':         ([], 'list all REPLs with step counts and origins'),
+    'Ir.theories':      ([], 'list all theories loaded in the session'),
+    'Ir.load_theory':   (['name'], 'load theory by name, e.g. "HOL-Library.Multiset"'),
+    'Ir.source':        (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
+    'Ir.source_map':    (['thy', 'start', 'stop'], 'segment-to-position map (start/stop 0-based, ~N from end)'),
+    'Ir.sledgehammer':  (['id', 'secs'], 'run sledgehammer on proof state with timeout'),
     'Ir.timeout':       (['secs'], 'set step timeout (0=unlimited, default 5s)'),
-    'Ir.explode':       (['idx'], 'split multi-command step idx into individual steps'),
-    'Ir.find_theorems': (['n', '"query"'], 'search theorems (n=max results, 0=unlimited)'),
-    'Ir.back':          ([], 'revert last step (synonym for truncate ~1)'),
+    'Ir.find_theorems': (['id', 'n', '"query"'], 'search theorems (n=max results, 0=unlimited)'),
+    'Ir.back':          (['id'], 'revert last step (synonym for truncate ~1)'),
     'Ir.config':        (['f'], 'update config (color, show_ignored, full_spans, auto_replay)'),
     'Ir.help':          ([], 'show full help text'),
     '/sources':         ([], 'list source files from heap DB with verification status'),
@@ -195,7 +189,7 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                     (?P<cmd>Ir\.init_from_document) \s+ (?P<rid>"[^"]*") \s+ (?P<sid>"[^"]*") \s+ (?P<num>[^\s]+)
                 |
                     # init: id then theory list
-                    (?P<cmd>Ir\.init) \s+ (?P<sid>"[^"]*") \s+
+                    (?P<cmd>Ir\.init) \s+ (?P<rid>"[^"]*") \s+
                         \[ \s* (?P<thy>"[^"]*") \s*
                            (, \s* (?P<thy>"[^"]*") \s* )*
                         \]?
@@ -206,29 +200,41 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                 |
                     (?P<cmd>Ir\.source) \s+ (?P<thy>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<num>[^\s]+)
                 |
-                    (?P<cmd>Ir\.focus)  \s+ (?P<rid>"[^"]*")
-                |
                     (?P<cmd>Ir\.remove) \s+ (?P<rid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.fork)   \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+)
+                    # fork: id new_id state_idx
+                    (?P<cmd>Ir\.fork) \s+ (?P<rid>"[^"]*") \s+ (?P<sid>"[^"]*") \s+ (?P<num>[^\s]+)
                 |
-                    (?P<cmd>Ir\.step)      \s+ (?P<sid>"[^"]*")
+                    # step: id "isar text"
+                    (?P<cmd>Ir\.step) \s+ (?P<rid>"[^"]*") \s+ (?P<sid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.step_file) \s+ (?P<sid>"[^"]*")
+                    # edit: id idx "text"
+                    (?P<cmd>Ir\.edit) \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.edit)   \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
+                    # state: id idx
+                    (?P<cmd>Ir\.state) \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+)
                 |
-                    (?P<cmd>Ir\.state)        \s+ (?P<num>[^\s]+)
+                    # truncate: id idx
+                    (?P<cmd>Ir\.truncate) \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+)
                 |
-                    (?P<cmd>Ir\.truncate)     \s+ (?P<num>[^\s]+)
+                    # sledgehammer: id secs
+                    (?P<cmd>Ir\.sledgehammer) \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+)
                 |
-                    (?P<cmd>Ir\.timeout)      \s+ (?P<num>[^\s]+)
+                    # find_theorems: id n "query"
+                    (?P<cmd>Ir\.find_theorems) \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.sledgehammer) \s+ (?P<num>[^\s]+)
+                    # Commands taking just a REPL id: show, text, replay, merge, back
+                    (?P<cmd>Ir\.show)    \s+ (?P<rid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.explode)      \s+ (?P<num>[^\s]+)
+                    (?P<cmd>Ir\.text)    \s+ (?P<rid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.find_theorems) \s+ (?P<num>[^\s]+) \s+ (?P<sid>"[^"]*")
+                    (?P<cmd>Ir\.replay)  \s+ (?P<rid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.merge)   \s+ (?P<rid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.back)    \s+ (?P<rid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.timeout) \s+ (?P<num>[^\s]+)
                 |
                     # /-commands with quoted arguments
                     (?P<cmd>/source-map) \s+ (?P<thy>"[^"]*")
@@ -567,6 +573,7 @@ class PolyMLProcess:
         accumulated in self.startup_output for diagnostics."""
         import re
         self.token = None
+        self.max_connections = None
         self.startup_output = []
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and self.alive():
@@ -576,10 +583,13 @@ class PolyMLProcess:
             self.startup_output.append(line.rstrip("\n"))
             m = re.search(
                 r'Tcp_Handler: listening on 127\.0\.0\.1:(\d+)'
-                r'(?: \(token "([^"]*)"\))?', line)
+                r'(?: \(token "([^"]*)")?'
+                r'(?:, max (\d+) connections)?', line)
             if m:
                 self.port = int(m.group(1))
                 self.token = m.group(2)
+                if m.group(3):
+                    self.max_connections = int(m.group(3))
                 return self.port
         return None
 
@@ -764,18 +774,95 @@ class PolyMLConnection:
         self._buf = b""
 
 
-class Server:
-    """TCP server that serializes client commands to the Poly/ML process."""
+class MLConnectionPool:
+    """Fixed pool of persistent TCP connections to the ML_Repl.
 
-    def __init__(self, poly, port, host="127.0.0.1", mgmt_output=None,
+    All connections are established at startup and kept alive for the
+    lifetime of repl.py.  One connection is reserved for the management
+    console; the remainder are available for client requests.
+
+    acquire() blocks until a pool connection is free, release() returns it.
+    drain_and_release() handles abandoned requests: reads until "done" in
+    a background thread, then returns the connection to the pool.
+    """
+
+    def __init__(self, host, port, token, size=5):
+        self.host = host
+        self.ml_port = port
+        self.token = token
+        self._size = size
+        self._lock = threading.Lock()
+        self._semaphore = threading.Semaphore(max(1, size - 1))
+        self._idle = []
+        self._console = None
+        # Open pool connections
+        for _ in range(max(1, size - 1)):
+            conn = PolyMLConnection(host, port, token)
+            conn.connect()
+            self._idle.append(conn)
+        # Reserved console connection
+        self._console = PolyMLConnection(host, port, token)
+        self._console.connect()
+
+    @property
+    def console(self):
+        """The reserved console connection (not in the shared pool)."""
+        return self._console
+
+    def acquire(self):
+        """Block until a pool connection is available, then return it."""
+        self._semaphore.acquire()
+        with self._lock:
+            return self._idle.pop()
+
+    def release(self, conn):
+        """Return a connection to the idle pool."""
+        with self._lock:
+            self._idle.append(conn)
+        self._semaphore.release()
+
+    def drain_and_release(self, conn):
+        """Background: read until 'done' on a busy connection, then release."""
+        def _drain():
+            c = conn
+            try:
+                while True:
+                    kind, _, _ = c.read_message()
+                    if kind == "done":
+                        break
+            except Exception:
+                c.close()
+                c = PolyMLConnection(self.host, self.ml_port, self.token)
+                c.connect()
+            self.release(c)
+        threading.Thread(target=_drain, daemon=True).start()
+
+    def alive(self):
+        """Check if the console connection is alive."""
+        return self._console is not None and self._console.alive()
+
+    def close_all(self):
+        """Close all connections."""
+        if self._console:
+            self._console.close()
+        with self._lock:
+            for conn in self._idle:
+                conn.close()
+            self._idle.clear()
+
+
+class Server:
+    """TCP server that dispatches client commands to a pool of ML connections."""
+
+    def __init__(self, pool, port, host="127.0.0.1", mgmt_output=None,
                  session=None, directory=None, heap_info=None,
                  remote_host=None):
-        self.poly = poly
+        self.pool = pool
+        self.poly = pool.console  # convenience alias for console access
         self.host = host
         self.token = os.environ.get("IR_AUTH_TOKEN", "").strip() or secrets.token_urlsafe(24)
         self.mgmt_output = mgmt_output or print
         self.remote_host = remote_host
-        self.lock = threading.Lock()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if port == 0:
@@ -865,8 +952,11 @@ class Server:
         Returns {seg_idx: {keyword, line, offset, file}} or None."""
         if theory in self._source_maps:
             return self._source_maps[theory]
-        with self.lock:
-            raw = self.poly.send(f'Ir.source_map "{theory}" 0 ~1;')
+        conn = self.pool.acquire()
+        try:
+            raw = conn.send(f'Ir.source_map "{theory}" 0 ~1;')
+        finally:
+            self.pool.release(conn)
         result = {}
         for line in strip_yxml(raw).splitlines():
             # Format: idx(5)  keyword(20)  line(6)  offset(6)  file
@@ -1044,8 +1134,11 @@ class Server:
                     "(rebuild with record_theories=true?)")
 
         # Get the rich Ir.source output (YXML markup)
-        with self.lock:
-            raw_source = self.poly.send(f'Ir.source "{theory}" 0 ~1;')
+        conn = self.pool.acquire()
+        try:
+            raw_source = conn.send(f'Ir.source "{theory}" 0 ~1;')
+        finally:
+            self.pool.release(conn)
 
         # Get timing data
         timing_by_offset = {}
@@ -1102,8 +1195,11 @@ class Server:
         theory = None
         if ".thy" in target.lower():
             # File pattern — find matching theory
-            with self.lock:
-                raw = self.poly.send("Ir.theories ();")
+            conn = self.pool.acquire()
+            try:
+                raw = conn.send("Ir.theories ();")
+            finally:
+                self.pool.release(conn)
             theory_names = [l.strip() for l in
                             strip_yxml(raw).splitlines() if l.strip()]
             stem = os.path.splitext(os.path.basename(target))[0]
@@ -1226,17 +1322,31 @@ class Server:
                     if not logged_connect:
                         self.log(f"{GREEN}[+] {peer} connected ({self.num_clients} total){RST}")
                         logged_connect = True
-                    with self.lock:
-                        if not self.poly.alive():
-                            msg = f"ERR: Poly/ML process terminated\n{SENTINEL}\n"
-                            client.sendall(msg.encode("utf-8"))
-                            disconnect_reason = "Poly/ML process terminated"
-                            self.running = False
-                            return
+                    ml_conn = self.pool.acquire()
+                    try:
+                        if not ml_conn.alive():
+                            ml_conn.close()
+                            ml_conn = PolyMLConnection(
+                                self.pool.host, self.pool.ml_port,
+                                self.pool.token)
+                            ml_conn.connect()
                         self.log_input(f"[{peer}]", command)
                         def on_msg(kind, props, body):
                             self.log_output(f"[{peer}]", kind, props, body)
-                        raw_output = self.poly.send_streaming(command, on_msg)
+                        raw_output = ml_conn.send_streaming(command, on_msg)
+                        self.pool.release(ml_conn)
+                        ml_conn = None
+                    except (ConnectionResetError, BrokenPipeError):
+                        # Client disconnected mid-request — drain ML in background
+                        if ml_conn is not None:
+                            self.pool.drain_and_release(ml_conn)
+                            ml_conn = None
+                        raise
+                    except Exception:
+                        if ml_conn is not None:
+                            self.pool.release(ml_conn)
+                            ml_conn = None
+                        raise
                     response = (apply_transforms(tcp_transforms, raw_output) +
                                 "\n" + SENTINEL + "\n").encode("utf-8")
                     client.sendall(response)
@@ -1387,10 +1497,9 @@ def make_toolbar(completer):
         var_to_params = {}  # varname -> [param_idx, ...]
         for i, p in enumerate(params):
             if p in ('"thy"', '["thy"]', 'name', 'thy',
-                     '"THEORY"', '"THEORY"', '"FILE"'):
+                     '"THEORY"', '"FILE"'):
                 var_to_params.setdefault('thy', []).append(i)
-            elif p == 'id':
-                var_to_params.setdefault('sid', []).append(i)
+            elif p in ('id', 'new_id'):
                 var_to_params.setdefault('rid', []).append(i)
             elif p in ('idx', 'state_idx', 'secs', 'start', 'stop',
                         'n', 'cmd_id', 'LINE', 'START', 'END'):
@@ -1512,35 +1621,35 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
         return False
     command = " ".join(cmd_lines).strip()
     cmd_lines.clear()
-    with server.lock:
-        if not server.poly.alive():
-            out(f"{RED}ERR: Poly/ML process terminated{RST}")
-            return True
-        def on_msg(kind, props, body):
-            if body and strip_yxml(body).strip():
-                out(apply_transforms(console_transforms, body))
-            server.log_output("[this]", kind, props, body)
-        server.log_input("[this]", command)
-        try:
-            output = server.poly.send_streaming(command, on_msg)
-        except EOFError as e:
-            out(f"{RED}ERR: ML backend connection closed: {e}{RST}")
-            out(f"{DIM}The Poly/ML process may have crashed. "
-                f"Check if it is still running.{RST}")
-            return False
-        except OSError as e:
-            out(f"{RED}ERR: connection error: {e}{RST}")
-            return False
-        except Exception as e:
-            out(f"{RED}ERR: {type(e).__name__}: {e}{RST}")
-            return False
+    console = server.pool.console
+    if not console.alive():
+        out(f"{RED}ERR: Poly/ML process terminated{RST}")
+        return True
+    def on_msg(kind, props, body):
+        if body and strip_yxml(body).strip():
+            out(apply_transforms(console_transforms, body))
+        server.log_output("[this]", kind, props, body)
+    server.log_input("[this]", command)
+    try:
+        output = console.send_streaming(command, on_msg)
+    except EOFError as e:
+        out(f"{RED}ERR: ML backend connection closed: {e}{RST}")
+        out(f"{DIM}The Poly/ML process may have crashed. "
+            f"Check if it is still running.{RST}")
+        return False
+    except OSError as e:
+        out(f"{RED}ERR: connection error: {e}{RST}")
+        return False
+    except Exception as e:
+        out(f"{RED}ERR: {type(e).__name__}: {e}{RST}")
+        return False
     # Update completer from command output
     if completer:
         try:
             if command.startswith("Ir.theories"):
                 completer.learn_theories(output)
             elif command.startswith("Ir.load_theory"):
-                refresh = server.poly.send("Ir.theories ();")
+                refresh = console.send("Ir.theories ();")
                 completer.learn_theories(refresh)
             elif command.startswith("Ir.repls"):
                 completer.learn_repls(output)
@@ -1912,6 +2021,9 @@ def main():
     p.add_argument("--mgmt-socket", default=None,
                    help="Unix socket path for --daemon/--attach "
                         "(default: auto-derived from TCP port)")
+    p.add_argument("--pool-size", type=int, default=5,
+                   help="Number of persistent ML connections (default: 5, "
+                        "1 reserved for console)")
     args = p.parse_args()
     if args.repl_only:
         args.no_heap_db = True
@@ -2027,6 +2139,12 @@ def main():
 
     poly = None
     bash_server = None
+    remote_host = None
+    quiet = args.daemon
+
+    def _log(msg):
+        """Startup log: plain in daemon mode, styled otherwise."""
+        print(msg, flush=True)
 
     if args.expect_ml:
         # --expect-ml: connect to an already-running ML_Repl
@@ -2053,11 +2171,6 @@ def main():
             sys.exit(1)
     else:
         # Start our own Poly/ML
-        quiet = args.daemon
-
-        def _log(msg):
-            """Startup log: plain in daemon mode, styled otherwise."""
-            print(msg, flush=True)
 
         # Detect remote execution via ISABELLE_REMOTE
         remote_host = None
@@ -2240,7 +2353,18 @@ def main():
     signal.signal(signal.SIGTERM, _signal_cleanup)
     signal.signal(signal.SIGHUP, _signal_cleanup)
 
-    server = Server(conn, args.port, host="127.0.0.1",
+    pool_size = args.pool_size
+    if poly and poly.max_connections is not None:
+        ml_max = poly.max_connections
+        if pool_size > ml_max:
+            print(f"{YELLOW}Pool size {pool_size} exceeds ML connection limit "
+                  f"{ml_max}, capping to {ml_max}{RST}", flush=True)
+            pool_size = ml_max
+    pool = MLConnectionPool(
+        host=conn.host, port=conn.port, token=conn.token,
+        size=pool_size)
+    conn.close()  # pool has its own connections; close the probe connection
+    server = Server(pool, args.port, host="127.0.0.1",
                     session=args.session, directory=args.dir,
                     heap_info=heap_info, remote_host=remote_host)
     mgmt_output = server.mgmt_output
@@ -2311,8 +2435,7 @@ def main():
             pass
     elif args.daemon:
         completer = IrCompleter()
-        with server.lock:
-            completer.learn_theories(server.poly.send("Ir.theories ();"))
+        completer.learn_theories(server.pool.console.send("Ir.theories ();"))
         sock_path = args.mgmt_socket or mgmt_socket_path(server.port)
         mgmt_sock = MgmtSocketServer(server, sock_path, completer=completer)
         mgmt_output = server.mgmt_output  # now points to mgmt_sock.broadcast
@@ -2346,8 +2469,7 @@ def main():
         histfile = os.path.expanduser("~/.ir_repl_history")
         completer = IrCompleter()
         # Seed completer with loaded theories and source files
-        with server.lock:
-            completer.learn_theories(server.poly.send("Ir.theories ();"))
+        completer.learn_theories(server.pool.console.send("Ir.theories ();"))
         session = PromptSession(history=FileHistory(histfile), completer=completer,
                                 complete_while_typing=Always())
         try:

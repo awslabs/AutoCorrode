@@ -124,7 +124,8 @@ object IQExploreDockable {
     val isabellePath = Isabelle_System.getenv("ISABELLE_HOME")
     val pb = new ProcessBuilder("python3", replPy, "--daemon", "--expect-ml",
       "--poly-ml-port", mlPort.toString,
-      "--isabelle", isabellePath)
+      "--isabelle", isabellePath,
+      "--no-heap-db")
     IQPlugin.mlReplToken.foreach { tok =>
       pb.environment().put("IR_REPL_AUTH_TOKEN", tok)
     }

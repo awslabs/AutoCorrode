@@ -41,7 +41,6 @@ enum IQToolName(val wire: String) {
   case ReplInit extends IQToolName("repl_init")
   case ReplInitFromSource extends IQToolName("repl_init_from_source")
   case ReplFork extends IQToolName("repl_fork")
-  case ReplFocus extends IQToolName("repl_focus")
   case ReplStep extends IQToolName("repl_step")
   case ReplShow extends IQToolName("repl_show")
   case ReplState extends IQToolName("repl_state")

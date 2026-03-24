@@ -3,19 +3,27 @@
 
 (* Generic TCP line server with PIDE-compatible message framing.
 
-   Listens on a localhost port, accepts one connection at a time.
-   For each connection, wraps the socket into BinIO streams (following
-   Socket_IO) and passes them to a configurable handler.  Input is
-   read line-by-line; output uses Byte_Message framing via the
-   BinIO.outstream (typically through a Message_Channel).
+   Listens on a localhost port, accepts concurrent connections (one
+   Future.fork per connection).  For each connection, wraps the socket
+   into BinIO streams (following Socket_IO) and passes them to a
+   configurable handler.
 
-   The handler is a Synchronized var so it can be registered after
-   the structure is loaded.  The server knows nothing about ML evaluation,
-   Isabelle, or output capture — it is a pure TCP transport. *)
+   Two handler modes:
+   - connection_handler (preferred): receives (in_stream, out_stream),
+     manages the full connection lifecycle including the read loop.
+   - handler (legacy): receives (line, out_stream) per line.
+
+   The server knows nothing about ML evaluation, Isabelle, or output
+   capture — it is a pure TCP transport. *)
 
 signature TCP_HANDLER =
 sig
   val handler : (string -> BinIO.outstream -> unit) Synchronized.var
+  val connection_handler :
+    (BinIO.instream -> BinIO.outstream -> unit) option Synchronized.var
+  val max_connections : int Synchronized.var
+  val make_streams :
+    Socket.active INetSock.stream_sock -> BinIO.instream * BinIO.outstream
   val is_running : unit -> bool
   val get_port : unit -> int option
   val start : int -> int * string * (unit -> unit)
@@ -29,6 +37,23 @@ struct
 val handler : (string -> BinIO.outstream -> unit) Synchronized.var =
   Synchronized.var "Tcp_Handler.handler"
     (fn _ => fn out => Byte_Message.write_message_string out ["ERROR: no handler registered"]);
+
+(* Per-connection handler: if set, receives (in_stream, out_stream) and
+   manages the full connection lifecycle including the read loop.
+   If NONE, the legacy per-line handler + built-in loop is used. *)
+val connection_handler :
+    (BinIO.instream -> BinIO.outstream -> unit) option Synchronized.var =
+  Synchronized.var "Tcp_Handler.connection_handler" NONE;
+
+(* Connection limit: each connection blocks a Future worker thread on I/O,
+   so we cap at max_threads - 2 to leave headroom for accept_loop + evals.
+   accept_loop blocks (via guarded_access) when the limit is reached. *)
+val active_connections : int Synchronized.var =
+  Synchronized.var "Tcp_Handler.active_connections" 0;
+
+val max_connections : int Synchronized.var =
+  Synchronized.var "Tcp_Handler.max_connections"
+    (Int.max (2, Multithreading.max_threads () - 2));
 
 val server_socket : Socket.passive INetSock.stream_sock option Synchronized.var =
   Synchronized.var "Tcp_Handler.socket" NONE;
@@ -115,33 +140,58 @@ fun serve_client socket =
           (case Byte_Message.read_line in_stream of
             NONE => false
           | SOME line_bytes => constant_time_equal (Bytes.content line_bytes) expected)
-    fun loop () =
+    fun line_loop () =
       case Byte_Message.read_line in_stream of
         NONE => ()
       | SOME line_bytes =>
           let val line = Bytes.content line_bytes
-          in if line = "" then loop ()
+          in if line = "" then line_loop ()
              else
                let val h = Synchronized.value handler
-               in h line out_stream; loop () end
+               in h line out_stream; line_loop () end
           end
-  in if check_token () then loop () else ()
+  in
+    if check_token () then
+      case Synchronized.value connection_handler of
+        SOME ch => ch in_stream out_stream
+      | NONE => line_loop ()
+    else ()
   end
      handle OS.SysErr _ => ()
           | IO.Io _ => ();
 
-(* Accept loop: one client at a time until socket is closed. *)
+(* Wait until active_connections < max_connections. *)
+fun await_connection_slot () =
+  Synchronized.guarded_access active_connections (fn n =>
+    if n < Synchronized.value max_connections
+    then SOME ((), n + 1)  (* increment and proceed *)
+    else NONE);            (* block until signalled *)
+
+fun release_connection_slot () =
+  Synchronized.change active_connections (fn n => Int.max (0, n - 1));
+
+(* Accept loop: fork a Future per connection, with a connection limit
+   to avoid exhausting the worker thread pool. *)
 fun accept_loop () =
   case Synchronized.value server_socket of
     NONE => ()
   | SOME ssock =>
-      let val (client, _) = Socket.accept ssock
-              handle OS.SysErr _ => raise Fail "stopped"
-      in (serve_client client;
-          Socket.close client handle OS.SysErr _ => ();
-          accept_loop ())
-         handle Fail "stopped" => ()
-      end;
+      let
+        val _ = await_connection_slot ()
+        val (client, _) = Socket.accept ssock
+            handle OS.SysErr msg =>
+              (release_connection_slot (); raise OS.SysErr msg)
+      in ignore (Future.fork (fn () =>
+           ((serve_client client
+               handle OS.SysErr _ => ()
+                    | IO.Io _ => ()
+                    | Fail _ => ());
+            Socket.close client handle OS.SysErr _ => ();
+            release_connection_slot ())));
+         accept_loop ()
+      end
+      handle Fail "stopped" => ()
+           | OS.SysErr _ => ();
 
 val default_port = 9146;
 
@@ -159,20 +209,24 @@ fun start port =
              Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, 0)))
         else
           Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, port))
-      val _ = Socket.listen (ssock, 1)
+      val _ = Socket.listen (ssock, 16)
       val (_, actual_port) = INetSock.fromAddr (Socket.Ctl.getSockName ssock)
       val tok = generate_token ()
       val _ = Synchronized.change server_socket (K (SOME ssock))
       val _ = Synchronized.change server_token (K (SOME tok))
+      val max_conn = Synchronized.value max_connections
       val _ = writeln ("Tcp_Handler: listening on 127.0.0.1:" ^
-                        string_of_int actual_port ^ " (token " ^ quote tok ^ ")")
+                        string_of_int actual_port ^
+                        " (token " ^ quote tok ^
+                        ", max " ^ string_of_int max_conn ^ " connections)")
   in (actual_port, tok, accept_loop) end;
 
 fun stop () =
   (Synchronized.change server_socket (fn old =>
     (case old of SOME s => (Socket.close s handle OS.SysErr _ => ()) | NONE => ();
      NONE));
-   Synchronized.change server_token (K NONE));
+   Synchronized.change server_token (K NONE);
+   Synchronized.change active_connections (K 0));
 
 fun is_running () = is_some (Synchronized.value server_socket);
 
