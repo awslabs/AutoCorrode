@@ -1035,6 +1035,7 @@ _MGMT_COMMANDS = {
     "/status": "Show proxy state",
     "/tunnels": "Show active SSH tunnels",
     "/rewrites": "Show path rewrites (local → remote)",
+    "/syncs": "Show synced files/directories",
     "/quit": "Detach",
 }
 
@@ -1098,6 +1099,7 @@ class ProxyMgmtServer:
         self.verbosity = 1
         self.tunnels = {}  # label -> "local:N -> remote:M"
         self.rewrites = []  # list of (old, new) path rewrites
+        self.syncs = []     # list of sync records: (direction, description, local, remote, files)
         self.bytes_transferred = [0]
         self.clients = []
         self.clients_lock = threading.Lock()
@@ -1202,6 +1204,7 @@ class ProxyMgmtServer:
             self.broadcast(f"  {YELLOW}/status{RST}          Show proxy state")
             self.broadcast(f"  {YELLOW}/tunnels{RST}         Show active SSH tunnels")
             self.broadcast(f"  {YELLOW}/rewrites{RST}        Show path rewrites (local → remote)")
+            self.broadcast(f"  {YELLOW}/syncs{RST}           Show synced files/directories")
             self.broadcast(f"  {YELLOW}/quit{RST}            Detach")
             self.broadcast(f"  {YELLOW}/help{RST}            This help")
         elif cmd == "/verbosity":
@@ -1235,6 +1238,20 @@ class ProxyMgmtServer:
                 for old, new in self.rewrites:
                     self.broadcast(f"  {old}")
                     self.broadcast(f"    {CYAN}→{RST} {new}")
+        elif cmd == "/syncs":
+            if not self.syncs:
+                self.broadcast(f"{DIM}No synced files/directories{RST}")
+            else:
+                self.broadcast(f"{BOLD}{len(self.syncs)} sync(s):{RST}")
+                for direction, desc, local, remote, files in self.syncs:
+                    arrow = "→" if direction == "push" else "←"
+                    self.broadcast(f"  {CYAN}{desc}{RST} ({arrow} {direction})")
+                    self.broadcast(f"    local:  {local}")
+                    self.broadcast(f"    remote: {remote}")
+                    if files:
+                        self.broadcast(f"    {DIM}{len(files)} file(s):{RST}")
+                        for f in files:
+                            self.broadcast(f"      {DIM}{f}{RST}")
         elif cmd == "/quit":
             self.broadcast(f"{DIM}Detaching...{RST}")
             # Close the requesting client (the broadcast above will reach it)
@@ -1675,6 +1692,7 @@ def main():
         logger.info(f"Synced {len(uncovered)} --use files to {host}:{remote_use_dir}/")
         for rp in rel_paths:
             logger.debug(f"  {rp}")
+        mgmt.syncs.append(("push", "--use files", common_parent, f"{host}:{remote_use_dir}", rel_paths))
         synced_dirs.add(common_parent)
         argv_rewrites.append((common_parent, remote_use_dir))
         argv_rewrites.sort(key=lambda x: -len(x[0]))
@@ -1772,6 +1790,10 @@ def main():
     remote_opts = f"{remote_tmp}/{os.path.basename(tmp_opts.name)}"
     remote_init = f"{remote_tmp}/{os.path.basename(tmp_init.name)}" if tmp_init else ""
     logger.debug(f"Copied {len(local_files)} files to {host}:{remote_tmp}/")
+    file_labels = ["ISABELLE_PROCESS_OPTIONS"]
+    if tmp_init:
+        file_labels.append("ISABELLE_INIT_SESSION")
+    mgmt.syncs.append(("push", "options/init files", "(temp)", f"{host}:{remote_tmp}", file_labels))
     os.unlink(tmp_opts.name)
     if tmp_init:
         os.unlink(tmp_init.name)
@@ -1812,6 +1834,9 @@ def main():
             check=True)
         remote_cd = f"cd {shlex.quote(remote_session_dir)} && "
         logger.debug(f"Remote cwd (synced): {remote_session_dir}")
+        src_files = sorted(os.path.relpath(os.path.join(dp, f), local_cwd)
+                           for dp, _, fns in os.walk(local_cwd) for f in fns)
+        mgmt.syncs.append(("push", "session sources", local_cwd, f"{host}:{remote_session_dir}", src_files))
 
     # Sync imported session directories that are outside ISABELLE_HOME.
     # The ML process needs .thy files for sessions listed in the ROOT file's
@@ -1845,6 +1870,9 @@ def main():
                  "--chmod=a-w", sdir + "/", f"{host}:{remote_sdir}/"],
                 check=True)
             imported_session_rewrites.append((sdir, remote_sdir))
+            imp_files = sorted(os.path.relpath(os.path.join(dp, f), sdir)
+                               for dp, _, fns in os.walk(sdir) for f in fns)
+            mgmt.syncs.append(("push", f"imported session '{sname}'", sdir, f"{host}:{remote_sdir}", imp_files))
 
     # Build path rewrite table for PIDE protocol interception (build_session).
     # Same as argv_rewrites, plus source dir rewrite for user sessions.
