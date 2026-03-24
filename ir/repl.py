@@ -523,6 +523,7 @@ class PolyMLProcess:
         self.port = port  # updated to actual port after start
         self.cmd = self._build_cmd(isabelle, session, directory, ml_dir, port,
                                    bash_server=bash_server, redirect=redirect)
+        self.startup_output = []
         self.proc = subprocess.Popen(
             self.cmd,
             stdin=subprocess.DEVNULL,
@@ -534,14 +535,17 @@ class PolyMLProcess:
 
     def read_actual_port(self, timeout=60):
         """Read stdout until Tcp_Handler reports its port and token.
-        Updates self.port and self.token."""
+        Updates self.port and self.token.  Non-matching lines are
+        accumulated in self.startup_output for diagnostics."""
         import re
         self.token = None
+        self.startup_output = []
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and self.alive():
             line = self.proc.stdout.readline().decode("utf-8", errors="replace")
             if not line:
                 break
+            self.startup_output.append(line.rstrip("\n"))
             m = re.search(
                 r'Tcp_Handler: listening on 127\.0\.0\.1:(\d+)'
                 r'(?: \(token "([^"]*)"\))?', line)
@@ -1732,6 +1736,9 @@ def main():
             if done: done.set(); t.join()
             print(f"{RED}Poly/ML process exited or timed out before "
                   f"reporting port{RST}", file=sys.stderr)
+            if poly.startup_output:
+                for line in poly.startup_output:
+                    print(f"{DIM}{line}{RST}", file=sys.stderr)
             poly.close()
             sys.exit(1)
         conn = PolyMLConnection(port=actual_port, token=poly.token)
