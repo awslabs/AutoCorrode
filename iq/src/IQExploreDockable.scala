@@ -97,10 +97,12 @@ object IQExploreDockable {
     // Start ML_Repl (port 0 = pick any free port)
     PIDE.session.protocol_command("IR_Repl.start")
     onStatus("Sent IR_Repl.start")
-    // Wait for ML_Repl to report its port (max 10s)
+    // Wait for ML_Repl to report its port (max 30s — protocol messages
+    // are delivered asynchronously and can be delayed by message channel
+    // backlog when the ML side is busy with theory processing)
     val mlPort = {
       var attempts = 0
-      while (IQPlugin.mlReplPort.isEmpty && attempts < 20) {
+      while (IQPlugin.mlReplPort.isEmpty && attempts < 60) {
         Thread.sleep(500)
         attempts += 1
         if (attempts % 4 == 0)
@@ -111,7 +113,7 @@ object IQExploreDockable {
           onStatus("ML_Repl reported port " + p)
           p
         case None =>
-          val msg = "ML_Repl did not report port within 10s — cannot start repl.py"
+          val msg = "ML_Repl did not report port within 30s — cannot start repl.py"
           onStatus(msg)
           startupError = Some(msg)
           started = false

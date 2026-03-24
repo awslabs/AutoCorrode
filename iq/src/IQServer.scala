@@ -714,7 +714,6 @@ class IQServer(
       val p = params.toMap
       p.get("ir_home").collect { case s: String if s.nonEmpty => s }
         .foreach(h => IQExploreDockable.irHome = Some(h))
-      IQExploreDockable.ensureStarted()
       IQExploreDockable.awaitClient() match {
         case Some(c) if c.isConnected =>
           val dir = IQExploreDockable.connectedIRDir.getOrElse("unknown")
