@@ -233,7 +233,11 @@ val _ =
             | NONE => ();
              Output.writeln ("IR_Repl: started on port " ^ string_of_int actual_port))
         | NONE =>
-            Output.writeln "IR_Repl: already running"
+            (case (Tcp_Handler.get_port (), Tcp_Handler.token ()) of
+              (SOME p, SOME t) => report_port p t
+            | (SOME p, NONE) => report_port p ""
+            | _ => ();
+             Output.writeln "IR_Repl: already running")
       end);
 
 val _ =
