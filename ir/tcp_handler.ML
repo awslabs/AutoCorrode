@@ -17,6 +17,7 @@ signature TCP_HANDLER =
 sig
   val handler : (string -> BinIO.outstream -> unit) Synchronized.var
   val is_running : unit -> bool
+  val get_port : unit -> int option
   val start : int -> int * string * (unit -> unit)
   val stop : unit -> unit
   val token : unit -> string option
@@ -36,6 +37,11 @@ val server_token : string option Synchronized.var =
   Synchronized.var "Tcp_Handler.token" NONE;
 
 fun token () = Synchronized.value server_token;
+
+fun get_port () =
+  Option.map (fn ssock =>
+    #2 (INetSock.fromAddr (Socket.Ctl.getSockName ssock)))
+  (Synchronized.value server_socket);
 
 (* Constant-time string comparison to avoid timing side-channels.
    XORs every byte pair and ORs results together — never short-circuits. *)
