@@ -24,6 +24,9 @@ object IQPlugin {
   /** Token reported by ML_Repl via PIDE protocol message. */
   @volatile var mlReplToken: Option[String] = None
 
+  /** Max connections reported by ML_Repl via PIDE protocol message. */
+  @volatile var mlReplMaxConn: Option[Int] = None
+
   /** Port of the I/R REPL (repl.py), set by IQExploreDockable on connect. */
   @volatile var irReplPort: Option[Int] = None
 
@@ -74,6 +77,14 @@ object IQPlugin {
   class IR_Repl_Handler extends Session.Protocol_Handler {
     private def handle_port(msg: Prover.Protocol_Output): Boolean = {
       msg.properties match {
+        case List(_, ("port", isabelle.Value.Int(port)), ("token", tok),
+                  ("max_connections", isabelle.Value.Int(mc))) =>
+          mlReplPort = Some(port)
+          mlReplToken = Some(tok)
+          mlReplMaxConn = Some(mc)
+          Output.writeln("IQPlugin: ML_Repl port = " + port +
+            ", max_connections = " + mc)
+          true
         case List(_, ("port", isabelle.Value.Int(port)), ("token", tok)) =>
           mlReplPort = Some(port)
           mlReplToken = Some(tok)

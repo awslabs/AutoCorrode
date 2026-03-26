@@ -126,6 +126,9 @@ object IQExploreDockable {
       "--poly-ml-port", mlPort.toString,
       "--isabelle", isabellePath,
       "--no-heap-db")
+    IQPlugin.mlReplMaxConn.foreach { mc =>
+      pb.command().addAll(java.util.List.of("--pool-size", mc.toString))
+    }
     IQPlugin.mlReplToken.foreach { tok =>
       pb.environment().put("IR_REPL_AUTH_TOKEN", tok)
     }

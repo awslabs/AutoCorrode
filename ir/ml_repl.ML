@@ -256,7 +256,9 @@ fun report_port port token =
   Output.protocol_message
     [Markup.function "IR_Repl.port",
      ("port", Value.print_int port),
-     ("token", token)] [];
+     ("token", token),
+     ("max_connections",
+      Value.print_int (Synchronized.value Tcp_Handler.max_connections))] [];
 
 val _ =
   Protocol_Command.define "IR_Repl.start"

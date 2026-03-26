@@ -670,8 +670,10 @@ class PolyMLConnection:
         self.sock = None
         self._buf = b""
 
-    def connect(self):
-        self.sock = socket.create_connection((self.host, self.port))
+    def connect(self, timeout=None):
+        self.sock = socket.create_connection((self.host, self.port),
+                                             timeout=timeout)
+        self.sock.settimeout(None)  # back to blocking for subsequent I/O
         self._buf = b""
         if self.token:
             self.sock.sendall((self.token + "\n").encode())
@@ -786,23 +788,34 @@ class MLConnectionPool:
     a background thread, then returns the connection to the pool.
     """
 
-    def __init__(self, host, port, token, size=5):
+    def __init__(self, host, port, token, size=5, connect_timeout=3):
         self.host = host
         self.ml_port = port
         self.token = token
         self._size = size
         self._lock = threading.Lock()
-        self._semaphore = threading.Semaphore(max(1, size - 1))
-        self._idle = []
-        self._console = None
-        # Open pool connections
-        for _ in range(max(1, size - 1)):
-            conn = PolyMLConnection(host, port, token)
-            conn.connect()
-            self._idle.append(conn)
-        # Reserved console connection
-        self._console = PolyMLConnection(host, port, token)
-        self._console.connect()
+        # Open connections (stop on first failure)
+        conns = []
+        for i in range(max(2, size)):
+            try:
+                c = PolyMLConnection(host, port, token)
+                c.connect(timeout=connect_timeout)
+                conns.append(c)
+                print(f"  ML connection {i + 1}/{size} established",
+                      flush=True)
+            except (OSError, EOFError) as e:
+                print(f"  ML connection {i + 1}/{size} failed: {e}",
+                      flush=True)
+                break
+        if not conns:
+            raise ConnectionError(
+                f"Could not establish any ML connections to {host}:{port}")
+        # Last connection is reserved for the console
+        self._console = conns.pop()
+        self._idle = conns
+        self._semaphore = threading.Semaphore(max(1, len(self._idle)))
+        print(f"  {len(conns)} pool + 1 console = "
+              f"{len(conns) + 1} ML connections", flush=True)
 
     @property
     def console(self):
@@ -2360,10 +2373,13 @@ def main():
             print(f"{YELLOW}Pool size {pool_size} exceeds ML connection limit "
                   f"{ml_max}, capping to {ml_max}{RST}", flush=True)
             pool_size = ml_max
+    pool_size = max(2, pool_size)
+    # Close probe before opening pool connections to free one connection slot.
+    pool_host, pool_port, pool_token = conn.host, conn.port, conn.token
+    conn.close()
     pool = MLConnectionPool(
-        host=conn.host, port=conn.port, token=conn.token,
+        host=pool_host, port=pool_port, token=pool_token,
         size=pool_size)
-    conn.close()  # pool has its own connections; close the probe connection
     server = Server(pool, args.port, host="127.0.0.1",
                     session=args.session, directory=args.dir,
                     heap_info=heap_info, remote_host=remote_host)
