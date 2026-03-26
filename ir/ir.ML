@@ -325,7 +325,7 @@ fun init_from_document id node_name command_id =
           (if Toplevel.is_proof toplevel_st then " [proof]" else " [theory]"))
   end;
 
-fun fork new_id parent_id state_idx =
+fun fork parent_id new_id state_idx =
   let val _ = if Symtab.defined (Synchronized.value repl_tab) new_id
               then error ("REPL " ^ quote new_id ^ " already exists")
               else ()
