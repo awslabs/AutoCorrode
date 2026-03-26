@@ -1,0 +1,4 @@
+session dep_chain = HOL +
+  theories
+    DC_A
+    DC_B

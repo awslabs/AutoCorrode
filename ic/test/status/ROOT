@@ -1,0 +1,3 @@
+session status = HOL +
+  theories
+    Status_Test

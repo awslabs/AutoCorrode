@@ -1,0 +1,5 @@
+session qualified_command = HOL +
+  sessions
+    "HOL-Library"
+  theories
+    QC_Test

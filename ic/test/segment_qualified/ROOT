@@ -1,0 +1,6 @@
+session SegQualTest = HOL +
+  options [record_theories = true]
+  sessions
+    "HOL-Library"
+  theories
+    SQ_Test

@@ -1,0 +1,6 @@
+session parent_order = HOL +
+  theories
+    PO_A
+    PO_B
+    PO_C
+    PO_Target

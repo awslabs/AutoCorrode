@@ -1,0 +1,5 @@
+session dep_diamond_heur_reload = HOL +
+  theories
+    SmA_A
+    SmA_B
+    SmA_C

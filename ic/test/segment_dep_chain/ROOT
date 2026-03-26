@@ -1,0 +1,6 @@
+session SegDepChainTest = HOL +
+  options [record_theories = true]
+  theories
+    SDC_A
+    SDC_B
+    SDC_C

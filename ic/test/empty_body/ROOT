@@ -1,0 +1,3 @@
+session empty_body = HOL +
+  theories
+    EB_File

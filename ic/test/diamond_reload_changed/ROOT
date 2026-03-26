@@ -1,0 +1,6 @@
+session diamond_reload_changed = HOL +
+  theories
+    DRC_A
+    DRC_B
+    DRC_C
+    DRC_D

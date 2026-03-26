@@ -1,0 +1,5 @@
+session RootDirsCross = HOL +
+  sessions
+    RootDirs
+  theories
+    Cross_C

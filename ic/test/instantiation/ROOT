@@ -1,0 +1,3 @@
+session instantiation_test = HOL +
+  theories
+    Inst_Test

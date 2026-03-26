@@ -1,0 +1,5 @@
+session dep_reload_transitive = HOL +
+  theories
+    DRT_A
+    DRT_B
+    DRT_C

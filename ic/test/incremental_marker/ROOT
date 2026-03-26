@@ -1,0 +1,5 @@
+session IncrMarker = HOL +
+  options [record_theories = true]
+  theories
+    IM_Dep
+    IM_Target

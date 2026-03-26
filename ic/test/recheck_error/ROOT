@@ -1,0 +1,3 @@
+session recheck_error = HOL +
+  theories
+    Rchk_Err

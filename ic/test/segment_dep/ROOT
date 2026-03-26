@@ -1,0 +1,5 @@
+session SegDepTest = HOL +
+  options [record_theories = true]
+  theories
+    SD_A
+    SD_B

@@ -1,0 +1,5 @@
+session UnlistedB = HOL +
+  sessions
+    UnlistedA
+  theories
+    Cross_B

@@ -1,0 +1,5 @@
+session SameNameC = SameNameB +
+  theories
+    UserA
+    UserB
+
