@@ -1,0 +1,6 @@
+session load_theory_leak = HOL +
+  theories
+    LTL_A
+    LTL_B
+    LTL_C
+    LTL_D

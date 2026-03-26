@@ -1,0 +1,3 @@
+session check_all = HOL +
+  theories
+    Check_All

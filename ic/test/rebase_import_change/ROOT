@@ -1,0 +1,6 @@
+session rebase_import_change = HOL +
+  theories
+    RIC_A
+    RIC_B
+    RIC_C
+    RIC_D

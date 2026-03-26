@@ -1,0 +1,3 @@
+session comments_and_markup = HOL +
+  theories
+    Markup_Test

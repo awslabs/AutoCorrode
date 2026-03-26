@@ -1,0 +1,3 @@
+session rebuild_fixed = HOL +
+  theories
+    Rebuild_Brk

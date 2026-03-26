@@ -1,0 +1,6 @@
+session StatusSorted = HOL +
+  options [record_theories = true]
+  theories
+    SSO_X
+    SSO_A
+    SSO_B

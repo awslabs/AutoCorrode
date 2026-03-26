@@ -1,0 +1,3 @@
+session timeout_check = HOL +
+  theories
+    TC_File
