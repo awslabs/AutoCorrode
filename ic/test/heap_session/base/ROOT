@@ -1,0 +1,3 @@
+session TestBase = HOL +
+  theories
+    Base

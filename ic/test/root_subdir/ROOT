@@ -1,0 +1,6 @@
+session root_subdir = HOL +
+  directories
+    "sub"
+  theories
+    "sub/SD_Sub"
+    SD_Top

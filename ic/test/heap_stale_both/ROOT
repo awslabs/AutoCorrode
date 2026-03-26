@@ -1,0 +1,5 @@
+session HeapStaleBoth = HOL +
+  options [record_theories = true]
+  theories
+    HSB_A
+    HSB_B

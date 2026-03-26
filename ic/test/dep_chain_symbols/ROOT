@@ -1,0 +1,4 @@
+session dep_chain_symbols = HOL +
+  theories
+    DCS_A
+    DCS_B

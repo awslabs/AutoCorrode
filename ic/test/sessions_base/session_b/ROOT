@@ -1,0 +1,3 @@
+session SessionB_Base = SessionA_Base +
+  theories
+    B

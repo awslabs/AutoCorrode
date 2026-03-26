@@ -1,0 +1,3 @@
+session keywords_in_comment = HOL +
+  theories
+    KIC_File

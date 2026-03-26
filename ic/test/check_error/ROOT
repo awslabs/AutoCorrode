@@ -1,0 +1,3 @@
+session check_error = HOL +
+  theories
+    Check_Error

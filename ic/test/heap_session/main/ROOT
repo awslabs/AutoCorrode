@@ -1,0 +1,3 @@
+session TestMain = TestBase +
+  theories
+    Main_Thy

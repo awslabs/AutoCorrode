@@ -1,0 +1,4 @@
+session StatusPartial = HOL +
+  options [record_theories = true]
+  theories
+    STP_File

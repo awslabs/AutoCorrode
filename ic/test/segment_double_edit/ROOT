@@ -1,0 +1,4 @@
+session SegDoubleEdit = HOL +
+  options [record_theories = true]
+  theories
+    SDE_File

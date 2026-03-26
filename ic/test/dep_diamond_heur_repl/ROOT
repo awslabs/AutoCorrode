@@ -1,0 +1,5 @@
+session dep_diamond_heur_repl = HOL +
+  theories
+    LgA_A
+    LgA_B
+    LgA_C

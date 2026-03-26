@@ -1,0 +1,6 @@
+session diamond_recheck = HOL +
+  theories
+    DR_A
+    DR_B
+    DR_C
+    DR_D

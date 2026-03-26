@@ -1,0 +1,5 @@
+session ShadowB = HOL +
+  sessions
+    ShadowA
+  theories
+    Shadow_Target

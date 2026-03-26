@@ -1,0 +1,5 @@
+session dep_diamond_reload = HOL +
+  theories
+    DiaR_A
+    DiaR_B
+    DiaR_C

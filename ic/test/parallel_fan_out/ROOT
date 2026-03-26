@@ -1,0 +1,10 @@
+session ParFanOut = HOL +
+  theories
+    PF_Base
+    PF_Dep1
+    PF_Dep2
+    PF_Dep3
+    PF_Dep4
+    PF_Dep5
+    PF_Dep6
+    PF_Target

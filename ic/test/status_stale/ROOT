@@ -1,0 +1,7 @@
+session StatusStale = HOL +
+  options [record_theories = true]
+  theories
+    STS_X
+    STS_A
+    STS_B
+    STS_C

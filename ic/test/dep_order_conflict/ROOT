@@ -1,0 +1,6 @@
+session dep_order_conflict = HOL +
+  theories
+    Ord_A
+    Ord_B
+    Ord_C
+    Ord_D

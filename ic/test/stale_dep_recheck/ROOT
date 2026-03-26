@@ -1,0 +1,4 @@
+session stale_dep_recheck = HOL +
+  theories
+    SDR_A
+    SDR_B

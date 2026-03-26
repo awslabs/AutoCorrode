@@ -1,0 +1,8 @@
+session DiamondIdentityStale = HOL +
+  options [record_theories = true]
+  theories
+    DIS_X
+    DIS_A
+    DIS_B
+    DIS_C
+    DIS_D

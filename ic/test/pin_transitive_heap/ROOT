@@ -1,0 +1,7 @@
+session PinTransHeap = HOL +
+  options [record_theories = true]
+  theories
+    PTH_A
+    PTH_C
+    PTH_D
+    PTH_Z

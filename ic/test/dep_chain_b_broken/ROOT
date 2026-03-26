@@ -1,0 +1,4 @@
+session dep_chain_b_broken = HOL +
+  theories
+    DCB_A
+    DCB_B

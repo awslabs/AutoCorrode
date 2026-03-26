@@ -1,0 +1,5 @@
+session dep_diamond_repl = HOL +
+  theories
+    DiaP_A
+    DiaP_B
+    DiaP_C
