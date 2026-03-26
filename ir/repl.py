@@ -748,18 +748,22 @@ class PolyMLConnection:
           props: list of (key, value) tuples
           body: str (decoded YXML body, may be empty)
 
-        Returns the concatenated body text (same as send()).
+        Returns (text, had_error) where text is the concatenated body text
+        and had_error is True if any PIDE "error" message was received.
         """
         line = unicode_to_isabelle(command.strip()) + "\n"
         self.sock.sendall(line.encode("utf-8"))
         parts = []
+        had_error = False
         while True:
             kind, props, body_chunks = self.read_message()
             body = "".join(c.decode("utf-8", errors="replace")
                            for c in body_chunks)
             on_message(kind, props, body)
+            if kind == "error":
+                had_error = True
             if kind == "done":
-                return "\n".join(parts).strip()
+                return "\n".join(parts).strip(), had_error
             if body:
                 parts.append(body)
 
@@ -1346,7 +1350,7 @@ class Server:
                         self.log_input(f"[{peer}]", command)
                         def on_msg(kind, props, body):
                             self.log_output(f"[{peer}]", kind, props, body)
-                        raw_output = ml_conn.send_streaming(command, on_msg)
+                        raw_output, had_error = ml_conn.send_streaming(command, on_msg)
                         self.pool.release(ml_conn)
                         ml_conn = None
                     except (ConnectionResetError, BrokenPipeError):
@@ -1360,7 +1364,9 @@ class Server:
                             self.pool.release(ml_conn)
                             ml_conn = None
                         raise
-                    response = (apply_transforms(tcp_transforms, raw_output) +
+                    err_prefix = "ERR\n" if had_error else ""
+                    response = (err_prefix +
+                                apply_transforms(tcp_transforms, raw_output) +
                                 "\n" + SENTINEL + "\n").encode("utf-8")
                     client.sendall(response)
                     with self.clients_lock:
@@ -1644,7 +1650,7 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
         server.log_output("[this]", kind, props, body)
     server.log_input("[this]", command)
     try:
-        output = console.send_streaming(command, on_msg)
+        output, _had_error = console.send_streaming(command, on_msg)
     except EOFError as e:
         out(f"{RED}ERR: ML backend connection closed: {e}{RST}")
         out(f"{DIM}The Poly/ML process may have crashed. "

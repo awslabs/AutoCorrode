@@ -96,7 +96,12 @@ class ReplClient:
         return self.sock is not None
 
     def send(self, ml_command: str) -> str:
-        """Send an ML command and return the transformed output."""
+        """Send an ML command and return the transformed output.
+
+        Raises RuntimeError if the ML command produced an error (the REPL
+        server prefixes error responses with 'ERR\\n').  FastMCP catches this
+        and returns it to the MCP client with isError=true.
+        """
         if self.sock is None:
             raise RuntimeError("Not connected — call the 'connect' tool first")
         self.sock.sendall((ml_command.strip() + "\n").encode())
@@ -110,7 +115,10 @@ class ReplClient:
             text = buf.decode("utf-8", errors="replace")
             if SENTINEL in text:
                 raw = text[:text.index(SENTINEL)].strip()
-                return apply_transforms(raw)
+                result = apply_transforms(raw)
+                if result.startswith("ERR\n"):
+                    raise RuntimeError(result[4:])
+                return result
 
 # ---------------------------------------------------------------------------
 # Output transforms (applied to every response from the ML process)
