@@ -2403,7 +2403,7 @@ def main():
     if args.mcp:
         mgmt_output(f"{BOLD}Starting MCP server...{RST}")
         mcp_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_server.py")
-        mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options)
+        mcp_cmd = [sys.executable, mcp_path] + shlex.split(args.mcp_options) + ["--repl-port", str(server.port)]
         mcp_proc = subprocess.Popen(mcp_cmd, stdin=subprocess.DEVNULL,
                                     stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT)

@@ -200,9 +200,12 @@ mcp = FastMCP("I/R REPL",
               ":: not \\<in>, etc.")
 
 repl_client = ReplClient()
+_repl_port = 9147  # overridden by --repl-port in main()
 
 @mcp.tool(description="Connect to the I/R REPL server. Call this before using any other tool. Can also reconnect after a dropped connection. If the token is not provided to you, use the IR_AUTH_TOKEN environment variable if set.")
-def connect(token: str, port: int = 9147) -> str:
+def connect(token: str, port: int = 0) -> str:
+    if port == 0:
+        port = _repl_port
     repl_client.connect("127.0.0.1", port, token)
     return f"Connected to {repl_client.host}:{repl_client.port}\n\n{session_info()}"
 
@@ -456,7 +459,12 @@ def main():
                    default="stdio")
     p.add_argument("--port", type=int, default=9148,
                    help="Port for SSE/streamable-http transport (default: 9148)")
+    p.add_argument("--repl-port", type=int, default=9147,
+                   help="Port of the I/R REPL to connect to (default: 9147)")
     args = p.parse_args()
+
+    global _repl_port
+    _repl_port = args.repl_port
 
     if args.transport in ("sse", "streamable-http"):
         mcp.settings.host = "127.0.0.1"
