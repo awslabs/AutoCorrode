@@ -646,7 +646,8 @@ def _setup_copy_from_local(host, remote_home, local_home,
 
     if sync_all:
         heaps = [f for f in os.listdir(local_hdir)
-                 if os.path.isfile(os.path.join(local_hdir, f))]
+                 if os.path.isfile(os.path.join(local_hdir, f))
+                 and not f.startswith(".")]
     else:
         heaps = ["Pure", "HOL"]
 
@@ -756,7 +757,8 @@ def cmd_run(args):
     # Sync local heaps to remote
     extra_heaps = sorted(f for f in os.listdir(lhdir)
                          if os.path.isfile(os.path.join(lhdir, f))
-                         and f not in ("Pure", "HOL"))
+                         and f not in ("Pure", "HOL")
+                         and not f.startswith("."))
     sync = args.sync_heaps
     if extra_heaps and sync is None:
         # Check which heaps actually differ from remote
@@ -783,12 +785,24 @@ def cmd_run(args):
                 f"  {_GREEN}--sync-heaps{_RESET}     Sync all local heaps to remote\n"
                 f"  {_YELLOW}--no-sync-heaps{_RESET}  Skip syncing (heaps will be rebuilt on demand)\n")
 
+    # Warn about rsync temporary files
+    tmp_files = [f for f in os.listdir(lhdir)
+                 if os.path.isfile(os.path.join(lhdir, f))
+                 and f.startswith(".")]
+    if tmp_files:
+        tmp_total = sum(os.path.getsize(os.path.join(lhdir, f))
+                        for f in tmp_files)
+        step(f"{_YELLOW}⚠ {len(tmp_files)} rsync temp file(s) "
+             f"({tmp_total // (1024*1024)}MB) — remove with: heap-mgr remove-tmp{_RESET}")
+        step_done()
+
     if sync:
         step("Syncing heaps to remote")
         step_done()
         remote_hdir = remote_user_heap_dir(host, base_platform)
         heaps = [f for f in os.listdir(lhdir)
-                 if os.path.isfile(os.path.join(lhdir, f))]
+                 if os.path.isfile(os.path.join(lhdir, f))
+                 and not f.startswith(".")]
         for heap in heaps:
             sz = os.path.getsize(os.path.join(lhdir, heap))
             step(f"{heap} ({sz // (1024*1024)}MB)", indent=1)

@@ -390,6 +390,12 @@ def cmd_list(args, extra):
                            if os.path.isfile(os.path.join(sd_path, f)) and not f.startswith("."))
             if heaps:
                 print(f"    {CYAN}{sd}{RESET}: {DIM}{', '.join(heaps)}{RESET}")
+            tmp_in_sd = [f for f in os.listdir(sd_path)
+                         if os.path.isfile(os.path.join(sd_path, f)) and f.startswith(".")]
+            if tmp_in_sd:
+                tmp_sz = sum(os.path.getsize(os.path.join(sd_path, f))
+                             for f in tmp_in_sd)
+                print(f"      {YELLOW}⚠ {len(tmp_in_sd)} rsync temp file(s) ({fmt_size(tmp_sz)}){RESET}")
         print()
 
 
@@ -465,6 +471,10 @@ def cmd_show(args, extra):
         heaps = [f for f in os.listdir(sd_path)
                  if os.path.isfile(os.path.join(sd_path, f)) and not f.startswith(".")]
 
+        # Collect rsync temp files
+        tmp_files = [f for f in os.listdir(sd_path)
+                     if os.path.isfile(os.path.join(sd_path, f)) and f.startswith(".")]
+
         # Collect .db files
         dbs = {}
         if os.path.isdir(log_dir):
@@ -526,6 +536,15 @@ def cmd_show(args, extra):
                 print(f"         {DIM}{db_path}{RESET}")
             elif has_heap:
                 print(f"         {DIM}(no .db){RESET}")
+
+        if tmp_files:
+            print(f"    {YELLOW}⚠ rsync temp files:{RESET}")
+            for tf in sorted(tmp_files):
+                tf_path = os.path.join(sd_path, tf)
+                tf_size = fmt_size(os.path.getsize(tf_path))
+                tf_mtime = file_mtime(tf_path)
+                tf_date = fmt_date(tf_mtime)
+                print(f"      {YELLOW}{tf:{30}}{RESET} {DIM}{tf_date}  {tf_size}{RESET}")
 
         print()
 
@@ -701,6 +720,80 @@ def cmd_remove(args, extra):
 
 
 # ---------------------------------------------------------------------------
+# remove-tmp
+# ---------------------------------------------------------------------------
+
+def cmd_remove_tmp(args, extra):
+    """Remove stale rsync temporary files (dot-prefixed) from heap directories."""
+    import time as _time
+
+    threshold_minutes = args.age
+    threshold_seconds = threshold_minutes * 60
+    now = _time.time()
+
+    heap_base = get_heap_base(args)
+    candidates = get_candidates(heap_base)
+
+    if not candidates:
+        print(f"  {DIM}No heap directories matching {heap_base}*{RESET}")
+        return
+
+    # Scan all platform directories for dot-prefixed files
+    found = []  # list of (filepath, size, mtime)
+    for d in candidates:
+        for entry in os.listdir(d):
+            sd_path = os.path.join(d, entry)
+            if not os.path.isdir(sd_path) or entry.startswith("."):
+                continue
+            for f in os.listdir(sd_path):
+                if not f.startswith("."):
+                    continue
+                fp = os.path.join(sd_path, f)
+                if not os.path.isfile(fp):
+                    continue
+                try:
+                    st = os.stat(fp)
+                except OSError:
+                    continue
+                age = now - st.st_mtime
+                if age > threshold_seconds:
+                    found.append((fp, st.st_size, st.st_mtime))
+
+    if not found:
+        print(f"\n  {CHECK} No stale rsync temp files found (threshold: {threshold_minutes}m)\n")
+        return
+
+    found.sort(key=lambda x: x[2])  # oldest first
+
+    print(f"\n{BOLD}Stale rsync temp files{RESET} (older than {threshold_minutes}m):")
+    print(f"{'─' * 60}\n")
+    total_size = 0
+    for fp, sz, mt in found:
+        total_size += sz
+        age_m = int((now - mt) / 60)
+        print(f"  {fp}")
+        print(f"    {DIM}{fmt_size(sz)}, {age_m}m old{RESET}")
+
+    print(f"\n  {BOLD}{len(found)}{RESET} file(s), {BOLD}{fmt_size(total_size)}{RESET} total\n")
+
+    if not args.yes:
+        answer = input(f"  {RED}Remove all above?{RESET} [y/N] ").strip().lower()
+        if answer != "y":
+            print(f"\n  {DIM}No changes made.{RESET}\n")
+            return
+
+    removed = 0
+    for fp, _, _ in found:
+        try:
+            os.remove(fp)
+            removed += 1
+        except OSError as e:
+            print(f"  {RED}Failed to remove {fp}: {e}{RESET}")
+
+    print(f"\n  {GREEN}Removed {removed} file(s).{RESET}\n")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -716,6 +809,8 @@ Commands:
   {BOLD}list{RESET}      List all heap directories with the given prefix.
   {BOLD}show{RESET}      Show contents of a heap directory (heaps + .db files).
   {BOLD}remove{RESET}    Remove a heap directory (with confirmation).
+  {BOLD}remove-tmp{RESET}
+            Remove stale rsync temp files from heap directories.
 
 Run 'heap-mgr <command> --help' for command-specific help.""")
         sys.exit(0)
@@ -756,6 +851,14 @@ are silently ignored.""",
   %(prog)s /path/to/heaps-old --platform polyml-5.9.2_arm64_32-darwin
   %(prog)s                      (interactive selection)""",
             formatter_class=argparse.RawDescriptionHelpFormatter)),
+        "remove-tmp": (cmd_remove_tmp, argparse.ArgumentParser(
+            prog="heap-mgr remove-tmp",
+            description="Remove stale rsync temporary files (dot-prefixed) from heap directories.",
+            epilog="""Examples:
+  %(prog)s
+  %(prog)s --age 30
+  %(prog)s -y""",
+            formatter_class=argparse.RawDescriptionHelpFormatter)),
     }
 
     if command not in commands:
@@ -766,6 +869,11 @@ are silently ignored.""",
                         help="Heap base path prefix (default: $ISABELLE_HOME_USER/heaps)")
     parser.add_argument("--platform", default=None,
                         help="Remove only this platform subdirectory (for 'remove' command)")
+    if command == "remove-tmp":
+        parser.add_argument("--age", type=int, default=5,
+                            help="Minimum age in minutes (default: 5)")
+        parser.add_argument("-y", "--yes", action="store_true",
+                            help="Skip confirmation prompt")
     args, extra = parser.parse_known_args(sys.argv[2:])
     func(args, extra)
 
