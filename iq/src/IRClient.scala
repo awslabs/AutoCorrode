@@ -62,7 +62,10 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       }
       if (line == null)
         throw new java.io.IOException("Connection closed by server")
-      sb.toString
+      val result = sb.toString
+      if (result.startsWith("ERR\n"))
+        throw new java.io.IOException(result.drop(4))
+      result
     } finally {
       sock.close()
     }
@@ -93,18 +96,18 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
   ): String = {
     val resolvedPath = IQUtils.autoCompleteFilePath(file) match {
       case Right(p) => p
-      case Left(err) => return s"Error: $err"
+      case Left(err) => throw new IllegalArgumentException(err)
     }
     val (target, oOpt, pOpt) =
       if (offset.isDefined) (CommandSelectionTarget.FileOffset, offset, None)
       else if (pattern.isDefined) (CommandSelectionTarget.FilePattern, None, pattern)
-      else return "Error: specify either offset or pattern"
+      else throw new IllegalArgumentException("specify either offset or pattern")
     IQUtils.resolveCommandSelection(target, Some(resolvedPath), oOpt, pOpt) match {
       case Right(resolved) =>
         val node = resolved.command.node_name.node
         val cmdId = resolved.command.id.toInt
         initFromDocument(repl, node, cmdId)
-      case Left(err) => s"Error: $err"
+      case Left(err) => throw new IllegalArgumentException(err)
     }
   }
 

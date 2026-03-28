@@ -1168,9 +1168,10 @@ class IQServer(
    * @param result The result data from a tool handler
    * @return Wrapped result data
    */
-  private def wrapToolCallResult(result: Map[String, Any]): Map[String, Any] = {
+  private def wrapToolCallResult(result: Map[String, Any], isError: Boolean = false): Map[String, Any] = {
     val serializedJson = JSON.Format(result)
-    Map("content" -> List(Map("type" -> "text", "text" -> serializedJson)))
+    val base = Map("content" -> List(Map("type" -> "text", "text" -> serializedJson)))
+    if (isError) base + ("isError" -> true) else base
   }
 
   /**
@@ -1215,16 +1216,15 @@ class IQServer(
         s"I/Q Server: Extracted tool='${toolCall.toolName.wire}', params=${params.toMap}"
       )
 
-      val result: Either[(Int, String), IQToolResult] =
-        capabilityBackend.invoke(toolCall.toolName, params).left.map {
-          case IQCapabilityInvocationError.UnknownTool(name) =>
-            safeOutput(s"I/Q Server: Unknown tool name: '$name'")
-            (ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name")
-          case err =>
-            (err.code, err.message)
-        }
-
-      result.map(res => wrapToolCallResult(res.toMap))
+      capabilityBackend.invoke(toolCall.toolName, params) match {
+        case Right(res) =>
+          Right(wrapToolCallResult(res.toMap))
+        case Left(IQCapabilityInvocationError.UnknownTool(name)) =>
+          safeOutput(s"I/Q Server: Unknown tool name: '$name'")
+          Left((ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name"))
+        case Left(err) =>
+          Right(wrapToolCallResult(Map("text" -> err.message), isError = true))
+      }
     } catch {
       case ex: Exception =>
         safeOutput(s"I/Q Server: Tool execution error: ${ex.getMessage}")

@@ -299,7 +299,30 @@ object IQUtils {
           case Left(SubstringNotFound) =>
             Left(s"Pattern '$trimmedPattern' not found in $filePath")
           case Left(SubstringNotUnique) =>
-            Left(s"Pattern '$trimmedPattern' is not unique in $filePath")
+            val contentLines = fileContent.split("\n", -1)
+            var matchLineIndices = List.empty[Int]
+            var searchFrom = 0
+            var totalMatches = 0
+            while (searchFrom < fileContent.length) {
+              val idx = fileContent.indexOf(trimmedPattern, searchFrom)
+              if (idx == -1) searchFrom = fileContent.length
+              else {
+                totalMatches += 1
+                if (matchLineIndices.size < 3)
+                  matchLineIndices = matchLineIndices :+ fileContent.substring(0, idx).count(_ == '\n')
+                searchFrom = idx + 1
+              }
+            }
+            val patternLineCount = trimmedPattern.count(_ == '\n')
+            val snippets = matchLineIndices.map { lineIdx =>
+              val from = math.max(0, lineIdx - 1)
+              val to = math.min(contentLines.length - 1, lineIdx + patternLineCount + 1)
+              (from to to).map(i => s"  ${i + 1}: ${contentLines(i)}").mkString("\n")
+            }
+            val header = s"Pattern '$trimmedPattern' matches $totalMatches locations in $filePath:"
+            val shown = snippets.mkString("\n---\n")
+            val ellipsis = if (totalMatches > 3) s"\n... and ${totalMatches - 3} more" else ""
+            Left(s"$header\n$shown$ellipsis\nUse 'offset' for an exact position.")
           case Left(SubstringEmpty) =>
             Left("Pattern cannot be empty")
         }
