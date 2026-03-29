@@ -644,7 +644,7 @@ class PolyMLProcess:
         cmd += ["-f", os.path.join(ml_dir, "tcp_handler.ML"),
                 "-f", os.path.join(ml_dir, "ir.ML"),
                 "-f", os.path.join(ml_dir, "ml_repl.ML"),
-                "-e", f"case ML_Repl.start {port} of SOME (_, f) => Future.join f | NONE => ();"]
+                "-e", f"case ML_Repl.start {port} of SOME (_, t) => Isabelle_Thread.join t | NONE => ();"]
         return cmd
 
     def alive(self):

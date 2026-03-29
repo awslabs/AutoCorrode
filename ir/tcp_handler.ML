@@ -3,10 +3,13 @@
 
 (* Generic TCP line server with PIDE-compatible message framing.
 
-   Listens on a localhost port, accepts concurrent connections (one
-   Future.fork per connection).  For each connection, wraps the socket
-   into BinIO streams (following Socket_IO) and passes them to a
-   configurable handler.
+   Listens on a localhost port, accepts concurrent connections.  Each
+   connection runs on its own Isabelle_Thread (outside the Future worker
+   pool) so that I/O-bound connection handlers never consume worker
+   slots needed by PIDE or evaluation futures.
+
+   For each connection, wraps the socket into BinIO streams (following
+   Socket_IO) and passes them to a configurable handler.
 
    Two handler modes:
    - connection_handler (preferred): receives (in_stream, out_stream),
@@ -45,8 +48,8 @@ val connection_handler :
     (BinIO.instream -> BinIO.outstream -> unit) option Synchronized.var =
   Synchronized.var "Tcp_Handler.connection_handler" NONE;
 
-(* Connection limit: each connection blocks a Future worker thread on I/O,
-   so we cap at max_threads - 2 to leave headroom for accept_loop + evals.
+(* Connection limit: each connection runs on its own Isabelle_Thread.
+   We still cap connections to bound OS thread count.
    accept_loop blocks (via guarded_access) when the limit is reached. *)
 val active_connections : int Synchronized.var =
   Synchronized.var "Tcp_Handler.active_connections" 0;
@@ -54,6 +57,10 @@ val active_connections : int Synchronized.var =
 val max_connections : int Synchronized.var =
   Synchronized.var "Tcp_Handler.max_connections"
     (Int.max (2, Multithreading.max_threads () - 2));
+
+(* Tracked Isabelle_Threads for connection handlers (for cleanup on stop). *)
+val connection_threads : Isabelle_Thread.T list Synchronized.var =
+  Synchronized.var "Tcp_Handler.connection_threads" [];
 
 val server_socket : Socket.passive INetSock.stream_sock option Synchronized.var =
   Synchronized.var "Tcp_Handler.socket" NONE;
@@ -170,8 +177,8 @@ fun await_connection_slot () =
 fun release_connection_slot () =
   Synchronized.change active_connections (fn n => Int.max (0, n - 1));
 
-(* Accept loop: fork a Future per connection, with a connection limit
-   to avoid exhausting the worker thread pool. *)
+(* Accept loop: fork an Isabelle_Thread per connection (outside the Future
+   worker pool) with a connection limit to bound OS thread count. *)
 fun accept_loop () =
   case Synchronized.value server_socket of
     NONE => ()
@@ -181,14 +188,20 @@ fun accept_loop () =
         val (client, _) = Socket.accept ssock
             handle OS.SysErr msg =>
               (release_connection_slot (); raise OS.SysErr msg)
-      in ignore (Future.fork (fn () =>
-           ((serve_client client
-               handle OS.SysErr _ => ()
-                    | IO.Io _ => ()
-                    | Fail _ => ());
-            Socket.close client handle OS.SysErr _ => ();
-            release_connection_slot ())));
-         accept_loop ()
+        val thread = Isabelle_Thread.fork
+          (Isabelle_Thread.interrupts (Isabelle_Thread.params "ir_connection"))
+          (fn () =>
+            ((serve_client client
+                handle OS.SysErr _ => ()
+                     | IO.Io _ => ()
+                     | Fail _ => ());
+             Socket.close client handle OS.SysErr _ => ();
+             release_connection_slot ();
+             Synchronized.change connection_threads
+               (filter Isabelle_Thread.is_active)))
+      in
+        Synchronized.change connection_threads (cons thread);
+        accept_loop ()
       end
       handle Fail "stopped" => ()
            | OS.SysErr _ => ();
@@ -225,6 +238,10 @@ fun stop () =
   (Synchronized.change server_socket (fn old =>
     (case old of SOME s => (Socket.close s handle OS.SysErr _ => ()) | NONE => ();
      NONE));
+   (* Interrupt connection threads so they exit blocking reads *)
+   List.app (fn t => Isabelle_Thread.interrupt_thread t handle Thread.Thread _ => ())
+     (Synchronized.value connection_threads);
+   Synchronized.change connection_threads (K []);
    Synchronized.change server_token (K NONE);
    Synchronized.change active_connections (K 0));
 

@@ -44,6 +44,13 @@ fun find_connection_message () =
               then SOME msg else lookup rest
       in lookup table end;
 
+(* WARNING: only returns true on Future worker threads whose group
+   ancestry includes a registered connection group.  Returns false on
+   Isabelle_Threads (accept loop, connection handlers) because
+   Future.worker_group() returns NONE there.  Code running on connection
+   threads must use the direct `message` function (Path A), NOT
+   writeln/warning/Private_Output (Path B) — those silently fall through
+   to jEdit's output channel instead of the TCP client. *)
 fun is_server_context () = is_some (find_connection_message ());
 
 
@@ -131,14 +138,21 @@ val ir_pri = ~1;
 val ir_group_var : Future.group option Synchronized.var =
   Synchronized.var "ML_Repl.ir_group" NONE;
 
+(* Accept loop thread handle (for cleanup on stop). *)
+val accept_thread_var : Isabelle_Thread.T option Synchronized.var =
+  Synchronized.var "ML_Repl.accept_thread" NONE;
+
 
 (** Per-connection handler **)
 
 (* Evaluate a single ML command within a command sub-group.
    The sub-group is a child of conn_group, so worker threads spawned
    during eval will find the connection's message function via
-   find_connection_message(). After eval, we join all pending tasks
-   in the command group to ensure all output is flushed before "done". *)
+   find_connection_message().  After eval, we join all pending tasks
+   in the command group to ensure all output is flushed before "done".
+   NOTE: pre-fork code (semicolon check, auto-correct warning) runs on
+   the connection Isabelle_Thread — must use `message` directly, not
+   writeln/Private_Output (see is_server_context warning). *)
 fun eval_in_group conn_group message line =
   let
     val cmd_group = Future.new_group (SOME conn_group)
@@ -200,7 +214,13 @@ fun eval_in_group conn_group message line =
 (* Per-connection handler registered as Tcp_Handler.connection_handler.
    Creates a persistent Message_Channel and group for the connection,
    registers in the routing table, runs a sequential read-eval loop,
-   and cleans up on disconnect. *)
+   and cleans up on disconnect.
+   NOTE: This handler runs on an Isabelle_Thread (outside the Future
+   worker pool) so that it does not consume worker slots needed by PIDE.
+   Consequence: Private_Output wrappers (writeln, warning, etc.) do NOT
+   route to this connection's TCP client from this thread.  All output
+   on this thread must go through `message` directly.  Eval output is
+   fine — eval futures run in the worker pool with correct group context. *)
 fun connection_serve in_stream out_stream =
   let
     val _ = install_wrappers ()
@@ -242,15 +262,23 @@ fun start port =
     val _ = Synchronized.change ir_group_var (K (SOME ir_group))
     val _ = Synchronized.change Tcp_Handler.connection_handler
               (K (SOME connection_serve))
+    (* Accept loop runs on an Isabelle_Thread (outside the Future worker
+       pool) so it does not consume a worker slot while blocked on
+       Socket.accept or await_connection_slot. *)
+    val accept_thread = Isabelle_Thread.fork
+      (Isabelle_Thread.interrupts (Isabelle_Thread.params "ml_repl_accept"))
+      accept_loop
+    val _ = Synchronized.change accept_thread_var (K (SOME accept_thread))
   in
-    SOME (actual_port, (singleton o Future.forks)
-      {name = "ml_repl_accept", group = SOME ir_group,
-       deps = [], pri = ir_pri, interrupts = true}
-      accept_loop)
+    SOME (actual_port, accept_thread)
   end;
 
 fun stop () =
   (Tcp_Handler.stop ();
+   (case Synchronized.value accept_thread_var of
+      SOME t => (Isabelle_Thread.interrupt_thread t handle Thread.Thread _ => ())
+    | NONE => ());
+   Synchronized.change accept_thread_var (K NONE);
    Synchronized.change ir_group_var (K NONE);
    Synchronized.change connection_messages (K []));
 
