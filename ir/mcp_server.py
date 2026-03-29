@@ -495,20 +495,32 @@ def main():
     import argparse
     p = argparse.ArgumentParser(description="I/R MCP server")
     p.add_argument("--transport", choices=["stdio", "sse", "streamable-http"],
-                   default="stdio")
-    p.add_argument("--port", type=int, default=9148,
+                   default=None)
+    p.add_argument("--port", type=int, default=None,
                    help="Port for SSE/streamable-http transport (default: 9148)")
     p.add_argument("--repl-port", type=int, default=9147,
                    help="Port of the I/R REPL to connect to (default: 9147)")
     args = p.parse_args()
 
+    port_explicit = args.port is not None
+    transport = args.transport
+
+    if port_explicit and transport == "stdio":
+        p.error("--port cannot be used with --transport stdio")
+
+    if transport is None:
+        transport = "streamable-http" if port_explicit else "stdio"
+
+    if args.port is None:
+        args.port = 9148
+
     global _repl_port
     _repl_port = args.repl_port
 
-    if args.transport in ("sse", "streamable-http"):
+    if transport in ("sse", "streamable-http"):
         mcp.settings.host = "127.0.0.1"
         mcp.settings.port = args.port
-        mcp.run(transport=args.transport)
+        mcp.run(transport=transport)
     else:
         mcp.run(transport="stdio")
 
