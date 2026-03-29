@@ -2331,14 +2331,32 @@ def main():
                 missing_vars = heap_info.unresolved_env_vars()
                 if missing_vars:
                     for var in sorted(missing_vars):
-                        _log(f"WARNING: ${var} is not set — "
-                             f"source files using it cannot be resolved. "
-                             f"Set it with: export {var}=/path/to/sources"
-                             if quiet else
-                             f"{YELLOW}WARNING: ${var} is not set — "
-                             f"source files using it cannot be resolved. "
-                             f"Set it with: export {var}=/path/to/sources{RST}")
-                else:
+                        if var == "ISABELLE_PROJECT_BASE":
+                            default = (os.path.realpath(args.dir)
+                                       if args.dir else os.getcwd())
+                            _log(f"WARNING: ${var} is not set — "
+                                 f"defaulting to {default}. "
+                                 f"Set it with: export {var}=/path/to/sources"
+                                 if quiet else
+                                 f"{YELLOW}WARNING: ${var} is not set — "
+                                 f"defaulting to {default}. "
+                                 f"Set it with: "
+                                 f"export {var}=/path/to/sources{RST}")
+                            os.environ[var] = default
+                            from heap_info import _isabelle_env_cache
+                            _isabelle_env_cache.pop(
+                                (var, args.isabelle), None)
+                        else:
+                            _log(f"WARNING: ${var} is not set — "
+                                 f"source files using it cannot be "
+                                 f"resolved. Set it with: "
+                                 f"export {var}=/path/to/sources"
+                                 if quiet else
+                                 f"{YELLOW}WARNING: ${var} is not set — "
+                                 f"source files using it cannot be "
+                                 f"resolved. Set it with: "
+                                 f"export {var}=/path/to/sources{RST}")
+                if not heap_info.unresolved_env_vars():
                     sources = heap_info.source_files()
                     verified = sum(1 for s in sources
                                    if s["status"] == "verified")
