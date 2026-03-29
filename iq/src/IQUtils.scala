@@ -195,69 +195,65 @@ object IQUtils {
       }
     }
 
-    // If direct matching failed or found multiple matches, try Unicode normalization
-    import java.text.Normalizer
-    val normalizedText = Normalizer.normalize(searchText, Normalizer.Form.NFC)
-    val normalizedSubstring = Normalizer.normalize(searchSubstring, Normalizer.Form.NFC)
-
-    val firstIndex = normalizedText.indexOf(normalizedSubstring)
-    if (firstIndex == -1) {
-      Output.writeln(s"I/Q Server: Substring not found in text")
-      Output.writeln(s"I/Q Server: Original text length: ${text.length}")
-      Output.writeln(s"I/Q Server: Original substring length: ${substring.length}")
-      Output.writeln(s"I/Q Server: Search text length: ${searchText.length}")
-      Output.writeln(s"I/Q Server: Search substring length: ${searchSubstring.length}")
-      if (offsetAdjustment > 0) {
-        Output.writeln(s"I/Q Server: Applied leading space relaxation: trimmed $offsetAdjustment spaces")
-      }
-      return Left(SubstringNotFound)
+    // If direct matching failed, try full normalization (NFC + Symbol.decode + whitespace compression)
+    IQNormalization.findUniqueMatch(searchText, searchSubstring) match {
+      case Right((startOffset, _)) =>
+        Right(startOffset + offsetAdjustment)
+      case Left(IQNormalization.SubstringNotFound) =>
+        Output.writeln(s"I/Q Server: Substring not found in text (after normalization)")
+        Output.writeln(s"I/Q Server: Original text length: ${text.length}")
+        Output.writeln(s"I/Q Server: Original substring length: ${substring.length}")
+        if (offsetAdjustment > 0) {
+          Output.writeln(s"I/Q Server: Applied leading space relaxation: trimmed $offsetAdjustment spaces")
+        }
+        Left(SubstringNotFound)
+      case Left(IQNormalization.SubstringNotUnique) =>
+        Output.writeln(s"I/Q Server: Substring found multiple times after normalization")
+        Left(SubstringNotUnique)
+      case Left(IQNormalization.SubstringEmpty) =>
+        Left(SubstringEmpty)
     }
-
-    val secondIndex = normalizedText.indexOf(normalizedSubstring, firstIndex + 1)
-    if (secondIndex != -1) {
-      Output.writeln(s"I/Q Server: Substring found multiple times at normalized positions $firstIndex and $secondIndex")
-      return Left(SubstringNotUnique)
-    }
-
-    // Convert the normalized offset back to search text offset, then add space adjustment
-    val searchTextOffset = mapNormalizedOffsetToOriginal(searchText, normalizedText, firstIndex)
-    Right(searchTextOffset + offsetAdjustment)
   }
 
   /**
-   * Maps an offset in a normalized string back to the corresponding offset in the original string.
-   * This handles cases where Unicode normalization changes character positions.
+   * Finds a unique substring match, returning both start and end offsets in the original text.
+   * The end offset is exclusive. Same relaxation and normalization as findUniqueSubstringOffset.
    */
-  private def mapNormalizedOffsetToOriginal(originalText: String, normalizedText: String, normalizedOffset: Int): Int = {
-    import java.text.Normalizer
+  def findUniqueSubstringMatch(text: String, substring: String): Either[SubstringSearchError, (Int, Int)] = {
+    if (substring.isEmpty) return Left(SubstringEmpty)
 
-    // If no normalization occurred, offsets are the same
-    if (originalText == normalizedText) return normalizedOffset
+    val textLeadingSpaces = countLeadingSpaces(text)
+    val substringLeadingSpaces = countLeadingSpaces(substring)
 
-    // Build a mapping by processing character by character
-    var originalPos = 0
-    var normalizedPos = 0
+    val (searchText, searchSubstring, offsetAdjustment) =
+      if (textLeadingSpaces > 0 && textLeadingSpaces == substringLeadingSpaces) {
+        val trimmedText = text.substring(textLeadingSpaces)
+        val trimmedSubstring = substring.substring(substringLeadingSpaces)
+        (trimmedText, trimmedSubstring, textLeadingSpaces)
+      } else {
+        (text, substring, 0)
+      }
 
-    while (normalizedPos < normalizedOffset && originalPos < originalText.length) {
-      // Get the next character from original text
-      val originalChar = originalText.charAt(originalPos)
-
-      // Normalize just this character to see how many normalized characters it produces
-      val normalizedChar = Normalizer.normalize(originalChar.toString, Normalizer.Form.NFC)
-
-      // Advance positions
-      originalPos += 1
-      normalizedPos += normalizedChar.length
-
-      // If we've gone past the target offset, we need to back up
-      if (normalizedPos > normalizedOffset) {
-        // The target offset falls within this character's normalization
-        // Return the position of the start of this character in the original text
-        return originalPos - 1
+    // Tier 1: direct match
+    val directFirstIndex = searchText.indexOf(searchSubstring)
+    if (directFirstIndex != -1) {
+      val directSecondIndex = searchText.indexOf(searchSubstring, directFirstIndex + 1)
+      if (directSecondIndex == -1) {
+        val start = directFirstIndex + offsetAdjustment
+        return Right((start, start + searchSubstring.length))
+      } else {
+        return Left(SubstringNotUnique)
       }
     }
 
-    originalPos
+    // Tier 2: normalized match
+    IQNormalization.findUniqueMatch(searchText, searchSubstring) match {
+      case Right((startOffset, endOffset)) =>
+        Right((startOffset + offsetAdjustment, endOffset + offsetAdjustment))
+      case Left(IQNormalization.SubstringNotFound) => Left(SubstringNotFound)
+      case Left(IQNormalization.SubstringNotUnique) => Left(SubstringNotUnique)
+      case Left(IQNormalization.SubstringEmpty) => Left(SubstringEmpty)
+    }
   }
 
   /**

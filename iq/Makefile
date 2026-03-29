@@ -64,6 +64,10 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQSecurityTest
+	echo "Running I/Q normalization tests..."
+	$(ISABELLE) scala \
+		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR)" \
+		IQNormalizationTest
 	echo "Running I/Q server auth/authorization tests..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \

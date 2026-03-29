@@ -1211,7 +1211,7 @@ class IQServer(
         }
       }
 
-      val params = IQToolParams.fromMap(extractArguments(toolCall.arguments))
+      val params = IQToolParams.fromMap(decodeIsabelleTextParams(extractArguments(toolCall.arguments)))
       safeOutput(
         s"I/Q Server: Extracted tool='${toolCall.toolName.wire}', params=${params.toMap}"
       )
@@ -1251,6 +1251,21 @@ class IQServer(
   def extractArguments(jsonMap: Map[String, JSON.T]): Map[String, Any] = {
     IQArgumentUtils.extractArguments(jsonMap)
   }
+
+  /** Parameters that contain Isabelle text and should be Symbol.decode'd on input. */
+  private val isabelleTextParamNames: Set[String] =
+    Set("old_str", "new_str", "pattern", "content")
+
+  /**
+   * Decode Isabelle escape sequences in text parameters.
+   * Converts \<Rightarrow> → ⇒ etc. so that MCP callers can use either representation.
+   * Only applies to parameters known to contain Isabelle text (old_str, new_str, pattern, content).
+   */
+  private def decodeIsabelleTextParams(params: Map[String, Any]): Map[String, Any] =
+    params.map {
+      case (k, v: String) if isabelleTextParamNames.contains(k) => k -> Symbol.decode(v)
+      case other => other
+    }
 
   /**
    * Formats a successful JSON-RPC response.
@@ -3400,8 +3415,8 @@ class IQServer(
           case _ => return Left("new_str parameter is required for command 'str_replace'")
         }
 
-        val startOffset = IQUtils.findUniqueSubstringOffset(content, old_str) match {
-          case Right(offset) => offset
+        val (startOffset, endOffset) = IQUtils.findUniqueSubstringMatch(content, old_str) match {
+          case Right(offsets) => offsets
           case Left(IQUtils.SubstringNotFound) =>
             return Left(s"Substring not found: '$old_str'")
           case Left(IQUtils.SubstringNotUnique) =>
@@ -3409,8 +3424,6 @@ class IQServer(
           case Left(IQUtils.SubstringEmpty) =>
             return Left("old_str parameter cannot be empty")
         }
-
-        val endOffset = startOffset + old_str.length
 
         (startOffset, endOffset, new_str)
 
@@ -3682,11 +3695,11 @@ end"""
     val totalLines = lines.length
     val safeContextLines = math.max(0, contextLines)
 
-    val normalizedPattern = pattern.toLowerCase(Locale.ROOT)
+    val normalizedPattern = IQNormalization.normalize(pattern).toLowerCase(Locale.ROOT)
 
-    // Find matching lines
+    // Find matching lines (normalize each line for Isabelle symbol + whitespace tolerance)
     val matchingLineIndices = lines.zipWithIndex.collect {
-      case (line, idx) if line.toLowerCase(Locale.ROOT).contains(normalizedPattern) => idx
+      case (line, idx) if IQNormalization.normalize(line).toLowerCase(Locale.ROOT).contains(normalizedPattern) => idx
     }
 
     // Create an array of match objects with context
