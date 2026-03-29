@@ -190,7 +190,7 @@ Authentication with the I/R daemon is managed internally: I/Q reads the daemon's
 - **repl_list**: List all REPLs with step counts and origins
 - **repl_sledgehammer**: Run sledgehammer on the current proof goal
 - **repl_find_theorems**: Search for theorems
-- **repl_timeout**: Set step timeout
+- **repl_timeout**: Set step timeout for a specific REPL
 - **repl_raw**: Send a raw ML expression to the REPL
 
 ### Tool Classification

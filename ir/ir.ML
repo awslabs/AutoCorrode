@@ -42,7 +42,7 @@ sig
   val sledgehammer_state : (Proof.state * int) option Synchronized.var
   val sledgehammer_result : string Synchronized.var
   val find_theorems : string -> int -> string -> unit
-  val timeout : int -> unit
+  val timeout : string -> int -> unit
   val is_interactive_session : unit -> bool
   val help : unit -> unit
 end;
@@ -62,12 +62,9 @@ val cfg : config Synchronized.var =
 fun config f = Synchronized.change cfg f;
 fun get_cfg () = Synchronized.value cfg;
 
-(** Step timeout (seconds, 0 = no limit) **)
+(** Default step timeout (seconds, 0 = no limit) **)
 
-val step_timeout : int Synchronized.var = Synchronized.var "Ir.timeout" 10;
-fun timeout secs =
-  (Synchronized.change step_timeout (K secs);
-   TextIO.print ("Timeout set to " ^ (if secs = 0 then "unlimited" else string_of_int secs ^ "s") ^ "\n"));
+val default_timeout : int = 10;
 
 (** Markup-based token rendering **)
 
@@ -208,7 +205,8 @@ type repl_step = {
 type repl = {
   origin: origin,
   base_state: Toplevel.state,
-  steps: repl_step list
+  steps: repl_step list,
+  timeout: int
 };
 
 (* Sledgehammer bridge: structure-qualified vars survive heap save/load,
@@ -229,8 +227,17 @@ fun the_repl id =
 fun update_repl id r =
   Synchronized.change repl_tab (Symtab.update (id, r));
 
+fun timeout id secs =
+  let val _ = the_repl id
+      val _ = Synchronized.change repl_tab (Symtab.map_entry id
+        (fn r : repl => {origin = #origin r, base_state = #base_state r,
+                         steps = #steps r, timeout = secs}))
+  in out ("Timeout for " ^ quote id ^ " set to " ^
+          (if secs = 0 then "unlimited" else string_of_int secs ^ "s"))
+  end;
+
 (* Execute Isar text against a state *)
-fun exec_text text st =
+fun exec_text timeout_secs text st =
   let val thy = Toplevel.theory_of st
       val transitions = Outer_Syntax.parse_text thy (fn () => thy) Position.none text
       fun run (tr, s) =
@@ -239,12 +246,11 @@ fun exec_text text st =
             val s' = Toplevel.command_exception false tr s
             val _ = Multithreading.parallel_proofs := old
         in s' end
-      val secs = Synchronized.value step_timeout
       fun go () = List.foldl (fn (tr, s) => run (tr, s)) st transitions
-  in if secs > 0
-     then Timeout.apply (Time.fromSeconds (Int.toLarge secs)) go ()
+  in if timeout_secs > 0
+     then Timeout.apply (Time.fromSeconds (Int.toLarge timeout_secs)) go ()
        handle Timeout.TIMEOUT _ =>
-         error ("Step timed out after " ^ string_of_int secs ^ "s")
+         error ("Step timed out after " ^ string_of_int timeout_secs ^ "s")
      else go ()
   end;
 
@@ -292,7 +298,7 @@ fun init id specs =
                 val thy = Theory.begin_theory (id, Position.none) thys
             in (From_Theory (String.concatWith "+" thy_names),
                 Toplevel.make_state (SOME thy)) end
-      val r : repl = {origin = origin, base_state = st, steps = []}
+      val r : repl = {origin = origin, base_state = st, steps = [], timeout = default_timeout}
   in update_repl id r;
      out ("Created REPL " ^ quote id)
   end;
@@ -318,7 +324,7 @@ fun init_from_document id node_name command_id =
             else ()
     val toplevel_st = Command.eval_result_state eval
     val r : repl = {origin = From_Document (node_name, command_id),
-                    base_state = toplevel_st, steps = []}
+                    base_state = toplevel_st, steps = [], timeout = default_timeout}
   in update_repl id r;
      out ("Created REPL " ^ quote id ^ " from document " ^ quote node_name ^
           " command " ^ string_of_int command_id ^
@@ -338,7 +344,8 @@ fun fork parent_id new_id state_idx =
                else if i >= 1 andalso i <= n then #post_state (nth steps (i - 1))
                else error ("State " ^ string_of_int state_idx ^ " out of range (0.." ^
                            string_of_int n ^ ")")
-      val r : repl = {origin = From_REPL (parent_id, i), base_state = st, steps = []}
+      val r : repl = {origin = From_REPL (parent_id, i), base_state = st, steps = [],
+                      timeout = #timeout parent}
   in update_repl new_id r;
      out ("Forked REPL " ^ quote new_id ^ " from " ^ quote parent_id ^
           " at state " ^ string_of_int i)
@@ -347,10 +354,10 @@ fun fork parent_id new_id state_idx =
 fun step id text =
   let val r = the_repl id
       val pre = last_state r
-      val post = exec_text text pre
+      val post = exec_text (#timeout r) text pre
       val s : repl_step = {text = text, pre_state = pre, post_state = post, stale = false}
       val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = #steps r @ [s]}
+                        steps = #steps r @ [s], timeout = #timeout r}
   in update_repl id r';
      out (pretty_state post)
   end;
@@ -374,8 +381,11 @@ fun show id =
         | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
         | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i
       val n = length (#steps r)
+      val tmo = if #timeout r = 0 then "unlimited"
+                 else string_of_int (#timeout r) ^ "s"
       val _ = out ("REPL " ^ quote id ^
-                   " (" ^ string_of_int n ^ " steps, from " ^ orig ^ ")")
+                   " (" ^ string_of_int n ^ " steps, from " ^ orig ^
+                   ", timeout=" ^ tmo ^ ")")
       val _ = out ("  base  level=" ^ string_of_int (Toplevel.level (#base_state r)))
       val thy = Toplevel.theory_of (#base_state r)
       fun pr _ [] = ()
@@ -399,13 +409,14 @@ fun replay id =
       fun go _ [] acc = rev acc
         | go prev_post (s :: rest) acc =
             if #stale (s : repl_step) then
-              let val post = exec_text (#text s) prev_post
+              let val post = exec_text (#timeout r) (#text s) prev_post
                   val s' : repl_step = {text = #text s, pre_state = prev_post,
                                          post_state = post, stale = false}
               in go post rest (s' :: acc) end
             else go (#post_state s) rest (s :: acc)
       val steps' = go (#base_state r) (#steps r) []
-      val r' : repl = {origin = #origin r, base_state = #base_state r, steps = steps'}
+      val r' : repl = {origin = #origin r, base_state = #base_state r, steps = steps',
+                        timeout = #timeout r}
   in update_repl id r';
      out ("Replayed " ^ string_of_int (length (filter #stale (#steps r))) ^ " stale steps")
   end;
@@ -417,14 +428,15 @@ fun edit id idx new_text =
               then error ("Step " ^ string_of_int idx ^ " out of range") else ()
       val pre = if idx = 0 then #base_state r
                 else #post_state (nth steps (idx - 1))
-      val post = exec_text new_text pre
+      val post = exec_text (#timeout r) new_text pre
       val edited : repl_step = {text = new_text, pre_state = pre, post_state = post, stale = false}
       val before_steps = List.take (steps, idx)
       val after_steps = List.drop (steps, idx + 1)
         |> map (fn s : repl_step => {text = #text s, pre_state = #pre_state s,
                                       post_state = #post_state s, stale = true})
       val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = before_steps @ [edited] @ after_steps}
+                        steps = before_steps @ [edited] @ after_steps,
+                        timeout = #timeout r}
   in update_repl id r';
      out ("Edited step " ^ string_of_int idx ^ ", " ^
           string_of_int (length after_steps) ^ " subsequent steps marked stale");
@@ -448,7 +460,8 @@ fun truncate id raw_idx =
               if pid = id andalso si > idx then Symtab.delete rid else I
           | _ => I) tab tab)
       val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = if idx < 0 then [] else List.take (steps, idx + 1)}
+                        steps = if idx < 0 then [] else List.take (steps, idx + 1),
+                        timeout = #timeout r}
   in update_repl id r';
      out ("Truncated to step " ^ string_of_int idx ^ ", dropped " ^
           string_of_int dropped ^ " steps")
@@ -594,7 +607,7 @@ fun help () = out
   \  merge id               inline sub-REPL into parent\n\
   \  sledgehammer id secs   run sledgehammer on proof state\n\
   \  find_theorems id n q   search theorems (n=max, 0=unlimited)\n\
-  \  timeout secs           set step timeout (0=unlimited, default 5s)\n\
+  \  timeout id secs        set step timeout for REPL (0=unlimited, default 10s)\n\
   \  remove id              remove REPL and its sub-REPLs\n\
   \  repls ()               list all REPLs\n\
   \  theories ()            list loaded theories\n\

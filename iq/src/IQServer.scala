@@ -804,9 +804,11 @@ class IQServer(
       for { repl <- strParam(p, "repl"); q <- strParam(p, "query"); r <- withIR(_.findTheorems(repl, p.get("max_results").collect { case n: Long => n.toInt }.getOrElse(40), q)) }
       yield IQToolResult.fromMap(r)
     }),
-    IQToolName.ReplTimeout -> (params =>
-      intParam(params.toMap, "secs").flatMap(s => withIR(_.timeout(s))).map(IQToolResult.fromMap)
-    ),
+    IQToolName.ReplTimeout -> (params => {
+      val p = params.toMap
+      for { repl <- strParam(p, "repl"); s <- intParam(p, "secs"); r <- withIR(_.timeout(repl, s)) }
+      yield IQToolResult.fromMap(r)
+    }),
     IQToolName.ReplRaw -> (params =>
       strParam(params.toMap, "ml_code").flatMap(c => withIR(_.send(c))).map(IQToolResult.fromMap)
     )
@@ -2057,11 +2059,11 @@ class IQServer(
           "max_results" -> int("Maximum results (default 40)")),
           List("repl", "query"))),
       Map("name" -> "repl_timeout",
-        "description" -> (replPrefix + "Set step timeout in seconds (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have " +
+        "description" -> (replPrefix + "Set step timeout in seconds for a specific REPL (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have " +
           "a specific reason to. Calls like `metis`, `auto`, `blast`, `force`, should NOT take longer than 5s. Even if they do, and the call " +
           "ultimately succeeds, it points at a proof that ought to be broken down further. ONLY use a large timeout if you work with very large " +
           "scripts or in special circumstances where, exceptionally, a large timeout is expected / tolerated."),
-        "inputSchema" -> schema(Map("secs" -> int("Timeout in seconds")), List("secs"))),
+        "inputSchema" -> schema(Map(replParam, "secs" -> int("Timeout in seconds")), List("repl", "secs"))),
       Map("name" -> "repl_raw",
         "description" -> (replPrefix + "Send a raw ML expression to the REPL."),
         "inputSchema" -> schema(Map("ml_code" -> str("ML expression")), List("ml_code")))

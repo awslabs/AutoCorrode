@@ -94,7 +94,7 @@ IR_CMDS = {
     'Ir.source':         'thy start stop  — list theory commands (start/stop 0-based, ~N from end)',
     'Ir.source_map':     'thy start stop  — segment-to-position map (start/stop 0-based, ~N from end)',
     'Ir.sledgehammer':   'id secs  — run sledgehammer on proof state with timeout',
-    'Ir.timeout':        'secs  — set step timeout (0=unlimited, default 5s)',
+    'Ir.timeout':        'id secs  — set step timeout for REPL (0=unlimited, default 10s)',
     'Ir.find_theorems':  'id n "query"  — search theorems (n=max results, 0=unlimited)',
     'Ir.back':           'id  — revert last step (synonym for truncate ~1)',
     'Ir.config':         'f  — update config (color, show_ignored, full_spans, auto_replay)',
@@ -131,7 +131,7 @@ IR_SIGS = {
     'Ir.source':        (['thy', 'start', 'stop'], 'list theory commands (start/stop 0-based, ~N from end)'),
     'Ir.source_map':    (['thy', 'start', 'stop'], 'segment-to-position map (start/stop 0-based, ~N from end)'),
     'Ir.sledgehammer':  (['id', 'secs'], 'run sledgehammer on proof state with timeout'),
-    'Ir.timeout':       (['secs'], 'set step timeout (0=unlimited, default 5s)'),
+    'Ir.timeout':       (['id', 'secs'], 'set step timeout for REPL (0=unlimited, default 10s)'),
     'Ir.find_theorems': (['id', 'n', '"query"'], 'search theorems (n=max results, 0=unlimited)'),
     'Ir.back':          (['id'], 'revert last step (synonym for truncate ~1)'),
     'Ir.config':        (['f'], 'update config (color, show_ignored, full_spans, auto_replay)'),
@@ -234,7 +234,7 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                 |
                     (?P<cmd>Ir\.back)    \s+ (?P<rid>"[^"]*")
                 |
-                    (?P<cmd>Ir\.timeout) \s+ (?P<num>[^\s]+)
+                    (?P<cmd>Ir\.timeout) \s+ (?P<rid>"[^"]*") \s+ (?P<num>[^\s]+)
                 |
                     # /-commands with quoted arguments
                     (?P<cmd>/source-map) \s+ (?P<thy>"[^"]*")

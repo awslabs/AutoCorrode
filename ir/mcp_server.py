@@ -383,12 +383,12 @@ async def find_theorems(repl: str, query: str, max_results: int = 40, ctx: Conte
             parts.append(criterion.strip())
     return await _send(ctx, f"Ir.find_theorems {ml_str(repl)} {ml_int(max_results)} {ml_str(' '.join(parts))};")
 
-@mcp.tool(description="Set step timeout in seconds (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have "
+@mcp.tool(description="Set step timeout in seconds for a specific REPL (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have "
           "a specific reason to. Calls like `metis`, `auto`, `blast`, `force`, should NOT take longer than 5s. Even if they do, and the call "
           "ultimately succeeds, it points at a proof that ought to be broken down further. ONLY use a large timeout if you work with very large "
           "scripts or in special circumstances where, exceptionally, a large timeout is expected / tolerated.")
-async def timeout(secs: int, ctx: Context = None) -> str:
-    return await _send(ctx, f"Ir.timeout {ml_int(secs)};")
+async def timeout(repl: str, secs: int, ctx: Context = None) -> str:
+    return await _send(ctx, f"Ir.timeout {ml_str(repl)} {ml_int(secs)};")
 
 @mcp.tool(description="Remove a REPL and all its sub-REPLs.")
 async def remove(repl: str, ctx: Context = None) -> str:

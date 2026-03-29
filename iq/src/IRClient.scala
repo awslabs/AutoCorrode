@@ -166,8 +166,8 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
   def sledgehammer(repl: String, secs: Int): String =
     send(s"Ir.sledgehammer ${q(repl)} ${mlInt(secs)}")
 
-  /** Set step timeout (0=unlimited). */
-  def timeout(secs: Int): String = send(s"Ir.timeout ${mlInt(secs)}")
+  /** Set step timeout for a specific REPL (0=unlimited). */
+  def timeout(repl: String, secs: Int): String = send(s"Ir.timeout ${q(repl)} ${mlInt(secs)}")
 
   /** Search theorems (n=max results, 0=unlimited). */
   def findTheorems(repl: String, n: Int, query: String): String =
@@ -223,7 +223,7 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       |Proof tools:
       |  sledgehammer("r", 30)              Run sledgehammer (timeout in secs)
       |  findTheorems("r", 10, "name: *")   Search theorems
-      |  timeout(10)                        Set step timeout (0 = unlimited)
+      |  timeout("r", 10)                   Set step timeout for REPL (0 = unlimited)
       |
       |Config:
       |  config("(fn c => ...)")            Update ML config record
