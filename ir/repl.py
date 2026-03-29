@@ -478,6 +478,37 @@ console_transforms = [isabelle_to_unicode, yxml_to_ansi]
 tcp_transforms = [isabelle_to_unicode, strip_yxml]
 mcp_transforms = [isabelle_to_unicode, strip_yxml]
 
+# ---------------------------------------------------------------------------
+# Noise filter — drop known-noisy output lines
+# ---------------------------------------------------------------------------
+# Each rule is either:
+#   ("drop", pattern)        — drop lines containing `pattern`
+#   ("drop+next", pattern)   — drop lines containing `pattern` AND the next line
+NOISE_RULES = [
+    ("drop+next", "Ignoring duplicate rewrite rule:"),
+    ("drop", "val it = (): unit"),
+]
+
+def noise_filter(text):
+    """Remove noisy lines from transformed output text."""
+    lines = text.split("\n")
+    result = []
+    skip_next = 0
+    for line in lines:
+        if skip_next > 0:
+            skip_next -= 1
+            continue
+        matched = False
+        for rule_type, pattern in NOISE_RULES:
+            if pattern in line:
+                matched = True
+                if rule_type == "drop+next":
+                    skip_next = 1
+                break
+        if not matched:
+            result.append(line)
+    return "\n".join(result)
+
 # ANSI colors
 RST = "\033[0m"
 BOLD = "\033[1m"
@@ -1365,8 +1396,9 @@ class Server:
                             ml_conn = None
                         raise
                     err_prefix = "ERR\n" if had_error else ""
-                    response = (err_prefix +
-                                apply_transforms(tcp_transforms, raw_output) +
+                    transformed = noise_filter(
+                        apply_transforms(tcp_transforms, raw_output))
+                    response = (err_prefix + transformed +
                                 "\n" + SENTINEL + "\n").encode("utf-8")
                     client.sendall(response)
                     with self.clients_lock:
@@ -1646,7 +1678,9 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
         return True
     def on_msg(kind, props, body):
         if body and strip_yxml(body).strip():
-            out(apply_transforms(console_transforms, body))
+            plain = noise_filter(isabelle_to_unicode(strip_yxml(body)))
+            if plain.strip():
+                out(apply_transforms(console_transforms, body))
         server.log_output("[this]", kind, props, body)
     server.log_input("[this]", command)
     try:
