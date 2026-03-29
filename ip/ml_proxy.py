@@ -426,8 +426,10 @@ def rewrite_bash_process_in_chunk(chunk, remote_bash_addr, remote_bash_pw):
             rb"bash_process_address([\x05\x06:]+)string([\x05\x06:]+)(127\.0\.0\.1:\d+)",
             chunk)
         if m:
-            chunk = chunk.replace(m.group(3), remote_bash_addr.encode(), 1)
-            logger.debug(f"Rewrote bash_process_address: {m.group(3).decode()} -> {remote_bash_addr}")
+            old_addr = m.group(3)
+            new_addr = remote_bash_addr.encode()
+            chunk = chunk.replace(old_addr, new_addr)
+            logger.debug(f"Rewrote bash_process_address: {old_addr.decode()} -> {remote_bash_addr}")
             modified = True
     if remote_bash_pw:
         m = re.search(
@@ -435,7 +437,7 @@ def rewrite_bash_process_in_chunk(chunk, remote_bash_addr, remote_bash_pw):
             rb"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
             chunk)
         if m:
-            chunk = chunk.replace(m.group(2), remote_bash_pw.encode(), 1)
+            chunk = chunk.replace(m.group(2), remote_bash_pw.encode())
             modified = True
     return chunk, modified
 
