@@ -168,6 +168,8 @@ fun eval_in_group conn_group message line =
              ML_Compiler.eval (ML_Compiler.verbose true ML_Compiler.flags)
                Position.none (ML_Lex.tokenize line)) ()
 
+    val timing_start = Timing.start ()
+
     (* Fork eval into cmd_group so output routing works.
        Workers in cmd_group are descendants of conn_group, so
        find_connection_message() finds the right channel. *)
@@ -187,6 +189,10 @@ fun eval_in_group conn_group message line =
        Toplevel.command_exception joins parallel proofs, so this
        suffices to ensure all output is flushed before "done". *)
     val _ = ignore (Future.join_result eval_future)
+    val timing = Timing.result timing_start
+    val elapsed_str = Time.fmt 3 (#elapsed timing) ^ "s"
+    val _ = message Markup.tracingN (Markup.serial_properties 0)
+              [XML.blob ["[timing] " ^ elapsed_str]]
   in
     message "done" [] []
   end;
