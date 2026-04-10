@@ -587,23 +587,56 @@ object IQUtils {
    * Block until a document model has a stable snapshot (no pending edits).
    * This is a utility function that can be used by both the server and dockable.
    *
+   * Flushes buffer edits to the session (via PIDE.editor.flush() on the EDT)
+   * so that PIDE.session.snapshot() reflects pending changes, then uses an
+   * event-driven wait (Session.Commands_Changed listener + CountDownLatch)
+   * instead of polling, to avoid blocking the EDT.
+   *
    * @param model The document model to wait for
    * @return A tuple containing (stable snapshot, whether the original snapshot was outdated)
    */
   def blockOnStableSnapshot(model: Document_Model): (Document.Snapshot, Boolean) = {
-    val initial_snapshot = GUI_Thread.now { Document_Model.snapshot(model) }
-    val was_outdated = initial_snapshot.is_outdated
+    val node_name = model.node_name
 
-    if (!was_outdated) {
+    // Flush buffer edits so PIDE.session.snapshot() sees them
+    GUI_Thread.now { PIDE.editor.flush() }
+
+    val initial_snapshot = PIDE.session.snapshot(node_name = node_name)
+
+    if (!initial_snapshot.is_outdated) {
       (initial_snapshot, false)
     } else {
-      var current_snapshot = initial_snapshot
-      while (current_snapshot.is_outdated) {
-        // Sleep briefly to avoid tight loop
-        Thread.sleep(50)
-        current_snapshot = GUI_Thread.now { Document_Model.snapshot(model) }
+      val latch = new java.util.concurrent.CountDownLatch(1)
+      @volatile var stable_snapshot: Document.Snapshot = initial_snapshot
+
+      val consumer = Session.Consumer[Session.Commands_Changed](
+        "IQUtils.blockOnStableSnapshot"
+      ) {
+        case Session.Commands_Changed(_, nodes, _) if nodes.contains(node_name) =>
+          val snap = PIDE.session.snapshot(node_name = node_name)
+          if (!snap.is_outdated) {
+            stable_snapshot = snap
+            latch.countDown()
+          }
+        case _ =>
       }
-      (current_snapshot, true)
+
+      PIDE.session.commands_changed += consumer
+      try {
+        // Re-check after subscribing to avoid TOCTOU race
+        val recheck = PIDE.session.snapshot(node_name = node_name)
+        if (!recheck.is_outdated) {
+          stable_snapshot = recheck
+          latch.countDown()
+        }
+        val completed = latch.await(30, java.util.concurrent.TimeUnit.SECONDS)
+        if (!completed) {
+          Output.warning(s"I/Q: blockOnStableSnapshot timed out after 30s for $node_name")
+        }
+      } finally {
+        PIDE.session.commands_changed -= consumer
+      }
+      (stable_snapshot, true)
     }
   }
 }

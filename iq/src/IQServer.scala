@@ -426,87 +426,86 @@ class IQServer(
 
     Output.writeln(s"I/Q Server: Waiting for theory completion: $node_name (timeout: ${timeout_ms}, timeout_per_command: ${timeoutPerCommandMs}ms)")
 
-    // Save the original required state
+    // Save the original required state and mark node as required (single-shot EDT calls)
     val originalRequiredState = GUI_Thread.now {
       model.node_required
     }
-
     GUI_Thread.now {
       Document_Model.node_required(node_name, set = true)
     }
 
-    // Get initial status to ensure we always have a valid status object
-    var currentStatus: Document_Status.Node_Status = GUI_Thread.now {
-      val snapshot = Document_Model.snapshot(model)
+    def getNodeStatus(): Document_Status.Node_Status = {
+      val snapshot = PIDE.session.snapshot(node_name = node_name)
       val state = snapshot.state
       val version = snapshot.version
       Document_Status.Node_Status.make(Date.now(), state, version, node_name)
     }
 
-    var completed = false
-    var iterations = 0
-    var perCommandTimerStart: Option[Long] = None
+    def isCompleted(status: Document_Status.Node_Status): Boolean =
+      status.terminated &&
+        (status.consolidated ||
+         (status.unprocessed == 0 && status.running == 0))
 
-    def is_timeout() : Boolean = {
-      timeout_ms match {
-        case Some(t) => (System.currentTimeMillis() - startTime) >= t
-        case _ => false
-      }
-    }
+    // Get initial status
+    @volatile var currentStatus = getNodeStatus()
+    var completed = isCompleted(currentStatus)
 
-    while (!completed && !is_timeout()) {
-      currentStatus = GUI_Thread.now {
-        val snapshot = Document_Model.snapshot(model)
-        val state = snapshot.state
-        val version = snapshot.version
-        Document_Status.Node_Status.make(Date.now(), state, version, node_name)
-      }
+    if (!completed) {
+      val latch = new CountDownLatch(1)
+      var checkCount = 0
+      var perCommandTimerStart: Option[Long] = None
 
-      // Check completion status
-      completed = currentStatus.terminated &&
-                  (currentStatus.consolidated ||
-                   (currentStatus.unprocessed == 0 && currentStatus.running == 0))
+      val consumer = Session.Consumer[Session.Commands_Changed](
+        "IQServer.waitForTheoryCompletion"
+      ) {
+        case Session.Commands_Changed(_, nodes, _) if nodes.contains(node_name) =>
+          checkCount += 1
+          currentStatus = getNodeStatus()
 
-      // Per-command timeout logic
-      if (currentStatus.unprocessed == 0 && perCommandTimerStart.isEmpty) {
-        // First time we see unprocessed == 0, start the timer
-        perCommandTimerStart = Some(System.currentTimeMillis())
-        Output.writeln(s"I/Q Server: All commands processed, starting per-command timer for running commands")
-      }
+          if (isCompleted(currentStatus)) {
+            Output.writeln(s"I/Q Server: Theory completion achieved after $checkCount checks")
+            latch.countDown()
+          } else {
+            // Per-command timeout logic
+            if (currentStatus.unprocessed == 0 && perCommandTimerStart.isEmpty) {
+              perCommandTimerStart = Some(System.currentTimeMillis())
+              Output.writeln(s"I/Q Server: All commands processed, starting per-command timer for running commands")
+            }
 
-      // Check per-command timeout abort conditions
-      if (currentStatus.unprocessed == 0) {
-        if (currentStatus.running == 0) {
-          // No commands running, we're done
-          completed = true
-          Output.writeln(s"I/Q Server: No commands running, completion achieved")
-        } else {
-          // Check if per-command timer has fired
-          timeoutPerCommandMs match {
-            case Some(perCmdTimeout) =>
-              perCommandTimerStart match {
-                case Some(timerStart) =>
-                  val perCommandElapsed = System.currentTimeMillis() - timerStart
-                  if (perCommandElapsed >= perCmdTimeout) {
-                    Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
-                    completed = true
-                  }
-                case None =>
-              }
-            case None => // No per-command timeout set
+            timeoutPerCommandMs match {
+              case Some(perCmdTimeout) =>
+                perCommandTimerStart match {
+                  case Some(timerStart) =>
+                    val perCommandElapsed = System.currentTimeMillis() - timerStart
+                    if (perCommandElapsed >= perCmdTimeout) {
+                      Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
+                      latch.countDown()
+                    }
+                  case None =>
+                }
+              case None =>
+            }
+
+            // Log progress every 50 checks (~5 seconds at 100ms event interval)
+            if (checkCount % 50 == 0) {
+              Output.writeln(s"I/Q Server: Theory completion progress - unprocessed: ${currentStatus.unprocessed}, running: ${currentStatus.running}, finished: ${currentStatus.finished}, failed: ${currentStatus.failed}, terminated: ${currentStatus.terminated}, consolidated: ${currentStatus.consolidated}")
+            }
           }
+        case _ =>
+      }
+
+      PIDE.session.commands_changed += consumer
+      try {
+        // Re-check after subscribing to avoid TOCTOU race
+        currentStatus = getNodeStatus()
+        if (isCompleted(currentStatus)) {
+          latch.countDown()
         }
-      }
-
-      iterations += 1
-
-      // Log progress every 5 iterations (5 seconds)
-      if (iterations % 5 == 0) {
-        Output.writeln(s"I/Q Server: Theory completion progress - unprocessed: ${currentStatus.unprocessed}, running: ${currentStatus.running}, finished: ${currentStatus.finished}, failed: ${currentStatus.failed}, terminated: ${currentStatus.terminated}, consolidated: ${currentStatus.consolidated}")
-      }
-
-      if (!completed) {
-        Thread.sleep(1000)
+        val timeoutVal = timeout_ms.getOrElse(30000).toLong
+        val awaitResult = latch.await(timeoutVal, TimeUnit.MILLISECONDS)
+        completed = awaitResult || isCompleted(currentStatus)
+      } finally {
+        PIDE.session.commands_changed -= consumer
       }
     }
 
@@ -522,7 +521,6 @@ class IQServer(
       Document_Model.node_required(node_name, set = originalRequiredState)
     }
 
-    // Ensure we always return a valid status object
     (completed, currentStatus)
   }
 
@@ -2422,107 +2420,113 @@ class IQServer(
 
     Output.writeln(s"I/Q Server: Parameters - mode: $mode, startLine: $startLineOpt, endLine: $endLineOpt, startOffset: $startOffsetOpt, endOffset: $endOffsetOpt, filePath: $filePath, waitUntilProcessed: $waitUntilProcessed, timeout: $timeoutMs, timeout_per_command: ${timeoutPerCommandMs}ms")
 
-    // Determine mode and execute (with optional waiting loop)
+    // Determine mode and execute (with optional waiting)
     val startTime = System.currentTimeMillis()
-    val pollIntervalMs = 500L  // 500ms
-    var commandInfos: List[CommandInfo] = List.empty
-    var shouldContinue = true
-    var loopCount = 0
-    var perCommandTimerStart: Option[Long] = None
+    val node_name = model.node_name
+    @volatile var commandInfos: List[CommandInfo] = List.empty
 
-    if (waitUntilProcessed) {
-      Output.writeln(s"I/Q Server: wait_until_processed=true detected - entering polling loop with ${timeoutMs.getOrElse(0L)}ms timeout")
-    } else {
-      Output.writeln(s"I/Q Server: wait_until_processed=false - single retrieval mode")
+    def retrieveCommands(): List[CommandInfo] = {
+      val snapshot = PIDE.session.snapshot(node_name = node_name)
+      getCommandsInOffsetRange(snapshot, node_name, content, startOffset, endOffset)
     }
 
-    while (shouldContinue) {
-      loopCount += 1
-      if (waitUntilProcessed) {
-        Output.writeln(s"I/Q Server: Polling loop iteration $loopCount - retrieving commands...")
+    def allProcessed(infos: List[CommandInfo]): Boolean =
+      infos.forall { info =>
+        info.status.summary match {
+          case CommandStatusSummary.Finished |
+              CommandStatusSummary.Canceled |
+              CommandStatusSummary.Failed => true
+          case _ => false
+        }
       }
 
-      // Get commands using the same logic regardless of waiting
-      commandInfos = GUI_Thread.now {
-        getCommandsInOffsetRange(model, content, startOffset, endOffset)
+    def allProcessedOrRunning(infos: List[CommandInfo]): Boolean =
+      infos.forall { info =>
+        info.status.summary match {
+          case CommandStatusSummary.Finished |
+              CommandStatusSummary.Canceled |
+              CommandStatusSummary.Failed |
+              CommandStatusSummary.Running => true
+          case _ => false
+        }
       }
 
-      if (waitUntilProcessed) {
-        Output.writeln(s"I/Q Server: Retrieved ${commandInfos.length} commands in iteration $loopCount")
-      }
+    if (!waitUntilProcessed) {
+      Output.writeln(s"I/Q Server: wait_until_processed=false - single retrieval mode")
+      commandInfos = retrieveCommands()
+    } else {
+      Output.writeln(s"I/Q Server: wait_until_processed=true - entering event-driven wait with ${timeoutMs.getOrElse(0L)}ms timeout")
 
-      // Check if we should continue waiting
-      if (!waitUntilProcessed || commandInfos.isEmpty) {
-        // Not waiting or no commands found - exit loop
-        if (waitUntilProcessed && commandInfos.isEmpty) {
-          Output.writeln(s"I/Q Server: No commands found - exiting wait loop")
-        }
-        shouldContinue = false
-      } else {
-        // Check if all commands are processed OR running too long
-        val allCommandsProcessedOrRunning = commandInfos.forall { info =>
-          info.status.summary match {
-            case CommandStatusSummary.Finished |
-                CommandStatusSummary.Canceled |
-                CommandStatusSummary.Failed |
-                CommandStatusSummary.Running => true
-            case _ => false
-          }
-        }
+      // Initial retrieval
+      commandInfos = retrieveCommands()
 
-        if (allCommandsProcessedOrRunning && perCommandTimerStart.isEmpty) {
-          perCommandTimerStart = Some(System.currentTimeMillis())
-          Output.writeln(s"I/Q Server: All commands processed or running, starting per-command timer")
-        }
+      if (commandInfos.nonEmpty && !allProcessed(commandInfos)) {
+        val latch = new CountDownLatch(1)
+        var checkCount = 0
+        var perCommandTimerStart: Option[Long] = None
 
-        val allProcessed = commandInfos.forall { info =>
-          info.status.summary match {
-            case CommandStatusSummary.Finished |
-                CommandStatusSummary.Canceled |
-                CommandStatusSummary.Failed => true
-            case _ => false
-          }
-        }
+        val consumer = Session.Consumer[Session.Commands_Changed](
+          "IQServer.handleGetCommandCore"
+        ) {
+          case Session.Commands_Changed(_, nodes, _) if nodes.contains(node_name) =>
+            checkCount += 1
+            commandInfos = retrieveCommands()
+            Output.writeln(s"I/Q Server: Event-driven check $checkCount - retrieved ${commandInfos.length} commands")
 
-        if (allProcessed) {
-          shouldContinue = false
-        } else {
-          // Check per-command timeout
-          timeoutPerCommandMs match {
-            case Some(perCmdTimeout) =>
-              perCommandTimerStart match {
-                case Some(timerStart) =>
-                  val perCommandElapsed = System.currentTimeMillis() - timerStart
-                  if (perCommandElapsed >= perCmdTimeout) {
-                    Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded, aborting")
-                    shouldContinue = false
-                  }
-                case None => // Timer not started yet
+            if (commandInfos.isEmpty || allProcessed(commandInfos)) {
+              latch.countDown()
+            } else {
+              // Per-command timeout: start timer once all commands are at least running
+              if (allProcessedOrRunning(commandInfos) && perCommandTimerStart.isEmpty) {
+                perCommandTimerStart = Some(System.currentTimeMillis())
+                Output.writeln(s"I/Q Server: All commands processed or running, starting per-command timer")
               }
-            case None => // No per-command timeout set
-          }
 
-          // Check global timeout
-          val timedOut = System.currentTimeMillis() - startTime >= timeoutMs.getOrElse(0L)
+              // Check per-command timeout
+              timeoutPerCommandMs match {
+                case Some(perCmdTimeout) =>
+                  perCommandTimerStart match {
+                    case Some(timerStart) =>
+                      val perCommandElapsed = System.currentTimeMillis() - timerStart
+                      if (perCommandElapsed >= perCmdTimeout) {
+                        Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded, aborting")
+                        latch.countDown()
+                      }
+                    case None =>
+                  }
+                case None =>
+              }
 
-          if (timedOut) {
-            Output.writeln(s"I/Q Server: Wait timeout reached after ${timeoutMs.getOrElse(0L)}ms and $loopCount iterations")
-            shouldContinue = false
-          } else {
-            // Log status and wait before next poll
-            val statusCounts = commandInfos.groupBy { info =>
-              info.status.summary.asWire
-            }.view.mapValues(_.size).toMap
-            Output.writeln(s"I/Q Server: Iteration $loopCount - Status: ${statusCounts.map { case (k, v) => s"$k: $v" }.mkString(", ")} - waiting ${pollIntervalMs}ms...")
-            Thread.sleep(pollIntervalMs)
+              // Log status
+              val statusCounts = commandInfos.groupBy(_.status.summary.asWire).view.mapValues(_.size).toMap
+              Output.writeln(s"I/Q Server: Check $checkCount - Status: ${statusCounts.map { case (k, v) => s"$k: $v" }.mkString(", ")}")
+            }
+          case _ =>
+        }
+
+        PIDE.session.commands_changed += consumer
+        try {
+          // Re-check after subscribing to avoid TOCTOU race
+          commandInfos = retrieveCommands()
+          if (commandInfos.isEmpty || allProcessed(commandInfos)) {
+            latch.countDown()
           }
+          val timeoutVal = timeoutMs.getOrElse(5000L)
+          val completed = latch.await(timeoutVal, TimeUnit.MILLISECONDS)
+          if (!completed) {
+            Output.writeln(s"I/Q Server: Wait timeout reached after ${timeoutVal}ms and $checkCount checks")
+            // Do a final retrieval so we return the latest state
+            commandInfos = retrieveCommands()
+          }
+        } finally {
+          PIDE.session.commands_changed -= consumer
         }
       }
     }
 
     val totalElapsed = System.currentTimeMillis() - startTime
     if (waitUntilProcessed) {
-      Output.writeln(s"I/Q Server: Wait loop completed after $loopCount iterations in ${totalElapsed}ms")
+      Output.writeln(s"I/Q Server: Wait completed in ${totalElapsed}ms")
     }
 
     // Optionally dump XML results to file for all commands
@@ -3458,7 +3462,7 @@ class IQServer(
 
     Output.writeln(s"I/Q Server: Writing to theory file: $filePath (waitUntilProcessed: $waitUntilProcessed, timeout: ${timeoutMs.getOrElse(0)}ms, range: $startOffset-$endOffset)")
 
-    // Delegate to existing resource write logic
+    // Delegate to existing resource write logic.
     GUI_Thread.now {
       IQUtils.replaceTextInBuffer(buffer_model, text, startOffset, endOffset)
     }
