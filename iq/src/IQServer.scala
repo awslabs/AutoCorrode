@@ -540,9 +540,20 @@ class IQServer(
   /** Flag indicating whether the server is running */
   @volatile private var isRunning = false
 
-  /** Thread pool for handling client connections */
+  /** Thread pool for handling client connections.
+   *  Threads run at MIN_PRIORITY so the OS scheduler prefers the EDT
+   *  (and other jEdit threads) when CPU is contended. */
+  private val workerCounter = new AtomicInteger(0)
   private val executor: ExecutorService =
-    Executors.newFixedThreadPool(securityConfig.maxClientThreads)
+    Executors.newFixedThreadPool(
+      securityConfig.maxClientThreads,
+      (r: Runnable) => {
+        val t = new Thread(r, s"iq-worker-${workerCounter.incrementAndGet()}")
+        t.setDaemon(true)
+        t.setPriority(Thread.MIN_PRIORITY)
+        t
+      }
+    )
 
   // Timestamp formatter for socket logging
   private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
@@ -2658,11 +2669,9 @@ class IQServer(
     }
   }
 
-  private def getCommandsInOffsetRange(model: Document_Model, content: String, startOffset: Int, endOffset: Int): List[CommandInfo] = {
-    val node_name = model.node_name
+  private def getCommandsInOffsetRange(snapshot: Document.Snapshot, node_name: Document.Node.Name, content: String, startOffset: Int, endOffset: Int): List[CommandInfo] = {
     Output.writeln(s"I/Q Server: Getting commands in offset range $startOffset-$endOffset for node: $node_name")
 
-    val snapshot = Document_Model.snapshot(model)
     val node = snapshot.get_node(node_name)
 
     val targetRange = Text.Range(startOffset, endOffset)
@@ -3154,12 +3163,10 @@ class IQServer(
     var tracked = false
 
     while (!tracked && System.currentTimeMillis() < deadline) {
-      tracked = GUI_Thread.now {
-        Document_Model.get_model(nodeName).nonEmpty
-      }
+      tracked = Document_Model.get_model(nodeName).nonEmpty
       if (!tracked) {
         try {
-          Thread.sleep(25)
+          Thread.sleep(200)
         } catch {
           case _: InterruptedException =>
             Thread.currentThread().interrupt()
@@ -4505,7 +4512,7 @@ end"""
 
         getFileContentAndModel(filePath) match {
           case (Some(content), Some(model)) =>
-            val snapshot = GUI_Thread.now { Document_Model.snapshot(model) }
+            val snapshot = PIDE.session.snapshot(node_name = model.node_name)
             val node = snapshot.get_node(model.node_name)
             if (node == null || node.commands.isEmpty) {
               Right(
@@ -5214,21 +5221,21 @@ end"""
         val lines = IQLineOffsetUtils.splitLines(content)
         val lineCount = lines.length
         
-        GUI_Thread.now {
+        {
           // Entity count from PIDE commands
-          val snapshot = Document_Model.snapshot(model)
+          val snapshot = PIDE.session.snapshot(node_name = model.node_name)
           val node = snapshot.get_node(model.node_name)
           val entityCount = if (node != null) {
-            node.command_iterator().count { case (cmd, _) => 
+            node.command_iterator().count { case (cmd, _) =>
               EntityKeywords.contains(cmd.span.name)
             }
           } else 0
-          
+
           // Processing status and diagnostics
           val nodeStatus = Document_Status.Node_Status.make(
             Date.now(), snapshot.state, snapshot.version, model.node_name
           )
-          
+
           Right(Map(
             "path" -> filePath,
             "line_count" -> lineCount,
@@ -5263,24 +5270,22 @@ end"""
 
     getFileContentAndModel(filePath) match {
       case (_, Some(model)) =>
-        GUI_Thread.now {
-          val snapshot = Document_Model.snapshot(model)
-          val nodeStatus = Document_Status.Node_Status.make(
-            Date.now(), snapshot.state, snapshot.version, model.node_name
-          )
+        val snapshot = PIDE.session.snapshot(node_name = model.node_name)
+        val nodeStatus = Document_Status.Node_Status.make(
+          Date.now(), snapshot.state, snapshot.version, model.node_name
+        )
 
-          Right(Map(
-            "path" -> filePath,
-            "fully_processed" -> (nodeStatus.terminated && nodeStatus.unprocessed == 0 && nodeStatus.running == 0),
-            "unprocessed" -> nodeStatus.unprocessed,
-            "running" -> nodeStatus.running,
-            "finished" -> nodeStatus.finished,
-            "failed" -> nodeStatus.failed,
-            "has_errors" -> (nodeStatus.failed > 0),
-            "error_count" -> nodeStatus.failed,
-            "consolidated" -> nodeStatus.consolidated
-          ))
-        }
+        Right(Map(
+          "path" -> filePath,
+          "fully_processed" -> (nodeStatus.terminated && nodeStatus.unprocessed == 0 && nodeStatus.running == 0),
+          "unprocessed" -> nodeStatus.unprocessed,
+          "running" -> nodeStatus.running,
+          "finished" -> nodeStatus.finished,
+          "failed" -> nodeStatus.failed,
+          "has_errors" -> (nodeStatus.failed > 0),
+          "error_count" -> nodeStatus.failed,
+          "consolidated" -> nodeStatus.consolidated
+        ))
       case _ => Left(s"File not tracked: $filePath")
     }
   }
@@ -5305,47 +5310,45 @@ end"""
 
     getFileContentAndModel(filePath) match {
       case (Some(content), Some(model)) =>
-        GUI_Thread.now {
-          val snapshot = Document_Model.snapshot(model)
-          val node = snapshot.get_node(model.node_name)
-          val lineDoc = Line.Document(content)
-          
-          if (node == null || node.commands.isEmpty) {
-            Right(Map("path" -> filePath, "count" -> 0, "positions" -> List.empty[Map[String, Any]]))
-          } else {
-            // Find sorry/oops commands
-            val sorryKeywords = Set("sorry", "oops")
-            val commands = node.command_iterator().toList
-            
-            // Find enclosing proof for each sorry
-            def findEnclosingProof(sorryIndex: Int): String = {
-              val proofStarters = Set("lemma", "theorem", "corollary", "proposition", "schematic_goal")
-              commands.take(sorryIndex).reverse.collectFirst {
-                case (cmd, _) if proofStarters.contains(cmd.span.name) =>
-                  EntityNamePattern.findFirstMatchIn(cmd.source.take(200))
-                    .map(_.group(1))
-                    .getOrElse(s"${cmd.span.name} (unnamed)")
-              }.getOrElse("(unknown)")
-            }
-            
-            val positions = commands.zipWithIndex.collect {
-              case ((cmd, offset), idx) if sorryKeywords.contains(cmd.span.name) =>
-                val line = lineDoc.position(offset).line + 1
-                val enclosingProof = findEnclosingProof(idx)
-                Map(
-                  "line" -> line,
-                  "keyword" -> cmd.span.name,
-                  "offset" -> offset,
-                  "in_proof" -> enclosingProof
-                )
-            }
-            
-            Right(Map(
-              "path" -> filePath,
-              "count" -> positions.length,
-              "positions" -> positions
-            ))
+        val snapshot = PIDE.session.snapshot(node_name = model.node_name)
+        val node = snapshot.get_node(model.node_name)
+        val lineDoc = Line.Document(content)
+
+        if (node == null || node.commands.isEmpty) {
+          Right(Map("path" -> filePath, "count" -> 0, "positions" -> List.empty[Map[String, Any]]))
+        } else {
+          // Find sorry/oops commands
+          val sorryKeywords = Set("sorry", "oops")
+          val commands = node.command_iterator().toList
+
+          // Find enclosing proof for each sorry
+          def findEnclosingProof(sorryIndex: Int): String = {
+            val proofStarters = Set("lemma", "theorem", "corollary", "proposition", "schematic_goal")
+            commands.take(sorryIndex).reverse.collectFirst {
+              case (cmd, _) if proofStarters.contains(cmd.span.name) =>
+                EntityNamePattern.findFirstMatchIn(cmd.source.take(200))
+                  .map(_.group(1))
+                  .getOrElse(s"${cmd.span.name} (unnamed)")
+            }.getOrElse("(unknown)")
           }
+
+          val positions = commands.zipWithIndex.collect {
+            case ((cmd, offset), idx) if sorryKeywords.contains(cmd.span.name) =>
+              val line = lineDoc.position(offset).line + 1
+              val enclosingProof = findEnclosingProof(idx)
+              Map(
+                "line" -> line,
+                "keyword" -> cmd.span.name,
+                "offset" -> offset,
+                "in_proof" -> enclosingProof
+              )
+          }
+
+          Right(Map(
+            "path" -> filePath,
+            "count" -> positions.length,
+            "positions" -> positions
+          ))
         }
       case _ => Left(s"File not tracked: $filePath")
     }
