@@ -273,8 +273,15 @@ fun parse_spec spec =
   | [thy] => (thy, NONE)
   | _ => error ("Bad spec: " ^ quote spec);
 
-(* Create a new REPL.  The theory must already be loaded — either present
-   in the initial heap or previously loaded via Ir.load_theory. *)
+(* Resolve a theory name: check active REPLs first (extracting their final
+   theory), then fall back to Thy_Info.get_theory for heap/loaded theories. *)
+fun get_theory_or_repl name =
+  case Symtab.lookup (Synchronized.value repl_tab) name of
+    SOME r => Toplevel.theory_of (last_state r)
+  | NONE => Thy_Info.get_theory name;
+
+(* Create a new REPL.  Theory specs can refer to loaded theories (in the
+   heap or via Ir.load_theory) or to active REPLs by name. *)
 fun init id specs =
   let val _ = if Symtab.defined (Synchronized.value repl_tab) id
               then error ("REPL " ^ quote id ^ " already exists")
@@ -294,7 +301,7 @@ fun init id specs =
                         then error "Cannot mix theory and segment specs in multi-theory init"
                         else ()
                 val thy_names = map #1 parsed
-                val thys = map Thy_Info.get_theory thy_names
+                val thys = map get_theory_or_repl thy_names
                 val thy = Theory.begin_theory (id, Position.none) thys
             in (From_Theory (String.concatWith "+" thy_names),
                 Toplevel.make_state (SOME thy)) end

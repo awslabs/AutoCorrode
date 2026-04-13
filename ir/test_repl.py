@@ -346,6 +346,42 @@ def core_tests(sock, prefix):
         send_recv(sock, f'Ir.remove {q(t)};')
     tests.append(("ft_negation", test_ft_negation))
 
+    def test_init_from_repl():
+        """Init a new REPL using an active REPL as theory source."""
+        src = f"{prefix}_irsrc"
+        dst = f"{prefix}_irdst"
+        send_recv(sock, f'Ir.init {q(src)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(src)} "lemma {prefix}_repl_lem: True by simp";')
+        # Create dst from src — should inherit src's theory with the lemma
+        send_recv(sock, f'Ir.init {q(dst)} [{q(src)}];')
+        out = send_recv(sock, f'Ir.find_theorems {q(dst)} 3 "name: {prefix}_repl_lem";')
+        assert f"{prefix}_repl_lem" in out, \
+            f"Expected {prefix}_repl_lem visible in dst, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(dst)};')
+        send_recv(sock, f'Ir.remove {q(src)};')
+    tests.append(("init_from_repl", test_init_from_repl))
+
+    def test_init_from_repl_chain():
+        """Chain: A → B → C, lemmas from A and B visible in C."""
+        a = f"{prefix}_irca"
+        b = f"{prefix}_ircb"
+        c = f"{prefix}_ircc"
+        send_recv(sock, f'Ir.init {q(a)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(a)} "lemma {prefix}_chain_a: True by simp";')
+        send_recv(sock, f'Ir.init {q(b)} [{q(a)}];')
+        send_recv(sock, f'Ir.step {q(b)} "lemma {prefix}_chain_b: True by simp";')
+        send_recv(sock, f'Ir.init {q(c)} [{q(b)}];')
+        out_a = send_recv(sock, f'Ir.find_theorems {q(c)} 3 "name: {prefix}_chain_a";')
+        assert f"{prefix}_chain_a" in out_a, \
+            f"Expected {prefix}_chain_a visible in C, got:\n{out_a}"
+        out_b = send_recv(sock, f'Ir.find_theorems {q(c)} 3 "name: {prefix}_chain_b";')
+        assert f"{prefix}_chain_b" in out_b, \
+            f"Expected {prefix}_chain_b visible in C, got:\n{out_b}"
+        send_recv(sock, f'Ir.remove {q(c)};')
+        send_recv(sock, f'Ir.remove {q(b)};')
+        send_recv(sock, f'Ir.remove {q(a)};')
+    tests.append(("init_from_repl_chain", test_init_from_repl_chain))
+
     # Cleanup: remove the shared REPL
     def cleanup():
         send_recv(sock, f'Ir.remove {q(r)};')
