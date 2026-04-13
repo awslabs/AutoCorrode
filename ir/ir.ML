@@ -488,16 +488,20 @@ fun merge id =
   end;
 
 fun remove id =
-  let val _ = the_repl id (* check exists *)
-      fun is_descendant rid =
-        case #origin (the_repl rid) of
-          From_REPL (pid, _) => pid = id orelse is_descendant pid
-        | _ => false
-      val all_ids = Symtab.keys (Synchronized.value repl_tab)
-      val to_remove = id :: filter is_descendant all_ids
-      val _ = List.app (fn rid =>
-        Synchronized.change repl_tab (Symtab.delete_safe rid)) to_remove
-  in out ("Removed " ^ commas (map quote to_remove)) end;
+  let val removed = Synchronized.change_result repl_tab (fn tab =>
+        case Symtab.lookup tab id of
+          NONE => error ("No REPL " ^ quote id)
+        | SOME _ =>
+          let fun is_descendant rid =
+                case Symtab.lookup tab rid of
+                  SOME r => (case #origin r of
+                    From_REPL (pid, _) => pid = id orelse is_descendant pid
+                  | _ => false)
+                | NONE => false
+              val to_remove = id :: filter is_descendant (Symtab.keys tab)
+              val tab' = fold (fn rid => Symtab.delete_safe rid) to_remove tab
+          in (to_remove, tab') end)
+  in out ("Removed " ^ commas (map quote removed)) end;
 
 fun repls () =
   Symtab.fold (fn (id, r : repl) => fn () =>
