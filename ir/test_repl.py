@@ -346,6 +346,35 @@ def core_tests(sock, prefix):
         send_recv(sock, f'Ir.remove {q(t)};')
     tests.append(("ft_negation", test_ft_negation))
 
+    def split_at(text, raw_out):
+        """Parse offsets from parse_spans output, return non-blank text slices."""
+        offsets = [int(l.strip()) for l in raw_out.strip().splitlines()
+                   if l.strip() and not l.strip().startswith("[timing]")]
+        slices = [text[a - 1:b - 1] for a, b in
+                  zip(offsets, offsets[1:] + [len(text) + 1])]
+        return [s for s in slices if s.strip()]
+
+    def test_parse_spans():
+        text = "lemma True by simp"
+        out = send_recv(sock, f'Ir.parse_spans {q(r)} {q(text)};')
+        assert split_at(text, out) == ["lemma True", "by simp"], \
+            f"Expected [lemma True, by simp], got {split_at(text, out)}"
+    tests.append(("parse_spans", test_parse_spans))
+
+    def test_parse_spans_single():
+        text = "lemma True"
+        out = send_recv(sock, f'Ir.parse_spans {q(r)} {q(text)};')
+        assert split_at(text, out) == ["lemma True"], \
+            f"Expected [lemma True], got {split_at(text, out)}"
+    tests.append(("parse_spans_single", test_parse_spans_single))
+
+    def test_parse_spans_multi():
+        text = "lemma True apply simp done"
+        out = send_recv(sock, f'Ir.parse_spans {q(r)} {q(text)};')
+        assert split_at(text, out) == ["lemma True", "apply simp", "done"], \
+            f"Expected [lemma True, apply simp, done], got {split_at(text, out)}"
+    tests.append(("parse_spans_multi", test_parse_spans_multi))
+
     # Cleanup: remove the shared REPL
     def cleanup():
         send_recv(sock, f'Ir.remove {q(r)};')

@@ -42,6 +42,7 @@ sig
   val sledgehammer_state : (Proof.state * int) option Synchronized.var
   val sledgehammer_result : string Synchronized.var
   val find_theorems : string -> int -> string -> unit
+  val parse_spans : string -> string -> unit
   val timeout : string -> int -> unit
   val is_interactive_session : unit -> bool
   val help : unit -> unit
@@ -588,6 +589,16 @@ fun sledgehammer id timeout_secs =
      else List.app out tries
   end;
 
+(* Parse text into Isar command spans and output their 1-based character offsets. *)
+fun parse_spans id text =
+  let val thy = Toplevel.theory_of (last_state (the_repl id))
+      val transitions = Outer_Syntax.parse_text thy (fn () => thy) Position.start text
+  in List.app (fn tr =>
+    case Position.offset_of (Toplevel.pos_of tr) of
+      SOME off => out (string_of_int off)
+    | NONE => ()) transitions
+  end;
+
 fun help () = out
   "=== I/R API ===\n\
   \\n\
@@ -607,6 +618,7 @@ fun help () = out
   \  merge id               inline sub-REPL into parent\n\
   \  sledgehammer id secs   run sledgehammer on proof state\n\
   \  find_theorems id n q   search theorems (n=max, 0=unlimited)\n\
+  \  parse_spans id \"text\" output 1-based char offsets of Isar commands \n\
   \  timeout id secs        set step timeout for REPL (0=unlimited, default 10s)\n\
   \  remove id              remove REPL and its sub-REPLs\n\
   \  repls ()               list all REPLs\n\
