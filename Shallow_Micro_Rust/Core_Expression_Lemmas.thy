@@ -504,6 +504,178 @@ lemma call_literal2 [micro_rust_simps]:
 text\<open>Note that \<^term>\<open>return_func\<close> is not the \<^emph>\<open>unit\<close> of the expression monad, as one may expect from the
 name if you are coming from Haskell!  That is \<^term>\<open>literal\<close>.\<close>
 
+subsection\<open>Inlining function calls\<close>
+
+text\<open>For expressions which do not \<^verbatim>\<open>return\<close>, it does not matter whether they are wrapped
+in function calls or not. More precisely:\<close>
+
+function no_return :: \<open>('s, 'v, 'r, 'abort, 'i, 'o) expression \<Rightarrow> bool\<close> where
+  \<open>no_return e = (\<forall>\<sigma>. 
+          (case evaluate e \<sigma> of
+             Success x \<sigma>' \<Rightarrow> True
+           | Return x \<sigma>'  \<Rightarrow> False
+           | Yield \<pi> \<sigma>' e' \<Rightarrow> (\<forall>\<omega>. no_return (e' \<omega>))
+           | Abort abt \<sigma>'  \<Rightarrow> True
+          ))\<close>
+by pat_completeness auto
+termination
+  no_return
+proof(relation \<open>expression_wf\<close>, goal_cases)
+  case 1
+  then show \<open>wf expression_wf\<close>
+    by force
+next
+  case (2 e x x41 x42 x43 xa)
+  then show \<open>(x43 xa, e) \<in> expression_wf\<close> 
+   by (force simp add: expression_wf_def expression_wf_base_def)
+qed
+declare no_return.simps[simp del]
+
+lemma expression_no_return:
+  assumes \<open>no_return e\<close>
+  shows \<open>evaluate e \<sigma> \<noteq> Return x \<sigma>'\<close>
+    and \<open>evaluate e \<sigma> = Yield \<pi> \<sigma>'' e' \<Longrightarrow> no_return (e' \<omega>)\<close>
+proof -
+  show \<open>evaluate e \<sigma> \<noteq> Return x \<sigma>'\<close>
+    using assms by (auto simp add: no_return.simps split!: continuation.splits)
+  show \<open>evaluate e \<sigma> = Yield \<pi> \<sigma>'' e' \<Longrightarrow> no_return (e' \<omega>)\<close>
+    using assms by (metis continuation.simps(20) no_return.elims(2))
+qed
+
+\<comment>\<open>Expressions which never return can be turned into function calls without change of semantics.
+   (Of course, this is false for expressions which \<^emph>\<open>do\<close> return, as the scope of the \<^verbatim>\<open>return\<close>
+   is bounded by the \<^term>\<open>call\<close>.\<close>
+lemma no_return_call_inline:
+  shows \<open>no_return e \<Longrightarrow> e = call (FunctionBody e)\<close>
+  using expression_wf_base_is_wf
+proof (induct e rule: wf_induct_rule) 
+  case (less e)
+  { fix \<sigma>
+    have \<open>evaluate e \<sigma> = evaluate (call (FunctionBody e)) \<sigma>\<close>
+    proof (cases \<open>evaluate e \<sigma>\<close>)
+      case (Success x11 x12)
+      then show ?thesis by (simp add: call_def evaluate_call_function_body)
+    next
+      case (Return x21 x22) 
+      from this and less(2) have False 
+        by (simp add: expression_no_return) 
+      then show ?thesis by simp
+    next
+      case (Abort x31 x32)
+      then show ?thesis by (simp add: call_def evaluate_call_function_body)
+    next
+      case (Yield \<pi> \<sigma>''' e')
+      then have \<omega>: \<open>(e' \<omega>, e) \<in> expression_wf_base\<close> for \<omega>
+        using expression_wf_base_def by fastforce 
+      moreover have nr: \<open>\<And>\<omega>. no_return (e' \<omega>)\<close>
+        by (meson Yield expression_no_return(2) less.prems)
+      have \<open>\<And>\<omega>. call_function_body (e' \<omega>) = e' \<omega>\<close> thm less(1)[OF \<omega>]
+        using less(1)[OF \<omega> nr] by (simp add: call_def)
+      then show ?thesis
+        by (simp add: Yield call_def evaluate_call_function_body)
+    qed 
+  }
+  then show ?case
+    by - (rule expression_eqI; simp)
+qed
+
+lemma no_return_call_inline':
+  shows \<open>no_return (function_body e) \<Longrightarrow> call e = function_body e\<close>
+  using no_return_call_inline[of \<open>function_body e\<close>] by simp
+
+named_theorems no_return_intros
+
+lemma call_no_return[no_return_intros]:
+    shows \<open>no_return (call f)\<close>
+proof -
+  have aux: "no_return (call_function_body e)" for e
+  proof (induct e rule: call_function_body.induct)
+    case (1 e)
+    show ?case
+      by (subst no_return.simps)
+         (auto simp: evaluate_call_function_body split: continuation.splits intro: 1)
+  qed
+  then show ?thesis
+    by (cases f) (simp add: call_def)
+qed
+
+lemma no_return_basic[no_return_intros]:
+  shows \<open>no_return (literal v)\<close>
+    and \<open>no_return (abort a)\<close>
+    and \<open>no_return (get f)\<close>
+    and \<open>no_return (put g)\<close>
+    and \<open>no_return (put_assert h a)\<close>
+    and \<open>no_return skip\<close>
+  by (subst no_return.simps; simp add: evaluate_def literal_def abort_def get_def put_def put_assert_def split: option.splits)+
+
+lemma bind_no_return[no_return_intros]:
+  assumes \<open>no_return e\<close>
+      and \<open>\<And>v. no_return (f v)\<close>
+    shows \<open>no_return (bind e f)\<close>
+  using assms(1)
+proof (induction e rule: no_return.induct)
+  case (1 e)
+  show ?case
+  proof (subst no_return.simps, simp only: bind_evaluate, intro allI)
+    fix \<sigma>
+    show \<open>case (case evaluate e \<sigma> of Success v \<sigma>' \<Rightarrow> evaluate (f v) \<sigma>' | Return r \<sigma>' \<Rightarrow> Return r \<sigma>'
+                | Abort a \<sigma>' \<Rightarrow> Abort a \<sigma>' | Yield \<pi> \<sigma>' e' \<Rightarrow> Yield \<pi> \<sigma>' (\<lambda>\<rho>. bind (e' \<rho>) f))
+          of Return x \<sigma>' \<Rightarrow> False | Yield \<pi> \<sigma>' e' \<Rightarrow> \<forall>\<omega>. no_return (e' \<omega>) | _ \<Rightarrow> True\<close>
+    proof (cases \<open>evaluate e \<sigma>\<close>)
+      case (Success x11 x12)
+      from assms(2) show ?thesis
+        unfolding Success by (subst (asm) no_return.simps) (auto split: continuation.splits)
+    next
+      case (Return x21 x22)
+      then have False using expression_no_return(1)[OF "1.prems"] by auto
+      then show ?thesis by simp
+    next
+      case (Abort x31 x32)
+      then show ?thesis by simp
+    next
+      case (Yield x41 x42 x43)
+      from expression_no_return(2)[OF "1.prems" Yield]
+      have nr_sub: \<open>no_return (x43 \<omega>)\<close> for \<omega> by simp
+      from "1.IH"[OF Yield nr_sub] show ?thesis
+        unfolding Yield by simp
+    qed
+  qed
+qed
+
+lemma sequence_no_return[no_return_intros]:
+  assumes nr_e: \<open>no_return e\<close>
+      and nr_f: \<open>no_return f\<close>
+    shows \<open>no_return (sequence e f)\<close>
+  unfolding sequence_def using nr_e
+proof (induction e rule: no_return.induct)
+  case (1 e)
+  show ?case
+  proof (subst no_return.simps, simp only: bind_evaluate, intro allI)
+    fix \<sigma>
+    show \<open>case (case evaluate e \<sigma> of Success v \<sigma>' \<Rightarrow> evaluate f \<sigma>' | Return r \<sigma>' \<Rightarrow> Return r \<sigma>'
+                | Abort a \<sigma>' \<Rightarrow> Abort a \<sigma>' | Yield \<pi> \<sigma>' e' \<Rightarrow> Yield \<pi> \<sigma>' (\<lambda>\<rho>. bind (e' \<rho>) (\<lambda>_. f)))
+          of Return x \<sigma>' \<Rightarrow> False | Yield \<pi> \<sigma>' e' \<Rightarrow> \<forall>\<omega>. no_return (e' \<omega>) | _ \<Rightarrow> True\<close>
+    proof (cases \<open>evaluate e \<sigma>\<close>)
+      case (Success x11 x12)
+      from nr_f show ?thesis
+        unfolding Success by (subst (asm) no_return.simps) (auto split: continuation.splits)
+    next
+      case (Return x21 x22)
+      then have False using expression_no_return(1)[OF "1.prems"] by auto
+      then show ?thesis by simp
+    next
+      case (Abort x31 x32)
+      then show ?thesis by simp
+    next
+      case (Yield x41 x42 x43)
+      from expression_no_return(2)[OF "1.prems" Yield]
+      have nr_sub: \<open>no_return (x43 \<omega>)\<close> for \<omega> by simp
+      from "1.IH"[OF Yield nr_sub] show ?thesis
+        unfolding Yield by simp
+    qed
+  qed
+qed
+
 subsection\<open>Aborts\<close>
 
 lemma evaluate_abortE [micro_rust_elims]:

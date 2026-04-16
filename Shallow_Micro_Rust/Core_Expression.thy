@@ -608,6 +608,15 @@ next
     by (force simp add: expression_wf_def expression_wf_base_def)
 qed
 
+lemma evaluate_call_function_body:
+  \<open>evaluate (call_function_body e) \<sigma> =
+          (case evaluate e \<sigma> of
+             Success x \<sigma>' \<Rightarrow> Success x \<sigma>'
+           | Return x \<sigma>'  \<Rightarrow> Success x \<sigma>'
+           | Yield \<pi> \<sigma>' e' \<Rightarrow> Yield \<pi> \<sigma>' (\<lambda>\<omega>. call_function_body (e' \<omega>))
+           | Abort abt \<sigma>'  \<Rightarrow> Abort abt \<sigma>')\<close>
+  by (simp add: evaluate_def)
+
 declare Core_Expression.call_function_body.simps[simp del]
 
 text \<open>Execute a Rust function.\<close>
