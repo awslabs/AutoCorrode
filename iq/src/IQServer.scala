@@ -435,95 +435,95 @@ class IQServer(
       Document_Model.node_required(node_name, set = true)
     }
 
-    // Get initial status to ensure we always have a valid status object
-    var currentStatus: Document_Status.Node_Status = GUI_Thread.now {
-      val snapshot = Document_Model.snapshot(model)
-      val state = snapshot.state
-      val version = snapshot.version
-      Document_Status.Node_Status.make(Date.now(), state, version, node_name)
-    }
-
-    var completed = false
-    var iterations = 0
-    var perCommandTimerStart: Option[Long] = None
-
-    def is_timeout() : Boolean = {
-      timeout_ms match {
-        case Some(t) => (System.currentTimeMillis() - startTime) >= t
-        case _ => false
-      }
-    }
-
-    while (!completed && !is_timeout()) {
-      currentStatus = GUI_Thread.now {
+    try {
+      // Get initial status to ensure we always have a valid status object
+      var currentStatus: Document_Status.Node_Status = GUI_Thread.now {
         val snapshot = Document_Model.snapshot(model)
         val state = snapshot.state
         val version = snapshot.version
         Document_Status.Node_Status.make(Date.now(), state, version, node_name)
       }
 
-      // Check completion status
-      completed = currentStatus.terminated &&
-                  (currentStatus.consolidated ||
-                   (currentStatus.unprocessed == 0 && currentStatus.running == 0))
+      var completed = false
+      var iterations = 0
+      var perCommandTimerStart: Option[Long] = None
 
-      // Per-command timeout logic
-      if (currentStatus.unprocessed == 0 && perCommandTimerStart.isEmpty) {
-        // First time we see unprocessed == 0, start the timer
-        perCommandTimerStart = Some(System.currentTimeMillis())
-        Output.writeln(s"I/Q Server: All commands processed, starting per-command timer for running commands")
-      }
-
-      // Check per-command timeout abort conditions
-      if (currentStatus.unprocessed == 0) {
-        if (currentStatus.running == 0) {
-          // No commands running, we're done
-          completed = true
-          Output.writeln(s"I/Q Server: No commands running, completion achieved")
-        } else {
-          // Check if per-command timer has fired
-          timeoutPerCommandMs match {
-            case Some(perCmdTimeout) =>
-              perCommandTimerStart match {
-                case Some(timerStart) =>
-                  val perCommandElapsed = System.currentTimeMillis() - timerStart
-                  if (perCommandElapsed >= perCmdTimeout) {
-                    Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
-                    completed = true
-                  }
-                case None =>
-              }
-            case None => // No per-command timeout set
-          }
+      def is_timeout() : Boolean = {
+        timeout_ms match {
+          case Some(t) => (System.currentTimeMillis() - startTime) >= t
+          case _ => false
         }
       }
 
-      iterations += 1
+      while (!completed && !is_timeout()) {
+        currentStatus = GUI_Thread.now {
+          val snapshot = Document_Model.snapshot(model)
+          val state = snapshot.state
+          val version = snapshot.version
+          Document_Status.Node_Status.make(Date.now(), state, version, node_name)
+        }
 
-      // Log progress every 5 iterations (5 seconds)
-      if (iterations % 5 == 0) {
-        Output.writeln(s"I/Q Server: Theory completion progress - unprocessed: ${currentStatus.unprocessed}, running: ${currentStatus.running}, finished: ${currentStatus.finished}, failed: ${currentStatus.failed}, terminated: ${currentStatus.terminated}, consolidated: ${currentStatus.consolidated}")
+        // Check completion status
+        completed = currentStatus.terminated &&
+                    (currentStatus.consolidated ||
+                     (currentStatus.unprocessed == 0 && currentStatus.running == 0))
+
+        // Per-command timeout logic
+        if (currentStatus.unprocessed == 0 && perCommandTimerStart.isEmpty) {
+          // First time we see unprocessed == 0, start the timer
+          perCommandTimerStart = Some(System.currentTimeMillis())
+          Output.writeln(s"I/Q Server: All commands processed, starting per-command timer for running commands")
+        }
+
+        // Check per-command timeout abort conditions
+        if (currentStatus.unprocessed == 0) {
+          if (currentStatus.running == 0) {
+            // No commands running, we're done
+            completed = true
+            Output.writeln(s"I/Q Server: No commands running, completion achieved")
+          } else {
+            // Check if per-command timer has fired
+            timeoutPerCommandMs match {
+              case Some(perCmdTimeout) =>
+                perCommandTimerStart match {
+                  case Some(timerStart) =>
+                    val perCommandElapsed = System.currentTimeMillis() - timerStart
+                    if (perCommandElapsed >= perCmdTimeout) {
+                      Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
+                      completed = true
+                    }
+                  case None =>
+                }
+              case None => // No per-command timeout set
+            }
+          }
+        }
+
+        iterations += 1
+
+        // Log progress every 5 iterations (5 seconds)
+        if (iterations % 5 == 0) {
+          Output.writeln(s"I/Q Server: Theory completion progress - unprocessed: ${currentStatus.unprocessed}, running: ${currentStatus.running}, finished: ${currentStatus.finished}, failed: ${currentStatus.failed}, terminated: ${currentStatus.terminated}, consolidated: ${currentStatus.consolidated}")
+        }
+
+        if (!completed) {
+          Thread.sleep(1000)
+        }
       }
 
-      if (!completed) {
-        Thread.sleep(1000)
+      val elapsedMs = System.currentTimeMillis() - startTime
+      if (completed) {
+        Output.writeln(s"I/Q Server: Theory completion succeeded after ${elapsedMs}ms")
+      } else {
+        Output.writeln(s"I/Q Server: Theory completion timed out after ${elapsedMs}ms")
+      }
+
+      (completed, currentStatus)
+    } finally {
+      GUI_Thread.now {
+        Document_Model.node_required(node_name, set = originalRequiredState)
       }
     }
-
-    val elapsedMs = System.currentTimeMillis() - startTime
-    if (completed) {
-      Output.writeln(s"I/Q Server: Theory completion succeeded after ${elapsedMs}ms")
-    } else {
-      Output.writeln(s"I/Q Server: Theory completion timed out after ${elapsedMs}ms")
-    }
-
-    // Restore the original required state
-    GUI_Thread.now {
-      Document_Model.node_required(node_name, set = originalRequiredState)
-    }
-
-    // Ensure we always return a valid status object
-    (completed, currentStatus)
   }
 
   /**
@@ -5166,6 +5166,7 @@ end"""
         s"I/Q Server: Starting query execution for $internalQuery with arguments: $formattedArgs"
       )
 
+      var operationToCleanup: Extended_Query_Operation = null
       try {
         val operation = GUI_Thread.now {
           val activeView = jEdit.getActiveView()
@@ -5187,6 +5188,7 @@ end"""
 
           Output.writeln("I/Q Server: Activating operation and applying query")
           operation.activate()
+          operationToCleanup = operation
 
           Output.writeln(s"I/Q Server: Formatted args: $formattedArgs")
           operation.apply_query_at_command(command, formattedArgs)
@@ -5215,9 +5217,10 @@ end"""
           s"I/Q Server: Finished waiting after ${elapsed}ms, isFinished=${collector.isFinished()}"
         )
 
-        Output.writeln("I/Q Server: Deactivating operation")
-        GUI_Thread.now {
-          operation.deactivate()
+        if (!completedInTime) {
+          Output.writeln("I/Q Server: Query timed out, cancelling ML execution")
+          try { GUI_Thread.now { operation.cancel_query() } }
+          catch { case _: Exception => }
         }
 
         val timedOut = !completedInTime
@@ -5254,6 +5257,11 @@ end"""
             "results" -> "",
             "message" -> s"Failed to execute query operation due to linkage error: ${throwableMessage(err)}"
           )
+      } finally {
+        if (operationToCleanup != null) {
+          try { GUI_Thread.now { operationToCleanup.deactivate() } }
+          catch { case _: Exception => }
+        }
       }
 
     } catch {

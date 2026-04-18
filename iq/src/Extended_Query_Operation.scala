@@ -265,12 +265,18 @@ class Extended_Query_Operation(
         }
     }
 
+  @volatile private var active = false
+
   def activate(): Unit = {
     editor.session.commands_changed += main
+    active = true
   }
 
   def deactivate(): Unit = {
-    editor.session.commands_changed -= main
-    cleanup_state()
+    if (active) {
+      active = false
+      editor.session.commands_changed -= main
+      cleanup_state()
+    }
   }
 }
