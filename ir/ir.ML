@@ -367,15 +367,18 @@ fun fork parent_id new_id state_idx =
           " at state " ^ string_of_int i)
   end;
 
+fun step_repl timeout_secs text (r : repl) : repl =
+  let val pre = last_state r
+      val post = exec_text timeout_secs text pre
+      val s : repl_step = {text = text, pre_state = pre, post_state = post, stale = false}
+  in {origin = #origin r, base_state = #base_state r,
+      steps = #steps r @ [s], timeout = #timeout r} end;
+
 fun step id text =
   let val r = the_repl id
-      val pre = last_state r
-      val post = exec_text (#timeout r) text pre
-      val s : repl_step = {text = text, pre_state = pre, post_state = post, stale = false}
-      val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = #steps r @ [s], timeout = #timeout r}
+      val r' = step_repl (#timeout r) text r
   in update_repl id r';
-     out (pretty_state post)
+     out (pretty_state (last_state r'))
   end;
 
 fun state id state_idx =
@@ -420,9 +423,8 @@ fun text id =
       val t = map #text (#steps r)
   in out (String.concatWith "\n" t) end;
 
-fun replay id =
-  let val r = the_repl id
-      fun go _ [] acc = rev acc
+fun replay_repl (r : repl) : repl =
+  let fun go _ [] acc = rev acc
         | go prev_post (s :: rest) acc =
             if #stale (s : repl_step) then
               let val post = exec_text (#timeout r) (#text s) prev_post
@@ -430,16 +432,20 @@ fun replay id =
                                          post_state = post, stale = false}
               in go post rest (s' :: acc) end
             else go (#post_state s) rest (s :: acc)
-      val steps' = go (#base_state r) (#steps r) []
-      val r' : repl = {origin = #origin r, base_state = #base_state r, steps = steps',
-                        timeout = #timeout r}
+  in {origin = #origin r, base_state = #base_state r,
+      steps = go (#base_state r) (#steps r) [],
+      timeout = #timeout r} end;
+
+fun replay id =
+  let val r = the_repl id
+      val stale_count = length (filter #stale (#steps r))
+      val r' = replay_repl r
   in update_repl id r';
-     out ("Replayed " ^ string_of_int (length (filter #stale (#steps r))) ^ " stale steps")
+     out ("Replayed " ^ string_of_int stale_count ^ " stale steps")
   end;
 
-fun edit id idx new_text =
-  let val r = the_repl id
-      val steps = #steps r
+fun edit_repl idx new_text (r : repl) : repl =
+  let val steps = #steps r
       val _ = if idx < 0 orelse idx >= length steps
               then error ("Step " ^ string_of_int idx ^ " out of range") else ()
       val pre = if idx = 0 then #base_state r
@@ -453,10 +459,16 @@ fun edit id idx new_text =
       val r' : repl = {origin = #origin r, base_state = #base_state r,
                         steps = before_steps @ [edited] @ after_steps,
                         timeout = #timeout r}
+  in if #auto_replay (get_cfg ()) andalso not (null after_steps)
+     then replay_repl r' else r' end;
+
+fun edit id idx new_text =
+  let val r = the_repl id
+      val r' = edit_repl idx new_text r
+      val after_count = length (#steps r) - idx - 1
   in update_repl id r';
      out ("Edited step " ^ string_of_int idx ^ ", " ^
-          string_of_int (length after_steps) ^ " subsequent steps marked stale");
-     if #auto_replay (get_cfg ()) andalso not (null after_steps) then replay id else ()
+          string_of_int after_count ^ " subsequent steps marked stale")
   end;
 
 fun truncate id raw_idx =
@@ -493,12 +505,12 @@ fun merge id =
         | _ => error ("REPL " ^ quote id ^ " is not a sub-REPL")
       val merged_text = String.concatWith "\n" (map #text (#steps r))
       val _ = Synchronized.change repl_tab (Symtab.delete_safe id)
-      val target = pidx
-  in if target < length (#steps (the_repl pid))
-     then (edit pid target merged_text;
+      val parent = the_repl pid
+  in if pidx < length (#steps parent)
+     then (update_repl pid (edit_repl pidx merged_text parent);
            out ("Merged " ^ quote id ^ " into " ^ quote pid ^
-                " (replaced step " ^ string_of_int target ^ ")"))
-     else (step pid merged_text;
+                " (replaced step " ^ string_of_int pidx ^ ")"))
+     else (update_repl pid (step_repl (#timeout parent) merged_text parent);
            out ("Merged " ^ quote id ^ " into " ^ quote pid ^
                 " (appended as new step)"))
   end;
