@@ -242,6 +242,15 @@ fun the_repl id = get_repl_in (Synchronized.value repl_tab) id;
 fun update_repl id r =
   Synchronized.change repl_tab (Symtab.update (id, Repl r));
 
+fun descendants tab id =
+  let fun is_desc rid =
+        case Symtab.lookup tab rid of
+          SOME entry => (case entry_origin entry of
+            From_REPL (pid, _) => pid = id orelse is_desc pid
+          | _ => false)
+        | NONE => false
+  in filter is_desc (Symtab.keys tab) end;
+
 fun timeout id secs =
   let val _ = the_repl id
       val _ = Synchronized.change repl_tab (Symtab.map_entry id
@@ -479,14 +488,17 @@ fun truncate id raw_idx =
       val _ = if idx < ~1 orelse idx >= n
               then error ("Step " ^ string_of_int raw_idx ^ " out of range ("
                           ^ string_of_int n ^ " steps)") else ()
-      (* Remove sub-REPLs attached to dropped steps *)
+      (* Remove sub-REPLs rooted at dropped steps (and their descendants) *)
       val dropped = length steps - idx - 1
       val _ = Synchronized.change repl_tab (fn tab =>
-        Symtab.fold (fn (rid, entry) =>
-          case entry_origin entry of
-            From_REPL (pid, si) =>
-              if pid = id andalso si > idx then Symtab.delete rid else I
-          | _ => I) tab tab)
+        let val base_orphans = Symtab.fold (fn (rid, entry) =>
+              case entry_origin entry of
+                From_REPL (pid, si) =>
+                  if pid = id andalso si > idx then cons rid else I
+              | _ => I) tab []
+            val all_orphans =
+              base_orphans @ flat (map (descendants tab) base_orphans)
+        in fold (fn rid => Symtab.delete_safe rid) all_orphans tab end)
       val r' : repl = {origin = #origin r, base_state = #base_state r,
                         steps = if idx < 0 then [] else List.take (steps, idx + 1),
                         timeout = #timeout r}
@@ -517,14 +529,8 @@ fun merge id =
 
 fun remove id =
   let val _ = the_repl id
-      fun is_descendant rid =
-        case Symtab.lookup (Synchronized.value repl_tab) rid of
-          SOME entry => (case entry_origin entry of
-            From_REPL (pid, _) => pid = id orelse is_descendant pid
-          | _ => false)
-        | NONE => false
-      val all_ids = Symtab.keys (Synchronized.value repl_tab)
-      val to_remove = id :: filter is_descendant all_ids
+      val tab = Synchronized.value repl_tab
+      val to_remove = id :: descendants tab id
       val _ = List.app (fn rid =>
         Synchronized.change repl_tab (Symtab.delete_safe rid)) to_remove
   in out ("Removed " ^ commas (map quote to_remove)) end;

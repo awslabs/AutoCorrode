@@ -237,6 +237,26 @@ def core_tests(sock, prefix):
         send_recv(sock, f'Ir.remove {q(t)};')
     tests.append(("truncate_negative_multi", test_truncate_negative_multi))
 
+    def test_truncate_deep_descendants():
+        """Truncate must remove grandchildren, not just direct children."""
+        t = f"{prefix}_tdd"
+        s = f"{prefix}_tdd_s"
+        u = f"{prefix}_tdd_t"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma a: True by simp";')
+        send_recv(sock, f'Ir.fork {q(t)} {q(s)} 1;')
+        send_recv(sock, f'Ir.step {q(s)} "lemma b: True by simp";')
+        send_recv(sock, f'Ir.fork {q(s)} {q(u)} 1;')
+        # u is a grandchild of t (t -> s -> u)
+        # Truncate t to step 0 — s (forked at state 1) becomes orphaned,
+        # and u (a descendant of s) should also be removed.
+        send_recv(sock, f'Ir.truncate {q(t)} ~1;')
+        out = send_recv(sock, 'Ir.repls ();')
+        assert s not in out, f"Expected {s} removed, got:\n{out}"
+        assert u not in out, f"Expected {u} (grandchild) removed, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("truncate_deep_descendants", test_truncate_deep_descendants))
+
     def test_back():
         t = f"{prefix}_bk"
         send_recv(sock, f'Ir.init {q(t)} ["Main"];')
