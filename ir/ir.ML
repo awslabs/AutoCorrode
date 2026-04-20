@@ -498,6 +498,11 @@ fun truncate id raw_idx =
               | _ => I) tab []
             val all_orphans =
               base_orphans @ flat (map (descendants tab) base_orphans)
+            val _ = List.app (fn rid =>
+              case Symtab.lookup tab rid of
+                SOME (Claimed _) =>
+                  error ("Cannot truncate: sub-REPL " ^ quote rid ^ " is busy")
+              | _ => ()) all_orphans
         in fold (fn rid => Symtab.delete_safe rid) all_orphans tab end)
       val r' : repl = {origin = #origin r, base_state = #base_state r,
                         steps = if idx < 0 then [] else List.take (steps, idx + 1),
@@ -531,6 +536,11 @@ fun remove id =
   let val _ = the_repl id
       val tab = Synchronized.value repl_tab
       val to_remove = id :: descendants tab id
+      val _ = List.app (fn rid =>
+        case Symtab.lookup tab rid of
+          SOME (Claimed _) =>
+            error ("Cannot remove: sub-REPL " ^ quote rid ^ " is busy")
+        | _ => ()) to_remove
       val _ = List.app (fn rid =>
         Synchronized.change repl_tab (Symtab.delete_safe rid)) to_remove
   in out ("Removed " ^ commas (map quote to_remove)) end;
