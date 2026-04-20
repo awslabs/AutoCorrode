@@ -251,6 +251,21 @@ fun descendants tab id =
         | NONE => false
   in filter is_desc (Symtab.keys tab) end;
 
+fun claim id =
+  Synchronized.change_result repl_tab (fn tab =>
+    let val r = get_repl_in tab id
+    in (r, Symtab.update (id, Claimed (#origin r)) tab) end);
+
+fun release id r =
+  Synchronized.change repl_tab (Symtab.update (id, Repl r));
+
+fun with_claim id (f : repl -> repl * 'a) : 'a =
+  let val r = claim id
+  in case Exn.capture f r of
+       Exn.Res (r', result) => (release id r'; result)
+     | Exn.Exn e => (release id r; Exn.reraise e)
+  end;
+
 fun timeout id secs =
   let val _ = the_repl id
       val _ = Synchronized.change repl_tab (Symtab.map_entry id
@@ -384,11 +399,9 @@ fun step_repl timeout_secs text (r : repl) : repl =
       steps = #steps r @ [s], timeout = #timeout r} end;
 
 fun step id text =
-  let val r = the_repl id
-      val r' = step_repl (#timeout r) text r
-  in update_repl id r';
-     out (pretty_state (last_state r'))
-  end;
+  with_claim id (fn r =>
+    let val r' = step_repl (#timeout r) text r
+    in (r', out (pretty_state (last_state r'))) end);
 
 fun state id state_idx =
   let val r = the_repl id
@@ -446,12 +459,10 @@ fun replay_repl (r : repl) : repl =
       timeout = #timeout r} end;
 
 fun replay id =
-  let val r = the_repl id
-      val stale_count = length (filter #stale (#steps r))
-      val r' = replay_repl r
-  in update_repl id r';
-     out ("Replayed " ^ string_of_int stale_count ^ " stale steps")
-  end;
+  with_claim id (fn r =>
+    let val stale_count = length (filter #stale (#steps r))
+        val r' = replay_repl r
+    in (r', out ("Replayed " ^ string_of_int stale_count ^ " stale steps")) end);
 
 fun edit_repl idx new_text (r : repl) : repl =
   let val steps = #steps r
@@ -472,13 +483,11 @@ fun edit_repl idx new_text (r : repl) : repl =
      then replay_repl r' else r' end;
 
 fun edit id idx new_text =
-  let val r = the_repl id
-      val r' = edit_repl idx new_text r
-      val after_count = length (#steps r) - idx - 1
-  in update_repl id r';
-     out ("Edited step " ^ string_of_int idx ^ ", " ^
-          string_of_int after_count ^ " subsequent steps marked stale")
-  end;
+  with_claim id (fn r =>
+    let val r' = edit_repl idx new_text r
+        val after_count = length (#steps r) - idx - 1
+    in (r', out ("Edited step " ^ string_of_int idx ^ ", " ^
+                 string_of_int after_count ^ " subsequent steps marked stale")) end);
 
 fun truncate id raw_idx =
   let val r = the_repl id
@@ -515,21 +524,27 @@ fun truncate id raw_idx =
 fun back id = truncate id ~1;
 
 fun merge id =
-  let val r = the_repl id
+  let val child = claim id
       val (pid, pidx) =
-        case #origin r of
+        case #origin child of
           From_REPL (p, i) => (p, i)
-        | _ => error ("REPL " ^ quote id ^ " is not a sub-REPL")
-      val merged_text = String.concatWith "\n" (map #text (#steps r))
-      val _ = Synchronized.change repl_tab (Symtab.delete_safe id)
-      val parent = the_repl pid
-  in if pidx < length (#steps parent)
-     then (update_repl pid (edit_repl pidx merged_text parent);
-           out ("Merged " ^ quote id ^ " into " ^ quote pid ^
-                " (replaced step " ^ string_of_int pidx ^ ")"))
-     else (update_repl pid (step_repl (#timeout parent) merged_text parent);
-           out ("Merged " ^ quote id ^ " into " ^ quote pid ^
-                " (appended as new step)"))
+        | _ => (release id child;
+                error ("REPL " ^ quote id ^ " is not a sub-REPL"))
+      val merged_text = String.concatWith "\n" (map #text (#steps child))
+  in
+    case Exn.capture (with_claim pid) (fn parent =>
+      let val r' =
+            if pidx < length (#steps parent)
+            then edit_repl pidx merged_text parent
+            else step_repl (#timeout parent) merged_text parent
+          val _ = Synchronized.change repl_tab (Symtab.delete id)
+          val msg = if pidx < length (#steps parent)
+                    then "replaced step " ^ string_of_int pidx
+                    else "appended as new step"
+      in (r', out ("Merged " ^ quote id ^ " into " ^ quote pid ^
+                   " (" ^ msg ^ ")")) end) of
+      Exn.Res x => x
+    | Exn.Exn e => (release id child; Exn.reraise e)
   end;
 
 fun remove id =
