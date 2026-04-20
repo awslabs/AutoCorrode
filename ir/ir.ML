@@ -209,6 +209,19 @@ type repl = {
   timeout: int
 };
 
+(* Concurrency guard: repl_tab stores repl_entry values.  A slow mutation
+   (step, edit, replay) atomically transitions Repl -> Claimed before
+   running exec_text, then Claimed -> Repl with the result.  Any operation
+   that calls the_repl/entry_repl on a Claimed entry fails immediately
+   with "is busy", preventing concurrent mutations from racing. *)
+datatype repl_entry = Repl of repl | Claimed of origin;
+
+fun entry_repl id (Repl r) = r
+  | entry_repl id (Claimed _) = error ("REPL " ^ quote id ^ " is busy");
+
+fun entry_origin (Repl r) = #origin r
+  | entry_origin (Claimed orig) = orig;
+
 (* Sledgehammer bridge: structure-qualified vars survive heap save/load,
    unlike top-level val bindings. Used by ML_Compiler.eval in sledgehammer. *)
 val sledgehammer_state : (Proof.state * int) option Synchronized.var =
@@ -216,22 +229,25 @@ val sledgehammer_state : (Proof.state * int) option Synchronized.var =
 val sledgehammer_result : string Synchronized.var =
   Synchronized.var "Ir.sledgehammer_result" "";
 
-val repl_tab : repl Symtab.table Synchronized.var
+val repl_tab : repl_entry Symtab.table Synchronized.var
   = Synchronized.var "Ir.repls" Symtab.empty;
 
-fun the_repl id =
-  case Symtab.lookup (Synchronized.value repl_tab) id of
-    SOME r => r
-  | NONE => error ("No REPL " ^ quote id);
+fun get_repl_in tab id =
+  case Symtab.lookup tab id of
+    NONE => error ("No REPL " ^ quote id)
+  | SOME e => entry_repl id e;
+
+fun the_repl id = get_repl_in (Synchronized.value repl_tab) id;
 
 fun update_repl id r =
-  Synchronized.change repl_tab (Symtab.update (id, r));
+  Synchronized.change repl_tab (Symtab.update (id, Repl r));
 
 fun timeout id secs =
   let val _ = the_repl id
       val _ = Synchronized.change repl_tab (Symtab.map_entry id
-        (fn r : repl => {origin = #origin r, base_state = #base_state r,
-                         steps = #steps r, timeout = secs}))
+        (fn Repl r => Repl {origin = #origin r, base_state = #base_state r,
+                            steps = #steps r, timeout = secs}
+          | e => e))
   in out ("Timeout for " ^ quote id ^ " set to " ^
           (if secs = 0 then "unlimited" else string_of_int secs ^ "s"))
   end;
@@ -454,8 +470,8 @@ fun truncate id raw_idx =
       (* Remove sub-REPLs attached to dropped steps *)
       val dropped = length steps - idx - 1
       val _ = Synchronized.change repl_tab (fn tab =>
-        Symtab.fold (fn (rid, r') =>
-          case #origin (r' : repl) of
+        Symtab.fold (fn (rid, entry) =>
+          case entry_origin entry of
             From_REPL (pid, si) =>
               if pid = id andalso si > idx then Symtab.delete rid else I
           | _ => I) tab tab)
@@ -488,11 +504,13 @@ fun merge id =
   end;
 
 fun remove id =
-  let val _ = the_repl id (* check exists *)
+  let val _ = the_repl id
       fun is_descendant rid =
-        case #origin (the_repl rid) of
-          From_REPL (pid, _) => pid = id orelse is_descendant pid
-        | _ => false
+        case Symtab.lookup (Synchronized.value repl_tab) rid of
+          SOME entry => (case entry_origin entry of
+            From_REPL (pid, _) => pid = id orelse is_descendant pid
+          | _ => false)
+        | NONE => false
       val all_ids = Symtab.keys (Synchronized.value repl_tab)
       val to_remove = id :: filter is_descendant all_ids
       val _ = List.app (fn rid =>
@@ -500,19 +518,24 @@ fun remove id =
   in out ("Removed " ^ commas (map quote to_remove)) end;
 
 fun repls () =
-  Symtab.fold (fn (id, r : repl) => fn () =>
-    let val n = length (#steps r)
-        val orig = case #origin r of
-            From_Theory t => "theory " ^ t
-          | From_Segment (t, i) => t ^ ":" ^ string_of_int i
-          | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
-          | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i
-        val stale = length (filter #stale (#steps r))
-        val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
-            (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
-            ", from " ^ orig ^ ")"
-    in out ("    " ^ desc)
-    end) (Synchronized.value repl_tab) ();
+  let fun origin_str orig = case orig of
+          From_Theory t => "theory " ^ t
+        | From_Segment (t, i) => t ^ ":" ^ string_of_int i
+        | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
+        | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i
+  in Symtab.fold (fn (id, entry) => fn () =>
+    case entry of
+      Claimed orig =>
+        out ("    " ^ id ^ " (busy, from " ^ origin_str orig ^ ")")
+    | Repl r =>
+      let val n = length (#steps r)
+          val stale = length (filter #stale (#steps r))
+          val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
+              (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
+              ", from " ^ origin_str (#origin r) ^ ")"
+      in out ("    " ^ desc) end)
+    (Synchronized.value repl_tab) ()
+  end;
 
 (* Lists theories in the initial heap plus those loaded via load_theory. *)
 fun theories () =
