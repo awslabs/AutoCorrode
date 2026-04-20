@@ -239,9 +239,6 @@ fun get_repl_in tab id =
 
 fun the_repl id = get_repl_in (Synchronized.value repl_tab) id;
 
-fun update_repl id r =
-  Synchronized.change repl_tab (Symtab.update (id, Repl r));
-
 fun descendants tab id =
   let fun is_desc rid =
         case Symtab.lookup tab rid of
@@ -266,15 +263,20 @@ fun with_claim id (f : repl -> repl * 'a) : 'a =
      | Exn.Exn e => (release id r; Exn.reraise e)
   end;
 
+fun with_repl id f =
+  Synchronized.change_result repl_tab (fn tab => f (get_repl_in tab id) tab);
+
+fun map_repl id (f : repl -> repl * 'a) : 'a =
+  with_repl id (fn r => fn tab =>
+    let val (r', result) = f r
+    in (result, Symtab.update (id, Repl r') tab) end);
+
 fun timeout id secs =
-  let val _ = the_repl id
-      val _ = Synchronized.change repl_tab (Symtab.map_entry id
-        (fn Repl r => Repl {origin = #origin r, base_state = #base_state r,
-                            steps = #steps r, timeout = secs}
-          | e => e))
-  in out ("Timeout for " ^ quote id ^ " set to " ^
-          (if secs = 0 then "unlimited" else string_of_int secs ^ "s"))
-  end;
+  (map_repl id (fn r =>
+    ({origin = #origin r, base_state = #base_state r,
+      steps = #steps r, timeout = secs}, ()));
+   out ("Timeout for " ^ quote id ^ " set to " ^
+        (if secs = 0 then "unlimited" else string_of_int secs ^ "s")));
 
 (* Execute Isar text against a state *)
 fun exec_text timeout_secs text st =
@@ -316,10 +318,7 @@ fun parse_spec spec =
 (* Create a new REPL.  The theory must already be loaded — either present
    in the initial heap or previously loaded via Ir.load_theory. *)
 fun init id specs =
-  let val _ = if Symtab.defined (Synchronized.value repl_tab) id
-              then error ("REPL " ^ quote id ^ " already exists")
-              else ()
-      val _ = if null specs then error "init requires at least one spec" else ()
+  let val _ = if null specs then error "init requires at least one spec" else ()
       val parsed = map parse_spec specs
       val (origin, st) =
         case parsed of
@@ -339,14 +338,15 @@ fun init id specs =
             in (From_Theory (String.concatWith "+" thy_names),
                 Toplevel.make_state (SOME thy)) end
       val r : repl = {origin = origin, base_state = st, steps = [], timeout = default_timeout}
-  in update_repl id r;
+  in Synchronized.change_result repl_tab (fn tab =>
+       if Symtab.defined tab id
+       then error ("REPL " ^ quote id ^ " already exists")
+       else ((), Symtab.update (id, Repl r) tab));
      out ("Created REPL " ^ quote id)
   end;
 
 fun init_from_document id node_name command_id =
   let
-    val _ = if Symtab.defined (Synchronized.value repl_tab) id
-            then error ("REPL " ^ quote id ^ " already exists") else ()
     val st = Document.state ()
     val exec =
       (case Exn.capture (Document.command_exec st node_name) command_id of
@@ -365,31 +365,32 @@ fun init_from_document id node_name command_id =
     val toplevel_st = Command.eval_result_state eval
     val r : repl = {origin = From_Document (node_name, command_id),
                     base_state = toplevel_st, steps = [], timeout = default_timeout}
-  in update_repl id r;
+  in Synchronized.change_result repl_tab (fn tab =>
+       if Symtab.defined tab id
+       then error ("REPL " ^ quote id ^ " already exists")
+       else ((), Symtab.update (id, Repl r) tab));
      out ("Created REPL " ^ quote id ^ " from document " ^ quote node_name ^
           " command " ^ string_of_int command_id ^
           (if Toplevel.is_proof toplevel_st then " [proof]" else " [theory]"))
   end;
 
 fun fork parent_id new_id state_idx =
-  let val _ = if Symtab.defined (Synchronized.value repl_tab) new_id
-              then error ("REPL " ^ quote new_id ^ " already exists")
-              else ()
-      val parent = the_repl parent_id
-      val steps = #steps parent
-      val n = length steps
-      (* Use same indexing as state: 0=base, 1=after step 0, ... *)
-      val i = if state_idx < 0 then n + 1 + state_idx else state_idx
-      val st = if i = 0 then #base_state parent
-               else if i >= 1 andalso i <= n then #post_state (nth steps (i - 1))
-               else error ("State " ^ string_of_int state_idx ^ " out of range (0.." ^
-                           string_of_int n ^ ")")
-      val r : repl = {origin = From_REPL (parent_id, i), base_state = st, steps = [],
-                      timeout = #timeout parent}
-  in update_repl new_id r;
-     out ("Forked REPL " ^ quote new_id ^ " from " ^ quote parent_id ^
-          " at state " ^ string_of_int i)
-  end;
+  (Synchronized.change repl_tab (fn tab =>
+    let val _ = if Symtab.defined tab new_id
+                then error ("REPL " ^ quote new_id ^ " already exists") else ()
+        val parent = get_repl_in tab parent_id
+        val steps = #steps parent
+        val n = length steps
+        val i = if state_idx < 0 then n + 1 + state_idx else state_idx
+        val st = if i = 0 then #base_state parent
+                 else if i >= 1 andalso i <= n then #post_state (nth steps (i - 1))
+                 else error ("State " ^ string_of_int state_idx ^
+                             " out of range (0.." ^ string_of_int n ^ ")")
+        val r : repl = {origin = From_REPL (parent_id, i), base_state = st,
+                        steps = [], timeout = #timeout parent}
+    in Symtab.update (new_id, Repl r) tab end);
+   out ("Forked REPL " ^ quote new_id ^ " from " ^ quote parent_id ^
+        " at state " ^ string_of_int state_idx));
 
 fun step_repl timeout_secs text (r : repl) : repl =
   let val pre = last_state r
@@ -490,36 +491,33 @@ fun edit id idx new_text =
                  string_of_int after_count ^ " subsequent steps marked stale")) end);
 
 fun truncate id raw_idx =
-  let val r = the_repl id
-      val steps = #steps r
-      val n = length steps
-      val idx = if raw_idx < 0 then n + raw_idx - 1 else raw_idx
-      val _ = if idx < ~1 orelse idx >= n
-              then error ("Step " ^ string_of_int raw_idx ^ " out of range ("
-                          ^ string_of_int n ^ " steps)") else ()
-      (* Remove sub-REPLs rooted at dropped steps (and their descendants) *)
-      val dropped = length steps - idx - 1
-      val _ = Synchronized.change repl_tab (fn tab =>
-        let val base_orphans = Symtab.fold (fn (rid, entry) =>
-              case entry_origin entry of
-                From_REPL (pid, si) =>
-                  if pid = id andalso si > idx then cons rid else I
-              | _ => I) tab []
-            val all_orphans =
-              base_orphans @ flat (map (descendants tab) base_orphans)
-            val _ = List.app (fn rid =>
-              case Symtab.lookup tab rid of
-                SOME (Claimed _) =>
-                  error ("Cannot truncate: sub-REPL " ^ quote rid ^ " is busy")
-              | _ => ()) all_orphans
-        in fold (fn rid => Symtab.delete_safe rid) all_orphans tab end)
-      val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = if idx < 0 then [] else List.take (steps, idx + 1),
-                        timeout = #timeout r}
-  in update_repl id r';
-     out ("Truncated to step " ^ string_of_int idx ^ ", dropped " ^
-          string_of_int dropped ^ " steps")
-  end;
+  with_repl id (fn r => fn tab =>
+    let val steps = #steps r
+        val n = length steps
+        val idx = if raw_idx < 0 then n + raw_idx - 1 else raw_idx
+        val _ = if idx < ~1 orelse idx >= n
+                then error ("Step " ^ string_of_int raw_idx ^ " out of range ("
+                            ^ string_of_int n ^ " steps)") else ()
+        val dropped = length steps - idx - 1
+        val base_orphans = Symtab.fold (fn (rid, entry) =>
+          case entry_origin entry of
+            From_REPL (pid, si) =>
+              if pid = id andalso si > idx then cons rid else I
+          | _ => I) tab []
+        val all_orphans =
+          base_orphans @ flat (map (descendants tab) base_orphans)
+        val _ = List.app (fn rid =>
+          case Symtab.lookup tab rid of
+            SOME (Claimed _) =>
+              error ("Cannot truncate: sub-REPL " ^ quote rid ^ " is busy")
+          | _ => ()) all_orphans
+        val tab' = fold (fn rid => Symtab.delete_safe rid) all_orphans tab
+        val r' : repl = {origin = #origin r, base_state = #base_state r,
+                          steps = if idx < 0 then [] else List.take (steps, idx + 1),
+                          timeout = #timeout r}
+    in (out ("Truncated to step " ^ string_of_int idx ^ ", dropped " ^
+             string_of_int dropped ^ " steps"),
+        Symtab.update (id, Repl r') tab') end);
 
 fun back id = truncate id ~1;
 
@@ -548,17 +546,18 @@ fun merge id =
   end;
 
 fun remove id =
-  let val _ = the_repl id
-      val tab = Synchronized.value repl_tab
-      val to_remove = id :: descendants tab id
-      val _ = List.app (fn rid =>
-        case Symtab.lookup tab rid of
-          SOME (Claimed _) =>
-            error ("Cannot remove: sub-REPL " ^ quote rid ^ " is busy")
-        | _ => ()) to_remove
-      val _ = List.app (fn rid =>
-        Synchronized.change repl_tab (Symtab.delete_safe rid)) to_remove
-  in out ("Removed " ^ commas (map quote to_remove)) end;
+  let val removed =
+    with_repl id (fn _ => fn tab =>
+      let val descs = descendants tab id
+          val _ = List.app (fn rid =>
+            case Symtab.lookup tab rid of
+              SOME (Claimed _) =>
+                error ("Cannot remove: sub-REPL " ^ quote rid ^ " is busy")
+            | _ => ()) descs
+          val to_remove = id :: descs
+          val tab' = fold (fn rid => Symtab.delete_safe rid) to_remove tab
+      in (to_remove, tab') end)
+  in out ("Removed " ^ commas (map quote removed)) end;
 
 fun repls () =
   let fun origin_str orig = case orig of
