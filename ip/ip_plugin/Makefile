@@ -6,6 +6,8 @@ endif
 
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
+JAVA_HOME ?= $(shell ls -d $(ISABELLE_HOME)/contrib/jdk-*/arm64-darwin 2>/dev/null | head -1)
+export JAVA_HOME
 JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4

@@ -43,6 +43,8 @@ sig
   val sledgehammer_result : string Synchronized.var
   val find_theorems : string -> int -> string -> unit
   val timeout : string -> int -> unit
+  val epoch : unit -> string
+  val print_epoch : unit -> unit
   val is_interactive_session : unit -> bool
   val help : unit -> unit
 end;
@@ -65,6 +67,16 @@ fun get_cfg () = Synchronized.value cfg;
 (** Default step timeout (seconds, 0 = no limit) **)
 
 val default_timeout : int = 10;
+
+(** Server epoch — unique per ML process lifetime **)
+
+val ir_epoch : string =
+  let val now = Time.now ()
+      val date_part = Date.fmt "%Y%m%dT%H%M%S" (Date.fromTimeLocal now)
+      val ms = LargeInt.toString (Time.toMilliseconds now mod 1000)
+  in date_part ^ "." ^ StringCvt.padLeft #"0" 3 ms end;
+fun epoch () = ir_epoch;
+fun print_epoch () = out ("SERVER_EPOCH=" ^ ir_epoch);
 
 (** Markup-based token rendering **)
 
@@ -397,7 +409,9 @@ fun show id =
                     indent ^ render_isar_text thy text ^ stale_mark);
                pr (i + 1) rest
             end
-  in pr 0 (#steps r) end;
+  in pr 0 (#steps r);
+     out ("SERVER_EPOCH=" ^ ir_epoch)
+  end;
 
 fun text id =
   let val r = the_repl id
@@ -513,6 +527,7 @@ fun repls () =
             ", from " ^ orig ^ ")"
     in out ("    " ^ desc)
     end) (Synchronized.value repl_tab) ();
+  out ("SERVER_EPOCH=" ^ ir_epoch);
 
 (* Lists theories in the initial heap plus those loaded via load_theory. *)
 fun theories () =

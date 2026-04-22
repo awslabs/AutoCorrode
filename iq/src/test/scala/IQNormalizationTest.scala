@@ -475,6 +475,21 @@ object IQNormalizationTest {
       IQNormalization.SubstringNotUnique,
       "non-unique single char")
 
+    // Newline-count invariant: pattern with 1 newline must not match a span with 2
+    assertLeft(
+      IQNormalization.findUniqueMatch("(* comment *)\n\n  code", "(* comment *)\n  code"),
+      IQNormalization.SubstringNotFound,
+      "newline count mismatch: 1 vs 2 newlines")
+
+    // Same-newline-count match should still succeed
+    locally {
+      val (start, end) = assertRight(
+        IQNormalization.findUniqueMatch("(* comment *)\n  code", "(* comment *)\n  code"),
+        "newline count match: 1 vs 1")
+      assertEquals(start, 0, "newline match: start")
+      assertEquals(end, 20, "newline match: end")
+    }
+
     // Performance sanity: normalize a moderately large string
     locally {
       val largeText = "hello \\<Rightarrow> world " * 1000

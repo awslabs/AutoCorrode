@@ -106,6 +106,16 @@ object IQNormalization {
       val endOffset =
         if (endIdx < normalized.offsetMap.length) normalized.offsetMap(endIdx)
         else text.length
+
+      // Guard: if the pattern contains newlines, the original-text slice must
+      // have the same count.  Whitespace compression can collapse \n runs into
+      // a single space, widening the match across blank-line boundaries.
+      if (substring.contains('\n')) {
+        val patternNewlines = substring.count(_ == '\n')
+        val sliceNewlines   = text.substring(startOffset, endOffset).count(_ == '\n')
+        if (patternNewlines != sliceNewlines) return Left(SubstringNotFound)
+      }
+
       Right((startOffset, endOffset))
     }
   }

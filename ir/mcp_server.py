@@ -40,6 +40,7 @@ MCP configuration for communication via streaming-http
 """
 
 import asyncio
+import os
 import sys
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True)
@@ -67,6 +68,8 @@ class ReplClient:
         self.host = host
         self.port = port
         self.token = token
+        self.recv_timeout = int(os.environ.get("IR_REPL_RECV_TIMEOUT", "600"))
+        self._last_epoch: str | None = None
 
     def connect(self, host: str | None = None, port: int | None = None,
                 token: str | None = None):
@@ -79,6 +82,30 @@ class ReplClient:
         # Probe reachability
         sock = socket.create_connection((self.host, self.port))
         sock.close()
+
+    def _check_epoch(self, result: str) -> tuple[str, str | None]:
+        """Extract SERVER_EPOCH line; warn if the ML process restarted."""
+        lines = result.split("\n")
+        epoch_line = None
+        rest = []
+        for line in lines:
+            if line.startswith("SERVER_EPOCH="):
+                epoch_line = line
+            else:
+                rest.append(line)
+        cleaned = "\n".join(rest)
+        if epoch_line is None:
+            return (cleaned, None)
+        new_epoch = epoch_line.split("=", 1)[1]
+        warning = None
+        if self._last_epoch is not None and new_epoch != self._last_epoch:
+            warning = (
+                f"[WARNING] I/R ML process restarted since last call "
+                f"(epoch was {self._last_epoch}, now {new_epoch}) — "
+                f"all previous REPL state is gone"
+            )
+        self._last_epoch = new_epoch
+        return (cleaned, warning)
 
     def disconnect(self):
         pass
@@ -106,12 +133,17 @@ class ReplClient:
         if not self.token:
             raise RuntimeError("Not connected — call the 'connect' tool first")
         sock = socket.create_connection((self.host, self.port))
+        sock.settimeout(self.recv_timeout)
         try:
             # Authenticate
             sock.sendall((self.token + "\n").encode())
             auth_buf = b""
             while b"\n" not in auth_buf:
-                chunk = sock.recv(1024)
+                try:
+                    chunk = sock.recv(1024)
+                except socket.timeout:
+                    raise RuntimeError(
+                        f"I/R auth handshake unresponsive for {self.recv_timeout}s")
                 if not chunk:
                     raise RuntimeError("Connection closed during auth handshake")
                 auth_buf += chunk
@@ -125,7 +157,12 @@ class ReplClient:
             # Read until sentinel
             buf = b""
             while True:
-                chunk = sock.recv(4096)
+                try:
+                    chunk = sock.recv(4096)
+                except socket.timeout:
+                    raise RuntimeError(
+                        f"I/R server unresponsive for {self.recv_timeout}s — "
+                        "check ML process health")
                 if not chunk:
                     raise EOFError("Connection closed by repl.py")
                 buf += chunk
@@ -135,6 +172,9 @@ class ReplClient:
                     result = apply_transforms(raw)
                     if result.startswith("ERR\n"):
                         raise RuntimeError(result[4:])
+                    result, epoch_warning = self._check_epoch(result)
+                    if epoch_warning:
+                        result = epoch_warning + "\n" + result
                     return result
         finally:
             sock.close()
@@ -240,6 +280,10 @@ async def connect(token: str, port: int = 0, ctx: Context = None) -> str:
         port = _repl_port
     client = _get_client(ctx)
     await asyncio.to_thread(client.connect, "127.0.0.1", port, token)
+    try:
+        await asyncio.to_thread(client.send, "Ir.print_epoch ();")
+    except Exception:
+        pass
     return f"Connected to {client.host}:{client.port}\n\n{await session_info(ctx=ctx)}"
 
 @mcp.tool(description="Disconnect from the I/R REPL server.")

@@ -435,95 +435,95 @@ class IQServer(
       Document_Model.node_required(node_name, set = true)
     }
 
-    // Get initial status to ensure we always have a valid status object
-    var currentStatus: Document_Status.Node_Status = GUI_Thread.now {
-      val snapshot = Document_Model.snapshot(model)
-      val state = snapshot.state
-      val version = snapshot.version
-      Document_Status.Node_Status.make(Date.now(), state, version, node_name)
-    }
-
-    var completed = false
-    var iterations = 0
-    var perCommandTimerStart: Option[Long] = None
-
-    def is_timeout() : Boolean = {
-      timeout_ms match {
-        case Some(t) => (System.currentTimeMillis() - startTime) >= t
-        case _ => false
-      }
-    }
-
-    while (!completed && !is_timeout()) {
-      currentStatus = GUI_Thread.now {
+    try {
+      // Get initial status to ensure we always have a valid status object
+      var currentStatus: Document_Status.Node_Status = GUI_Thread.now {
         val snapshot = Document_Model.snapshot(model)
         val state = snapshot.state
         val version = snapshot.version
         Document_Status.Node_Status.make(Date.now(), state, version, node_name)
       }
 
-      // Check completion status
-      completed = currentStatus.terminated &&
-                  (currentStatus.consolidated ||
-                   (currentStatus.unprocessed == 0 && currentStatus.running == 0))
+      var completed = false
+      var iterations = 0
+      var perCommandTimerStart: Option[Long] = None
 
-      // Per-command timeout logic
-      if (currentStatus.unprocessed == 0 && perCommandTimerStart.isEmpty) {
-        // First time we see unprocessed == 0, start the timer
-        perCommandTimerStart = Some(System.currentTimeMillis())
-        Output.writeln(s"I/Q Server: All commands processed, starting per-command timer for running commands")
-      }
-
-      // Check per-command timeout abort conditions
-      if (currentStatus.unprocessed == 0) {
-        if (currentStatus.running == 0) {
-          // No commands running, we're done
-          completed = true
-          Output.writeln(s"I/Q Server: No commands running, completion achieved")
-        } else {
-          // Check if per-command timer has fired
-          timeoutPerCommandMs match {
-            case Some(perCmdTimeout) =>
-              perCommandTimerStart match {
-                case Some(timerStart) =>
-                  val perCommandElapsed = System.currentTimeMillis() - timerStart
-                  if (perCommandElapsed >= perCmdTimeout) {
-                    Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
-                    completed = true
-                  }
-                case None =>
-              }
-            case None => // No per-command timeout set
-          }
+      def is_timeout() : Boolean = {
+        timeout_ms match {
+          case Some(t) => (System.currentTimeMillis() - startTime) >= t
+          case _ => false
         }
       }
 
-      iterations += 1
+      while (!completed && !is_timeout()) {
+        currentStatus = GUI_Thread.now {
+          val snapshot = Document_Model.snapshot(model)
+          val state = snapshot.state
+          val version = snapshot.version
+          Document_Status.Node_Status.make(Date.now(), state, version, node_name)
+        }
 
-      // Log progress every 5 iterations (5 seconds)
-      if (iterations % 5 == 0) {
-        Output.writeln(s"I/Q Server: Theory completion progress - unprocessed: ${currentStatus.unprocessed}, running: ${currentStatus.running}, finished: ${currentStatus.finished}, failed: ${currentStatus.failed}, terminated: ${currentStatus.terminated}, consolidated: ${currentStatus.consolidated}")
+        // Check completion status
+        completed = currentStatus.terminated &&
+                    (currentStatus.consolidated ||
+                     (currentStatus.unprocessed == 0 && currentStatus.running == 0))
+
+        // Per-command timeout logic
+        if (currentStatus.unprocessed == 0 && perCommandTimerStart.isEmpty) {
+          // First time we see unprocessed == 0, start the timer
+          perCommandTimerStart = Some(System.currentTimeMillis())
+          Output.writeln(s"I/Q Server: All commands processed, starting per-command timer for running commands")
+        }
+
+        // Check per-command timeout abort conditions
+        if (currentStatus.unprocessed == 0) {
+          if (currentStatus.running == 0) {
+            // No commands running, we're done
+            completed = true
+            Output.writeln(s"I/Q Server: No commands running, completion achieved")
+          } else {
+            // Check if per-command timer has fired
+            timeoutPerCommandMs match {
+              case Some(perCmdTimeout) =>
+                perCommandTimerStart match {
+                  case Some(timerStart) =>
+                    val perCommandElapsed = System.currentTimeMillis() - timerStart
+                    if (perCommandElapsed >= perCmdTimeout) {
+                      Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded (${perCommandElapsed}ms elapsed), aborting")
+                      completed = true
+                    }
+                  case None =>
+                }
+              case None => // No per-command timeout set
+            }
+          }
+        }
+
+        iterations += 1
+
+        // Log progress every 5 iterations (5 seconds)
+        if (iterations % 5 == 0) {
+          Output.writeln(s"I/Q Server: Theory completion progress - unprocessed: ${currentStatus.unprocessed}, running: ${currentStatus.running}, finished: ${currentStatus.finished}, failed: ${currentStatus.failed}, terminated: ${currentStatus.terminated}, consolidated: ${currentStatus.consolidated}")
+        }
+
+        if (!completed) {
+          Thread.sleep(1000)
+        }
       }
 
-      if (!completed) {
-        Thread.sleep(1000)
+      val elapsedMs = System.currentTimeMillis() - startTime
+      if (completed) {
+        Output.writeln(s"I/Q Server: Theory completion succeeded after ${elapsedMs}ms")
+      } else {
+        Output.writeln(s"I/Q Server: Theory completion timed out after ${elapsedMs}ms")
+      }
+
+      (completed, currentStatus)
+    } finally {
+      GUI_Thread.now {
+        Document_Model.node_required(node_name, set = originalRequiredState)
       }
     }
-
-    val elapsedMs = System.currentTimeMillis() - startTime
-    if (completed) {
-      Output.writeln(s"I/Q Server: Theory completion succeeded after ${elapsedMs}ms")
-    } else {
-      Output.writeln(s"I/Q Server: Theory completion timed out after ${elapsedMs}ms")
-    }
-
-    // Restore the original required state
-    GUI_Thread.now {
-      Document_Model.node_required(node_name, set = originalRequiredState)
-    }
-
-    // Ensure we always return a valid status object
-    (completed, currentStatus)
   }
 
   /**
@@ -1225,7 +1225,7 @@ class IQServer(
           safeOutput(s"I/Q Server: Unknown tool name: '$name'")
           Left((ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name"))
         case Left(err) =>
-          Right(wrapToolCallResult(Map("text" -> err.message), isError = true))
+          Left((err.code, err.message))
       }
     } catch {
       case ex: Exception =>
@@ -1829,7 +1829,9 @@ class IQServer(
       ),
       Map(
         "name" -> "get_diagnostics",
-        "description" -> "Read-only diagnostics retrieval for errors or warnings in either a canonical command selection or an entire file.",
+        "description" -> ("Read-only diagnostics retrieval for errors or warnings in either a canonical command selection or an entire file. " +
+          "Response also carries processing state for the target (is_fully_processed, unprocessed, running, finished) so an " +
+          "empty diagnostics list can be distinguished from 'file still being processed'."),
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
@@ -1907,6 +1909,16 @@ class IQServer(
             "max_results" -> Map(
               "type" -> "integer",
               "description" -> "Optional result limit for query='find_theorems'. Values <= 0 are ignored and default 20 is used."
+            ),
+            "max_chars_per_result" -> Map(
+              "type" -> "integer",
+              "description" -> ("Optional per-result size cap in characters; results longer than this are truncated with a trailing marker. " +
+                s"Default ${ExploreResultCollector.DefaultMaxCharsPerResult}. Set to 0 to disable.")
+            ),
+            "max_total_chars" -> Map(
+              "type" -> "integer",
+              "description" -> ("Optional total response-body size cap in characters (applied after joining results). " +
+                s"Default ${ExploreResultCollector.DefaultMaxTotalChars}. Set to 0 to disable.")
             )
           ),
           "required" -> List("query", "command_selection"),
@@ -2895,6 +2907,17 @@ class IQServer(
     *         - Option[String]: The file content if successful, None otherwise
     *         - Option[Document_Model]: The model if one exists, None otherwise
     */
+  private def getDocumentModel(filePath: String): Option[Document_Model] = {
+    try {
+      val nodeName = PIDE.resources.node_name(filePath)
+      Document_Model.get_model(nodeName)
+    } catch {
+      case ex: Exception =>
+        Output.writeln(s"I/Q Server: Error getting document model: ${ex.getMessage}")
+        None
+    }
+  }
+
   private def getFileContentAndModel(filePath: String): (Option[String], Option[Document_Model]) = {
     try {
       // Convert the file path to a node name
@@ -4687,6 +4710,24 @@ end"""
       .toList
   }
 
+  private def processingStatusFields(
+      snapshot: Document.Snapshot,
+      nodeName: Document.Node.Name
+  ): Map[String, Any] = {
+    val nodeStatus = Document_Status.Node_Status.make(
+      Date.now(), snapshot.state, snapshot.version, nodeName
+    )
+    val fullyProcessed = nodeStatus.terminated &&
+                         nodeStatus.unprocessed == 0 &&
+                         nodeStatus.running == 0
+    Map(
+      "is_fully_processed" -> fullyProcessed,
+      "unprocessed" -> nodeStatus.unprocessed,
+      "running" -> nodeStatus.running,
+      "finished" -> nodeStatus.finished
+    )
+  }
+
   private def handleGetDiagnostics(
       params: Map[String, Any]
   ): Either[String, Map[String, Any]] = {
@@ -4741,7 +4782,7 @@ end"""
                 "node_name" -> model.node_name.toString,
                 "count" -> diagnostics.length,
                 "diagnostics" -> diagnostics
-              )
+              ) ++ processingStatusFields(snapshot, model.node_name)
             )
           case _ =>
             Left(
@@ -4778,7 +4819,7 @@ end"""
               "command" -> commandInfoMap(command),
               "count" -> diagnostics.length,
               "diagnostics" -> diagnostics
-            )
+            ) ++ processingStatusFields(snapshot, command.node_name)
           }
         }
       }
@@ -4802,6 +4843,14 @@ end"""
         case Right(v) => v
         case Left(err) => return Left(err)
       }
+      val maxCharsPerResult = IQArgumentUtils.optionalIntParam(params, "max_chars_per_result") match {
+        case Right(v) => v.getOrElse(ExploreResultCollector.DefaultMaxCharsPerResult)
+        case Left(err) => return Left(err)
+      }
+      val maxTotalChars = IQArgumentUtils.optionalIntParam(params, "max_total_chars") match {
+        case Right(v) => v.getOrElse(ExploreResultCollector.DefaultMaxTotalChars)
+        case Left(err) => return Left(err)
+      }
 
       if (query.isEmpty) {
         return Left("Missing required parameter: query")
@@ -4821,9 +4870,9 @@ end"""
         resolveTargetSelection(selection).map { resolvedTarget =>
           // Check if this is a batch find_theorems query (semicolon-separated patterns)
           if (parsedQuery == ExploreQuery.FindTheorems && arguments.contains(";")) {
-            executeBatchFindTheorems(resolvedTarget, arguments, maxResults)
+            executeBatchFindTheorems(resolvedTarget, arguments, maxResults, maxCharsPerResult, maxTotalChars)
           } else {
-            executeExploration(resolvedTarget, parsedQuery, arguments, maxResults)
+            executeExploration(resolvedTarget, parsedQuery, arguments, maxResults, maxCharsPerResult, maxTotalChars)
           }
         }
       }
@@ -4851,10 +4900,12 @@ end"""
   private def executeBatchFindTheorems(
     resolvedTarget: IQUtils.TargetResolution,
     patterns: String,
-    maxResults: Option[Int]
+    maxResults: Option[Int],
+    maxCharsPerResult: Int,
+    maxTotalChars: Int
   ): Map[String, Any] = {
     val patternList = patterns.split(";").map(_.trim).filter(_.nonEmpty).toList
-    
+
     if (patternList.isEmpty) {
       return Map(
         "success" -> false,
@@ -4863,19 +4914,20 @@ end"""
         "message" -> "Empty pattern list after splitting by semicolon"
       )
     }
-    
+
     Output.writeln(s"I/Q Server: Executing batch find_theorems with ${patternList.length} patterns")
-    
+
     // Execute each pattern query and collect results
     val allResults = scala.collection.mutable.ListBuffer[String]()
     var anySuccess = false
     var anyTimedOut = false
     val errors = scala.collection.mutable.ListBuffer[String]()
-    
+
     for ((pattern, idx) <- patternList.zipWithIndex) {
       Output.writeln(s"I/Q Server: Running find_theorems query ${idx + 1}/${patternList.length}: $pattern")
-      val result = executeExploration(resolvedTarget, ExploreQuery.FindTheorems, pattern, maxResults)
-      
+      // Pass per-result cap but disable per-call total cap: the total cap applies to the aggregated output below.
+      val result = executeExploration(resolvedTarget, ExploreQuery.FindTheorems, pattern, maxResults, maxCharsPerResult, 0)
+
       if (boolField(result, "success")) {
         anySuccess = true
         val results = stringField(result, "results").trim
@@ -4888,8 +4940,10 @@ end"""
         result.get("error").foreach(err => errors += s"Pattern ${idx + 1} ($pattern): ${err.toString}")
       }
     }
-    
-    val aggregatedResults = if (allResults.nonEmpty) allResults.mkString("\n\n") else "No results"
+
+    val aggregatedResults =
+      if (allResults.isEmpty) "No results"
+      else ExploreResultCollector.truncateResults(allResults.toList, 0, maxTotalChars)
     val message = if (anySuccess && allResults.nonEmpty) {
       s"Batch find_theorems completed: ${allResults.length} of ${patternList.length} patterns found results"
     } else if (anyTimedOut) {
@@ -4910,6 +4964,30 @@ end"""
       "patterns_count" -> patternList.length,
       "successful_patterns" -> allResults.length
     ) ++ (if (errors.nonEmpty) Map("errors" -> errors.toList) else Map.empty)
+  }
+
+  private object ExploreResultCollector {
+    val DefaultMaxCharsPerResult: Int = 5000
+    val DefaultMaxTotalChars: Int = 100000
+
+    def truncateResults(
+        results: List[String],
+        maxCharsPerResult: Int,
+        maxTotalChars: Int
+    ): String = {
+      val capped =
+        if (maxCharsPerResult <= 0) results
+        else results.map(r =>
+          if (r.length > maxCharsPerResult)
+            r.take(maxCharsPerResult) +
+              s"\n… (result truncated: ${r.length - maxCharsPerResult} more chars)"
+          else r
+        )
+      val joined = capped.mkString("\n\n")
+      if (maxTotalChars <= 0 || joined.length <= maxTotalChars) joined
+      else joined.take(maxTotalChars) +
+        s"\n\n… (response truncated: ${joined.length - maxTotalChars} more chars)"
+    }
   }
 
   /**
@@ -4964,7 +5042,10 @@ end"""
       }
     }
 
-    def getResultsAsString(): String = {
+    def getResultsAsString(
+        maxCharsPerResult: Int = ExploreResultCollector.DefaultMaxCharsPerResult,
+        maxTotalChars: Int = ExploreResultCollector.DefaultMaxTotalChars
+    ): String = {
       val resultsSnapshot = xmlResults
       // Debug: log result collection
       Output.writeln(s"I/Q Server: Getting results as string, xmlResults.size=${resultsSnapshot.size}")
@@ -4994,9 +5075,9 @@ end"""
       } else {
         // Apply sledgehammer-specific filtering
         if (queryType == "sledgehammer") {
-          filterSledgehammerResults(results)
+          filterSledgehammerResults(results, maxTotalChars)
         } else {
-          results.mkString("\n\n")
+          ExploreResultCollector.truncateResults(results, maxCharsPerResult, maxTotalChars)
         }
       }
     }
@@ -5005,7 +5086,7 @@ end"""
      * Filters sledgehammer results to only include those with "Try this: .* ms)"
      * that have been successfully replayed.
      */
-    private def filterSledgehammerResults(results: List[String]): String = {
+    private def filterSledgehammerResults(results: List[String], maxTotalChars: Int): String = {
       // Fixed regex to handle prover name before "Try this" and decimal milliseconds
       val tryThisPattern = """.*Try this:\s+(.+?)\s+\((\d+(?:\.\d+)?)\s*ms\)""".r
 
@@ -5031,7 +5112,7 @@ end"""
         distinctResults.foreach { result =>
           Output.writeln(s"I/Q Server: Final result: ${result.take(100)}")
         }
-        distinctResults.mkString("\n\n")
+        ExploreResultCollector.truncateResults(distinctResults, 0, maxTotalChars)
       }
     }
 
@@ -5055,7 +5136,9 @@ end"""
     resolvedTarget: IQUtils.TargetResolution,
     query: ExploreQuery,
     arguments: String,
-    maxResults: Option[Int]
+    maxResults: Option[Int],
+    maxCharsPerResult: Int = ExploreResultCollector.DefaultMaxCharsPerResult,
+    maxTotalChars: Int = ExploreResultCollector.DefaultMaxTotalChars
   ): Map[String, Any] = {
 
     try {
@@ -5083,6 +5166,7 @@ end"""
         s"I/Q Server: Starting query execution for $internalQuery with arguments: $formattedArgs"
       )
 
+      var operationToCleanup: Extended_Query_Operation = null
       try {
         val operation = GUI_Thread.now {
           val activeView = jEdit.getActiveView()
@@ -5104,6 +5188,7 @@ end"""
 
           Output.writeln("I/Q Server: Activating operation and applying query")
           operation.activate()
+          operationToCleanup = operation
 
           Output.writeln(s"I/Q Server: Formatted args: $formattedArgs")
           operation.apply_query_at_command(command, formattedArgs)
@@ -5132,9 +5217,10 @@ end"""
           s"I/Q Server: Finished waiting after ${elapsed}ms, isFinished=${collector.isFinished()}"
         )
 
-        Output.writeln("I/Q Server: Deactivating operation")
-        GUI_Thread.now {
-          operation.deactivate()
+        if (!completedInTime) {
+          Output.writeln("I/Q Server: Query timed out, cancelling ML execution")
+          try { GUI_Thread.now { operation.cancel_query() } }
+          catch { case _: Exception => }
         }
 
         val timedOut = !completedInTime
@@ -5147,7 +5233,7 @@ end"""
           "arguments" -> finalArguments,
           "selection" -> targetSelectionToMap(resolvedTarget.selection),
           "command_found" -> displayText,
-          "results" -> collector.getResultsAsString(),
+          "results" -> collector.getResultsAsString(maxCharsPerResult, maxTotalChars),
           "timed_out" -> timedOut,
           "message" -> (if (timedOut) "Query timed out after 30 seconds"
                         else if (collector.wasSuccessful())
@@ -5171,6 +5257,11 @@ end"""
             "results" -> "",
             "message" -> s"Failed to execute query operation due to linkage error: ${throwableMessage(err)}"
           )
+      } finally {
+        if (operationToCleanup != null) {
+          try { GUI_Thread.now { operationToCleanup.deactivate() } }
+          catch { case _: Exception => }
+        }
       }
 
     } catch {
@@ -5261,27 +5352,27 @@ end"""
       case None => return Left("Missing required parameter: path")
     }
 
-    getFileContentAndModel(filePath) match {
-      case (_, Some(model)) =>
-        GUI_Thread.now {
-          val snapshot = Document_Model.snapshot(model)
-          val nodeStatus = Document_Status.Node_Status.make(
-            Date.now(), snapshot.state, snapshot.version, model.node_name
-          )
+    // Counter read only — kept off-EDT so polling loops never stall behind UI rendering.
+    // Uses getDocumentModel (not getFileContentAndModel) to avoid touching jEdit buffers.
+    getDocumentModel(filePath) match {
+      case Some(model) =>
+        val snapshot = Document_Model.snapshot(model)
+        val nodeStatus = Document_Status.Node_Status.make(
+          Date.now(), snapshot.state, snapshot.version, model.node_name
+        )
 
-          Right(Map(
-            "path" -> filePath,
-            "fully_processed" -> (nodeStatus.terminated && nodeStatus.unprocessed == 0 && nodeStatus.running == 0),
-            "unprocessed" -> nodeStatus.unprocessed,
-            "running" -> nodeStatus.running,
-            "finished" -> nodeStatus.finished,
-            "failed" -> nodeStatus.failed,
-            "has_errors" -> (nodeStatus.failed > 0),
-            "error_count" -> nodeStatus.failed,
-            "consolidated" -> nodeStatus.consolidated
-          ))
-        }
-      case _ => Left(s"File not tracked: $filePath")
+        Right(Map(
+          "path" -> filePath,
+          "fully_processed" -> (nodeStatus.terminated && nodeStatus.unprocessed == 0 && nodeStatus.running == 0),
+          "unprocessed" -> nodeStatus.unprocessed,
+          "running" -> nodeStatus.running,
+          "finished" -> nodeStatus.finished,
+          "failed" -> nodeStatus.failed,
+          "has_errors" -> (nodeStatus.failed > 0),
+          "error_count" -> nodeStatus.failed,
+          "consolidated" -> nodeStatus.consolidated
+        ))
+      case None => Left(s"File not tracked: $filePath")
     }
   }
 
