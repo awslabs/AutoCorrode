@@ -142,6 +142,7 @@ of `configure-remote.py` for more information.
 
 import argparse
 import atexit
+from collections import deque
 import os
 import re
 import shlex
@@ -2078,6 +2079,8 @@ def main():
     # an SSH local forward so that I/R (ML_Repl) is reachable locally.
     _tcp_handler_re = re.compile(rb"Tcp_Handler: listening on 127\.0\.0\.1:(\d+)")
 
+    _stdout_tail = deque(maxlen=100)
+
     def _relay_stdout():
         try:
             while True:
@@ -2104,6 +2107,7 @@ def main():
                     else:
                         logger.warning("I/R tunnel failed — I/R will not be reachable locally")
                         mgmt.event(f"{RED}I/R tunnel failed{RST}", 1)
+                _stdout_tail.append(text)
                 sys.stdout.buffer.write(line)
                 sys.stdout.buffer.flush()
         except (OSError, ValueError):
@@ -2139,9 +2143,14 @@ def main():
         rc = proc.wait()
         stdout_thread.join(timeout=2)
         logger.debug(f"SSH process exited with rc={rc}")
-        if rc == 127:
-            logger.error("rc=127 (command not found) — the setsid-wrapped "
-                         "remote command may have a quoting issue")
+        if rc != 0:
+            tail = _stdout_tail
+            if tail:
+                logger.error(f"Remote process failed (rc={rc}). Last stdout:")
+                for line in tail:
+                    logger.error(f"  | {line}")
+            else:
+                logger.error(f"Remote process failed (rc={rc}) with no stdout output")
     except KeyboardInterrupt:
         proc.terminate()
         rc = proc.wait()
