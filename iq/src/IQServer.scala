@@ -2423,32 +2423,33 @@ class IQServer(
     // Determine mode and execute (with optional waiting)
     val startTime = System.currentTimeMillis()
     val node_name = model.node_name
-    @volatile var commandInfos: List[CommandInfo] = List.empty
+    var commandInfos: List[CommandInfo] = List.empty
 
     def retrieveCommands(): List[CommandInfo] = {
       val snapshot = PIDE.session.snapshot(node_name = node_name)
       getCommandsInOffsetRange(snapshot, node_name, content, startOffset, endOffset)
     }
 
-    def allProcessed(infos: List[CommandInfo]): Boolean =
-      infos.forall { info =>
-        info.status.summary match {
-          case CommandStatusSummary.Finished |
-              CommandStatusSummary.Canceled |
-              CommandStatusSummary.Failed => true
-          case _ => false
-        }
+    def retrieveStatuses(): List[CommandStatusSummary] = {
+      val snapshot = PIDE.session.snapshot(node_name = node_name)
+      getCommandStatusesInOffsetRange(snapshot, node_name, startOffset, endOffset)
+    }
+
+    def allStatusesProcessed(statuses: List[CommandStatusSummary]): Boolean =
+      statuses.forall {
+        case CommandStatusSummary.Finished |
+            CommandStatusSummary.Canceled |
+            CommandStatusSummary.Failed => true
+        case _ => false
       }
 
-    def allProcessedOrRunning(infos: List[CommandInfo]): Boolean =
-      infos.forall { info =>
-        info.status.summary match {
-          case CommandStatusSummary.Finished |
-              CommandStatusSummary.Canceled |
-              CommandStatusSummary.Failed |
-              CommandStatusSummary.Running => true
-          case _ => false
-        }
+    def allStatusesProcessedOrRunning(statuses: List[CommandStatusSummary]): Boolean =
+      statuses.forall {
+        case CommandStatusSummary.Finished |
+            CommandStatusSummary.Canceled |
+            CommandStatusSummary.Failed |
+            CommandStatusSummary.Running => true
+        case _ => false
       }
 
     if (!waitUntilProcessed) {
@@ -2457,10 +2458,11 @@ class IQServer(
     } else {
       Output.writeln(s"I/Q Server: wait_until_processed=true - entering event-driven wait with ${timeoutMs.getOrElse(0L)}ms timeout")
 
-      // Initial retrieval
-      commandInfos = retrieveCommands()
+      // Use lightweight status-only checks during the wait loop to avoid
+      // extracting full XML results on every Commands_Changed event.
+      var statuses = retrieveStatuses()
 
-      if (commandInfos.nonEmpty && !allProcessed(commandInfos)) {
+      if (statuses.nonEmpty && !allStatusesProcessed(statuses)) {
         val latch = new CountDownLatch(1)
         var checkCount = 0
         var perCommandTimerStart: Option[Long] = None
@@ -2470,36 +2472,27 @@ class IQServer(
         ) {
           case Session.Commands_Changed(_, nodes, _) if nodes.contains(node_name) =>
             checkCount += 1
-            commandInfos = retrieveCommands()
-            Output.writeln(s"I/Q Server: Event-driven check $checkCount - retrieved ${commandInfos.length} commands")
+            statuses = retrieveStatuses()
 
-            if (commandInfos.isEmpty || allProcessed(commandInfos)) {
+            if (statuses.isEmpty || allStatusesProcessed(statuses)) {
               latch.countDown()
             } else {
-              // Per-command timeout: start timer once all commands are at least running
-              if (allProcessedOrRunning(commandInfos) && perCommandTimerStart.isEmpty) {
+              if (allStatusesProcessedOrRunning(statuses) && perCommandTimerStart.isEmpty) {
                 perCommandTimerStart = Some(System.currentTimeMillis())
-                Output.writeln(s"I/Q Server: All commands processed or running, starting per-command timer")
               }
 
-              // Check per-command timeout
               timeoutPerCommandMs match {
                 case Some(perCmdTimeout) =>
                   perCommandTimerStart match {
                     case Some(timerStart) =>
                       val perCommandElapsed = System.currentTimeMillis() - timerStart
                       if (perCommandElapsed >= perCmdTimeout) {
-                        Output.writeln(s"I/Q Server: Per-command timeout of ${perCmdTimeout}ms exceeded, aborting")
                         latch.countDown()
                       }
                     case None =>
                   }
                 case None =>
               }
-
-              // Log status
-              val statusCounts = commandInfos.groupBy(_.status.summary.asWire).view.mapValues(_.size).toMap
-              Output.writeln(s"I/Q Server: Check $checkCount - Status: ${statusCounts.map { case (k, v) => s"$k: $v" }.mkString(", ")}")
             }
           case _ =>
         }
@@ -2507,21 +2500,22 @@ class IQServer(
         PIDE.session.commands_changed += consumer
         try {
           // Re-check after subscribing to avoid TOCTOU race
-          commandInfos = retrieveCommands()
-          if (commandInfos.isEmpty || allProcessed(commandInfos)) {
+          statuses = retrieveStatuses()
+          if (statuses.isEmpty || allStatusesProcessed(statuses)) {
             latch.countDown()
           }
           val timeoutVal = timeoutMs.getOrElse(5000L)
           val completed = latch.await(timeoutVal, TimeUnit.MILLISECONDS)
           if (!completed) {
-            Output.writeln(s"I/Q Server: Wait timeout reached after ${timeoutVal}ms and $checkCount checks")
-            // Do a final retrieval so we return the latest state
-            commandInfos = retrieveCommands()
+            Output.writeln(s"I/Q Server: Wait timeout reached after ${timeoutVal}ms")
           }
         } finally {
           PIDE.session.commands_changed -= consumer
         }
       }
+
+      // Full retrieval only once, after waiting is complete
+      commandInfos = retrieveCommands()
     }
 
     val totalElapsed = System.currentTimeMillis() - startTime
@@ -2671,6 +2665,14 @@ class IQServer(
     } else {
       "other"
     }
+  }
+
+  private def getCommandStatusesInOffsetRange(snapshot: Document.Snapshot, node_name: Document.Node.Name, startOffset: Int, endOffset: Int): List[CommandStatusSummary] = {
+    val node = snapshot.get_node(node_name)
+    val targetRange = Text.Range(startOffset, endOffset)
+    node.command_iterator(targetRange).map { case (command, _) =>
+      getCommandStatus(command, snapshot).summary
+    }.toList
   }
 
   private def getCommandsInOffsetRange(snapshot: Document.Snapshot, node_name: Document.Node.Name, content: String, startOffset: Int, endOffset: Int): List[CommandInfo] = {
