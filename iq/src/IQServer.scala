@@ -5094,8 +5094,9 @@ end"""
         s"I/Q Server: Starting query execution for $internalQuery with arguments: $formattedArgs"
       )
 
+      var operation: Extended_Query_Operation = null
       try {
-        val operation = GUI_Thread.now {
+        operation = GUI_Thread.now {
           val activeView = jEdit.getActiveView()
           if (activeView == null) {
             throw new RuntimeException("No active view available")
@@ -5105,7 +5106,7 @@ end"""
             s"I/Q Server: Creating Extended_Query_Operation for $internalQuery"
           )
 
-          val operation = new Extended_Query_Operation(
+          val op = new Extended_Query_Operation(
             PIDE.editor,
             activeView,
             internalQuery,
@@ -5114,11 +5115,11 @@ end"""
           )
 
           Output.writeln("I/Q Server: Activating operation and applying query")
-          operation.activate()
+          op.activate()
 
           Output.writeln(s"I/Q Server: Formatted args: $formattedArgs")
-          operation.apply_query_at_command(command, formattedArgs)
-          operation
+          op.apply_query_at_command(command, formattedArgs)
+          op
         }
 
         val timeoutMs = 30000L
@@ -5142,11 +5143,6 @@ end"""
         Output.writeln(
           s"I/Q Server: Finished waiting after ${elapsed}ms, isFinished=${collector.isFinished()}"
         )
-
-        Output.writeln("I/Q Server: Deactivating operation")
-        GUI_Thread.now {
-          operation.deactivate()
-        }
 
         val timedOut = !completedInTime
         val cmdText = command.source.trim.replace("\n", "\\n")
@@ -5182,6 +5178,11 @@ end"""
             "results" -> "",
             "message" -> s"Failed to execute query operation due to linkage error: ${throwableMessage(err)}"
           )
+      } finally {
+        if (operation != null) {
+          try { GUI_Thread.now { operation.deactivate() } }
+          catch { case _: Throwable => () }
+        }
       }
 
     } catch {
