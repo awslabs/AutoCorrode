@@ -23,6 +23,9 @@ session Micro_Rust_Examples = HOL +
     Reference_Examples
     Showcase
     Number_Theory
+    FSet_Ref
+    Stack
+    Graph
     MLKEM_Parameters
     MLKEM_Specification
     MLKEM_Zq
