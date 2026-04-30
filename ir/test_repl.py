@@ -366,6 +366,83 @@ def core_tests(sock, prefix):
         send_recv(sock, f'Ir.remove {q(t)};')
     tests.append(("ft_negation", test_ft_negation))
 
+    def test_pin_basic():
+        """Pin a REPL, step, re-pin."""
+        t = f"{prefix}_pin1"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.pin {q(t)};')
+        assert "Pinned" in out, f"Expected Pinned, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "pinned" in out, f"Expected pinned in show, got:\n{out}"
+        send_recv(sock, f'Ir.step {q(t)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.pin {q(t)};')
+        assert "Pinned" in out, f"Expected Pinned on re-pin, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("pin_basic", test_pin_basic))
+
+    def test_pin_stale_on_step():
+        """Pin becomes stale after stepping."""
+        t = f"{prefix}_pin2"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.pin {q(t)};')
+        send_recv(sock, f'Ir.step {q(t)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "stale" in out, f"Expected stale in show, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("pin_stale_on_step", test_pin_stale_on_step))
+
+    def test_pin_repin_clears_stale():
+        """Re-pinning clears staleness."""
+        t = f"{prefix}_pin3"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.pin {q(t)};')
+        send_recv(sock, f'Ir.step {q(t)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "stale" in out, f"Expected stale, got:\n{out}"
+        send_recv(sock, f'Ir.pin {q(t)};')
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "stale" not in out, f"Expected no stale after re-pin, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("pin_repin_clears_stale", test_pin_repin_clears_stale))
+
+    def test_pin_during_proof():
+        """Pinning while in a proof state should fail."""
+        t = f"{prefix}_pinpf"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma True";')
+        out = send_recv(sock, f'Ir.pin {q(t)} handle ERROR msg => writeln ("ERR: " ^ msg);')
+        assert "ERR:" in out and "proof state" in out, \
+            f"Expected proof state error, got:\n{out}"
+        send_recv(sock, f'Ir.step {q(t)} "by simp";')
+        # After closing the proof, pin should succeed
+        out = send_recv(sock, f'Ir.pin {q(t)};')
+        assert "Pinned" in out, f"Expected Pinned after proof, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("pin_during_proof", test_pin_during_proof))
+
+    def test_unpin():
+        """Unpin removes the pin."""
+        t = f"{prefix}_pin4"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.pin {q(t)};')
+        out = send_recv(sock, f'Ir.unpin {q(t)};')
+        assert "Unpinned" in out, f"Expected Unpinned, got:\n{out}"
+        out = send_recv(sock, f'Ir.show {q(t)};')
+        assert "pinned" not in out, f"Expected no pin in show, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("unpin", test_unpin))
+
+    def test_unpin_nonexistent():
+        """Unpin a REPL that has no pin."""
+        t = f"{prefix}_pin5"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        out = send_recv(sock, f'Ir.unpin {q(t)} handle ERROR msg => writeln ("ERR: " ^ msg);')
+        assert "ERR:" in out and "not pinned" in out, \
+            f"Expected error about not pinned, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("unpin_nonexistent", test_unpin_nonexistent))
+
     # Cleanup: remove the shared REPL
     def cleanup():
         send_recv(sock, f'Ir.remove {q(r)};')
