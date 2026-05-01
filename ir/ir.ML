@@ -192,8 +192,10 @@ fun source_map thy_name start_line stop_line =
 
 (** REPL core **)
 
+datatype spec = LoadedTheory of string | PinnedRepl of string * int;
+
 datatype origin =
-  From_Theory of string
+  From_Theory of spec list
 | From_Segment of string * int
 | From_REPL of string * int
 | From_Document of string * int;
@@ -332,10 +334,39 @@ fun parse_spec spec =
   | [thy] => (thy, NONE)
   | _ => error ("Bad spec: " ^ quote spec);
 
-(* Create a new REPL.  The theory must already be loaded — either present
-   in the initial heap or previously loaded via Ir.load_theory. *)
+fun resolve_spec tab spec_str =
+  if String.isPrefix "pin@" spec_str then
+    let val name = String.extract (spec_str, 4, NONE)
+    in case Symtab.lookup tab name of
+         SOME (Repl r) =>
+           (case #pin r of
+              SOME p => if #stale p then error ("Pin " ^ quote name ^ " is stale")
+                        else (#theory p, PinnedRepl (name, #version p))
+            | NONE => error ("REPL " ^ quote name ^ " is not pinned"))
+       | SOME (Claimed _) => error ("REPL " ^ quote name ^ " is busy")
+       | NONE => error ("No REPL " ^ quote name)
+    end
+  else (Thy_Info.get_theory spec_str, LoadedTheory spec_str);
+
+fun has_pin_dep tab target_id =
+  Symtab.exists (fn (_, entry) =>
+    case entry_origin entry of
+      From_Theory specs => exists (fn PinnedRepl (n, _) => n = target_id
+                                    | _ => false) specs
+    | _ => false) tab;
+
+(* Create a new REPL.  Theory specs must already be loaded — either present
+   in the initial heap or previously loaded via Ir.load_theory.
+   Pin specs ("pin@NAME") reference a pinned REPL's theory snapshot. *)
 fun init id specs =
   let val _ = if null specs then error "init requires at least one spec" else ()
+      fun from_specs specs =
+            let val tab = Synchronized.value repl_tab
+                val resolved = map (resolve_spec tab) specs
+                val thys = map #1 resolved
+                val spec_list = map #2 resolved
+                val thy = Theory.begin_theory (id, Position.none) thys
+            in (From_Theory spec_list, Toplevel.make_state (SOME thy)) end
       val parsed = map parse_spec specs
       val (origin, st) =
         case parsed of
@@ -344,16 +375,13 @@ fun init id specs =
                 val seg = nth segs idx
                   handle General.Subscript =>
                     error ("Index " ^ string_of_int idx ^ " out of range")
-            in (From_Segment (thy_name, idx), #state (seg : Document_Output.segment)) end
+            in (From_Segment (thy_name, idx),
+                #state (seg : Document_Output.segment)) end
         | _ =>
             let val _ = if exists (fn (_, opt) => is_some opt) parsed
                         then error "Cannot mix theory and segment specs in multi-theory init"
                         else ()
-                val thy_names = map #1 parsed
-                val thys = map Thy_Info.get_theory thy_names
-                val thy = Theory.begin_theory (id, Position.none) thys
-            in (From_Theory (String.concatWith "+" thy_names),
-                Toplevel.make_state (SOME thy)) end
+            in from_specs (map #1 parsed) end
       val r : repl = {origin = origin, base_state = st, steps = [],
                       timeout = default_timeout, pin = NONE}
   in Synchronized.change_result repl_tab (fn tab =>
@@ -434,8 +462,11 @@ fun state id state_idx =
                            string_of_int n ^ ")")
   in out (pretty_state st) end;
 
+fun spec_str (LoadedTheory s) = s
+  | spec_str (PinnedRepl (n, _)) = "pin@" ^ n;
+
 fun origin_str orig = case orig of
-    From_Theory t => "theory " ^ t
+    From_Theory specs => String.concatWith "+" (map spec_str specs)
   | From_Segment (t, i) => t ^ ":" ^ string_of_int i
   | From_REPL (p, i) => "REPL " ^ quote p ^ " state " ^ string_of_int i
   | From_Document (n, i) => "document " ^ quote n ^ " cmd " ^ string_of_int i;
@@ -458,11 +489,14 @@ fun pin id =
   in out ("Pinned " ^ quote id) end;
 
 fun unpin id =
-  (map_repl id (fn r =>
+  (with_repl id (fn r => fn tab =>
     case #pin r of
       NONE => error ("REPL " ^ quote id ^ " is not pinned")
-    | SOME _ => ({origin = #origin r, base_state = #base_state r, steps = #steps r,
-                  timeout = #timeout r, pin = NONE}, ()));
+    | SOME _ =>
+        if has_pin_dep tab id
+        then error ("Cannot unpin " ^ quote id ^ ": other REPLs depend on it")
+        else ((), Symtab.update (id, Repl {origin = #origin r, base_state = #base_state r,
+               steps = #steps r, timeout = #timeout r, pin = NONE}) tab));
    out ("Unpinned " ^ quote id));
 
 fun show id =
@@ -593,8 +627,14 @@ fun merge id =
 
 fun remove id =
   let val removed =
-    with_repl id (fn _ => fn tab =>
-      let val descs = descendants tab id
+    with_repl id (fn r => fn tab =>
+      let val _ = case #pin r of
+              SOME _ => if has_pin_dep tab id
+                        then error ("Cannot remove " ^ quote id ^
+                                    ": other REPLs depend on its pin")
+                        else ()
+            | NONE => ()
+          val descs = descendants tab id
           val _ = List.app (fn rid =>
             case Symtab.lookup tab rid of
               SOME (Claimed _) =>
