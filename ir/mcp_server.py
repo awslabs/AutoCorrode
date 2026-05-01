@@ -404,6 +404,10 @@ async def repl_pin(repl: str, ctx: Context = None) -> str:
 async def repl_unpin(repl: str, ctx: Context = None) -> str:
     return await _send(ctx, f"Ir.unpin {ml_str(repl)};")
 
+@mcp.tool(description="Rebase a REPL onto updated pin states. Updates the base theory and marks all steps stale; call replay afterwards to re-execute them. Fails if any pin is stale (re-pin first).")
+async def rebase(repl: str, ctx: Context = None) -> str:
+    return await _send(ctx, f"Ir.rebase {ml_str(repl)};")
+
 @mcp.tool(description="List all REPL sessions.")
 async def repls(ctx: Context = None) -> str:
     return await _send(ctx, "Ir.repls ();")
