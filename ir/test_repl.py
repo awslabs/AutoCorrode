@@ -561,6 +561,95 @@ def core_tests(sock, prefix):
         send_recv(sock, f'Ir.remove {q(src)};')
     tests.append(("remove_pinned_with_dependent", test_remove_pinned_with_dependent))
 
+    def test_rebase_pin_noop():
+        """Rebase when pins are up to date is a no-op."""
+        src = f"{prefix}_rn_s"
+        dst = f"{prefix}_rn_d"
+        send_recv(sock, f'Ir.init {q(src)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(src)} "lemma True by simp";')
+        send_recv(sock, f'Ir.pin {q(src)};')
+        send_recv(sock, f'Ir.init {q(dst)} ["pin@{src}"];')
+        send_recv(sock, f'Ir.step {q(dst)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.rebase {q(dst)};')
+        assert "up to date" in out, f"Expected up to date, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(dst)};')
+        send_recv(sock, f'Ir.remove {q(src)};')
+    tests.append(("rebase_pin_noop", test_rebase_pin_noop))
+
+    def test_rebase_pin_updated():
+        """Rebase replays steps on updated pin."""
+        src = f"{prefix}_ru_s"
+        dst = f"{prefix}_ru_d"
+        send_recv(sock, f'Ir.init {q(src)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(src)} "lemma {prefix}_ru_a: True by simp";')
+        send_recv(sock, f'Ir.pin {q(src)};')
+        send_recv(sock, f'Ir.init {q(dst)} ["pin@{src}"];')
+        send_recv(sock, f'Ir.step {q(dst)} "lemma {prefix}_ru_b: True by simp";')
+        # Update source and re-pin
+        send_recv(sock, f'Ir.step {q(src)} "lemma {prefix}_ru_c: True by simp";')
+        send_recv(sock, f'Ir.pin {q(src)};')
+        out = send_recv(sock, f'Ir.rebase {q(dst)};')
+        assert "stale" in out, f"Expected stale, got:\n{out}"
+        # Steps are stale; replay to re-execute them
+        send_recv(sock, f'Ir.replay {q(dst)};')
+        # dst should see both its own lemma and the new one from src
+        out_b = send_recv(sock, f'Ir.find_theorems {q(dst)} 3 "name: {prefix}_ru_b";')
+        assert f"{prefix}_ru_b" in out_b, \
+            f"Expected {prefix}_ru_b after rebase+replay, got:\n{out_b}"
+        out_c = send_recv(sock, f'Ir.find_theorems {q(dst)} 3 "name: {prefix}_ru_c";')
+        assert f"{prefix}_ru_c" in out_c, \
+            f"Expected {prefix}_ru_c after rebase+replay, got:\n{out_c}"
+        send_recv(sock, f'Ir.remove {q(dst)};')
+        send_recv(sock, f'Ir.remove {q(src)};')
+    tests.append(("rebase_pin_updated", test_rebase_pin_updated))
+
+    def test_rebase_pin_stale_error():
+        """Rebase fails if pin is stale (not re-pinned)."""
+        src = f"{prefix}_rs_s"
+        dst = f"{prefix}_rs_d"
+        send_recv(sock, f'Ir.init {q(src)} ["Main"];')
+        send_recv(sock, f'Ir.pin {q(src)};')
+        send_recv(sock, f'Ir.init {q(dst)} ["pin@{src}"];')
+        send_recv(sock, f'Ir.step {q(src)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.rebase {q(dst)} '
+                        f'handle ERROR msg => writeln ("ERR: " ^ msg);')
+        assert "ERR:" in out and "stale" in out, \
+            f"Expected stale error, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(dst)};')
+        send_recv(sock, f'Ir.remove {q(src)};')
+    tests.append(("rebase_pin_stale_error", test_rebase_pin_stale_error))
+
+    def test_rebase_marks_own_pin_stale():
+        """Rebasing a pinned REPL marks its own pin stale."""
+        src = f"{prefix}_rps_s"
+        mid = f"{prefix}_rps_m"
+        send_recv(sock, f'Ir.init {q(src)} ["Main"];')
+        send_recv(sock, f'Ir.pin {q(src)};')
+        send_recv(sock, f'Ir.init {q(mid)} ["pin@{src}"];')
+        send_recv(sock, f'Ir.step {q(mid)} "lemma True by simp";')
+        send_recv(sock, f'Ir.pin {q(mid)};')
+        out = send_recv(sock, f'Ir.show {q(mid)};')
+        assert "stale" not in out, f"Expected pin not stale before rebase, got:\n{out}"
+        # Update src, re-pin, rebase mid
+        send_recv(sock, f'Ir.step {q(src)} "lemma True by simp";')
+        send_recv(sock, f'Ir.pin {q(src)};')
+        send_recv(sock, f'Ir.rebase {q(mid)};')
+        out = send_recv(sock, f'Ir.show {q(mid)};')
+        assert "stale" in out, f"Expected pin stale after rebase, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(mid)};')
+        send_recv(sock, f'Ir.remove {q(src)};')
+    tests.append(("rebase_marks_own_pin_stale", test_rebase_marks_own_pin_stale))
+
+    def test_rebase_no_pins_is_noop():
+        """Rebase on a REPL with no pins is a no-op."""
+        t = f"{prefix}_rnp"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        send_recv(sock, f'Ir.step {q(t)} "lemma True by simp";')
+        out = send_recv(sock, f'Ir.rebase {q(t)};')
+        assert "up to date" in out, f"Expected up to date, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("rebase_no_pins_is_noop", test_rebase_no_pins_is_noop))
+
     # Cleanup: remove the shared REPL
     def cleanup():
         send_recv(sock, f'Ir.remove {q(r)};')

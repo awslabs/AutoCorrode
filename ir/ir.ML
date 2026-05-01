@@ -34,6 +34,7 @@ sig
 
   val pin : string -> unit
   val unpin : string -> unit
+  val rebase : string -> unit
 
   val remove : string -> unit
   val repls : unit -> unit
@@ -334,19 +335,24 @@ fun parse_spec spec =
   | [thy] => (thy, NONE)
   | _ => error ("Bad spec: " ^ quote spec);
 
-fun resolve_spec tab spec_str =
-  if String.isPrefix "pin@" spec_str then
-    let val name = String.extract (spec_str, 4, NONE)
-    in case Symtab.lookup tab name of
-         SOME (Repl r) =>
-           (case #pin r of
-              SOME p => if #stale p then error ("Pin " ^ quote name ^ " is stale")
-                        else (#theory p, PinnedRepl (name, #version p))
-            | NONE => error ("REPL " ^ quote name ^ " is not pinned"))
-       | SOME (Claimed _) => error ("REPL " ^ quote name ^ " is busy")
-       | NONE => error ("No REPL " ^ quote name)
-    end
-  else (Thy_Info.get_theory spec_str, LoadedTheory spec_str);
+(* The initial version 0 is a placeholder; resolve_spec looks up and
+   returns the current pinned version regardless of the input version. *)
+fun string_to_spec s =
+  if String.isPrefix "pin@" s then PinnedRepl (String.extract (s, 4, NONE), 0)
+  else LoadedTheory s;
+
+(* Resolve a spec to a theory.  For PinnedRepl, the version in the argument
+   is ignored; the current pinned version is looked up and returned. *)
+fun resolve_spec tab (LoadedTheory s) = (Thy_Info.get_theory s, LoadedTheory s)
+  | resolve_spec tab (PinnedRepl (name, _)) =
+      case Symtab.lookup tab name of
+        SOME (Repl r) =>
+          (case #pin r of
+             SOME p => if #stale p then error ("Pin " ^ quote name ^ " is stale")
+                       else (#theory p, PinnedRepl (name, #version p))
+           | NONE => error ("REPL " ^ quote name ^ " is not pinned"))
+      | SOME (Claimed _) => error ("REPL " ^ quote name ^ " is busy")
+      | NONE => error ("No REPL " ^ quote name);
 
 fun has_pin_dep tab target_id =
   Symtab.exists (fn (_, entry) =>
@@ -362,7 +368,7 @@ fun init id specs =
   let val _ = if null specs then error "init requires at least one spec" else ()
       fun from_specs specs =
             let val tab = Synchronized.value repl_tab
-                val resolved = map (resolve_spec tab) specs
+                val resolved = map (resolve_spec tab o string_to_spec) specs
                 val thys = map #1 resolved
                 val spec_list = map #2 resolved
                 val thy = Theory.begin_theory (id, Position.none) thys
@@ -544,6 +550,36 @@ fun replay id =
     let val stale_count = length (filter #stale (#steps r))
         val r' = replay_repl r
     in (r', out ("Replayed " ^ string_of_int stale_count ^ " stale steps")) end);
+
+fun mark_all_stale (steps : repl_step list) : repl_step list =
+  map (fn s => {text = #text s, pre_state = #pre_state s,
+                post_state = #post_state s, stale = true}) steps;
+
+(* with_claim because Theory.begin_theory is expensive and must not hold
+   the repl_tab lock.  Does NOT replay steps — leaves them stale for a
+   subsequent Ir.replay call. *)
+fun rebase id =
+  with_claim id (fn r =>
+    case #origin r of
+      From_Theory specs =>
+        let val tab = Synchronized.value repl_tab
+            (* Resolve all specs against current pin state *)
+            val resolved = map (resolve_spec tab) specs
+            val new_specs = map #2 resolved
+        in if specs = new_specs
+           then (r, out ("REPL " ^ quote id ^ " is already up to date"))
+           else
+             let val new_thy = Theory.begin_theory (id, Position.none) (map #1 resolved)
+                 val new_base = Toplevel.make_state (SOME new_thy)
+                 val n = length (#steps r)
+                 val r' = {origin = From_Theory new_specs, base_state = new_base,
+                           steps = mark_all_stale (#steps r),
+                           timeout = #timeout r, pin = #pin r}
+             in (r', out ("Rebased " ^ quote id ^ " (" ^
+                          string_of_int n ^ " steps marked stale; use replay to re-execute)")) end
+        end
+    | orig => error ("REPL " ^ quote id ^ " (from " ^ origin_str orig ^
+                     ") does not support rebase"));
 
 fun edit_repl idx new_text (r : repl) : repl =
   let val steps = #steps r
@@ -739,7 +775,7 @@ fun help () = out
   \  All REPL operations take an explicit REPL id.\n\
   \\n\
   \  init id [specs]         create REPL from [\"Theory\"], [\"Theory:idx\"],\n\
-  \                          or [\"T1\",\"T2\",...] (merges theories)\n\
+  \                          [\"pin@A\"], or [\"T1\",\"T2\",...] (merges)\n\
   \  fork id new_id state_idx  fork sub-REPL from id at state (~1=latest)\n\
   \  step id \"isar text\"    append step to REPL\n\
   \  show id                describe REPL (origin, steps, staleness)\n\
@@ -752,6 +788,7 @@ fun help () = out
   \  merge id               inline sub-REPL into parent\n\
   \  pin id                 snapshot REPL theory state\n\
   \  unpin id               remove a REPL's pin\n\
+  \  rebase id              update base to latest pins (marks steps stale)\n\
   \  sledgehammer id secs   run sledgehammer on proof state\n\
   \  find_theorems id n q   search theorems (n=max, 0=unlimited)\n\
   \  timeout id secs        set step timeout for REPL (0=unlimited, default 10s)\n\
@@ -784,6 +821,16 @@ fun help () = out
   \\n\
   \  Ir.edit \"R\" 0 \"lemma \\\"Q\\\"\";  (* edit first step *)\n\
   \  Ir.truncate \"R\" 1;             (* keep only steps 0 and 1 *)\n\
+  \\n\
+  \=== Pinning and rebasing ===\n\
+  \\n\
+  \  Ir.pin \"R\";                        (* snapshot R's theory state *)\n\
+  \  Ir.init \"S\" [\"pin@R\"];             (* new REPL from pinned state *)\n\
+  \  Ir.step \"S\" \"lemma True by simp\";  (* work in S *)\n\
+  \  (* ... edit R, then re-pin: *)\n\
+  \  Ir.pin \"R\";\n\
+  \  Ir.rebase \"S\";                     (* rebase S onto updated R *)\n\
+  \  Ir.replay \"S\";                     (* re-execute stale steps *)\n\
   \\n\
   \=== Segments (record_theories) ===\n\
   \\n\
