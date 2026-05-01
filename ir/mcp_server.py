@@ -290,12 +290,14 @@ async def server_info(ctx: Context = None) -> str:
     "This is equivalent to writing `theory T imports A B C begin ...` in a .thy file. "
     "This is the ONLY way to make a theory's definitions, lemmas, and notations available. "
     "Theories not in the initial heap must be loaded first with `load_theory`.\n\n"
-    "`theories` is a list of fully qualified theory names. Examples:\n"
+    "`theories` is a list of theory specs. Examples:\n"
     "- [\"Main\"] — start from the standard HOL library\n"
     "- [\"HOL-Library.Multiset\"] — import the Multiset theory\n"
     "- [\"HOL-Library.Multiset\", \"HOL-Library.FSet\"] — import and merge multiple theories\n"
-    "- [\"MySession.MyTheory:42\"] — start from a specific source location (single spec only)\n\n"
-    "When multiple theories are listed, they are merged so the REPL has access to all of them. "
+    "- [\"MySession.MyTheory:42\"] — start from a specific source location (single spec only)\n"
+    "- [\"pin@A\"] — start from the pinned state of REPL A (use `repl_pin` first)\n"
+    "- [\"pin@A\", \"Main\"] — merge a pinned REPL state with a theory\n\n"
+    "When multiple specs are listed, they are merged so the REPL has access to all of them. "
     "Use `theories` to see what is already loaded in the session."
 ))
 async def init(repl: str, theories: list[str], ctx: Context = None) -> str:
