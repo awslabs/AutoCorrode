@@ -87,6 +87,35 @@ lemma set_disjoint_from_Union':
   shows \<open>((\<Union>x\<in>l. f x) \<inter> a = {}) = (\<forall>x\<in>l. f x \<inter> a = {})\<close>
 by auto
 
+subsection\<open>Disjointness and unions\<close>
+
+lemma set_disjoint_from_union:
+  shows \<open>a \<inter> (b \<union> c) = {} \<longleftrightarrow> (a \<inter> b = {} \<and> a \<inter> c = {})\<close>
+by auto
+
+lemma set_disjoint_from_Union:
+  shows \<open>(a \<inter> (\<Union>x\<in>l. f x) = {}) = (\<forall>x\<in>l. a \<inter> f x = {})\<close>
+by auto
+
+lemma set_disjoint_from_unionI:
+  assumes \<open>a \<inter> b = {}\<close>
+      and \<open>a \<inter> c = {}\<close>
+    shows \<open>a \<inter> (b \<union> c) = {}\<close>
+using assms by auto
+
+lemma set_disjoint_from_UnionI:
+  assumes \<open>\<And>x. x\<in>l \<Longrightarrow> a \<inter> f x = {}\<close>
+    shows \<open>a \<inter> (\<Union>x\<in>l. f x) = {}\<close>
+using assms by auto
+
+subsection\<open>Singletons and distinct lists\<close>
+
+lemma distinct_singleton_list:
+  assumes \<open>distinct ls\<close>
+      and \<open>set ls = {x}\<close>
+    shows \<open>ls = [x]\<close>
+by (metis assms distinct.simps(2) distinct_length_2_or_more list.set_cases neq_Nil_conv singleton_iff)
+
 subsection\<open>Let-binding elimination\<close>
 
 lemma LetE:

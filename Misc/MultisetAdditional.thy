@@ -413,6 +413,32 @@ proof -
   finally show ?thesis by simp
 qed
 
+subsection\<open>Multiset-set range splitting\<close>
+
+lemma mset_set_Suc_image:
+  shows \<open>mset_set {Suc 0..<Suc n} = image_mset Suc (mset_set {0..<n})\<close>
+proof -
+  have \<open>{Suc 0..<Suc n} = Suc ` {0..<n}\<close>
+    by auto
+  also have \<open>mset_set ... = image_mset Suc (mset_set {0..<n})\<close>
+    by (rule image_mset_mset_set[symmetric]) (simp add: inj_on_def)
+  finally show ?thesis .
+qed
+
+lemma mset_set_singleton_difference:
+  assumes \<open>l > 0\<close>
+    shows \<open>mset_set {0..<l} - mset_set {Suc 0..<l} = {# 0 #}\<close>
+proof -
+  obtain n where \<open>l = Suc n\<close>
+    using assms gr0_implies_Suc by blast
+  hence \<open>{0..<l} = {0} \<union> {Suc 0..<l}\<close>
+    by force
+  hence \<open>mset_set {0..<l} = {#0#} + mset_set {Suc 0..<l}\<close>
+    by (simp add: mset_set_Union)
+  thus ?thesis
+    by simp
+qed
+
 subsection\<open>Image multisets and cardinality\<close>
 
 lemma count_image_mset_eqcard:
