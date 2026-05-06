@@ -1448,6 +1448,10 @@ lemma awand_mp:
   shows \<open>(\<phi> \<Zsurj> \<psi>) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
 by (clarsimp elim!: asepconjE awandE simp add: aentails_def)
 
+lemma awand_curry:
+  shows \<open>(\<phi> \<star> \<psi>) \<Zsurj> \<chi> = \<phi> \<Zsurj> \<psi> \<Zsurj> \<chi>\<close>
+by (metis (no_types, lifting) aentails_eq asepconj_AC(2) awand_adjoint awand_mp)
+
 lemma awand_L0:
   assumes \<open>\<rho> \<longlongrightarrow> \<phi>\<close>
       and \<open>\<psi> \<longlongrightarrow> \<theta>\<close>
