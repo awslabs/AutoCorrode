@@ -87,6 +87,14 @@ lemma set_disjoint_from_Union':
   shows \<open>((\<Union>x\<in>l. f x) \<inter> a = {}) = (\<forall>x\<in>l. f x \<inter> a = {})\<close>
 by auto
 
+subsection\<open>Let-binding elimination\<close>
+
+lemma LetE:
+  assumes \<open>let x = e in P x\<close>
+      and \<open>\<And>x. x=e \<Longrightarrow> P x \<Longrightarrow> Q\<close>
+    shows \<open>Q\<close>
+  using assms by simp
+
 (*<*)
 end
 (*>*)
