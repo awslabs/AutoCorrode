@@ -542,5 +542,58 @@ lemma word64_div_mono:
     shows \<open>x div z \<le> y div z\<close>
 using assms by (simp add: div_le_mono unat_div word_le_nat_alt)
 
+lemma word_nth_out_of_bounds:
+  fixes addr :: \<open>'l::len word\<close>
+  assumes \<open>\<not>(n < LENGTH('l))\<close>
+    shows \<open>addr !! n = False\<close>
+using assms bit_imp_le_length by blast
+
+lemmas word_nth_simps =
+  ucast_ucast_mask is_aligned_nth less_imp_diff_less bit_mask_iff bit_drop_bit_eq bin_nth_shiftr
+  neg_mask_test_bit word_or_nth word_and_nth nth_shiftl bit_or_iff bit_ucast_iff size_word_def
+  bit_push_bit_iff'
+
+lemma drop_bit_align_down:
+  shows \<open>drop_bit n addr = drop_bit n (word_align_down addr n)\<close>
+  apply (intro word_eqI; clarsimp simp add: word_nth_simps)
+  apply (case_tac \<open>n + na < 64\<close>; simp add: word_nth_out_of_bounds)
+  done
+
+lemma UCAST_0_alt:
+  fixes w :: \<open>'a::len word\<close>
+  assumes \<open>LENGTH('b) \<le> LENGTH('a)\<close>
+    shows \<open>UCAST('a \<rightarrow> 'b::len) w = 0 \<longleftrightarrow> is_aligned w LENGTH('b)\<close>
+by (meson is_aligned_over_length is_aligned_ucastI order.refl ucast_zero_is_aligned)
+
+lemma word_lt_elim:
+    fixes x :: \<open>'a::len word\<close>
+  assumes \<open>x < numeral n\<close>
+      and \<open>\<And>k. k < numeral n \<Longrightarrow> x = of_nat k \<Longrightarrow> P\<close>
+    shows \<open>P\<close>
+using assms by (metis of_nat_numeral unat_less_helper word_unat.Rep_inverse')
+
+lemma nat_lt_elim:
+    fixes x :: \<open>nat\<close>
+  assumes \<open>x < numeral n\<close>
+      and \<open>\<And>k. k < numeral n \<Longrightarrow> x = k \<Longrightarrow> P\<close>
+    shows \<open>P\<close>
+using assms by blast
+
+lemma ucast_collapse:
+  assumes \<open>x < 2^LENGTH('m)\<close>
+    shows \<open>UCAST('m::{len} \<rightarrow> 'l::{len}) (UCAST ('n::{len} \<rightarrow> 'm) x) = UCAST ('n \<rightarrow> 'l) x\<close>
+using assms by (metis Word.of_nat_unat ucast_of_nat_small unat_less_helper word_unat_power)
+
+lemma and_length_lt:
+  assumes \<open>m < 2^LENGTH('l::{len})\<close>
+    shows \<open>m && n < 2^LENGTH('l::{len})\<close>
+using assms by (metis word_and_less' word_bw_comms(1))
+
+lemma unat_plus_lt_fiddle:
+    fixes x y z :: \<open>'a::{len} word\<close>
+  assumes \<open>x \<le> x + y\<close>
+    shows \<open>unat x + unat y < 2^LENGTH('a)\<close>
+using assms by (subst no_plus_overflow_unat_size[simplified size_word_def, simplified, symmetric])
+
 end
 (*>*)
