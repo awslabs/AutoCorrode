@@ -320,6 +320,14 @@ translations
     \<rightharpoonup> "CONST lift_fun9 f"
   "_shallow(_urust_fun_literal10 f)"
     \<rightharpoonup> "CONST lift_fun10 f"
+  "_shallow(_urust_fun_literal11 f)"
+    \<rightharpoonup> "CONST lift_fun11 f"
+  "_shallow(_urust_fun_literal12 f)"
+    \<rightharpoonup> "CONST lift_fun12 f"
+  "_shallow(_urust_fun_literal13 f)"
+    \<rightharpoonup> "CONST lift_fun13 f"
+  "_shallow(_urust_fun_literal14 f)"
+    \<rightharpoonup> "CONST lift_fun14 f"
   "_shallow(_urust_numeral num)"
     \<rightharpoonup> "CONST literal (_Numeral num)" \<comment>\<open>TODO: What type should we cast numerals to by default?\<close>
   "_shallow(_urust_numeral_0)"
@@ -1071,11 +1079,11 @@ ML\<open>
       val mk = Syntax.const
       fun mk_antiquotation t = mk \<^syntax_const>\<open>_urust_antiquotation\<close> $ t
       fun mk_callable_lifted ctor arity =
-        if arity >= 0 andalso arity <= 10 then
+        if arity >= 0 andalso arity <= 14 then
           mk_antiquotation (mk ("lift_fun" ^ Int.toString arity) $ ctor)
         else
           error ("struct expression: constructor arity " ^ Int.toString arity ^
-            " is unsupported (max 10)")
+            " is unsupported (max 14)")
       fun mk_args [e] = mk \<^syntax_const>\<open>_urust_args_single\<close> $ e
         | mk_args (e :: es) = mk \<^syntax_const>\<open>_urust_args_app\<close> $ e $ mk_args es
         | mk_args [] = error "struct expression: empty field list"

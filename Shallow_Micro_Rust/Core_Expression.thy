@@ -433,6 +433,18 @@ definition lift_fun9 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Righta
 definition lift_fun10 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 'v) \<Rightarrow>
                          ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body)\<close>
   where [micro_rust_simps]: \<open>lift_fun10 \<equiv> deep_compose10 fun_literal\<close>
+definition lift_fun11 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 'v) \<Rightarrow>
+                         ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body)\<close>
+  where [micro_rust_simps]: \<open>lift_fun11 \<equiv> deep_compose11 fun_literal\<close>
+definition lift_fun12 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 'v) \<Rightarrow>
+                         ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body)\<close>
+  where [micro_rust_simps]: \<open>lift_fun12 \<equiv> deep_compose12 fun_literal\<close>
+definition lift_fun13 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 'v) \<Rightarrow>
+                         ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body)\<close>
+  where [micro_rust_simps]: \<open>lift_fun13 \<equiv> deep_compose13 fun_literal\<close>
+definition lift_fun14 :: \<open>('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> 'v) \<Rightarrow>
+                         ('t0 \<Rightarrow> 't1 \<Rightarrow> 't2 \<Rightarrow> 't3 \<Rightarrow> 't4 \<Rightarrow> 't5 \<Rightarrow> 't6 \<Rightarrow> 't7 \<Rightarrow> 't8 \<Rightarrow> 't9 \<Rightarrow> 't10 \<Rightarrow> 't11 \<Rightarrow> 't12 \<Rightarrow> 't13 \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body)\<close>
+  where [micro_rust_simps]: \<open>lift_fun14 \<equiv> deep_compose14 fun_literal\<close>
 
 text\<open>As an example of a \<^term>\<open>fun_literal\<close> Micro Rust expression, we introduce the \<^emph>\<open>skip\<close> command:
 This is just an abbreviation for the unit literal, though with a more suggestive name for when we

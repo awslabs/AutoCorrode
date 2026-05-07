@@ -113,6 +113,14 @@ syntax
     ("\<llangle>_\<rrangle>\<^sub>9" [0]1000)
   "_urust_fun_literal10" :: "'value \<Rightarrow> urust_fun_literal"
     ("\<llangle>_\<rrangle>\<^sub>1\<^sub>0" [0]1000)
+  "_urust_fun_literal11" :: "'value \<Rightarrow> urust_fun_literal"
+    ("\<llangle>_\<rrangle>\<^sub>1\<^sub>1" [0]1000)
+  "_urust_fun_literal12" :: "'value \<Rightarrow> urust_fun_literal"
+    ("\<llangle>_\<rrangle>\<^sub>1\<^sub>2" [0]1000)
+  "_urust_fun_literal13" :: "'value \<Rightarrow> urust_fun_literal"
+    ("\<llangle>_\<rrangle>\<^sub>1\<^sub>3" [0]1000)
+  "_urust_fun_literal14" :: "'value \<Rightarrow> urust_fun_literal"
+    ("\<llangle>_\<rrangle>\<^sub>1\<^sub>4" [0]1000)
   \<comment>\<open>Primitive casts\<close>
   "_urust_primitive_integral_cast_u8" :: "urust \<Rightarrow> urust"
     ("(_) as/ u8" [100]1000)
