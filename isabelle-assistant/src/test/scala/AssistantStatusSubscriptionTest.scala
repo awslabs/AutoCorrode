@@ -24,7 +24,7 @@ class AssistantStatusSubscriptionTest extends AnyFunSuite with Matchers {
     def remove(c: Session.Consumer[A]): Unit = {
       removeCount += 1
       val idx = consumers.indexWhere(_ eq c)
-      if (idx >= 0) consumers.remove(idx)
+      if (idx >= 0) { val _ = consumers.remove(idx) }
     }
 
     def emit(a: A): Unit = consumers.foreach(_.consume_robust(a))

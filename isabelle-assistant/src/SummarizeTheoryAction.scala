@@ -9,16 +9,21 @@ import javax.swing.JOptionPane
 
 /** Summarizes theory content via LLM, with context window size checking. */
 object SummarizeTheoryAction {
-  /** Estimate context window size based on model ID. */
-  private def estimateContextWindow: Int = {
-    val modelId = AssistantOptions.getModelId.toLowerCase
-    if (modelId.contains("claude-sonnet") || modelId.contains("claude-opus") || modelId.contains("claude-4")) 200000
-    else if (modelId.contains("claude")) 200000
-    else if (modelId.contains("llama3") || modelId.contains("llama-3")) 128000
-    else if (modelId.contains("mistral-large")) 128000
-    else if (modelId.contains("titan")) 32000
+  /** Estimate context window size based on model ID.
+    * `private[assistant]` so tests can pin the lookup table without going
+    * through `AssistantOptions` — a mistaken 200000 → 32000 regression here
+    * would silently gate out large summaries on capable models. */
+  private[assistant] def estimateContextWindowFor(modelIdLower: String): Int = {
+    if (modelIdLower.contains("claude-sonnet") || modelIdLower.contains("claude-opus") || modelIdLower.contains("claude-4")) 200000
+    else if (modelIdLower.contains("claude")) 200000
+    else if (modelIdLower.contains("llama3") || modelIdLower.contains("llama-3")) 128000
+    else if (modelIdLower.contains("mistral-large")) 128000
+    else if (modelIdLower.contains("titan")) 32000
     else 100000 // conservative default
   }
+
+  private def estimateContextWindow: Int =
+    estimateContextWindowFor(AssistantOptions.getModelId.toLowerCase)
 
   def summarize(view: View): Unit = {
     val buffer = view.getBuffer
@@ -49,7 +54,7 @@ object SummarizeTheoryAction {
     }
 
     promptOpt.foreach { prompt =>
-      ActionHelper.runAndRespond("assistant-summarize", "Summarizing theory...") {
+      ActionHelper.runAndRespond("assistant-summarize", "Summarizing theory…") {
         BedrockClient.invokeInContext(prompt)
       }
     }

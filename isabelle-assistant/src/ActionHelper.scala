@@ -28,7 +28,17 @@ object ActionHelper {
   )(body: => String)(
     onSuccess: String => Unit,
     onError: String => Unit = msg => {
-      ChatAction.addMessage(ChatAction.Assistant, s"Error: $msg")
+      // msg has already been through ErrorHandler.makeUserFriendly in the
+      // caller below — addErrorResponse would re-translate. Go directly
+      // through ChatAction.addMessage with the Error kind.
+      ChatAction.addMessage(
+        ChatAction.Message(
+          ChatAction.Assistant,
+          msg,
+          java.time.LocalDateTime.now(),
+          kind = ChatAction.ResponseKind.Error
+        )
+      )
       AssistantDockable.showConversation(ChatAction.getHistory)
       AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
     }
@@ -57,6 +67,29 @@ object ActionHelper {
     )
 
   /**
+   * Record a chat-invocation prelude: echo the command into the chat as if
+   * the user had typed it, then run the usual async LLM fetch and post the
+   * response. Most of the colon-command handlers share this scaffold.
+   *
+   * @param commandLine    Exact user-visible command (e.g. ":suggest-strategy")
+   * @param threadName     Isabelle_Thread name for diagnostics
+   * @param status         Busy-indicator status text
+   * @param buildPrompt    Runs on a background thread; must return the final
+   *                       prompt text to send to the LLM.
+   */
+  def runChatCommand(
+      commandLine: String,
+      threadName: String,
+      status: String = AssistantConstants.STATUS_THINKING
+  )(buildPrompt: => String): Unit = {
+    ChatAction.addMessage(ChatAction.User, commandLine)
+    AssistantDockable.showConversation(ChatAction.getHistory)
+    runAndRespond(threadName, status) {
+      BedrockClient.invokeInContext(buildPrompt)
+    }
+  }
+
+  /**
    * Run an I/Q-backed command action: fork background thread, check command at cursor, execute body.
    * Handles the common pattern of verifying cursor position before dispatching I/Q work.
    * The body receives the view and is executed on a background thread, allowing it to safely
@@ -80,7 +113,7 @@ object ActionHelper {
       CommandExtractor.getCommandAtOffset(buffer, offset) match {
         case None =>
           GUI_Thread.later {
-            ChatAction.addResponse("No Isabelle command at cursor position.")
+            ChatAction.addResponse(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           }
         case Some(_) => 
@@ -115,7 +148,7 @@ object ActionHelper {
       GoalExtractor.getGoalState(buffer, offset) match {
         case None =>
           GUI_Thread.later {
-            ChatAction.addResponse("No goal state available at cursor position.")
+            ChatAction.addResponse(AssistantConstants.UIText.NO_GOAL_AT_CURSOR)
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           }
         case Some(_) => 

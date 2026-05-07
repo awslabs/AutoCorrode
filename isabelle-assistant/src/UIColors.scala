@@ -51,16 +51,21 @@ object UIColors {
   
   // Help table colors
   object HelpTable {
-    def headerBackground: String = if (ThemeUtils.isDark) "#3a3a3a" else "#f0f0f0"
-    def borderColor: String = if (ThemeUtils.isDark) "#555" else "#ccc"
-    def rowBorder: String = if (ThemeUtils.isDark) "#444" else "#eee"
-    def accentColor: String = if (ThemeUtils.isDark) "#b090d0" else "#7b1fa2"
+    def headerBackground: String = ThemeUtils.themedHex("#3a3a3a", "#f0f0f0")
+    def borderColor: String = ThemeUtils.themedHex("#555555", "#cccccc")
+    def rowBorder: String = ThemeUtils.themedHex("#444444", "#eeeeee")
+    def accentColor: String = ThemeUtils.themedHex("#b090d0", "#7b1fa2")
   }
-  
+
   // Info box colors (for help sections)
   object InfoBox {
-    def background: String = if (ThemeUtils.isDark) "#2a3040" else "#f5f5f5"
-    def border: String = if (ThemeUtils.isDark) "#4a4a5a" else "#e0e0e0"
+    def background: String = ThemeUtils.themedHex("#2a3040", "#f5f5f5")
+    def border: String = ThemeUtils.themedHex("#4a4a5a", "#e0e0e0")
+  }
+
+  // Muted / secondary text (fallbacks for subtle labels, parse-failure hints)
+  object Muted {
+    def text: String = ThemeUtils.themedHex("#808890", "#666666")
   }
   
   // General link color
@@ -72,6 +77,9 @@ object UIColors {
     def border: String = ThemeUtils.themedHex("#3a3a3a", "#e1dfdb")
     def actionBackground: String = ThemeUtils.themedHex("#2a2a2a", "#ebe9e6")
     def actionBorder: String = ThemeUtils.themedHex("#3a3a3a", "#d8d6d2")
+    /** Default foreground color inside a code block — used where Isabelle
+      * keyword/type highlighting does not apply. */
+    def text: String = ThemeUtils.themedHex("#d6d3cd", "#383a42")
   }
   
   // Inline code background
@@ -86,6 +94,9 @@ object UIColors {
   // Tool message colors (for tool-use display in chat)
   object ToolMessage {
     def border: String = ThemeUtils.themedHex("#00897b", "#00897b")
+    /** Header / label text — matches the teal accent border. */
+    def headerText: String = ThemeUtils.themedHex("#26a69a", "#00796b")
+    /** Timestamp / secondary text — muted gray. */
     def timestamp: String = ThemeUtils.themedHex("#a0a8b0", "#5f6368")
   }
   

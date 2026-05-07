@@ -6,6 +6,7 @@ package isabelle.assistant
 import isabelle._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
+import java.util.regex.Pattern
 import scala.util.Try
 import scala.jdk.CollectionConverters._
 
@@ -23,6 +24,36 @@ object TargetParser {
   case class RelativePosition(base: Target, offset: Int) extends Target
   case object CurrentSelection extends Target
   case object CurrentCursor extends Target
+
+  /** Compile a single regex that matches a line starting with any of
+    * `keywords` (as alternation) followed by the literal `name`. Compiling
+    * once per lookup — instead of once per keyword per line — turns the
+    * NamedElement scan from O(L·K) regex compilations into O(L) matches
+    * against a single precompiled `Pattern`. */
+  private[assistant] def buildNamedElementPattern(
+      keywords: Iterable[String],
+      name: String
+  ): Pattern = {
+    val kwAlt = keywords.map(Pattern.quote).mkString("(?:", "|", ")")
+    val quotedName = Pattern.quote(name)
+    Pattern.compile(s"(?s)$kwAlt\\s+$quotedName\\b.*")
+  }
+
+  /** Does `trimmedLine` start with one of `keywords` followed by literal `name`?
+    *
+    * The user-supplied `name` is quoted with `Pattern.quote` so regex
+    * metacharacters (e.g. `:explain Foo.thy:lem.*`) match literally instead
+    * of acting as wildcards that would pick up any lemma starting with
+    * "lem". Exposed package-privately so the quoting behaviour can be
+    * unit-tested without a live jEdit buffer. Kept for single-call test
+    * cases; the production scan uses the precompiled pattern form directly.
+    */
+  private[assistant] def namedElementMatches(
+      trimmedLine: String,
+      keywords: Iterable[String],
+      name: String
+  ): Boolean =
+    buildNamedElementPattern(keywords, name).matcher(trimmedLine).matches()
 
   def parseTarget(spec: String, view: View): Option[Target] = {
     spec.trim match {
@@ -126,14 +157,13 @@ object TargetParser {
         }
         
       case NamedElement(theory, name) =>
-        // Find named element using Isabelle keyword patterns for precise matching
+        // Find named element using Isabelle keyword patterns for precise matching.
         findTheoryBuffer(theory, view).flatMap { buffer =>
           val content = buffer.getText(0, buffer.getLength)
-          val keywords = IsabelleKeywords.entityKeywords
+          val pattern = buildNamedElementPattern(IsabelleKeywords.entityKeywords, name)
           val lines = content.split("\n")
           lines.zipWithIndex.find { case (line, _) =>
-            val trimmed = line.trim
-            keywords.exists(kw => trimmed.matches(s"""(?s)$kw\\s+$name\\b.*"""))
+            pattern.matcher(line.trim).matches()
           } match {
             case Some((_, lineIdx)) =>
               val offset = buffer.getLineStartOffset(lineIdx)

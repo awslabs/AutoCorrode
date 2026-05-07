@@ -7,7 +7,6 @@ import isabelle._
 import org.gjt.sp.jedit.View
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import scala.jdk.CollectionConverters._
 
 /** Central command dispatcher and chat history manager for the Assistant
   * dockable. Handles 30+ colon-prefixed commands (`:help`, `:suggest`, etc.)
@@ -40,18 +39,31 @@ object ChatAction {
   }
   export ChatRole._
 
+  /** Semantic tag for an assistant message. The renderer uses this to pick
+    * bubble chrome (colour, icon) instead of sniffing for `Error:` / `[FAIL]`
+    * string prefixes in content. `Normal` is the default for free-form
+    * assistant text. `Error` / `Success` / `Info` are used by the typed
+    * wrappers (`addErrorResponse`, etc.). `Summary` marks the transient
+    * notice that auto-summarisation produced. */
+  enum ResponseKind {
+    case Normal, Error, Success, Info, Summary
+  }
+
   case class Message(
       role: ChatRole,
       content: String,
       timestamp: LocalDateTime,
       rawHtml: Boolean = false,
-      transient: Boolean = false
+      transient: Boolean = false,
+      kind: ResponseKind = ResponseKind.Normal
   )
 
-  // Bounded history using immutable List with lock for thread-safety
+  // Bounded history backed by ArrayDeque; all reads/writes serialized by
+  // historyLock. getHistory publishes a snapshot so callers iterate safely.
   private val maxHistory = AssistantConstants.MAX_ACCUMULATED_MESSAGES
   private val historyLock = new Object()
-  @volatile private var history: List[Message] = Nil
+  private val history: java.util.ArrayDeque[Message] =
+    new java.util.ArrayDeque[Message](maxHistory)
   private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
 
   /** Command dispatch entry: description for help, handler function, whether
@@ -62,49 +74,6 @@ object ChatAction {
       handler: (View, String) => Unit,
       needsIQ: Boolean = false
   )
-
-  enum CommandId(val wireName: String) {
-    case Analyze extends CommandId("analyze")
-    case Deps extends CommandId("deps")
-    case Explain extends CommandId("explain")
-    case ExplainCounterexample extends CommandId("explain-counterexample")
-    case ExplainError extends CommandId("explain-error")
-    case Extract extends CommandId("extract")
-    case Find extends CommandId("find")
-    case GenerateDoc extends CommandId("generate-doc")
-    case GenerateElim extends CommandId("generate-elim")
-    case GenerateIntro extends CommandId("generate-intro")
-    case GenerateTests extends CommandId("generate-tests")
-    case Help extends CommandId("help")
-    case Models extends CommandId("models")
-    case Nitpick extends CommandId("nitpick")
-    case PrintContext extends CommandId("print-context")
-    case Quickcheck extends CommandId("quickcheck")
-    case Read extends CommandId("read")
-    case Refactor extends CommandId("refactor")
-    case Search extends CommandId("search")
-    case Set extends CommandId("set")
-    case ShowType extends CommandId("show-type")
-    case Sledgehammer extends CommandId("sledgehammer")
-    case Suggest extends CommandId("suggest")
-    case SuggestName extends CommandId("suggest-name")
-    case SuggestStrategy extends CommandId("suggest-strategy")
-    case SuggestTactic extends CommandId("suggest-tactic")
-    case Summarize extends CommandId("summarize")
-    case Theories extends CommandId("theories")
-    case Tidy extends CommandId("tidy")
-    case Trace extends CommandId("trace")
-    case TryMethods extends CommandId("try-methods")
-    case Verify extends CommandId("verify")
-  }
-
-  object CommandId {
-    private val byWire: Map[String, CommandId] =
-      values.iterator.map(id => id.wireName -> id).toMap
-
-    def fromWire(wireName: String): Option[CommandId] =
-      byWire.get(wireName.trim.toLowerCase)
-  }
 
   /** Expose command names for auto-completion. */
   def commandNames: List[String] =
@@ -159,7 +128,7 @@ object ChatAction {
     ),
     CommandId.Help -> CommandEntry(
       "Display this table of available commands and their descriptions",
-      (_, _) => showHelp()
+      (_, a) => showHelp(a.trim)
     ),
     CommandId.Models -> CommandEntry(
       "Refresh the list of available Anthropic models from AWS Bedrock",
@@ -250,6 +219,10 @@ object ChatAction {
       "Verify that a given proof text is correct and complete",
       (v, a) => runVerify(v, a),
       needsIQ = true
+    ),
+    CommandId.Version -> CommandEntry(
+      "Show the Isabelle Assistant plugin name and version",
+      (_, _) => runVersion()
     )
   )
   require(
@@ -258,41 +231,81 @@ object ChatAction {
   )
 
   def addMessage(message: Message): Unit = historyLock.synchronized {
-    history = (history :+ message).takeRight(maxHistory)
+    history.addLast(capMessageSize(sanitizeIfRawHtml(message)))
+    while (history.size > maxHistory) {
+      val _ = history.pollFirst()
+    }
+  }
+
+  /** Defense-in-depth: rawHtml widget messages bypass MarkdownRenderer's
+    * escape path. Widget producers are supposed to escape user/LLM text
+    * before interpolation, but a future producer that forgets must not
+    * open a JEditorPane injection surface. Strip `<script>`/`<iframe>`
+    * elements, `javascript:` URL schemes, and inline event handlers. */
+  private def sanitizeIfRawHtml(message: Message): Message =
+    if (message.rawHtml && message.content != null)
+      message.copy(content = HtmlUtil.sanitizeWidgetHtml(message.content))
+    else message
+
+  /** Truncate an individual message's content to `MAX_MESSAGE_SIZE_CHARS`.
+    * Count-based history trimming alone is not enough: one pathological
+    * message (runaway tool output, huge pasted file) can still blow through
+    * any token budget. Truncate in the middle so both the opening context
+    * and the final summary remain visible. */
+  private def capMessageSize(message: Message): Message = {
+    val limit = AssistantConstants.MAX_MESSAGE_SIZE_CHARS
+    val content = message.content
+    if (content == null || content.length <= limit) message
+    else {
+      val head = content.substring(0, limit / 2)
+      val tail = content.substring(content.length - limit / 2)
+      val omitted = content.length - limit
+      val truncated = head +
+        s"\n\n*— truncated $omitted characters —*\n\n" +
+        tail
+      message.copy(content = truncated)
+    }
   }
 
   def addMessage(role: ChatRole, content: String): Unit =
     addMessage(Message(role, content, LocalDateTime.now()))
 
   def clearHistory(): Unit = historyLock.synchronized {
-    history = Nil
+    history.clear()
+    ToolPermissions.clearSession()
   }
 
   /**
    * Atomically replace the entire conversation history with a summary message.
    * Used by ContextSummarizer when context budget is exceeded.
-   * 
+   *
    * @param summaryContent The formatted summary text to use as the new seed message
    */
   def replaceHistoryWithSummary(summaryContent: String): Unit = historyLock.synchronized {
-    history = List(Message(Assistant, summaryContent, LocalDateTime.now()))
+    history.clear()
+    history.addLast(Message(Assistant, summaryContent, LocalDateTime.now()))
   }
 
   /**
    * Add a transient notification that context was summarized.
    * Shows the user that old messages were compressed to save space.
+   * The distinguishing chrome (border tint / icon) comes from
+   * `ResponseKind.Summary`, so no bracket-tag prefix is needed.
    */
   def addSummarizationNotice(): Unit = {
-    val notice = "📋 Context was automatically summarized to stay within limits. Your task progress has been preserved."
-    addMessage(Message(Assistant, notice, LocalDateTime.now(), transient = true))
+    val notice = "Context was automatically summarized to stay within limits. Your task progress has been preserved."
+    addMessage(Message(Assistant, notice, LocalDateTime.now(), transient = true, kind = ResponseKind.Summary))
     AssistantDockable.showConversation(getHistory)
   }
 
-  /** Get the current history as an immutable snapshot. Thread-safe because
-    * @volatile ensures visibility and the List reference is immutable once
-    * published. Writers are serialized by historyLock.
+  /** Get the current history as an immutable snapshot. Copy is taken under
+    * historyLock so the returned List is safe to iterate from any thread.
     */
-  def getHistory: List[Message] = history
+  def getHistory: List[Message] = historyLock.synchronized {
+    val arr = new Array[Message](history.size)
+    val _ = history.toArray(arr)
+    arr.toList
+  }
 
   def formatTime(ts: LocalDateTime): String = ts.format(timeFmt)
 
@@ -340,7 +353,7 @@ object ChatAction {
                   "chat"
                 )
               AssistantDockable.setStatus(s"Error: $errorMsg")
-              addResponse(s"Error: $errorMsg")
+              addErrorResponse(errorMsg, "chat")
             }
           case Right(systemPrompt) =>
             try {
@@ -360,14 +373,21 @@ object ChatAction {
                   AssistantDockable.setStatus(s"Error: $errorMsg")
 
                   val retryAction = () => {
-                    AssistantDockable.setStatus("Retrying...")
+                    AssistantDockable.setStatus("Retrying…")
                     retryChatInternal(view, systemPrompt, messagesForApi)
                   }
                   val retryId = AssistantDockable.registerAction(retryAction)
-                  ChatAction.addMessage(
+                  // Compose error + retry action as one bubble. The ACTION
+                  // marker is rendered as a clickable link by
+                  // ConversationRenderer; we build the full content first
+                  // and emit it with ResponseKind.Error so the bubble gets
+                  // the error border.
+                  addMessage(Message(
                     Assistant,
-                    s"Error: $errorMsg\n\n{{ACTION:$retryId:Retry}}"
-                  )
+                    s"$errorMsg\n\n{{ACTION:$retryId:Retry}}",
+                    LocalDateTime.now(),
+                    kind = ResponseKind.Error
+                  ))
                   AssistantDockable.showConversation(ChatAction.getHistory)
                 }
             }
@@ -396,7 +416,7 @@ object ChatAction {
           GUI_Thread.later {
             val errorMsg = ErrorHandler.makeUserFriendly(ex.getMessage, "chat")
             AssistantDockable.setStatus(s"Error: $errorMsg")
-            addResponse(s"Error: $errorMsg")
+            addErrorResponse(errorMsg, "chat")
           }
       }
     }
@@ -415,18 +435,60 @@ object ChatAction {
         dispatch(commandId) match {
           case entry if entry.needsIQ && !IQAvailable.isAvailable =>
             addResponse(
-              "I/Q plugin not available. Install I/Q to use this command."
+              "Proof verification plugin (I/Q) is not installed. I/Q provides proof state, verification, and ATP integration. " +
+                "Install via `make install` or see the README for setup."
             )
           case entry => entry.handler(view, arg)
         }
       case None =>
+        val suggestion = closestCommand(rawCmd)
+        val hint = suggestion.map(s => s" Did you mean `:$s`?").getOrElse("")
         addResponse(
-          s"Unknown command `:$rawCmd`. Type `:help` for available commands."
+          s"Unknown command `:$rawCmd`.$hint Type `:help` for available commands."
         )
     }
   }
 
-  private def showHelp(): Unit = {
+  /** Find the closest command name within Levenshtein distance 2, or None. */
+  private def closestCommand(input: String): Option[String] = {
+    if (input.isEmpty) None
+    else {
+      val candidates = commandNames.map(n => (n, levenshtein(input, n)))
+      candidates.filter(_._2 <= 2).sortBy(_._2).headOption.map(_._1)
+    }
+  }
+
+  /** Classic iterative Levenshtein with two rolling rows. O(m*n) time, O(n) space. */
+  private def levenshtein(a: String, b: String): Int = {
+    if (a == b) return 0
+    if (a.isEmpty) return b.length
+    if (b.isEmpty) return a.length
+    val n = b.length
+    val prev = (0 to n).toArray
+    val curr = new Array[Int](n + 1)
+    var i = 1
+    while (i <= a.length) {
+      curr(0) = i
+      var j = 1
+      while (j <= n) {
+        val cost = if (a.charAt(i - 1) == b.charAt(j - 1)) 0 else 1
+        curr(j) = math.min(
+          math.min(curr(j - 1) + 1, prev(j) + 1),
+          prev(j - 1) + cost
+        )
+        j += 1
+      }
+      System.arraycopy(curr, 0, prev, 0, n + 1)
+      i += 1
+    }
+    prev(n)
+  }
+
+  private def showHelp(target: String = ""): Unit = {
+    if (target.nonEmpty) {
+      showHelpForCommand(target.stripPrefix(":").toLowerCase)
+      return
+    }
     val headerBg = UIColors.HelpTable.headerBackground
     val borderColor = UIColors.HelpTable.borderColor
     val rowBorder = UIColors.HelpTable.rowBorder
@@ -434,36 +496,167 @@ object ChatAction {
     val infoBg = UIColors.InfoBox.background
     val infoBorder = UIColors.InfoBox.border
 
+    val intro =
+      s"<div style='margin-bottom:${UIDesign.Space.md};font-size:${UIDesign.FontSize.base};'>" +
+        "Tip: type <code>:help &lt;command&gt;</code> for details on any command. " +
+        "Example: <code>:help suggest</code>." +
+        "</div>"
+
     val sortedCommands = dispatch.toList.sortBy(_._1.wireName)
+    val cellBase =
+      s"padding:${UIDesign.Space.sm} ${UIDesign.Space.md};font-size:${UIDesign.FontSize.base};"
     val header =
-      s"<tr><th style='padding:4px 8px;border-bottom:2px solid $borderColor;text-align:left;font-size:11pt;background:$headerBg;'>Command</th><th style='padding:4px 8px;border-bottom:2px solid $borderColor;text-align:left;font-size:11pt;background:$headerBg;'>Description</th><th style='padding:4px 8px;border-bottom:2px solid $borderColor;text-align:center;font-size:11pt;background:$headerBg;'>I/Q</th></tr>"
+      s"<tr>" +
+        s"<th style='${cellBase}border-bottom:2px solid $borderColor;text-align:left;background:$headerBg;'>Command</th>" +
+        s"<th style='${cellBase}border-bottom:2px solid $borderColor;text-align:left;background:$headerBg;'>Description</th>" +
+        s"<th style='${cellBase}border-bottom:2px solid $borderColor;text-align:center;background:$headerBg;'>I/Q</th>" +
+        "</tr>"
     val rows = sortedCommands.map { case (commandId, entry) =>
       val iq = if (entry.needsIQ) "yes" else ""
-      s"<tr><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-family:${MarkdownRenderer.codeFont};font-size:11pt;white-space:nowrap;color:$accentColor;'>:${commandId.wireName}</td><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-size:11pt;'>${entry.description}</td><td style='padding:4px 8px;border-bottom:1px solid $rowBorder;font-size:11pt;text-align:center;'>$iq</td></tr>"
+      s"<tr>" +
+        s"<td style='${cellBase}border-bottom:1px solid $rowBorder;font-family:${MarkdownRenderer.codeFont};" +
+        s"white-space:nowrap;color:$accentColor;'>:${commandId.wireName}</td>" +
+        s"<td style='${cellBase}border-bottom:1px solid $rowBorder;'>${entry.description}</td>" +
+        s"<td style='${cellBase}border-bottom:1px solid $rowBorder;text-align:center;'>$iq</td>" +
+        "</tr>"
     }.mkString
     val table =
       s"<table style='width:100%;border-collapse:collapse;'>$header$rows</table>"
     val targetHelp =
-      s"""<div style='margin-top:10px;padding:8px 10px;background:$infoBg;border:1px solid $infoBorder;border-radius:3px;'>
-      |<div style='font-weight:bold;margin-bottom:4px;'>Target Syntax</div>
-      |<div style='font-size:11pt;'>Commands like <code>:explain</code> and <code>:suggest</code> accept optional targets:</div>
-      |<div style='font-size:11pt;padding-left:12px;margin-top:4px;'>
-      |• <code>cursor</code> — current cursor position (default)<br/>
-      |• <code>selection</code> — current text selection<br/>
-      |• <code>Theory.thy:42</code> — specific line<br/>
-      |• <code>Theory.thy:10-20</code> — line range<br/>
-      |• <code>Theory.thy:lemma_name</code> — named element<br/>
-      |• <code>cursor+5</code>, <code>cursor-3</code> — relative offset
-      |</div></div>""".stripMargin
+      s"<div style='margin-top:${UIDesign.Space.md};padding:${UIDesign.Space.md} ${UIDesign.Space.md};" +
+        s"background:$infoBg;border:1px solid $infoBorder;border-radius:${UIDesign.Radius.sm};'>" +
+        s"<div style='font-weight:bold;margin-bottom:${UIDesign.Space.sm};'>Target Syntax</div>" +
+        s"<div style='font-size:${UIDesign.FontSize.base};'>" +
+        "Commands like <code>:explain</code> and <code>:suggest</code> accept optional targets:" +
+        "</div>" +
+        s"<div style='font-size:${UIDesign.FontSize.base};padding-left:${UIDesign.Space.lg};margin-top:${UIDesign.Space.sm};'>" +
+        "• <code>cursor</code> — current cursor position (default)<br/>" +
+        "• <code>selection</code> — current text selection<br/>" +
+        "• <code>Theory.thy:42</code> — specific line<br/>" +
+        "• <code>Theory.thy:10-20</code> — line range<br/>" +
+        "• <code>Theory.thy:lemma_name</code> — named element<br/>" +
+        "• <code>cursor+5</code>, <code>cursor-3</code> — relative offset" +
+        "</div></div>"
     addMessage(
       Message(
         Assistant,
-        table + targetHelp,
+        intro + table + targetHelp,
         LocalDateTime.now(),
         rawHtml = true
       )
     )
     AssistantDockable.showConversation(getHistory)
+  }
+
+  /** Per-command help card. Invoked via `:help COMMAND`; falls back to a
+    * did-you-mean suggestion when COMMAND is unknown.
+    */
+  private def showHelpForCommand(rawName: String): Unit = {
+    CommandId.fromWire(rawName) match {
+      case None =>
+        val suggestion = closestCommand(rawName)
+        val hint = suggestion.map(s => s" Did you mean `:$s`?").getOrElse("")
+        addResponse(s"Unknown command `:$rawName`.$hint Type `:help` to see all commands.")
+      case Some(id) =>
+        val entry = dispatch(id)
+        val name = id.wireName
+        val iqNote =
+          if (entry.needsIQ) s"<div style='font-size:${UIDesign.FontSize.sm};color:${UIColors.HelpTable.accentColor};margin-top:${UIDesign.Space.sm};'>Requires I/Q plugin.</div>"
+          else ""
+        val usageLine = usageExample(id)
+        val acceptsTarget = commandAcceptsTarget(id)
+        val targetNote =
+          if (acceptsTarget)
+            s"<div style='font-size:${UIDesign.FontSize.sm};margin-top:${UIDesign.Space.sm};'>" +
+              "Accepts an optional target: <code>cursor</code> (default), <code>selection</code>, " +
+              "<code>Theory.thy:42</code>, <code>Theory.thy:10-20</code>, <code>Theory.thy:lemma_name</code>, or <code>cursor±N</code>." +
+              "</div>"
+          else ""
+        val related = relatedCommands.getOrElse(id, Nil)
+        val seeAlso =
+          if (related.isEmpty) ""
+          else {
+            val links = related
+              .map(r => s"<code>:${r.wireName}</code>")
+              .mkString(", ")
+            s"<div style='font-size:${UIDesign.FontSize.sm};margin-top:${UIDesign.Space.sm};color:${UIColors.Muted.text};'>" +
+              s"See also: $links" +
+              "</div>"
+          }
+        val body =
+          s"<div style='font-family:${MarkdownRenderer.codeFont};font-weight:bold;color:${UIColors.HelpTable.accentColor};" +
+            s"font-size:${UIDesign.FontSize.md};margin-bottom:${UIDesign.Space.sm};'>:$name</div>" +
+            s"<div style='font-size:${UIDesign.FontSize.base};'>${entry.description}.</div>" +
+            s"<div style='font-size:${UIDesign.FontSize.sm};margin-top:${UIDesign.Space.sm};color:${UIColors.HelpTable.accentColor};'>" +
+            s"Usage: <code>$usageLine</code></div>" +
+            targetNote + iqNote + seeAlso
+        val html = UIDesign.infoCard(
+          "",
+          body,
+          UIColors.HelpTable.accentColor,
+          UIColors.InfoBox.background,
+          UIColors.InfoBox.border
+        )
+        addMessage(Message(Assistant, html, LocalDateTime.now(), rawHtml = true))
+        AssistantDockable.showConversation(getHistory)
+    }
+  }
+
+  /** Cross-links surfaced in the per-command `:help <command>` card.
+    * The listing is deliberately curated rather than computed: "related"
+    * is a user-facing judgement (what would the user want to try next?),
+    * not a code-graph query. Order matters — the first entry is the most
+    * obvious next thing to try.
+    */
+  private[assistant] val relatedCommands: Map[CommandId, List[CommandId]] = Map(
+    CommandId.Suggest        -> List(CommandId.SuggestStrategy, CommandId.SuggestTactic, CommandId.Sledgehammer),
+    CommandId.SuggestStrategy -> List(CommandId.Suggest, CommandId.SuggestTactic),
+    CommandId.SuggestTactic   -> List(CommandId.Suggest, CommandId.SuggestStrategy),
+    CommandId.Sledgehammer    -> List(CommandId.Suggest, CommandId.TryMethods, CommandId.Verify),
+    CommandId.Verify          -> List(CommandId.Sledgehammer, CommandId.TryMethods, CommandId.Suggest),
+    CommandId.TryMethods      -> List(CommandId.Sledgehammer, CommandId.Verify),
+    CommandId.Explain         -> List(CommandId.ExplainError, CommandId.ShowType, CommandId.PrintContext),
+    CommandId.ExplainError    -> List(CommandId.Explain, CommandId.PrintContext),
+    CommandId.ShowType        -> List(CommandId.Explain),
+    CommandId.Nitpick         -> List(CommandId.Quickcheck, CommandId.ExplainCounterexample),
+    CommandId.Quickcheck      -> List(CommandId.Nitpick, CommandId.ExplainCounterexample),
+    CommandId.ExplainCounterexample -> List(CommandId.Nitpick, CommandId.Quickcheck),
+    CommandId.Find            -> List(CommandId.Search, CommandId.Theories),
+    CommandId.Search          -> List(CommandId.Find, CommandId.Read),
+    CommandId.Theories        -> List(CommandId.Read, CommandId.Deps, CommandId.Search),
+    CommandId.Read            -> List(CommandId.Theories, CommandId.Deps, CommandId.Search),
+    CommandId.Deps            -> List(CommandId.Theories, CommandId.Read),
+    CommandId.GenerateIntro   -> List(CommandId.GenerateElim, CommandId.GenerateTests),
+    CommandId.GenerateElim    -> List(CommandId.GenerateIntro, CommandId.GenerateTests),
+    CommandId.GenerateTests   -> List(CommandId.GenerateIntro, CommandId.GenerateElim),
+    CommandId.Set             -> List(CommandId.Models, CommandId.Version)
+  )
+
+  /** Commands that forward their argument through TargetParser. */
+  private def commandAcceptsTarget(id: CommandId): Boolean = id match {
+    case CommandId.Explain | CommandId.Suggest => true
+    case _                                     => false
+  }
+
+  /** Canonical usage example per command, rendered in the per-command help card. */
+  private def usageExample(id: CommandId): String = id match {
+    case CommandId.Explain     => ":explain [target]"
+    case CommandId.Suggest     => ":suggest [target]"
+    case CommandId.Verify      => ":verify <proof>"
+    case CommandId.Find        => ":find <pattern>"
+    case CommandId.Search      => ":search <pattern>"
+    case CommandId.Read        => ":read <theory> [lines]"
+    case CommandId.Deps        => ":deps <theory>"
+    case CommandId.Set         => ":set [key] [value]"
+    case CommandId.Help        => ":help [command]"
+    case other                 => s":${other.wireName}"
+  }
+
+  /** Display the plugin name and version. Reads from the packaged
+    * plugin.props via [[BuildInfo]]; falls back to "Isabelle Assistant
+    * dev" when the resource is not on the classpath. */
+  private def runVersion(): Unit = {
+    addInfoResponse(BuildInfo.identity)
   }
 
   /** Refresh available Bedrock models and display in chat.
@@ -473,7 +666,7 @@ object ChatAction {
     * background thread to avoid blocking the UI.
     */
   private def runModels(): Unit = {
-    AssistantDockable.setStatus("Refreshing models...")
+    AssistantDockable.setStatus("Refreshing models…")
 
     val _ = Isabelle_Thread.fork(name = "chat-models") {
       try {
@@ -482,14 +675,15 @@ object ChatAction {
         GUI_Thread.later {
           val modelList = models.map(m => s"* `$m`").mkString("\n")
           addResponse(
-            s"**Available Anthropic Models** (${models.length} total)\n\n$modelList"
+            s"**Available Anthropic Models** (${models.length} total)\n\n$modelList\n\n" +
+              "Use `:set model <id>` to select one."
           )
           AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         }
       } catch {
         case ex: Exception =>
           GUI_Thread.later {
-            addResponse(s"Error refreshing models: ${ex.getMessage}")
+            addErrorResponse(ex.getMessage, "refresh models")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           }
       }
@@ -511,7 +705,11 @@ object ChatAction {
     val parts = arg.trim.split("\\s+", 2)
 
     if (arg.trim.isEmpty) {
-      addResponse(s"**Current Settings**\n\n${AssistantOptions.listSettings}")
+      addResponse(
+        "**Current Settings**\n\n" +
+          "Tip: use `:set <key> <value>` to change a setting.\n\n" +
+          AssistantOptions.listSettings
+      )
     } else if (parts.length == 1) {
       AssistantOptions.getSetting(parts(0)) match {
         case Some(value) => addResponse(s"`${parts(0)}` = `$value`")
@@ -563,7 +761,7 @@ object ChatAction {
             CommandExtractor.getCommandAtOffset(buffer, start) match {
               case Some(text) => Some(text)
               case None       =>
-                addResponse("No command found at target location")
+                addResponse(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
                 None
             }
           } else {
@@ -571,7 +769,7 @@ object ChatAction {
           }
 
           textOpt.foreach { text =>
-            ActionHelper.runAndRespond("chat-explain", "Explaining code...") {
+            ActionHelper.runAndRespond("chat-explain", "Explaining code…") {
               val context = ContextFetcher.getContext(view, 3000)
               val subs = Map("theorem" -> text) ++
                 context.map(c => Map("context" -> c)).getOrElse(Map.empty)
@@ -612,7 +810,7 @@ object ChatAction {
     targetOpt.foreach { target =>
       TargetParser.resolveTarget(target, view) match {
         case Some((buffer, offset, _)) =>
-          AssistantDockable.setStatus("Generating suggestions...")
+          AssistantDockable.setStatus("Generating suggestions…")
           val _ = Isabelle_Thread.fork(name = "chat-suggest") {
             try {
               SuggestAction.suggestFromChat(view, buffer, offset)
@@ -622,7 +820,7 @@ object ChatAction {
             } catch {
               case ex: Exception =>
                 GUI_Thread.later {
-                  addResponse(s"Error: ${ex.getMessage}")
+                  addErrorResponse(ex.getMessage, "suggest")
                   AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
                 }
             }
@@ -649,12 +847,12 @@ object ChatAction {
     // Extract error first (this is local to PIDE, not I/Q MCP)
     ExplainErrorAction.extractErrorAtOffset(buffer, offset) match {
       case None =>
-        addResponse("No error at cursor position.")
+        addResponse(AssistantConstants.UIText.NO_ERROR_AT_CURSOR)
       case Some(error) =>
         // Fork immediately to avoid blocking EDT on I/Q MCP calls
         ActionHelper.runAndRespond(
           "chat-explain-error",
-          "Explaining error..."
+          "Explaining error…"
         ) {
           // These I/Q MCP calls are now on background thread
           val context =
@@ -692,11 +890,10 @@ object ChatAction {
         
         IQIntegration.verifyProofAsync(v, proof, timeout, {
           case IQIntegration.ProofSuccess(timeMs, _) =>
-            addResponse(s"[ok] Proof verified successfully (${timeMs}ms)")
+            addSuccessResponse(s"Proof verified successfully (${timeMs}ms).")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           case IQIntegration.ProofFailure(error) =>
-            val result = s"[FAIL] Verification failed: $error"
-            addResponse(result)
+            addErrorResponse(s"Verification failed: $error", "verify")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
             // Diagnose failure using LLM on background thread
             val _ = Isabelle_Thread.fork(name = "chat-verify-diagnose") {
@@ -715,10 +912,10 @@ object ChatAction {
               }
             }
           case IQIntegration.ProofTimeout =>
-            addResponse("[FAIL] Verification timed out")
+            addErrorResponse("Verification timed out.", "verify")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           case _ =>
-            addResponse("[FAIL] Verification unavailable")
+            addErrorResponse("Verification unavailable.", "verify")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         })
       }(view)
@@ -726,7 +923,7 @@ object ChatAction {
   }
 
   private def runSledgehammer(view: View): Unit = {
-    ActionHelper.runIQCommand("chat-sledgehammer", "Running sledgehammer...") { v =>
+    ActionHelper.runIQCommand("chat-sledgehammer", "Running sledgehammer…") { v =>
       val timeout = AssistantOptions.getSledgehammerTimeout
       IQIntegration.runSledgehammerAsync(v, timeout, {
         case Right(results) if results.nonEmpty =>
@@ -739,7 +936,7 @@ object ChatAction {
           addResponse("Sledgehammer found no proofs.")
           AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         case Left(error) =>
-          addResponse(s"Sledgehammer error: $error")
+          addErrorResponse(error, "sledgehammer")
           AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
       })
     }(view)
@@ -751,7 +948,7 @@ object ChatAction {
         "Usage: `:find <pattern>`\n\nExample: `:find \"_ + _ = _ + _\"`"
       )
     else {
-      ActionHelper.runIQCommand("chat-find", "Searching theorems...") { v =>
+      ActionHelper.runIQCommand("chat-find", "Searching theorems…") { v =>
         val limit = AssistantOptions.getFindTheoremsLimit
         val timeout = AssistantOptions.getFindTheoremsTimeout
         val quotedPattern =
@@ -766,7 +963,7 @@ object ChatAction {
             addResponse(s"No theorems found matching: $pattern")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           case Left(error) =>
-            addResponse(s"Find theorems error: $error")
+            addErrorResponse(error, "find theorems")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         })
       }(view)
@@ -775,6 +972,33 @@ object ChatAction {
 
   def addResponse(content: String): Unit = {
     addMessage(Message(Assistant, content, LocalDateTime.now()))
+    AssistantDockable.showConversation(getHistory)
+  }
+
+  /** Post an assistant-authored error to the chat. The bubble is rendered
+    * with the error border via `ResponseKind.Error`, so callers must not
+    * prepend their own `"Error: "` tag — the renderer owns the visual
+    * distinction. The `operation` label passes through
+    * [[ErrorHandler.makeUserFriendly]] so the user sees remediation hints
+    * instead of raw technical text (network errors → credentials hint;
+    * timeouts → `:set verify_timeout` hint; etc.). */
+  def addErrorResponse(content: String, operation: String = "operation"): Unit = {
+    val friendly = ErrorHandler.makeUserFriendly(content, operation)
+    addMessage(Message(Assistant, friendly, LocalDateTime.now(), kind = ResponseKind.Error))
+    AssistantDockable.showConversation(getHistory)
+  }
+
+  /** Post an assistant-authored success message. Rendered with a green
+    * bubble border. */
+  def addSuccessResponse(content: String): Unit = {
+    addMessage(Message(Assistant, content, LocalDateTime.now(), kind = ResponseKind.Success))
+    AssistantDockable.showConversation(getHistory)
+  }
+
+  /** Post an assistant-authored informational message. Rendered with a
+    * neutral (info-tinted) bubble border. */
+  def addInfoResponse(content: String): Unit = {
+    addMessage(Message(Assistant, content, LocalDateTime.now(), kind = ResponseKind.Info))
     AssistantDockable.showConversation(getHistory)
   }
 
@@ -819,11 +1043,22 @@ object ChatAction {
         )
       }
     } catch {
-      case _: Exception =>
+      case ex: Exception =>
+        // The fallback seed drops the user's selection and file path. A
+        // silent swallow used to hide why the follow-up chat lost
+        // context; log so the cause surfaces in the Isabelle messages
+        // panel.
+        ErrorHandler.safeLog(
+          s"[Assistant] captureContextSeed fallback: ${ex.getMessage}"
+        )
         ChatContextSeed(selectedText = None, path = None, caretOffset = 0)
     }
 
   private def getContext(seed: ChatContextSeed): String =
+    // If the user already selected text we pass that through verbatim —
+    // no I/Q round-trip needed. This is the common case and used to be
+    // masked behind a 3-second CONTEXT_FETCH_TIMEOUT wait when the
+    // lookup path was reached for edge cases.
     seed.selectedText.getOrElse {
       seed.path
         .flatMap { path =>
@@ -834,7 +1069,7 @@ object ChatAction {
                 "path" -> path,
                 "offset" -> seed.caretOffset
               ),
-              timeoutMs = AssistantConstants.CONTEXT_FETCH_TIMEOUT
+              timeoutMs = AssistantConstants.CHAT_CONTEXT_FETCH_TIMEOUT
             )
             .toOption
             .map(_.command.source)

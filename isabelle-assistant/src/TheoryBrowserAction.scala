@@ -3,6 +3,7 @@
 
 package isabelle.assistant
 
+import isabelle._
 import org.gjt.sp.jedit.View
 import scala.annotation.unused
 
@@ -14,10 +15,10 @@ object TheoryBrowserAction {
 
   private val numberedLinePattern = """^\s*(?:→\s*)?(\d+):(.*)$""".r
 
-  private def baseName(path: String): String =
+  private[assistant] def baseName(path: String): String =
     java.nio.file.Paths.get(path).getFileName.toString
 
-  private def stripNumberPrefixes(content: String): String =
+  private[assistant] def stripNumberPrefixes(content: String): String =
     content.linesIterator
       .map {
         case numberedLinePattern(_, rest) => rest
@@ -25,7 +26,7 @@ object TheoryBrowserAction {
       }
       .mkString("\n")
 
-  private def firstHighlightedOrFirstLine(context: String): String = {
+  private[assistant] def firstHighlightedOrFirstLine(context: String): String = {
     val lines = context.linesIterator.map(_.trim).filter(_.nonEmpty).toList
     lines.find(_.startsWith("→")).orElse(lines.headOption).map {
       case numberedLinePattern(_, rest) => rest.trim
@@ -61,7 +62,30 @@ object TheoryBrowserAction {
       }
   }
 
-  def theories(): Unit = {
+  /** Run a synchronous MCP-backed action on a background thread and post its
+    * result to the chat. All four :theories/:read/:deps/:search commands
+    * share this scaffold because every path resolves into one or more
+    * IQMcpClient.call* round trips that must not run on the EDT.
+    */
+  private def runBrowser(threadName: String, status: String)(body: => String): Unit = {
+    AssistantDockable.setStatus(status)
+    val _ = Isabelle_Thread.fork(name = threadName) {
+      val outcome: Either[String, String] =
+        try Right(body)
+        catch {
+          case ex: Exception => Left(ex.getMessage)
+        }
+      GUI_Thread.later {
+        outcome match {
+          case Right(result) => ChatAction.addResponse(result)
+          case Left(err)     => ChatAction.addErrorResponse(err, threadName)
+        }
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+      }
+    }
+  }
+
+  def theories(): Unit = runBrowser("assistant-theories", "Listing theories…") {
     IQMcpClient
       .callListFiles(
         filterOpen = Some(true),
@@ -70,17 +94,15 @@ object TheoryBrowserAction {
         timeoutMs = timeoutMs
       )
       .fold(
-        err => ChatAction.addResponse(s"Error listing theories: $err"),
+        err => s"Error listing theories: $err",
         listed => {
           val theories = listed.files
             .map(f => baseName(f.path).stripSuffix(".thy"))
             .distinct
             .sorted
           if (theories.nonEmpty)
-            ChatAction.addResponse(
-              s"**Open Theories (${theories.length}):**\n\n- ${theories.mkString("\n- ")}"
-            )
-          else ChatAction.addResponse("No theory files currently open.")
+            s"**Open Theories (${theories.length}):**\n\n- ${theories.mkString("\n- ")}"
+          else "No theory files currently open."
         }
       )
   }
@@ -96,24 +118,23 @@ object TheoryBrowserAction {
       if (parts.length > 1) try parts(1).toInt
       catch { case _: NumberFormatException => 100 }
       else 100
-    resolveTheoryPath(theoryName).fold(
-      err => ChatAction.addResponse(err),
-      path =>
-        IQMcpClient
-          .callReadFileLine(
-            path = path,
-            startLine = Some(1),
-            endLine = Some(math.max(1, maxLines)),
-            timeoutMs = timeoutMs
-          )
-          .fold(
-            readErr => ChatAction.addResponse(s"Error reading theory: $readErr"),
-            content =>
-              ChatAction.addResponse(
-                s"**Theory: $theoryName**\n\n```isabelle\n$content\n```"
-              )
-          )
-    )
+    runBrowser("assistant-read-theory", s"Reading $theoryName…") {
+      resolveTheoryPath(theoryName).fold(
+        identity,
+        path =>
+          IQMcpClient
+            .callReadFileLine(
+              path = path,
+              startLine = Some(1),
+              endLine = Some(math.max(1, maxLines)),
+              timeoutMs = timeoutMs
+            )
+            .fold(
+              readErr => s"Error reading theory: $readErr",
+              content => s"**Theory: $theoryName**\n\n```isabelle\n$content\n```"
+            )
+      )
+    }
   }
 
   def deps(@unused view: View, theoryName: String): Unit = {
@@ -121,42 +142,38 @@ object TheoryBrowserAction {
       ChatAction.addResponse("Usage: `:deps <theory>`")
       return
     }
-    resolveTheoryPath(theoryName).fold(
-      err => ChatAction.addResponse(err),
-      path =>
-        IQMcpClient
-          .callReadFileLine(
-            path = path,
-            startLine = Some(1),
-            endLine = Some(-1),
-            timeoutMs = timeoutMs
-          )
-          .fold(
-            readErr => ChatAction.addResponse(s"Error getting dependencies: $readErr"),
-            content => {
-              val importPattern = """(?s)imports\s+(.*?)(?:\bbegin\b|\z)""".r
-              val plain = stripNumberPrefixes(content)
-              importPattern.findFirstMatchIn(plain) match {
-                case Some(m) =>
-                  val tokenPattern = """"[^"]+"|[^\s"]+""".r
-                  val imports =
-                    tokenPattern.findAllIn(m.group(1)).toList.filter(_.nonEmpty)
-                  if (imports.nonEmpty)
-                    ChatAction.addResponse(
+    runBrowser("assistant-deps", s"Reading dependencies of $theoryName…") {
+      resolveTheoryPath(theoryName).fold(
+        identity,
+        path =>
+          IQMcpClient
+            .callReadFileLine(
+              path = path,
+              startLine = Some(1),
+              endLine = Some(-1),
+              timeoutMs = timeoutMs
+            )
+            .fold(
+              readErr => s"Error getting dependencies: $readErr",
+              content => {
+                val importPattern = """(?s)imports\s+(.*?)(?:\bbegin\b|\z)""".r
+                val plain = stripNumberPrefixes(content)
+                importPattern.findFirstMatchIn(plain) match {
+                  case Some(m) =>
+                    val tokenPattern = """"[^"]+"|[^\s"]+""".r
+                    val imports =
+                      tokenPattern.findAllIn(m.group(1)).toList.filter(_.nonEmpty)
+                    if (imports.nonEmpty)
                       s"**Dependencies of $theoryName:**\n\n- ${imports.mkString("\n- ")}"
-                    )
-                  else
-                    ChatAction.addResponse(
+                    else
                       s"Theory '$theoryName' has no explicit imports."
-                    )
-                case None =>
-                  ChatAction.addResponse(
+                  case None =>
                     s"No imports found in theory '$theoryName'."
-                  )
+                }
               }
-            }
-          )
-    )
+            )
+      )
+    }
   }
 
   def search(@unused view: View, args: String): Unit = {
@@ -168,39 +185,37 @@ object TheoryBrowserAction {
     val theoryName = parts(0)
     val pattern = parts(1)
     val maxResults = 20
-    resolveTheoryPath(theoryName).fold(
-      err => ChatAction.addResponse(err),
-      path =>
-        IQMcpClient
-          .callReadFileSearch(
-            path = path,
-            pattern = pattern,
-            contextLines = 0,
-            timeoutMs = timeoutMs
-          )
-          .fold(
-            searchErr => ChatAction.addResponse(s"Error searching theory: $searchErr"),
-            matches => {
-              val shown = matches.take(maxResults)
-              if (shown.nonEmpty) {
-                val matchList = shown
-                  .map(m =>
-                    s"Line ${m.lineNumber}: ${firstHighlightedOrFirstLine(m.context)}"
-                  )
-                  .mkString("\n")
-                val truncated =
-                  if (matches.length > maxResults)
-                    s"\n\n... (showing $maxResults of ${matches.length} matches)"
-                  else ""
-                ChatAction.addResponse(
+    runBrowser("assistant-search-theory", s"Searching $theoryName…") {
+      resolveTheoryPath(theoryName).fold(
+        identity,
+        path =>
+          IQMcpClient
+            .callReadFileSearch(
+              path = path,
+              pattern = pattern,
+              contextLines = 0,
+              timeoutMs = timeoutMs
+            )
+            .fold(
+              searchErr => s"Error searching theory: $searchErr",
+              matches => {
+                val shown = matches.take(maxResults)
+                if (shown.nonEmpty) {
+                  val matchList = shown
+                    .map(m =>
+                      s"Line ${m.lineNumber}: ${firstHighlightedOrFirstLine(m.context)}"
+                    )
+                    .mkString("\n")
+                  val truncated =
+                    if (matches.length > maxResults)
+                      s"\n\n… (showing $maxResults of ${matches.length} matches)"
+                    else ""
                   s"**Found matches in $theoryName:**\n\n$matchList$truncated"
-                )
-              } else
-                ChatAction.addResponse(
+                } else
                   s"No matches found for '$pattern' in theory '$theoryName'."
-                )
-            }
-          )
-    )
+              }
+            )
+      )
+    }
   }
 }

@@ -50,7 +50,31 @@ class ConversationRendererTest extends AnyFunSuite with Matchers {
     html should include(UIColors.ChatBubble.assistantBorder)
   }
 
-  test("createAssistantMessageHtml should use red border for errors") {
+  test("createAssistantMessageHtml should use red border when kind is Error") {
+    val registerAction = (_: String) => "test-id"
+    val html = ConversationRenderer.createAssistantMessageHtml(
+      "Something went wrong",
+      "12:00",
+      rawHtml = false,
+      registerAction,
+      ChatAction.ResponseKind.Error
+    )
+    html should include(UIColors.ChatBubble.errorBorder)
+  }
+
+  test("createAssistantMessageHtml should use green border when kind is Success") {
+    val registerAction = (_: String) => "test-id"
+    val html = ConversationRenderer.createAssistantMessageHtml(
+      "It worked",
+      "12:00",
+      rawHtml = false,
+      registerAction,
+      ChatAction.ResponseKind.Success
+    )
+    html should include(UIColors.Badge.successBorder)
+  }
+
+  test("createAssistantMessageHtml should fall back to error border for legacy 'Error:' prefix") {
     val registerAction = (_: String) => "test-id"
     val html = ConversationRenderer.createAssistantMessageHtml(
       "Error: something went wrong",
@@ -61,7 +85,7 @@ class ConversationRendererTest extends AnyFunSuite with Matchers {
     html should include(UIColors.ChatBubble.errorBorder)
   }
 
-  test("createAssistantMessageHtml should use red border for FAIL messages") {
+  test("createAssistantMessageHtml should fall back to error border for legacy '[FAIL]' prefix") {
     val registerAction = (_: String) => "test-id"
     val html = ConversationRenderer.createAssistantMessageHtml(
       "[FAIL] Verification failed",
@@ -108,7 +132,7 @@ class ConversationRendererTest extends AnyFunSuite with Matchers {
     html should include("[Insert]")
   }
 
-  test("createAssistantMessageHtml should convert ACTION placeholders") {
+  test("createAssistantMessageHtml should convert ACTION placeholders without 'Run ' prefix for verb-initial labels") {
     val registerAction = (_: String) => "test-id-123"
     val html = ConversationRenderer.createAssistantMessageHtml(
       "Click here: {{ACTION:abc123:Retry}}",
@@ -117,7 +141,59 @@ class ConversationRendererTest extends AnyFunSuite with Matchers {
       registerAction
     )
     html should include("action:insert:abc123")
-    html should include("Run Retry")
+    // Label starts with a verb ("Retry") — rendered as-is, no 'Run ' prefix.
+    html should include(">Retry<")
+    html should not include "Run Retry"
+  }
+
+  test("createAssistantMessageHtml should prepend 'Run ' to non-verb ACTION labels") {
+    val registerAction = (_: String) => "test-id-123"
+    val html = ConversationRenderer.createAssistantMessageHtml(
+      "Click here: {{ACTION:abc123:Nitpick}}",
+      "12:00",
+      rawHtml = false,
+      registerAction
+    )
+    html should include("action:insert:abc123")
+    // "Nitpick" is not in the verb-prefix list, so the renderer adds "Run ".
+    html should include("Run Nitpick")
+  }
+
+  test("createAssistantMessageHtml should not render raw <script> in ACTION labels") {
+    val registerAction = (_: String) => "test-id-123"
+    // MarkdownRenderer escapes angle brackets before the {{ACTION}} rewrite
+    // sees them, so an attempted <script> payload in the label text comes
+    // through as &lt;script&gt; — and must not be re-un-escaped on the way
+    // out.
+    val html = ConversationRenderer.createAssistantMessageHtml(
+      "Click here: {{ACTION:abc123:<script>alert(1)</script>}}",
+      "12:00",
+      rawHtml = false,
+      registerAction
+    )
+    // Within the anchor's rendered label, there must be no live <script> tag.
+    val anchorFragment = {
+      val idx = html.indexOf("<a href='action:insert:abc123'>")
+      val end = html.indexOf("</a>", idx)
+      html.substring(idx, if (end >= 0) end else html.length)
+    }
+    anchorFragment should not include "<script>"
+    anchorFragment should include("&lt;script&gt;")
+  }
+
+  test("createAssistantMessageHtml should not interpret $ backrefs in INSERT") {
+    val registerAction = (_: String) => "test-id-123"
+    // The replacement path uses Matcher.appendReplacement under the hood,
+    // which historically interpreted `$1` in the replacement as a group
+    // backreference. quoteReplacement must neutralize it.
+    val html = ConversationRenderer.createAssistantMessageHtml(
+      "Here: {{INSERT:deadbeef}} and $1 literal",
+      "12:00",
+      rawHtml = false,
+      registerAction
+    )
+    html should include("action:insert:deadbeef")
+    html should include("$1 literal")
   }
 
   test("createToolMessageHtml should include tool name") {
@@ -185,30 +261,59 @@ class ConversationRendererTest extends AnyFunSuite with Matchers {
   test("createWelcomeHtml should show warning when model not configured") {
     val originalModel = AssistantOptions.getModelId
     try {
-      AssistantOptions.setSetting("model", "")
+      val _ = AssistantOptions.setSetting("model", "")
       val registerHelp = () => "help-id"
       val html = ConversationRenderer.createWelcomeHtml(registerHelp)
       html should include("No model configured")
       html should include(":models")
     } finally {
-      if (originalModel.nonEmpty)
-        AssistantOptions.setSetting("model", originalModel)
+      val _ =
+        if (originalModel.nonEmpty)
+          AssistantOptions.setSetting("model", originalModel)
+        else
+          ()
     }
   }
 
   test("createWelcomeHtml should not show warning when model is configured") {
     val originalModel = AssistantOptions.getModelId
     try {
-      AssistantOptions.setSetting("model", "us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+      val _ = AssistantOptions.setSetting("model", "us.anthropic.claude-3-5-sonnet-20241022-v2:0")
       val registerHelp = () => "help-id"
       val html = ConversationRenderer.createWelcomeHtml(registerHelp)
       html should not include "No model configured"
     } finally {
-      if (originalModel.nonEmpty)
-        AssistantOptions.setSetting("model", originalModel)
-      else
-        AssistantOptions.setSetting("model", "")
+      val _ =
+        if (originalModel.nonEmpty)
+          AssistantOptions.setSetting("model", originalModel)
+        else
+          AssistantOptions.setSetting("model", "")
     }
+  }
+
+  test("createWelcomeHtml renders example prompts when an example registrar is provided") {
+    val registerHelp = () => "help-id"
+    val seen = scala.collection.mutable.ArrayBuffer.empty[String]
+    var counter = 0
+    val registerExample: String => String = cmd => {
+      seen += cmd
+      counter += 1
+      s"ex-$counter"
+    }
+    val html = ConversationRenderer.createWelcomeHtml(registerHelp, Some(registerExample))
+
+    seen.toList should contain allOf (":explain", ":suggest", ":verify by simp")
+    html should include("Try:")
+    html should include(":explain")
+    html should include(":suggest")
+    html should include(":verify by simp")
+    html should include("action:insert:ex-1")
+  }
+
+  test("createWelcomeHtml omits the examples row when no example registrar is provided") {
+    val registerHelp = () => "help-id"
+    val html = ConversationRenderer.createWelcomeHtml(registerHelp)
+    html should not include "Try:"
   }
 
   test("messageBubbleHtml should include provided border color") {

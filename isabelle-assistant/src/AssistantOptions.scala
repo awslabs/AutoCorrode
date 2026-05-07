@@ -16,15 +16,13 @@ import javax.swing.{
 import scala.collection.mutable.ListBuffer
 
 /** jEdit option pane for Assistant configuration. Provides GUI controls for AWS
-  * region, model selection, temperature, verification settings, and tracing
-  * parameters.
+  * region, model selection, verification settings, and tracing parameters.
   */
 class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
   private var regionCombo: Option[JComboBox[String]] = None
   private var modelCombo: Option[JComboBox[String]] = None
   private var crisCheckbox: Option[JCheckBox] = None
   private var refreshButton: Option[JButton] = None
-  private var temperatureField: Option[JTextField] = None
   private var maxTokensField: Option[JTextField] = None
   private var maxContextTokensField: Option[JTextField] = None
   private var maxRetriesField: Option[JTextField] = None
@@ -41,9 +39,7 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
   private var traceDepthField: Option[JTextField] = None
   private var maxToolIterationsField: Option[JTextField] = None
   private var planningModelCombo: Option[JComboBox[String]] = None
-  private var planningTemperatureField: Option[JTextField] = None
   private var summarizationModelCombo: Option[JComboBox[String]] = None
-  private var summarizationTemperatureField: Option[JTextField] = None
   private var autoSummarizeCheckbox: Option[JCheckBox] = None
   private var summarizationThresholdField: Option[JTextField] = None
 
@@ -85,14 +81,10 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
 
     addSeparator("Model Parameters")
 
-    val temperature = new JTextField(AssistantOptions.getTemperature.toString, 10)
-    temperatureField = Some(temperature)
-    addComponent("Temperature (0.0-1.0):", temperature)
-
     val maxTokens = new JTextField(AssistantOptions.getMaxTokens.toString, 10)
-    maxTokens.setToolTipText("Maximum tokens in model's response (output length)")
+    maxTokens.setToolTipText(s"Maximum tokens in model's response (output length). Default: ${AssistantConstants.DEFAULT_MAX_TOKENS}.")
     maxTokensField = Some(maxTokens)
-    addComponent("Max Output Tokens:", maxTokens)
+    addComponent(s"Max Output Tokens (default ${AssistantConstants.DEFAULT_MAX_TOKENS}):", maxTokens)
 
     val maxContextTokens = new JTextField(AssistantOptions.getMaxContextTokens.toString, 10)
     maxContextTokens.setToolTipText(
@@ -105,7 +97,7 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
       "• Lower = reduces API costs and latency</html>"
     )
     maxContextTokensField = Some(maxContextTokens)
-    addComponent("Max Context Tokens (input):", maxContextTokens)
+    addComponent(s"Max Context Tokens (default ${AssistantConstants.DEFAULT_MAX_CONTEXT_TOKENS}):", maxContextTokens)
 
     val toolIterText = AssistantOptions.getMaxToolIterations match {
       case Some(n) => n.toString
@@ -113,28 +105,28 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
     }
     val maxToolIterations = new JTextField(toolIterText, 10)
     maxToolIterations.setToolTipText(
-      "Maximum tool-use iterations per LLM call. Leave empty or set to 0 for unlimited."
+      s"Maximum tool-use iterations per LLM call. Leave empty or set to 0 for unlimited. Default: ${AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS}."
     )
     maxToolIterationsField = Some(maxToolIterations)
-    addComponent("Max Tool Iterations:", maxToolIterations)
+    addComponent(s"Max Tool Iterations (default ${AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS}):", maxToolIterations)
 
     addSeparator("Verification (I/Q Integration)")
 
     val maxRetries =
       new JTextField(AssistantOptions.getMaxVerificationRetries.toString, 10)
     maxRetries.setToolTipText(
-      "Maximum LLM retry attempts when proof verification fails"
+      s"Maximum LLM retry attempts when proof verification fails. Default: ${AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES}."
     )
     maxRetriesField = Some(maxRetries)
-    addComponent("Max Retries:", maxRetries)
+    addComponent(s"Max Retries (default ${AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES}):", maxRetries)
 
     val verifyTimeout =
       new JTextField(AssistantOptions.getVerificationTimeout.toString, 10)
     verifyTimeout.setToolTipText(
-      "Timeout for proof verification in milliseconds"
+      s"Timeout for proof verification in milliseconds. Default: ${AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT}."
     )
     verifyTimeoutField = Some(verifyTimeout)
-    addComponent("Timeout (ms):", verifyTimeout)
+    addComponent(s"Timeout ms (default ${AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT}):", verifyTimeout)
 
     addSeparator("Proof Suggestions")
 
@@ -157,96 +149,77 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
     val sledgehammerTimeout =
       new JTextField(AssistantOptions.getSledgehammerTimeout.toString, 10)
     sledgehammerTimeout.setToolTipText(
-      "Timeout for sledgehammer in milliseconds"
+      s"Timeout for sledgehammer in milliseconds. Default: ${AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT}."
     )
     sledgehammerTimeoutField = Some(sledgehammerTimeout)
-    addComponent("Sledgehammer Timeout (ms):", sledgehammerTimeout)
+    addComponent(s"Sledgehammer Timeout ms (default ${AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT}):", sledgehammerTimeout)
 
     val maxVerifyCandidates =
       new JTextField(AssistantOptions.getMaxVerifyCandidates.toString, 10)
     maxVerifyCandidates.setToolTipText(
-      "Maximum number of suggestions to verify"
+      s"Maximum number of suggestions to verify. Default: ${AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES}."
     )
     maxVerifyCandidatesField = Some(maxVerifyCandidates)
-    addComponent("Max Verify Candidates:", maxVerifyCandidates)
+    addComponent(s"Max Verify Candidates (default ${AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES}):", maxVerifyCandidates)
 
     val findTheoremsLimit =
       new JTextField(AssistantOptions.getFindTheoremsLimit.toString, 10)
     findTheoremsLimit.setToolTipText(
-      "Maximum theorems to find for LLM context"
+      s"Maximum theorems to find for LLM context. Default: ${AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT}."
     )
     findTheoremsLimitField = Some(findTheoremsLimit)
-    addComponent("Find Theorems Limit:", findTheoremsLimit)
+    addComponent(s"Find Theorems Limit (default ${AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT}):", findTheoremsLimit)
 
     val findTheoremsTimeout =
       new JTextField(AssistantOptions.getFindTheoremsTimeout.toString, 10)
     findTheoremsTimeout.setToolTipText(
-      "Timeout for find_theorems in milliseconds"
+      s"Timeout for find_theorems in milliseconds. Default: ${AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT}."
     )
     findTheoremsTimeoutField = Some(findTheoremsTimeout)
-    addComponent("Find Theorems Timeout (ms):", findTheoremsTimeout)
+    addComponent(s"Find Theorems Timeout ms (default ${AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT}):", findTheoremsTimeout)
 
     addSeparator("Counterexample Search")
 
     val quickcheckTimeout =
       new JTextField(AssistantOptions.getQuickcheckTimeout.toString, 10)
     quickcheckTimeout.setToolTipText(
-      "Timeout for Quickcheck in milliseconds"
+      s"Timeout for Quickcheck in milliseconds. Default: ${AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT}."
     )
     quickcheckTimeoutField = Some(quickcheckTimeout)
-    addComponent("Quickcheck Timeout (ms):", quickcheckTimeout)
+    addComponent(s"Quickcheck Timeout ms (default ${AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT}):", quickcheckTimeout)
 
     val nitpickTimeout =
       new JTextField(AssistantOptions.getNitpickTimeout.toString, 10)
     nitpickTimeout.setToolTipText(
-      "Timeout for Nitpick in milliseconds"
+      s"Timeout for Nitpick in milliseconds. Default: ${AssistantConstants.DEFAULT_NITPICK_TIMEOUT}."
     )
     nitpickTimeoutField = Some(nitpickTimeout)
-    addComponent("Nitpick Timeout (ms):", nitpickTimeout)
+    addComponent(s"Nitpick Timeout ms (default ${AssistantConstants.DEFAULT_NITPICK_TIMEOUT}):", nitpickTimeout)
 
     addSeparator("Simplifier Tracing")
 
     val traceTimeout = new JTextField(AssistantOptions.getTraceTimeout.toString, 10)
-    traceTimeout.setToolTipText("Timeout for simp/auto tracing in seconds")
+    traceTimeout.setToolTipText(s"Timeout for simp/auto tracing in seconds. Default: ${AssistantConstants.DEFAULT_TRACE_TIMEOUT}.")
     traceTimeoutField = Some(traceTimeout)
-    addComponent("Trace Timeout (s):", traceTimeout)
+    addComponent(s"Trace Timeout s (default ${AssistantConstants.DEFAULT_TRACE_TIMEOUT}):", traceTimeout)
 
     val traceDepth = new JTextField(AssistantOptions.getTraceDepth.toString, 10)
-    traceDepth.setToolTipText("Maximum depth for simplifier trace")
+    traceDepth.setToolTipText(s"Maximum depth for simplifier trace. Default: ${AssistantConstants.DEFAULT_TRACE_DEPTH}.")
     traceDepthField = Some(traceDepth)
-    addComponent("Trace Depth:", traceDepth)
+    addComponent(s"Trace Depth (default ${AssistantConstants.DEFAULT_TRACE_DEPTH}):", traceDepth)
 
     addSeparator("Planning Agent")
 
     val planningModel = new JComboBox[String]()
-    val planningModelId = AssistantOptions.getPlanningBaseModelId
     val models = BedrockModels.getModels
-    planningModel.addItem("(use main model)")
-    models.foreach(planningModel.addItem)
-    if (planningModelId.nonEmpty && !models.contains(planningModelId)) {
-      planningModel.addItem(planningModelId)
-    }
-    if (planningModelId.nonEmpty) {
-      planningModel.setSelectedItem(planningModelId)
-    } else {
-      planningModel.setSelectedIndex(0)
-    }
+    AssistantOptions.populateOptionalModelCombo(
+      planningModel, models, AssistantOptions.getPlanningBaseModelId
+    )
     planningModel.setToolTipText(
       "Model for planning sub-agents (leave as 'use main model' to use the main model)"
     )
     planningModelCombo = Some(planningModel)
     addComponent("Planning Model:", planningModel)
-
-    val planningTemp = AssistantOptions.getPlanningTemperature match {
-      case Some(t) => t.toString
-      case None    => ""
-    }
-    val planningTemperature = new JTextField(planningTemp, 10)
-    planningTemperature.setToolTipText(
-      "Temperature for planning agents (leave empty to use main temperature)"
-    )
-    planningTemperatureField = Some(planningTemperature)
-    addComponent("Planning Temperature:", planningTemperature)
 
     addSeparator("Context Summarization")
 
@@ -273,17 +246,9 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
     addComponent("Summarization Threshold:", summarizationThreshold)
 
     val summarizationModel = new JComboBox[String]()
-    val summarizationModelId = AssistantOptions.getSummarizationBaseModelId
-    summarizationModel.addItem("(use main model)")
-    models.foreach(summarizationModel.addItem)
-    if (summarizationModelId.nonEmpty && !models.contains(summarizationModelId)) {
-      summarizationModel.addItem(summarizationModelId)
-    }
-    if (summarizationModelId.nonEmpty) {
-      summarizationModel.setSelectedItem(summarizationModelId)
-    } else {
-      summarizationModel.setSelectedIndex(0)
-    }
+    AssistantOptions.populateOptionalModelCombo(
+      summarizationModel, models, AssistantOptions.getSummarizationBaseModelId
+    )
     summarizationModel.setToolTipText(
       "<html>Model for context summarization (leave as 'use main model' to use the main model).<br/>" +
       "Consider using a faster/cheaper model like Haiku for summarization.</html>"
@@ -291,32 +256,14 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
     summarizationModelCombo = Some(summarizationModel)
     addComponent("Summarization Model:", summarizationModel)
 
-    val summarizationTemp = AssistantOptions.getSummarizationTemperature match {
-      case Some(t) => t.toString
-      case None    => ""
-    }
-    val summarizationTemperature = new JTextField(summarizationTemp, 10)
-    summarizationTemperature.setToolTipText(
-      "Temperature for summarization agent (leave empty to use main temperature)"
-    )
-    summarizationTemperatureField = Some(summarizationTemperature)
-    addComponent("Summarization Temperature:", summarizationTemperature)
-
-  }
-
-  private def populateModelCombo(models: Array[String], current: String): Unit = {
-    val combo = requireUi(modelCombo, "modelCombo")
-    combo.removeAllItems()
-    models.foreach(combo.addItem)
-    if (current.nonEmpty && !models.contains(current)) combo.addItem(current)
-    if (current.nonEmpty) combo.setSelectedItem(current)
-    else if (models.nonEmpty) combo.setSelectedIndex(0)
   }
 
   private def loadModelsFromCache(): Unit = {
     val current = AssistantOptions.getBaseModelId
     val models = BedrockModels.getModels
-    populateModelCombo(models, current)
+    AssistantOptions.populateMainModelCombo(
+      requireUi(modelCombo, "modelCombo"), models, current
+    )
   }
 
   private def refreshModelsAsync(): Unit = {
@@ -330,11 +277,11 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
     val current =
       Option(modelCombo.getSelectedItem).map(_.toString).getOrElse("")
     val currentPlanning =
-      Option(planningModelCombo.getSelectedItem).map(_.toString).filter(_ != "(use main model)").getOrElse("")
+      Option(planningModelCombo.getSelectedItem).map(_.toString).filter(_ != AssistantOptions.USE_MAIN_MODEL_LABEL).getOrElse("")
     val currentSummarization =
-      Option(summarizationModelCombo.getSelectedItem).map(_.toString).filter(_ != "(use main model)").getOrElse("")
+      Option(summarizationModelCombo.getSelectedItem).map(_.toString).filter(_ != AssistantOptions.USE_MAIN_MODEL_LABEL).getOrElse("")
     refresh.setEnabled(false)
-    refresh.setText("Refreshing...")
+    refresh.setText("Refreshing…")
 
     new SwingWorker[Array[String], Void] {
       override def doInBackground(): Array[String] =
@@ -344,34 +291,10 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
         refresh.setText("Refresh Models")
         try {
           val models = get()
-          populateModelCombo(models, current)
-          
-          // Also update planning model combo
-          planningModelCombo.removeAllItems()
-          planningModelCombo.addItem("(use main model)")
-          models.foreach(planningModelCombo.addItem)
-          if (currentPlanning.nonEmpty && !models.contains(currentPlanning)) {
-            planningModelCombo.addItem(currentPlanning)
-          }
-          if (currentPlanning.nonEmpty) {
-            planningModelCombo.setSelectedItem(currentPlanning)
-          } else {
-            planningModelCombo.setSelectedIndex(0)
-          }
-          
-          // Also update summarization model combo
-          summarizationModelCombo.removeAllItems()
-          summarizationModelCombo.addItem("(use main model)")
-          models.foreach(summarizationModelCombo.addItem)
-          if (currentSummarization.nonEmpty && !models.contains(currentSummarization)) {
-            summarizationModelCombo.addItem(currentSummarization)
-          }
-          if (currentSummarization.nonEmpty) {
-            summarizationModelCombo.setSelectedItem(currentSummarization)
-          } else {
-            summarizationModelCombo.setSelectedIndex(0)
-          }
-          
+          AssistantOptions.populateMainModelCombo(modelCombo, models, current)
+          AssistantOptions.populateOptionalModelCombo(planningModelCombo, models, currentPlanning)
+          AssistantOptions.populateOptionalModelCombo(summarizationModelCombo, models, currentSummarization)
+
           if (models.isEmpty) {
             JOptionPane.showMessageDialog(
               AssistantOptions.this,
@@ -395,413 +318,18 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
   }
 
   override def _save(): Unit = {
-    val (
-      regionCombo,
-      modelCombo,
-      crisCheckbox,
-      temperatureField,
-      maxTokensField,
-      maxContextTokensField,
-      maxToolIterationsField,
-      maxRetriesField,
-      verifyTimeoutField,
-      verifySuggestionsCheckbox,
-      useSledgehammerCheckbox,
-      sledgehammerTimeoutField,
-      quickcheckTimeoutField,
-      nitpickTimeoutField,
-      maxVerifyCandidatesField,
-      findTheoremsLimitField,
-      findTheoremsTimeoutField,
-      traceTimeoutField,
-      traceDepthField,
-      planningModelCombo,
-      planningTemperatureField,
-      summarizationModelCombo,
-      summarizationTemperatureField,
-      autoSummarizeCheckbox,
-      summarizationThresholdField
-    ) = (
-      requireUi(this.regionCombo, "regionCombo"),
-      requireUi(this.modelCombo, "modelCombo"),
-      requireUi(this.crisCheckbox, "crisCheckbox"),
-      requireUi(this.temperatureField, "temperatureField"),
-      requireUi(this.maxTokensField, "maxTokensField"),
-      requireUi(this.maxContextTokensField, "maxContextTokensField"),
-      requireUi(this.maxToolIterationsField, "maxToolIterationsField"),
-      requireUi(this.maxRetriesField, "maxRetriesField"),
-      requireUi(this.verifyTimeoutField, "verifyTimeoutField"),
-      requireUi(this.verifySuggestionsCheckbox, "verifySuggestionsCheckbox"),
-      requireUi(this.useSledgehammerCheckbox, "useSledgehammerCheckbox"),
-      requireUi(this.sledgehammerTimeoutField, "sledgehammerTimeoutField"),
-      requireUi(this.quickcheckTimeoutField, "quickcheckTimeoutField"),
-      requireUi(this.nitpickTimeoutField, "nitpickTimeoutField"),
-      requireUi(this.maxVerifyCandidatesField, "maxVerifyCandidatesField"),
-      requireUi(this.findTheoremsLimitField, "findTheoremsLimitField"),
-      requireUi(this.findTheoremsTimeoutField, "findTheoremsTimeoutField"),
-      requireUi(this.traceTimeoutField, "traceTimeoutField"),
-      requireUi(this.traceDepthField, "traceDepthField"),
-      requireUi(this.planningModelCombo, "planningModelCombo"),
-      requireUi(this.planningTemperatureField, "planningTemperatureField"),
-      requireUi(this.summarizationModelCombo, "summarizationModelCombo"),
-      requireUi(this.summarizationTemperatureField, "summarizationTemperatureField"),
-      requireUi(this.autoSummarizeCheckbox, "autoSummarizeCheckbox"),
-      requireUi(this.summarizationThresholdField, "summarizationThresholdField")
-    )
+    val fields = collectFields()
+    val normalizer = new AssistantOptions.Normalizer
+    val normalized = AssistantOptions.normalizeAll(fields, normalizer)
 
-    val warnings = ListBuffer.empty[String]
-    def warn(msg: String): Unit = warnings += msg
-
-    def normalizeInt(
-        raw: String,
-        settingLabel: String,
-        default: Int,
-        min: Int,
-        max: Int
-    ): String =
-      try {
-        val parsed = raw.trim.toInt
-        val clamped = math.max(min, math.min(max, parsed))
-        if (clamped != parsed)
-          warn(s"$settingLabel was clamped to $clamped (valid range: $min-$max).")
-        clamped.toString
-      } catch {
-        case _: NumberFormatException =>
-          warn(s"$settingLabel was invalid and reset to $default.")
-          default.toString
-      }
-
-    def normalizeLong(
-        raw: String,
-        settingLabel: String,
-        default: Long,
-        min: Long,
-        max: Long
-    ): String =
-      try {
-        val parsed = raw.trim.toLong
-        val clamped = math.max(min, math.min(max, parsed))
-        if (clamped != parsed)
-          warn(
-            s"$settingLabel was clamped to $clamped (valid range: $min-$max)."
-          )
-        clamped.toString
-      } catch {
-        case _: NumberFormatException =>
-          warn(s"$settingLabel was invalid and reset to $default.")
-          default.toString
-      }
-
-    def normalizeDouble(
-        raw: String,
-        settingLabel: String,
-        default: Double,
-        min: Double,
-        max: Double
-    ): String =
-      try {
-        val parsed = raw.trim.toDouble
-        val clamped = math.max(min, math.min(max, parsed))
-        if (clamped != parsed)
-          warn(s"$settingLabel was clamped to $clamped (valid range: $min-$max).")
-        clamped.toString
-      } catch {
-        case _: NumberFormatException =>
-          warn(s"$settingLabel was invalid and reset to $default.")
-          default.toString
-      }
-
-    def normalizeOptionalInt(
-        raw: String,
-        settingLabel: String,
-        default: Int,
-        min: Int,
-        max: Int
-    ): String = {
-      val normalized = raw.trim.toLowerCase
-      if (
-        normalized.isEmpty || normalized == "0" || normalized == "none" || normalized == "unlimited"
-      ) ""
-      else
-        try {
-          val parsed = normalized.toInt
-          if (parsed < min || parsed > max) {
-            warn(
-              s"$settingLabel was invalid and reset to $default (or leave empty for unlimited)."
-            )
-            default.toString
-          } else parsed.toString
-        } catch {
-          case _: NumberFormatException =>
-            warn(
-              s"$settingLabel was invalid and reset to $default (or leave empty for unlimited)."
-            )
-            default.toString
-        }
-    }
-
-    val regionValue = {
-      val value =
-        Option(regionCombo.getSelectedItem).map(_.toString.trim).getOrElse("")
-      if (value.matches("^[a-z]{2}(?:-[a-z]+)+-\\d+$")) value
-      else {
-        warn("AWS Region had an invalid format and was reset to us-east-1.")
-        "us-east-1"
-      }
-    }
-
-    val modelValue = {
-      val value =
-        Option(modelCombo.getSelectedItem).map(_.toString.trim).getOrElse("")
-      if (value.isEmpty || BedrockModels.isAnthropicModelId(value)) value
-      else {
-        warn("Model ID was invalid and has been cleared. Only Anthropic model IDs are supported.")
-        ""
-      }
-    }
-
-    val temperatureValue = normalizeDouble(
-      temperatureField.getText,
-      "Temperature",
-      AssistantConstants.DEFAULT_TEMPERATURE,
-      AssistantConstants.MIN_TEMPERATURE,
-      AssistantConstants.MAX_TEMPERATURE
-    )
-    val maxTokensValue = normalizeInt(
-      maxTokensField.getText,
-      "Max Tokens",
-      AssistantConstants.DEFAULT_MAX_TOKENS,
-      AssistantConstants.MIN_MAX_TOKENS,
-      Int.MaxValue
-    )
-    val maxContextTokensValue = normalizeInt(
-      maxContextTokensField.getText,
-      "Max Context Tokens",
-      AssistantConstants.DEFAULT_MAX_CONTEXT_TOKENS,
-      AssistantConstants.MIN_MAX_CONTEXT_TOKENS,
-      Int.MaxValue
-    )
-    val maxToolIterationsValue = normalizeOptionalInt(
-      maxToolIterationsField.getText,
-      "Max Tool Iterations",
-      AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS,
-      1,
-      50
-    )
-    val maxRetriesValue = normalizeInt(
-      maxRetriesField.getText,
-      "Max Retries",
-      AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES,
-      1,
-      10
-    )
-    val verifyTimeoutValue = normalizeLong(
-      verifyTimeoutField.getText,
-      "Verification Timeout",
-      AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT,
-      5000L,
-      300000L
-    )
-    val sledgehammerTimeoutValue = normalizeLong(
-      sledgehammerTimeoutField.getText,
-      "Sledgehammer Timeout",
-      AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT,
-      1000L,
-      300000L
-    )
-    val quickcheckTimeoutValue = normalizeLong(
-      quickcheckTimeoutField.getText,
-      "Quickcheck Timeout",
-      AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT,
-      1000L,
-      300000L
-    )
-    val nitpickTimeoutValue = normalizeLong(
-      nitpickTimeoutField.getText,
-      "Nitpick Timeout",
-      AssistantConstants.DEFAULT_NITPICK_TIMEOUT,
-      1000L,
-      300000L
-    )
-    val maxVerifyCandidatesValue = normalizeInt(
-      maxVerifyCandidatesField.getText,
-      "Max Verify Candidates",
-      AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES,
-      1,
-      20
-    )
-    val findTheoremsLimitValue = normalizeInt(
-      findTheoremsLimitField.getText,
-      "Find Theorems Limit",
-      AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT,
-      1,
-      100
-    )
-    val findTheoremsTimeoutValue = normalizeLong(
-      findTheoremsTimeoutField.getText,
-      "Find Theorems Timeout",
-      AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT,
-      1000L,
-      300000L
-    )
-    val traceTimeoutValue = normalizeInt(
-      traceTimeoutField.getText,
-      "Trace Timeout",
-      AssistantConstants.DEFAULT_TRACE_TIMEOUT,
-      1,
-      300
-    )
-    val traceDepthValue = normalizeInt(
-      traceDepthField.getText,
-      "Trace Depth",
-      AssistantConstants.DEFAULT_TRACE_DEPTH,
-      1,
-      50
-    )
-
-    val planningModelValue = {
-      val value = Option(planningModelCombo.getSelectedItem)
-        .map(_.toString.trim)
-        .getOrElse("")
-      if (value == "(use main model)" || value.isEmpty) ""
-      else if (BedrockModels.isAnthropicModelId(value)) value
-      else {
-        warn("Planning Model ID was invalid and has been cleared.")
-        ""
-      }
-    }
-
-    val planningTemperatureValue = {
-      val raw = planningTemperatureField.getText.trim
-      if (raw.isEmpty) ""
-      else {
-        try {
-          val parsed = raw.toDouble
-          val clamped = math.max(
-            AssistantConstants.MIN_TEMPERATURE,
-            math.min(AssistantConstants.MAX_TEMPERATURE, parsed)
-          )
-          if (clamped != parsed) {
-            warn(s"Planning Temperature was clamped to $clamped (valid range: ${AssistantConstants.MIN_TEMPERATURE}-${AssistantConstants.MAX_TEMPERATURE}).")
-          }
-          clamped.toString
-        } catch {
-          case _: NumberFormatException =>
-            warn("Planning Temperature was invalid and has been cleared.")
-            ""
-        }
-      }
-    }
-
-    val summarizationThresholdValue = normalizeDouble(
-      summarizationThresholdField.getText,
-      "Summarization Threshold",
-      AssistantConstants.DEFAULT_SUMMARIZATION_THRESHOLD,
-      AssistantConstants.MIN_SUMMARIZATION_THRESHOLD,
-      AssistantConstants.MAX_SUMMARIZATION_THRESHOLD
-    )
-
-    val summarizationModelValue = {
-      val value = Option(summarizationModelCombo.getSelectedItem)
-        .map(_.toString.trim)
-        .getOrElse("")
-      if (value == "(use main model)" || value.isEmpty) ""
-      else if (BedrockModels.isAnthropicModelId(value)) value
-      else {
-        warn("Summarization Model ID was invalid and has been cleared.")
-        ""
-      }
-    }
-
-    val summarizationTemperatureValue = {
-      val raw = summarizationTemperatureField.getText.trim
-      if (raw.isEmpty) ""
-      else {
-        try {
-          val parsed = raw.toDouble
-          val clamped = math.max(
-            AssistantConstants.MIN_TEMPERATURE,
-            math.min(AssistantConstants.MAX_TEMPERATURE, parsed)
-          )
-          if (clamped != parsed) {
-            warn(s"Summarization Temperature was clamped to $clamped (valid range: ${AssistantConstants.MIN_TEMPERATURE}-${AssistantConstants.MAX_TEMPERATURE}).")
-          }
-          clamped.toString
-        } catch {
-          case _: NumberFormatException =>
-            warn("Summarization Temperature was invalid and has been cleared.")
-            ""
-        }
-      }
-    }
-
-    jEdit.setProperty("assistant.aws.region", regionValue)
-    jEdit.setProperty("assistant.model.id", modelValue)
-    jEdit.setBooleanProperty("assistant.use.cris", crisCheckbox.isSelected)
-    jEdit.setProperty("assistant.temperature", temperatureValue)
-    jEdit.setProperty("assistant.max.tokens", maxTokensValue)
-    jEdit.setProperty("assistant.max.context.tokens", maxContextTokensValue)
-    jEdit.setProperty("assistant.max.tool.iterations", maxToolIterationsValue)
-    jEdit.setProperty("assistant.verify.max.retries", maxRetriesValue)
-    jEdit.setProperty("assistant.verify.timeout", verifyTimeoutValue)
-    jEdit.setBooleanProperty(
-      "assistant.verify.suggestions",
-      verifySuggestionsCheckbox.isSelected
-    )
-    jEdit.setBooleanProperty(
-      "assistant.use.sledgehammer",
-      useSledgehammerCheckbox.isSelected
-    )
-    jEdit.setProperty("assistant.sledgehammer.timeout", sledgehammerTimeoutValue)
-    jEdit.setProperty("assistant.quickcheck.timeout", quickcheckTimeoutValue)
-    jEdit.setProperty("assistant.nitpick.timeout", nitpickTimeoutValue)
-    jEdit.setProperty("assistant.max.verify.candidates", maxVerifyCandidatesValue)
-    jEdit.setProperty("assistant.find.theorems.limit", findTheoremsLimitValue)
-    jEdit.setProperty("assistant.find.theorems.timeout", findTheoremsTimeoutValue)
-    jEdit.setProperty("assistant.trace.timeout", traceTimeoutValue)
-    jEdit.setProperty("assistant.trace.depth", traceDepthValue)
-    jEdit.setProperty("assistant.planning.model.id", planningModelValue)
-    jEdit.setProperty("assistant.planning.temperature", planningTemperatureValue)
-    jEdit.setBooleanProperty("assistant.auto.summarize", autoSummarizeCheckbox.isSelected)
-    jEdit.setProperty("assistant.summarization.threshold", summarizationThresholdValue)
-    jEdit.setProperty("assistant.summarization.model.id", summarizationModelValue)
-    jEdit.setProperty("assistant.summarization.temperature", summarizationTemperatureValue)
-
-    regionCombo.setSelectedItem(regionValue)
-    modelCombo.setSelectedItem(modelValue)
-    temperatureField.setText(temperatureValue)
-    maxTokensField.setText(maxTokensValue)
-    maxContextTokensField.setText(maxContextTokensValue)
-    maxToolIterationsField.setText(maxToolIterationsValue)
-    maxRetriesField.setText(maxRetriesValue)
-    verifyTimeoutField.setText(verifyTimeoutValue)
-    sledgehammerTimeoutField.setText(sledgehammerTimeoutValue)
-    quickcheckTimeoutField.setText(quickcheckTimeoutValue)
-    nitpickTimeoutField.setText(nitpickTimeoutValue)
-    maxVerifyCandidatesField.setText(maxVerifyCandidatesValue)
-    findTheoremsLimitField.setText(findTheoremsLimitValue)
-    findTheoremsTimeoutField.setText(findTheoremsTimeoutValue)
-    traceTimeoutField.setText(traceTimeoutValue)
-    traceDepthField.setText(traceDepthValue)
-    if (planningModelValue.isEmpty) {
-      planningModelCombo.setSelectedIndex(0) // "(use main model)"
-    } else {
-      planningModelCombo.setSelectedItem(planningModelValue)
-    }
-    planningTemperatureField.setText(planningTemperatureValue)
-    summarizationThresholdField.setText(summarizationThresholdValue)
-    if (summarizationModelValue.isEmpty) {
-      summarizationModelCombo.setSelectedIndex(0) // "(use main model)"
-    } else {
-      summarizationModelCombo.setSelectedItem(summarizationModelValue)
-    }
-    summarizationTemperatureField.setText(summarizationTemperatureValue)
+    AssistantOptions.writeJEditProperties(normalized)
+    reflectNormalizedBack(fields, normalized)
 
     AssistantOptions.invalidateCache()
     AssistantDockable.refreshModelLabel()
 
-    if (warnings.nonEmpty) {
-      val msg = warnings.map(w => s"• $w").mkString("\n")
+    if (normalizer.warnings.nonEmpty) {
+      val msg = normalizer.warnings.map(w => s"• $w").mkString("\n")
       JOptionPane.showMessageDialog(
         this,
         s"Some settings were adjusted while saving:\n\n$msg",
@@ -810,64 +338,416 @@ class AssistantOptions extends AbstractOptionPane("assistant-general-options") {
       )
     }
   }
+
+  private def collectFields(): AssistantOptions.UiFields =
+    AssistantOptions.UiFields(
+      regionCombo = requireUi(this.regionCombo, "regionCombo"),
+      modelCombo = requireUi(this.modelCombo, "modelCombo"),
+      crisCheckbox = requireUi(this.crisCheckbox, "crisCheckbox"),
+      maxTokensField = requireUi(this.maxTokensField, "maxTokensField"),
+      maxContextTokensField = requireUi(this.maxContextTokensField, "maxContextTokensField"),
+      maxToolIterationsField = requireUi(this.maxToolIterationsField, "maxToolIterationsField"),
+      maxRetriesField = requireUi(this.maxRetriesField, "maxRetriesField"),
+      verifyTimeoutField = requireUi(this.verifyTimeoutField, "verifyTimeoutField"),
+      verifySuggestionsCheckbox = requireUi(this.verifySuggestionsCheckbox, "verifySuggestionsCheckbox"),
+      useSledgehammerCheckbox = requireUi(this.useSledgehammerCheckbox, "useSledgehammerCheckbox"),
+      sledgehammerTimeoutField = requireUi(this.sledgehammerTimeoutField, "sledgehammerTimeoutField"),
+      quickcheckTimeoutField = requireUi(this.quickcheckTimeoutField, "quickcheckTimeoutField"),
+      nitpickTimeoutField = requireUi(this.nitpickTimeoutField, "nitpickTimeoutField"),
+      maxVerifyCandidatesField = requireUi(this.maxVerifyCandidatesField, "maxVerifyCandidatesField"),
+      findTheoremsLimitField = requireUi(this.findTheoremsLimitField, "findTheoremsLimitField"),
+      findTheoremsTimeoutField = requireUi(this.findTheoremsTimeoutField, "findTheoremsTimeoutField"),
+      traceTimeoutField = requireUi(this.traceTimeoutField, "traceTimeoutField"),
+      traceDepthField = requireUi(this.traceDepthField, "traceDepthField"),
+      planningModelCombo = requireUi(this.planningModelCombo, "planningModelCombo"),
+      summarizationModelCombo = requireUi(this.summarizationModelCombo, "summarizationModelCombo"),
+      autoSummarizeCheckbox = requireUi(this.autoSummarizeCheckbox, "autoSummarizeCheckbox"),
+      summarizationThresholdField = requireUi(this.summarizationThresholdField, "summarizationThresholdField")
+    )
+
+  private def reflectNormalizedBack(
+      f: AssistantOptions.UiFields,
+      n: AssistantOptions.NormalizedSettings
+  ): Unit = {
+    f.regionCombo.setSelectedItem(n.region)
+    f.modelCombo.setSelectedItem(n.model)
+    f.maxTokensField.setText(n.maxTokens)
+    f.maxContextTokensField.setText(n.maxContextTokens)
+    f.maxToolIterationsField.setText(n.maxToolIterations)
+    f.maxRetriesField.setText(n.maxRetries)
+    f.verifyTimeoutField.setText(n.verifyTimeout)
+    f.sledgehammerTimeoutField.setText(n.sledgehammerTimeout)
+    f.quickcheckTimeoutField.setText(n.quickcheckTimeout)
+    f.nitpickTimeoutField.setText(n.nitpickTimeout)
+    f.maxVerifyCandidatesField.setText(n.maxVerifyCandidates)
+    f.findTheoremsLimitField.setText(n.findTheoremsLimit)
+    f.findTheoremsTimeoutField.setText(n.findTheoremsTimeout)
+    f.traceTimeoutField.setText(n.traceTimeout)
+    f.traceDepthField.setText(n.traceDepth)
+    if (n.planningModel.isEmpty) f.planningModelCombo.setSelectedIndex(0)
+    else f.planningModelCombo.setSelectedItem(n.planningModel)
+    f.summarizationThresholdField.setText(n.summarizationThreshold)
+    if (n.summarizationModel.isEmpty) f.summarizationModelCombo.setSelectedIndex(0)
+    else f.summarizationModelCombo.setSelectedItem(n.summarizationModel)
+  }
 }
 
 object AssistantOptions {
-  val REGIONS: Array[String] = Array(
-    "us-east-1",
-    "us-east-2",
-    "us-west-1",
-    "us-west-2",
-    "eu-west-1",
-    "eu-west-2",
-    "eu-west-3",
-    "eu-central-1",
-    "eu-north-1",
-    "ap-southeast-1",
-    "ap-southeast-2",
-    "ap-northeast-1",
-    "ap-northeast-2",
-    "ap-south-1",
-    "ca-central-1",
-    "sa-east-1"
+  // Schema — the snapshot shape and parsing rules — lives in
+  // AssistantOptionsSchema.scala so that the pure data/validation layer is
+  // decoupled from jEdit's Props API. The companion object below is a
+  // jEdit-bound facade.
+  val REGIONS: Array[String] = AssistantOptionsSchema.REGIONS
+  type SettingsSnapshot = AssistantOptionsSchema.SettingsSnapshot
+  val SettingsSnapshot = AssistantOptionsSchema.SettingsSnapshot
+
+  // Label used by optional-model combo boxes to indicate "fall back to main model".
+  private[assistant] val USE_MAIN_MODEL_LABEL = "(use main model)"
+
+  /** Populate a main-model combo: no sentinel entry, empty base leaves first item
+    * selected if any. */
+  private[assistant] def populateMainModelCombo(
+      combo: JComboBox[String],
+      models: Array[String],
+      current: String
+  ): Unit = {
+    combo.removeAllItems()
+    models.foreach(combo.addItem)
+    if (current.nonEmpty && !models.contains(current)) combo.addItem(current)
+    if (current.nonEmpty) combo.setSelectedItem(current)
+    else if (models.nonEmpty) combo.setSelectedIndex(0)
+  }
+
+  /** Populate an optional-model combo: prepends [[USE_MAIN_MODEL_LABEL]]; empty
+    * `current` selects the sentinel so the main model is used. */
+  private[assistant] def populateOptionalModelCombo(
+      combo: JComboBox[String],
+      models: Array[String],
+      current: String
+  ): Unit = {
+    combo.removeAllItems()
+    combo.addItem(USE_MAIN_MODEL_LABEL)
+    models.foreach(combo.addItem)
+    if (current.nonEmpty && !models.contains(current)) combo.addItem(current)
+    if (current.nonEmpty) combo.setSelectedItem(current)
+    else combo.setSelectedIndex(0)
+  }
+
+  // --- _save() support types: bundle UI fields and normalized values for
+  // section-by-section processing without ballooning the save method. ---
+
+  private case class UiFields(
+      regionCombo: JComboBox[String],
+      modelCombo: JComboBox[String],
+      crisCheckbox: JCheckBox,
+      maxTokensField: JTextField,
+      maxContextTokensField: JTextField,
+      maxToolIterationsField: JTextField,
+      maxRetriesField: JTextField,
+      verifyTimeoutField: JTextField,
+      verifySuggestionsCheckbox: JCheckBox,
+      useSledgehammerCheckbox: JCheckBox,
+      sledgehammerTimeoutField: JTextField,
+      quickcheckTimeoutField: JTextField,
+      nitpickTimeoutField: JTextField,
+      maxVerifyCandidatesField: JTextField,
+      findTheoremsLimitField: JTextField,
+      findTheoremsTimeoutField: JTextField,
+      traceTimeoutField: JTextField,
+      traceDepthField: JTextField,
+      planningModelCombo: JComboBox[String],
+      summarizationModelCombo: JComboBox[String],
+      autoSummarizeCheckbox: JCheckBox,
+      summarizationThresholdField: JTextField
   )
 
-  private val modelIdPattern = "^[a-zA-Z0-9._:/-]*$"
-  private def isValidBaseModelId(modelId: String): Boolean =
-    modelId.matches(modelIdPattern) &&
-      (modelId.isEmpty || BedrockModels.isAnthropicModelId(modelId))
-
-  /** All parsed settings in a single immutable snapshot, cached atomically.
-    * Boolean settings are included here (not read from jEdit directly) to
-    * ensure a consistent view across all settings.
-    */
-  private[assistant] case class SettingsSnapshot(
+  private case class NormalizedSettings(
       region: String,
-      baseModelId: String,
-      temperature: Double,
-      maxTokens: Int,
-      maxContextTokens: Int,
-      maxToolIterations: Option[Int],
-      maxRetries: Int,
-      verifyTimeout: Long,
-      sledgehammerTimeout: Long,
-      quickcheckTimeout: Long,
-      nitpickTimeout: Long,
-      maxVerifyCandidates: Int,
-      findTheoremsLimit: Int,
-      findTheoremsTimeout: Long,
-      traceTimeout: Int,
-      traceDepth: Int,
+      model: String,
       useCris: Boolean,
+      maxTokens: String,
+      maxContextTokens: String,
+      maxToolIterations: String,
+      maxRetries: String,
+      verifyTimeout: String,
       verifySuggestions: Boolean,
       useSledgehammer: Boolean,
-      planningBaseModelId: String,
-      planningTemperature: Option[Double],
-      summarizationBaseModelId: String,
-      summarizationTemperature: Option[Double],
+      sledgehammerTimeout: String,
+      quickcheckTimeout: String,
+      nitpickTimeout: String,
+      maxVerifyCandidates: String,
+      findTheoremsLimit: String,
+      findTheoremsTimeout: String,
+      traceTimeout: String,
+      traceDepth: String,
+      planningModel: String,
+      summarizationModel: String,
       autoSummarize: Boolean,
-      summarizationThreshold: Double
+      summarizationThreshold: String
   )
+
+  private class Normalizer {
+    val warnings: ListBuffer[String] = ListBuffer.empty[String]
+    def warn(msg: String): Unit = { val _ = warnings += msg }
+
+    def normalizeInt(
+        raw: String, label: String, default: Int, min: Int, max: Int
+    ): String =
+      try {
+        val parsed = raw.trim.toInt
+        val clamped = math.max(min, math.min(max, parsed))
+        if (clamped != parsed)
+          warn(s"$label was clamped to $clamped (valid range: $min-$max).")
+        clamped.toString
+      } catch {
+        case _: NumberFormatException =>
+          warn(s"$label was invalid and reset to $default.")
+          default.toString
+      }
+
+    def normalizeLong(
+        raw: String, label: String, default: Long, min: Long, max: Long
+    ): String =
+      try {
+        val parsed = raw.trim.toLong
+        val clamped = math.max(min, math.min(max, parsed))
+        if (clamped != parsed)
+          warn(s"$label was clamped to $clamped (valid range: $min-$max).")
+        clamped.toString
+      } catch {
+        case _: NumberFormatException =>
+          warn(s"$label was invalid and reset to $default.")
+          default.toString
+      }
+
+    def normalizeDouble(
+        raw: String, label: String, default: Double, min: Double, max: Double
+    ): String =
+      try {
+        val parsed = raw.trim.toDouble
+        val clamped = math.max(min, math.min(max, parsed))
+        if (clamped != parsed)
+          warn(s"$label was clamped to $clamped (valid range: $min-$max).")
+        clamped.toString
+      } catch {
+        case _: NumberFormatException =>
+          warn(s"$label was invalid and reset to $default.")
+          default.toString
+      }
+
+    def normalizeOptionalInt(
+        raw: String, label: String, default: Int, min: Int, max: Int
+    ): String = {
+      val normalized = raw.trim.toLowerCase
+      if (normalized.isEmpty || normalized == "0" || normalized == "none" || normalized == "unlimited") ""
+      else
+        try {
+          val parsed = normalized.toInt
+          if (parsed < min || parsed > max) {
+            warn(s"$label was invalid and reset to $default (or leave empty for unlimited).")
+            default.toString
+          } else parsed.toString
+        } catch {
+          case _: NumberFormatException =>
+            warn(s"$label was invalid and reset to $default (or leave empty for unlimited).")
+            default.toString
+        }
+    }
+  }
+
+  /** Validate AWS region text; falls back to us-east-1 with a warning if malformed. */
+  private def validateRegion(raw: String, n: Normalizer): String =
+    if (raw.matches("^[a-z]{2}(?:-[a-z]+)+-\\d+$")) raw
+    else {
+      n.warn("AWS Region had an invalid format and was reset to us-east-1.")
+      "us-east-1"
+    }
+
+  /** Validate a main-model ID; clears and warns on invalid input. */
+  private def validateMainModel(raw: String, n: Normalizer): String =
+    if (raw.isEmpty || BedrockModels.isAnthropicModelId(raw)) raw
+    else {
+      n.warn("Model ID was invalid and has been cleared. Only Anthropic model IDs are supported.")
+      ""
+    }
+
+  /** Validate an optional model combo selection; accepts empty or the "use main"
+    * sentinel as "leave unset", and warns when a non-Anthropic value is entered.
+    *
+    * The warning distinguishes "user typed a non-Anthropic model" from "user
+    * left the field blank" — the latter is the documented "use main model"
+    * path and shouldn't surface any message. */
+  private def validateOptionalModel(
+      raw: String, name: String, n: Normalizer
+  ): String =
+    if (raw == USE_MAIN_MODEL_LABEL || raw.isEmpty) ""
+    else if (BedrockModels.isAnthropicModelId(raw)) raw
+    else {
+      n.warn(
+        s"$name Model ID '$raw' is not a valid Anthropic model and has been cleared. " +
+          s"$name operations will use the main model."
+      )
+      ""
+    }
+
+  private def normalizeAwsSection(f: UiFields, n: Normalizer): (String, String) = {
+    val region = validateRegion(
+      Option(f.regionCombo.getSelectedItem).map(_.toString.trim).getOrElse(""), n
+    )
+    val model = validateMainModel(
+      Option(f.modelCombo.getSelectedItem).map(_.toString.trim).getOrElse(""), n
+    )
+    (region, model)
+  }
+
+  private def normalizeModelParams(f: UiFields, n: Normalizer): (String, String, String) = (
+    n.normalizeInt(
+      f.maxTokensField.getText, "Max Tokens",
+      AssistantConstants.DEFAULT_MAX_TOKENS, AssistantConstants.MIN_MAX_TOKENS, Int.MaxValue
+    ),
+    n.normalizeInt(
+      f.maxContextTokensField.getText, "Max Context Tokens",
+      AssistantConstants.DEFAULT_MAX_CONTEXT_TOKENS, AssistantConstants.MIN_MAX_CONTEXT_TOKENS, Int.MaxValue
+    ),
+    n.normalizeOptionalInt(
+      f.maxToolIterationsField.getText, "Max Tool Iterations",
+      AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS, 1, 50
+    )
+  )
+
+  private def normalizeVerification(f: UiFields, n: Normalizer): (String, String) = (
+    n.normalizeInt(
+      f.maxRetriesField.getText, "Max Retries",
+      AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES, 1, 10
+    ),
+    n.normalizeLong(
+      f.verifyTimeoutField.getText, "Verification Timeout",
+      AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT, 5000L, 300000L
+    )
+  )
+
+  private def normalizeSuggestions(f: UiFields, n: Normalizer): (String, String, String, String) = (
+    n.normalizeLong(
+      f.sledgehammerTimeoutField.getText, "Sledgehammer Timeout",
+      AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT, 1000L, 300000L
+    ),
+    n.normalizeInt(
+      f.maxVerifyCandidatesField.getText, "Max Verify Candidates",
+      AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES, 1, 20
+    ),
+    n.normalizeInt(
+      f.findTheoremsLimitField.getText, "Find Theorems Limit",
+      AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT, 1, 100
+    ),
+    n.normalizeLong(
+      f.findTheoremsTimeoutField.getText, "Find Theorems Timeout",
+      AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT, 1000L, 300000L
+    )
+  )
+
+  private def normalizeCounterexample(f: UiFields, n: Normalizer): (String, String) = (
+    n.normalizeLong(
+      f.quickcheckTimeoutField.getText, "Quickcheck Timeout",
+      AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT, 1000L, 300000L
+    ),
+    n.normalizeLong(
+      f.nitpickTimeoutField.getText, "Nitpick Timeout",
+      AssistantConstants.DEFAULT_NITPICK_TIMEOUT, 1000L, 300000L
+    )
+  )
+
+  private def normalizeTracing(f: UiFields, n: Normalizer): (String, String) = (
+    n.normalizeInt(
+      f.traceTimeoutField.getText, "Trace Timeout",
+      AssistantConstants.DEFAULT_TRACE_TIMEOUT, 1, 300
+    ),
+    n.normalizeInt(
+      f.traceDepthField.getText, "Trace Depth",
+      AssistantConstants.DEFAULT_TRACE_DEPTH, 1, 50
+    )
+  )
+
+  private def normalizeSummarization(f: UiFields, n: Normalizer): (String, String, String) = {
+    val planningModel = validateOptionalModel(
+      Option(f.planningModelCombo.getSelectedItem).map(_.toString.trim).getOrElse(""),
+      "Planning", n
+    )
+    val threshold = n.normalizeDouble(
+      f.summarizationThresholdField.getText, "Summarization Threshold",
+      AssistantConstants.DEFAULT_SUMMARIZATION_THRESHOLD,
+      AssistantConstants.MIN_SUMMARIZATION_THRESHOLD,
+      AssistantConstants.MAX_SUMMARIZATION_THRESHOLD
+    )
+    val summarizationModel = validateOptionalModel(
+      Option(f.summarizationModelCombo.getSelectedItem).map(_.toString.trim).getOrElse(""),
+      "Summarization", n
+    )
+    (planningModel, threshold, summarizationModel)
+  }
+
+  private def normalizeAll(f: UiFields, n: Normalizer): NormalizedSettings = {
+    val (region, model) = normalizeAwsSection(f, n)
+    val (maxTokens, maxContextTokens, maxToolIterations) = normalizeModelParams(f, n)
+    val (maxRetries, verifyTimeout) = normalizeVerification(f, n)
+    val (sledgehammerTimeout, maxVerifyCandidates, findTheoremsLimit, findTheoremsTimeout) =
+      normalizeSuggestions(f, n)
+    val (quickcheckTimeout, nitpickTimeout) = normalizeCounterexample(f, n)
+    val (traceTimeout, traceDepth) = normalizeTracing(f, n)
+    val (planningModel, summarizationThreshold, summarizationModel) =
+      normalizeSummarization(f, n)
+    NormalizedSettings(
+      region = region,
+      model = model,
+      useCris = f.crisCheckbox.isSelected,
+      maxTokens = maxTokens,
+      maxContextTokens = maxContextTokens,
+      maxToolIterations = maxToolIterations,
+      maxRetries = maxRetries,
+      verifyTimeout = verifyTimeout,
+      verifySuggestions = f.verifySuggestionsCheckbox.isSelected,
+      useSledgehammer = f.useSledgehammerCheckbox.isSelected,
+      sledgehammerTimeout = sledgehammerTimeout,
+      quickcheckTimeout = quickcheckTimeout,
+      nitpickTimeout = nitpickTimeout,
+      maxVerifyCandidates = maxVerifyCandidates,
+      findTheoremsLimit = findTheoremsLimit,
+      findTheoremsTimeout = findTheoremsTimeout,
+      traceTimeout = traceTimeout,
+      traceDepth = traceDepth,
+      planningModel = planningModel,
+      summarizationModel = summarizationModel,
+      autoSummarize = f.autoSummarizeCheckbox.isSelected,
+      summarizationThreshold = summarizationThreshold
+    )
+  }
+
+  private def writeJEditProperties(n: NormalizedSettings): Unit = {
+    jEdit.setProperty("assistant.aws.region", n.region)
+    jEdit.setProperty("assistant.model.id", n.model)
+    jEdit.setBooleanProperty("assistant.use.cris", n.useCris)
+    jEdit.setProperty("assistant.max.tokens", n.maxTokens)
+    jEdit.setProperty("assistant.max.context.tokens", n.maxContextTokens)
+    jEdit.setProperty("assistant.max.tool.iterations", n.maxToolIterations)
+    jEdit.setProperty("assistant.verify.max.retries", n.maxRetries)
+    jEdit.setProperty("assistant.verify.timeout", n.verifyTimeout)
+    jEdit.setBooleanProperty("assistant.verify.suggestions", n.verifySuggestions)
+    jEdit.setBooleanProperty("assistant.use.sledgehammer", n.useSledgehammer)
+    jEdit.setProperty("assistant.sledgehammer.timeout", n.sledgehammerTimeout)
+    jEdit.setProperty("assistant.quickcheck.timeout", n.quickcheckTimeout)
+    jEdit.setProperty("assistant.nitpick.timeout", n.nitpickTimeout)
+    jEdit.setProperty("assistant.max.verify.candidates", n.maxVerifyCandidates)
+    jEdit.setProperty("assistant.find.theorems.limit", n.findTheoremsLimit)
+    jEdit.setProperty("assistant.find.theorems.timeout", n.findTheoremsTimeout)
+    jEdit.setProperty("assistant.trace.timeout", n.traceTimeout)
+    jEdit.setProperty("assistant.trace.depth", n.traceDepth)
+    jEdit.setProperty("assistant.planning.model.id", n.planningModel)
+    jEdit.setBooleanProperty("assistant.auto.summarize", n.autoSummarize)
+    jEdit.setProperty("assistant.summarization.threshold", n.summarizationThreshold)
+    jEdit.setProperty("assistant.summarization.model.id", n.summarizationModel)
+  }
+
+  private def isValidBaseModelId(modelId: String): Boolean =
+    AssistantOptionsSchema.isValidBaseModelId(modelId)
 
   @volatile private var _cache: Option[SettingsSnapshot] = None
 
@@ -892,173 +772,14 @@ object AssistantOptions {
     )
   }
 
+  /** Delegates to AssistantOptionsSchema — exposed here at the old location
+    * so existing call sites (and tests) keep working.
+    */
   private[assistant] def parseSnapshot(
       prop: (String, String) => String,
       boolProp: (String, Boolean) => Boolean
-  ): SettingsSnapshot = {
-    def intProp(key: String, default: Int, min: Int, max: Int): Int =
-      try { math.max(min, math.min(max, prop(key, default.toString).toInt)) }
-      catch { case _: NumberFormatException => default }
-    def longProp(key: String, default: Long, min: Long, max: Long): Long =
-      try { math.max(min, math.min(max, prop(key, default.toString).toLong)) }
-      catch { case _: NumberFormatException => default }
-    def doubleProp(
-        key: String,
-        default: Double,
-        min: Double,
-        max: Double
-    ): Double =
-      try { math.max(min, math.min(max, prop(key, default.toString).toDouble)) }
-      catch { case _: NumberFormatException => default }
-    def optIntProp(
-        key: String,
-        min: Int,
-        max: Int,
-        default: Option[Int]
-    ): Option[Int] = {
-      val defaultText = default.map(_.toString).getOrElse("")
-      val value = prop(key, defaultText).trim.toLowerCase
-      if (
-        value.isEmpty || value == "0" || value == "none" || value == "unlimited"
-      ) None
-      else
-        try {
-          val n = value.toInt
-          if (n >= min && n <= max) Some(n) else None
-        } catch { case _: NumberFormatException => None }
-    }
-
-    val region = prop("assistant.aws.region", "us-east-1")
-    val modelId = prop("assistant.model.id", "")
-    val planningModelId = prop("assistant.planning.model.id", "")
-    val planningTempStr = prop("assistant.planning.temperature", "")
-    val summarizationModelId = prop("assistant.summarization.model.id", "")
-    val summarizationTempStr = prop("assistant.summarization.temperature", "")
-
-    SettingsSnapshot(
-      region =
-        if (region.matches("^[a-z]{2}(?:-[a-z]+)+-\\d+$")) region
-        else "us-east-1",
-      baseModelId = if (isValidBaseModelId(modelId)) modelId else "",
-      temperature = doubleProp(
-        "assistant.temperature",
-        AssistantConstants.DEFAULT_TEMPERATURE,
-        AssistantConstants.MIN_TEMPERATURE,
-        AssistantConstants.MAX_TEMPERATURE
-      ),
-      maxTokens = intProp(
-        "assistant.max.tokens",
-        AssistantConstants.DEFAULT_MAX_TOKENS,
-        AssistantConstants.MIN_MAX_TOKENS,
-        Int.MaxValue
-      ),
-      maxContextTokens = intProp(
-        "assistant.max.context.tokens",
-        AssistantConstants.DEFAULT_MAX_CONTEXT_TOKENS,
-        AssistantConstants.MIN_MAX_CONTEXT_TOKENS,
-        Int.MaxValue
-      ),
-      maxToolIterations =
-        optIntProp(
-          "assistant.max.tool.iterations",
-          1,
-          50,
-          Some(AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS)
-        ),
-      maxRetries = intProp(
-        "assistant.verify.max.retries",
-        AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES,
-        1,
-        10
-      ),
-      verifyTimeout = longProp(
-        "assistant.verify.timeout",
-        AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT,
-        5000L,
-        300000L
-      ),
-      sledgehammerTimeout = longProp(
-        "assistant.sledgehammer.timeout",
-        AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT,
-        1000L,
-        300000L
-      ),
-      quickcheckTimeout = longProp(
-        "assistant.quickcheck.timeout",
-        AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT,
-        1000L,
-        300000L
-      ),
-      nitpickTimeout = longProp(
-        "assistant.nitpick.timeout",
-        AssistantConstants.DEFAULT_NITPICK_TIMEOUT,
-        1000L,
-        300000L
-      ),
-      maxVerifyCandidates = intProp(
-        "assistant.max.verify.candidates",
-        AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES,
-        1,
-        20
-      ),
-      findTheoremsLimit = intProp(
-        "assistant.find.theorems.limit",
-        AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT,
-        1,
-        100
-      ),
-      findTheoremsTimeout = longProp(
-        "assistant.find.theorems.timeout",
-        AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT,
-        1000L,
-        300000L
-      ),
-      traceTimeout = intProp(
-        "assistant.trace.timeout",
-        AssistantConstants.DEFAULT_TRACE_TIMEOUT,
-        1,
-        300
-      ),
-      traceDepth = intProp(
-        "assistant.trace.depth",
-        AssistantConstants.DEFAULT_TRACE_DEPTH,
-        1,
-        50
-      ),
-      useCris = boolProp("assistant.use.cris", true),
-      verifySuggestions = boolProp("assistant.verify.suggestions", true),
-      useSledgehammer = boolProp("assistant.use.sledgehammer", false),
-      planningBaseModelId = if (isValidBaseModelId(planningModelId)) planningModelId else "",
-      planningTemperature = {
-        val trimmed = planningTempStr.trim
-        if (trimmed.isEmpty) None
-        else try {
-          val parsed = trimmed.toDouble
-          if (parsed >= AssistantConstants.MIN_TEMPERATURE && parsed <= AssistantConstants.MAX_TEMPERATURE)
-            Some(parsed)
-          else None
-        } catch { case _: NumberFormatException => None }
-      },
-      summarizationBaseModelId = if (isValidBaseModelId(summarizationModelId)) summarizationModelId else "",
-      summarizationTemperature = {
-        val trimmed = summarizationTempStr.trim
-        if (trimmed.isEmpty) None
-        else try {
-          val parsed = trimmed.toDouble
-          if (parsed >= AssistantConstants.MIN_TEMPERATURE && parsed <= AssistantConstants.MAX_TEMPERATURE)
-            Some(parsed)
-          else None
-        } catch { case _: NumberFormatException => None }
-      },
-      autoSummarize = boolProp("assistant.auto.summarize", true),
-      summarizationThreshold = doubleProp(
-        "assistant.summarization.threshold",
-        AssistantConstants.DEFAULT_SUMMARIZATION_THRESHOLD,
-        AssistantConstants.MIN_SUMMARIZATION_THRESHOLD,
-        AssistantConstants.MAX_SUMMARIZATION_THRESHOLD
-      )
-    )
-  }
+  ): SettingsSnapshot =
+    AssistantOptionsSchema.parseSnapshot(prop, boolProp)
 
   def invalidateCache(): Unit = synchronized { _cache = None }
 
@@ -1066,7 +787,6 @@ object AssistantOptions {
 
   def getRegion: String = snapshot.region
   def getBaseModelId: String = snapshot.baseModelId
-  def getTemperature: Double = snapshot.temperature
   def getMaxTokens: Int = snapshot.maxTokens
   def getMaxContextTokens: Int = snapshot.maxContextTokens
   def getMaxToolIterations: Option[Int] = snapshot.maxToolIterations
@@ -1084,7 +804,6 @@ object AssistantOptions {
   def getVerifySuggestions: Boolean = snapshot.verifySuggestions
   def getUseSledgehammer: Boolean = snapshot.useSledgehammer
   def getPlanningBaseModelId: String = snapshot.planningBaseModelId
-  def getPlanningTemperature: Option[Double] = snapshot.planningTemperature
 
   def getModelId: String = {
     val base = getBaseModelId
@@ -1100,12 +819,7 @@ object AssistantOptions {
     else base
   }
 
-  def getEffectivePlanningTemperature: Double = {
-    getPlanningTemperature.getOrElse(getTemperature) // Fallback to main temperature if not set
-  }
-
   def getSummarizationBaseModelId: String = snapshot.summarizationBaseModelId
-  def getSummarizationTemperature: Option[Double] = snapshot.summarizationTemperature
   def getAutoSummarize: Boolean = snapshot.autoSummarize
   def getSummarizationThreshold: Double = snapshot.summarizationThreshold
 
@@ -1114,10 +828,6 @@ object AssistantOptions {
     if (base.isEmpty) getModelId // Fallback to main model if summarization model not set
     else if (getUseCris) BedrockModels.applyCrisPrefix(base, getRegion)
     else base
-  }
-
-  def getEffectiveSummarizationTemperature: Double = {
-    getSummarizationTemperature.getOrElse(getTemperature) // Fallback to main temperature if not set
   }
 
   // --- Data-driven setting definitions ---
@@ -1250,38 +960,6 @@ object AssistantOptions {
     }
   }
 
-  private case class OptionalDoubleSetting(
-      key: String,
-      prop: String,
-      min: Double,
-      max: Double,
-      getter: SettingsSnapshot => Option[Double]
-  ) extends SettingDef {
-    def get(s: SettingsSnapshot): String = getter(s) match {
-      case Some(d) => d.toString
-      case None    => "(use main)"
-    }
-    def set(value: String): Option[String] = {
-      val normalized = value.trim.toLowerCase
-      if (normalized.isEmpty || normalized == "none" || normalized == "default") {
-        jEdit.setProperty(prop, "")
-        Some(s"$key = (use main)")
-      } else
-        try {
-          val v = value.toDouble
-          if (v >= min && v <= max) {
-            jEdit.setProperty(prop, value); Some(s"$key = $value")
-          } else
-            Some(
-              s"$key must be between $min and $max, or empty/none/default to use main temperature"
-            )
-        } catch {
-          case _: NumberFormatException =>
-            Some(s"$key must be a number or empty/none/default")
-        }
-    }
-  }
-
   /** Registry of all settings — single source of truth for get/set/list. */
   private val settingDefs: List[SettingDef] = List(
     StringSetting(
@@ -1299,13 +977,6 @@ object AssistantOptions {
       _.baseModelId
     ),
     BoolSetting("cris", "assistant.use.cris", _.useCris),
-    DoubleSetting(
-      "temperature",
-      "assistant.temperature",
-      AssistantConstants.MIN_TEMPERATURE,
-      AssistantConstants.MAX_TEMPERATURE,
-      _.temperature
-    ),
     IntSetting(
       "max_tokens",
       "assistant.max.tokens",
@@ -1408,13 +1079,6 @@ object AssistantOptions {
       "Invalid planning model ID. Only Anthropic model IDs are supported (or empty to use main model).",
       s => if (s.planningBaseModelId.isEmpty) "(use main)" else s.planningBaseModelId
     ),
-    OptionalDoubleSetting(
-      "planning_temperature",
-      "assistant.planning.temperature",
-      AssistantConstants.MIN_TEMPERATURE,
-      AssistantConstants.MAX_TEMPERATURE,
-      _.planningTemperature
-    ),
     BoolSetting("auto_summarize", "assistant.auto.summarize", _.autoSummarize),
     DoubleSetting(
       "summarization_threshold",
@@ -1429,13 +1093,6 @@ object AssistantOptions {
       isValidBaseModelId,
       "Invalid summarization model ID. Only Anthropic model IDs are supported (or empty to use main model).",
       s => if (s.summarizationBaseModelId.isEmpty) "(use main)" else s.summarizationBaseModelId
-    ),
-    OptionalDoubleSetting(
-      "summarization_temperature",
-      "assistant.summarization.temperature",
-      AssistantConstants.MIN_TEMPERATURE,
-      AssistantConstants.MAX_TEMPERATURE,
-      _.summarizationTemperature
     )
   )
 
@@ -1468,6 +1125,42 @@ object AssistantOptions {
   def getSetting(key: String): Option[String] =
     settingsByKey.get(normalizeKey(key)).map(_.get(snapshot))
 
-  def listSettings: String =
-    settingDefs.map(d => s"${d.key} = ${d.get(snapshot)}").mkString("\n")
+  def listSettings: String = {
+    val snap = snapshot
+    settingDefs.map { d =>
+      val current = d.get(snap)
+      val default = defaultFor(d.key)
+      default match {
+        case Some(dv) if dv != current => s"${d.key} = $current (default: $dv)"
+        case _                         => s"${d.key} = $current"
+      }
+    }.mkString("\n")
+  }
+
+  /** Static default per setting key. Mirrors AssistantOptionsSchema's defaults
+    * so that `:set` can show `(default: X)` next to any non-default value.
+    * Keys without a meaningful constant default (region, model ids — env-
+    * dependent) return None and render as plain `key = value`. */
+  private def defaultFor(key: String): Option[String] = key match {
+    case "max_tokens"              => Some(AssistantConstants.DEFAULT_MAX_TOKENS.toString)
+    case "max_context_tokens"      => Some(AssistantConstants.DEFAULT_MAX_CONTEXT_TOKENS.toString)
+    case "max_tool_iterations"     => Some(AssistantConstants.DEFAULT_MAX_TOOL_ITERATIONS.toString)
+    case "max_retries"             => Some(AssistantConstants.DEFAULT_MAX_VERIFICATION_RETRIES.toString)
+    case "verify_timeout"          => Some(AssistantConstants.DEFAULT_VERIFICATION_TIMEOUT.toString)
+    case "sledgehammer_timeout"    => Some(AssistantConstants.DEFAULT_SLEDGEHAMMER_TIMEOUT.toString)
+    case "quickcheck_timeout"      => Some(AssistantConstants.DEFAULT_QUICKCHECK_TIMEOUT.toString)
+    case "nitpick_timeout"         => Some(AssistantConstants.DEFAULT_NITPICK_TIMEOUT.toString)
+    case "max_verify_candidates"   => Some(AssistantConstants.DEFAULT_MAX_VERIFY_CANDIDATES.toString)
+    case "find_theorems_limit"     => Some(AssistantConstants.DEFAULT_FIND_THEOREMS_LIMIT.toString)
+    case "find_theorems_timeout"   => Some(AssistantConstants.DEFAULT_FIND_THEOREMS_TIMEOUT.toString)
+    case "trace_timeout"           => Some(AssistantConstants.DEFAULT_TRACE_TIMEOUT.toString)
+    case "trace_depth"             => Some(AssistantConstants.DEFAULT_TRACE_DEPTH.toString)
+    case "cris"                    => Some("true")
+    case "verify_suggestions"      => Some("true")
+    case "use_sledgehammer"        => Some("false")
+    case "auto_summarize"          => Some("true")
+    case "summarization_threshold" => Some(AssistantConstants.DEFAULT_SUMMARIZATION_THRESHOLD.toString)
+    case "region"                  => Some("us-east-1")
+    case _                         => None
+  }
 }

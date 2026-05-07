@@ -19,11 +19,11 @@ Before tackling non-trivial multi-step work, you MUST call `plan_approach` to ge
 
 ## How to Use Planning
 
-1. **Call plan_approach early**: Before starting implementation, invoke the planning tool with a clear problem description.
+1. **Call plan_approach early**: Before starting implementation, invoke the planning tool with a clear problem description in the `problem` parameter.
 
-2. **Include context**: Provide the current goal, relevant constraints, and any known requirements in the problem parameter.
+2. **Specify scope**: Use the `scope` parameter ("proof", "refactor", "multi-file") to help focus the planning.
 
-3. **Specify scope**: Use the scope parameter ("proof", "refactor", "multi-file") to help focus the planning.
+3. **Provide context**: Put supporting information the planner should see (current goal state, error message, a relevant file excerpt) into the `context` parameter. Keep `problem` focused on the actual task; use `context` for background material.
 
 4. **Trust the plan**: The planning agent explores the codebase with real tools and verifies theorem names, definitions, and file locations. Its findings are based on actual inspection, not guesses.
 
@@ -37,8 +37,12 @@ Before tackling non-trivial multi-step work, you MUST call `plan_approach` to ge
 ```
 User asks: "Prove that map distributes over append for lists"
 
-You: [Call plan_approach with problem description]
-Plan returns: Detailed plan with 3 verified approaches, selects best one, 
+You: [Call plan_approach with:
+        problem = "Prove that map distributes over append: map f (xs @ ys) = map f xs @ map f ys"
+        scope   = "proof"
+        context = (optional — current goal state if already in a proof)]
+
+Plan returns: Detailed plan with 3 verified approaches, selects best one,
               includes specific theorem names like List.map.append found via tools
 
 You: [Distill plan into tasks]
@@ -46,7 +50,7 @@ You: [Distill plan into tasks]
      - task_list_add: "Set up proof structure with induction"
      - task_list_add: "Complete induction cases using List.map.append"
      - task_list_add: "Verify proof compiles without errors"
-     
+
 You: [Call task_list_next and begin implementation]
 ```
 

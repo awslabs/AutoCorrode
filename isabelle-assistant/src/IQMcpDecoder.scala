@@ -51,43 +51,111 @@ private[assistant] object IQMcpDecoder {
   }
 
   // --- Field extractors ---
+  //
+  // Each extractor takes a payload and a key. If the key is absent the
+  // `default` is returned silently (absent optional fields are normal). If
+  // the key is present but the value has an unexpected type, the default is
+  // still returned, but a warning is logged to the Isabelle output so the
+  // mismatch is diagnosable from the jEdit log. That keeps the Assistant
+  // resilient to server version drift while making shape violations loud.
+
+  private def logShapeMismatch(
+      key: String,
+      expected: String,
+      value: Any
+  ): Unit = {
+    val actual = if (value == null) "null" else value.getClass.getSimpleName
+    // Truncate the rendered value for logging so a pathological payload can
+    // not flood the Isabelle output panel.
+    val rendered = {
+      val s = String.valueOf(value)
+      if (s.length > 120) s.take(120) + "…" else s
+    }
+    Output.warning(
+      s"[Assistant] I/Q MCP: field '$key' expected $expected, got $actual ($rendered)"
+    )
+  }
 
   def boolField(payload: Map[String, Any], key: String, default: Boolean): Boolean =
     payload.get(key) match {
+      case None => default
       case Some(value: Boolean) => value
-      case Some(value: String) => value.trim.toLowerCase match {
+      case Some(value: String) =>
+        value.trim.toLowerCase match {
           case "true" => true
           case "false" => false
-          case _ => default
+          case _ =>
+            logShapeMismatch(key, "boolean", value)
+            default
         }
       case Some(value: Int) => value != 0
       case Some(value: Long) => value != 0L
       case Some(value: Double) => value != 0.0
-      case _ => default
+      case Some(other) =>
+        logShapeMismatch(key, "boolean", other)
+        default
     }
 
   def stringField(payload: Map[String, Any], key: String): String =
-    payload.get(key).map(_.toString).getOrElse("")
+    payload.get(key) match {
+      case None => ""
+      case Some(value: String) => value
+      // Numbers and booleans render fine via toString; objects and arrays
+      // almost certainly indicate a schema mismatch.
+      case Some(value: Boolean) => value.toString
+      case Some(value: Int) => value.toString
+      case Some(value: Long) => value.toString
+      case Some(value: Double) => value.toString
+      case Some(other) =>
+        logShapeMismatch(key, "string", other)
+        other.toString
+    }
 
   def intField(
       payload: Map[String, Any],
       key: String,
       default: Int
-  ): Int =
-    payload.get(key).flatMap(asInt).getOrElse(default)
+  ): Int = payload.get(key) match {
+    case None => default
+    case Some(value) =>
+      asInt(value).getOrElse {
+        logShapeMismatch(key, "integer", value)
+        default
+      }
+  }
 
   def longField(
       payload: Map[String, Any],
       key: String,
       default: Long
-  ): Long =
-    payload.get(key).flatMap(asLong).getOrElse(default)
+  ): Long = payload.get(key) match {
+    case None => default
+    case Some(value) =>
+      asLong(value).getOrElse {
+        logShapeMismatch(key, "long", value)
+        default
+      }
+  }
 
   def mapField(payload: Map[String, Any], key: String): Map[String, Any] =
-    payload.get(key).flatMap(asObject).getOrElse(Map.empty)
+    payload.get(key) match {
+      case None => Map.empty
+      case Some(value) =>
+        asObject(value).getOrElse {
+          logShapeMismatch(key, "object", value)
+          Map.empty
+        }
+    }
 
   def listField(payload: Map[String, Any], key: String): List[Any] =
-    payload.get(key).flatMap(asList).getOrElse(List.empty)
+    payload.get(key) match {
+      case None => List.empty
+      case Some(value) =>
+        asList(value).getOrElse {
+          logShapeMismatch(key, "array", value)
+          List.empty
+        }
+    }
 
   // --- Decode functions ---
 
@@ -401,6 +469,7 @@ private[assistant] object IQMcpDecoder {
       overwritten = boolField(payload, "overwritten", default = false),
       opened = boolField(payload, "opened", default = false),
       inView = boolField(payload, "in_view", default = true),
+      tracked = boolField(payload, "tracked", default = false),
       message = stringField(payload, "message")
     )
 

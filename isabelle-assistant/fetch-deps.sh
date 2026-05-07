@@ -1,11 +1,17 @@
 #!/bin/bash
-# Download AWS SDK v2 JARs for Bedrock Runtime
+# Download AWS SDK v2 JARs for Bedrock Runtime. Shared SHA-1-verifying
+# helpers live in fetch-deps-lib.sh so that fetch-test-deps (and any
+# future fetcher) can reuse the same tamper-resistant pipeline.
 
 set -e
 
 VERSION="2.41.21"
 BASE_URL="https://repo1.maven.org/maven2/software/amazon/awssdk"
-LIB_DIR="$(dirname "$0")/lib"
+SCRIPT_DIR="$(dirname "$0")"
+LIB_DIR="$SCRIPT_DIR/lib"
+
+# shellcheck source=fetch-deps-lib.sh
+. "$SCRIPT_DIR/fetch-deps-lib.sh"
 
 mkdir -p "$LIB_DIR"
 
@@ -53,25 +59,18 @@ echo "Downloading AWS SDK v2 JARs (version $VERSION)..."
 for jar in "${JARS[@]}"; do
     url="${BASE_URL}/${jar}/${VERSION}/${jar}-${VERSION}.jar"
     dest="${LIB_DIR}/${jar}-${VERSION}.jar"
-    if [ ! -f "$dest" ]; then
-        echo "  Downloading $jar..."
-        curl -sL "$url" -o "$dest"
-    else
-        echo "  $jar already exists"
-    fi
+    fetch_and_verify "$url" "$dest" "$jar-$VERSION.jar"
 done
 
 echo "Downloading third-party dependencies..."
 for path in "${THIRD_PARTY[@]}"; do
     filename=$(basename "$path")
     dest="${LIB_DIR}/${filename}"
-    if [ ! -f "$dest" ]; then
-        echo "  Downloading $filename..."
-        curl -sL "https://repo1.maven.org/maven2/${path}" -o "$dest"
-    fi
+    url="https://repo1.maven.org/maven2/${path}"
+    fetch_and_verify "$url" "$dest" "$filename"
 done
 
 echo ""
-echo "Done. JARs downloaded to $LIB_DIR"
+echo "Done. JARs downloaded and verified to $LIB_DIR"
 echo ""
 ls -lh "$LIB_DIR"/*.jar | awk '{print $9, $5}'

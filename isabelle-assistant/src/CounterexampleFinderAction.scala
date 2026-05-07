@@ -33,7 +33,7 @@ object CounterexampleFinderAction {
   )
 
   def run(view: View, config: Config): Unit = {
-    ActionHelper.runIQGoalAction(s"assistant-${config.toolName}", s"Running ${config.toolName}...") { v =>
+    ActionHelper.runIQGoalAction(s"assistant-${config.toolName}", s"Running ${config.toolName}…") { v =>
       val buffer = v.getBuffer
       val offset = v.getTextArea.getCaretPosition
       val goal = GoalExtractor.getGoalState(buffer, offset).getOrElse("")
@@ -89,7 +89,7 @@ object CounterexampleFinderAction {
           s"${config.displayName} result:\n\n$text"
         )
       case Left(error) =>
-        AssistantDockable.respondInChat(s"${config.displayName} error: $error")
+        ChatAction.addErrorResponse(error, config.displayName.toLowerCase)
     }
   }
 }

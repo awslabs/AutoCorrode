@@ -34,7 +34,7 @@ object ErrorHandler {
     else scala.util.Success(input.trim)
   }
 
-  /** Truncate a string to `maxLength`, appending "..." if truncated. */
+  /** Truncate a string to `maxLength`, appending "…" if truncated. */
   def sanitize(
       input: String,
       maxLength: Int = AssistantConstants.MAX_RESPONSE_LENGTH
@@ -47,7 +47,7 @@ object ErrorHandler {
 
   /** Convert technical error messages to user-friendly ones. */
   def makeUserFriendly(message: String, operation: String): String = {
-    if (message == null || message.trim.isEmpty) s"Unknown error in $operation"
+    if (message == null || message.trim.isEmpty) s"$operation failed with an unknown error."
     else {
       val msg = message.toLowerCase
       if (msg.contains("timeout") || msg.contains("timed out"))
@@ -80,7 +80,7 @@ object ErrorHandler {
   def truncateError(error: String): String = {
     if (error == null) "Unknown error"
     else if (error.length > AssistantConstants.MAX_ERROR_MESSAGE_LENGTH)
-      error.take(AssistantConstants.MAX_ERROR_MESSAGE_LENGTH) + "..."
+      error.take(AssistantConstants.MAX_ERROR_MESSAGE_LENGTH).stripTrailing + "…"
     else error
   }
 
@@ -108,6 +108,30 @@ object ErrorHandler {
     try Output.writeln(message)
     catch {
       case NonFatal(_) | _: LinkageError => ()
+    }
+  }
+
+  /** Safe wrapper for Output.warning — falls back to System.err if Isabelle
+    * runtime isn't available (e.g. during tests with the jEdit classpath
+    * absent). Use in place of hand-rolled try/catch around Output.warning
+    * so callers don't swallow the message entirely.
+    */
+  def safeWarn(message: String): Unit = {
+    try Output.warning(message)
+    catch {
+      case NonFatal(_) | _: LinkageError => System.err.println(s"WARNING: $message")
+    }
+  }
+
+  /** Run a Unit-valued side-effecting block that touches UI / GUI APIs. Swallows
+    * only LinkageError (jEdit/Swing classpath missing, typical in unit tests).
+    * Logs other exceptions via [[logSilentError]] rather than losing them.
+    */
+  def safeUi(component: String)(block: => Unit): Unit = {
+    try block
+    catch {
+      case _: LinkageError => ()
+      case NonFatal(ex)    => logSilentError(component, ex)
     }
   }
 

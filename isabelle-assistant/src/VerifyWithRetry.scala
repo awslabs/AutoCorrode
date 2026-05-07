@@ -38,7 +38,8 @@ object VerifyWithRetry {
     attempt: Int,
     retryPrompt: (String, String) => String,
     invokeAndExtract: String => String,
-    showResult: (String, VerificationBadge.BadgeType) => Unit
+    showResult: (String, VerificationBadge.BadgeType) => Unit,
+    token: Option[CancellationToken] = None
   ): Unit = {
     val maxRetries = AssistantOptions.getMaxVerificationRetries
     val timeout = AssistantOptions.getVerificationTimeout
@@ -57,18 +58,18 @@ object VerifyWithRetry {
 
       case IQIntegration.ProofTimeout if attempt < maxRetries =>
         retryInBackground(view, codeToVerify, "Verification timed out",
-          attempt, maxRetries, retryPrompt, invokeAndExtract, showResult)
+          attempt, maxRetries, retryPrompt, invokeAndExtract, showResult, token)
 
       case IQIntegration.ProofTimeout =>
         showResult(fullResponse, VerificationBadge.Failed("Timed out"))
 
       case IQIntegration.ProofFailure(error) if attempt < maxRetries =>
         retryInBackground(view, codeToVerify, error,
-          attempt, maxRetries, retryPrompt, invokeAndExtract, showResult)
+          attempt, maxRetries, retryPrompt, invokeAndExtract, showResult, token)
 
       case IQIntegration.ProofFailure(_) =>
         showResult(fullResponse, VerificationBadge.Failed(s"Failed after $maxRetries attempts"))
-    })
+    }, token)
   }
 
   private def retryInBackground(
@@ -77,22 +78,33 @@ object VerifyWithRetry {
     attempt: Int, maxRetries: Int,
     retryPrompt: (String, String) => String,
     invokeAndExtract: String => String,
-    showResult: (String, VerificationBadge.BadgeType) => Unit
+    showResult: (String, VerificationBadge.BadgeType) => Unit,
+    token: Option[CancellationToken]
   ): Unit = {
-    AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
+    def cancelled: Boolean = token.exists(_.isCancelled)
+    // Bail before scheduling a new LLM call if the operation was cancelled.
+    if (cancelled) return
+    AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)…")
 
     val _ = Isabelle_Thread.fork(name = "assistant-verify-retry") {
       try {
-        val prompt = retryPrompt(failedCode, error)
-        val code = invokeAndExtract(prompt)
-        GUI_Thread.later {
-          verify(view, code, code, attempt + 1,
-            retryPrompt, invokeAndExtract, showResult)
+        // Exponential backoff capped at 5s, consistent with BedrockClient.
+        val backoffMs = math.min(5000L, 100L * (1L << (attempt - 1)))
+        Thread.sleep(backoffMs)
+        if (!cancelled) {
+          val prompt = retryPrompt(failedCode, error)
+          val code = invokeAndExtract(prompt)
+          GUI_Thread.later {
+            if (!cancelled)
+              verify(view, code, code, attempt + 1,
+                retryPrompt, invokeAndExtract, showResult, token)
+          }
         }
       } catch {
         case ex: Exception =>
           GUI_Thread.later {
-            showResult(failedCode, VerificationBadge.Failed("Retry failed: " + ex.getMessage))
+            if (!cancelled)
+              showResult(failedCode, VerificationBadge.Failed("Retry failed: " + ex.getMessage))
           }
       }
     }

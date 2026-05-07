@@ -8,6 +8,24 @@ import org.scalatest.matchers.should.Matchers
 
 class IQMcpClientTest extends AnyFunSuite with Matchers {
 
+  test("callExplore should short-circuit with the cancelled marker when the token is already cancelled") {
+    // When the caller trips the token before invoking the MCP call, the
+    // cancellable path must short-circuit without attempting any I/O and
+    // return the documented marker string so callers (IQIntegration) can
+    // recognise cancellation and distinguish it from real errors.
+    val token = new CancellationToken
+    token.cancel()
+
+    val result = IQMcpClient.callExplore(
+      query = IQMcpClient.ExploreQueryType.Proof,
+      arguments = "by simp",
+      timeoutMs = 100L,
+      token = Some(token)
+    )
+
+    result shouldBe Left(IQMcpClient.CancelledErrorMessage)
+  }
+
   test("parseToolCallResponse should decode embedded JSON payload") {
     val response =
       """{"jsonrpc":"2.0","id":"1","result":{"content":[{"type":"text","text":"{\"success\":true,\"results\":\"Try this: by simp (10 ms)\",\"message\":\"ok\",\"timed_out\":false}"}]}}"""
@@ -184,5 +202,62 @@ class IQMcpClientTest extends AnyFunSuite with Matchers {
     decoded.diagnostics should have size 1
     decoded.diagnostics.head.line shouldBe 12
     decoded.diagnostics.head.message should include("redundant")
+  }
+
+  test("decodeOpenFileResult should surface every server field including tracked") {
+    val payload: Map[String, Any] = Map(
+      "path" -> "/tmp/Foo.thy",
+      "created" -> true,
+      "overwritten" -> false,
+      "opened" -> true,
+      "in_view" -> true,
+      "tracked" -> true,
+      "message" -> "File opened successfully"
+    )
+
+    val result = IQMcpDecoder.decodeOpenFileResult(payload)
+
+    result.path shouldBe "/tmp/Foo.thy"
+    result.created shouldBe true
+    result.overwritten shouldBe false
+    result.opened shouldBe true
+    result.inView shouldBe true
+    result.tracked shouldBe true
+    result.message shouldBe "File opened successfully"
+  }
+
+  test("decodeOpenFileResult should default tracked to false when server omits it") {
+    val payload: Map[String, Any] = Map(
+      "path" -> "/tmp/Foo.thy",
+      "created" -> true,
+      "opened" -> true,
+      "in_view" -> true,
+      "message" -> ""
+    )
+
+    val result = IQMcpDecoder.decodeOpenFileResult(payload)
+
+    result.tracked shouldBe false
+  }
+
+  test(
+    "decodeOpenFileResult should capture partial-success response with tracking timeout"
+  ) {
+    val payload: Map[String, Any] = Map(
+      "path" -> "/tmp/Slow.thy",
+      "created" -> true,
+      "overwritten" -> false,
+      "opened" -> true,
+      "in_view" -> true,
+      "tracked" -> false,
+      "message" -> "File open was requested but tracking did not stabilize before timeout"
+    )
+
+    val result = IQMcpDecoder.decodeOpenFileResult(payload)
+
+    result.created shouldBe true
+    result.opened shouldBe true
+    result.tracked shouldBe false
+    result.message should include("tracking did not stabilize")
   }
 }

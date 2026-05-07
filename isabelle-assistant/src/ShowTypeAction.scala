@@ -30,11 +30,21 @@ object ShowTypeAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
 
-    getTypeAtOffset(buffer, offset) match {
-      case Some(typ) =>
-        AssistantDockable.respondInChat(s"Type: `$typ`")
-      case None =>
-        AssistantDockable.respondInChat("No type information available at cursor position.")
+    // getTypeAtOffset calls I/Q MCP; running it on the EDT freezes jEdit.
+    AssistantDockable.setStatus("Looking up type…")
+    val _ = Isabelle_Thread.fork(name = "assistant-show-type") {
+      val typeOpt = getTypeAtOffset(buffer, offset)
+      GUI_Thread.later {
+        typeOpt match {
+          case Some(typ) =>
+            AssistantDockable.respondInChat(s"Type: `$typ`")
+          case None =>
+            AssistantDockable.respondInChat(
+              "No type information available at cursor position."
+            )
+        }
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+      }
     }
   }
 

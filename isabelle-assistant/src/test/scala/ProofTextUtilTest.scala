@@ -76,6 +76,35 @@ class ProofTextUtilTest extends AnyFunSuite with Matchers {
     result should include("sorry")  // replaced the actual by
   }
 
+  test("sorryify should skip by inside string literals") {
+    val proof = """proof have "by_label" by simp qed"""
+    val result = ProofTextUtil.sorryify(proof)
+    // The textual "by_label" must survive — the word boundary in the regex
+    // already protects "by_label" because of the trailing _, but a bare "by"
+    // inside a quoted literal must also survive.
+    val proof2 = """proof have "prove by induction" by simp qed"""
+    val result2 = ProofTextUtil.sorryify(proof2)
+    result2 should include("\"prove by induction\"")
+    result2 should include("sorry")
+    result should include("by_label")
+  }
+
+  test("sorryify should replace each by-clause independently in a multi-step proof") {
+    val proof = """proof
+  have h1: P by simp
+  have h2: Q by auto
+  show ?thesis by (metis h1 h2)
+qed"""
+    val result = ProofTextUtil.sorryify(proof)
+    // Every `by ...` clause should have become `sorry`.
+    "\\bsorry\\b".r.findAllIn(result).length shouldBe 3
+    result should include("h1")
+    result should include("h2")
+    result should not include "by simp"
+    result should not include "by auto"
+    result should not include "by (metis"
+  }
+
   test("isStructurallyComplete should detect qed on final line") {
     ProofTextUtil.isStructurallyComplete("proof\n  sorry\nqed") shouldBe true
   }

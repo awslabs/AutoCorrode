@@ -29,6 +29,11 @@ object VerificationCache {
   }
 
   private val maxSize = AssistantConstants.VERIFICATION_CACHE_SIZE
+  private val ttlMs = AssistantConstants.VERIFICATION_CACHE_TTL_MS
+
+  /** Test seam: overridable clock so TTL tests don't have to block. */
+  private[assistant] var nowMs: () => Long = () => System.currentTimeMillis()
+
   private val infrastructureFailureHints =
     List(
       "timeout",
@@ -85,12 +90,24 @@ object VerificationCache {
   private[assistant] def shouldCacheResult(result: IQIntegration.VerificationResult): Boolean =
     classifyResult(result) == ResultClass.StableSuccess
 
+  /** Look up, then evict if the entry has passed its TTL. Returns `None`
+    * both when the key is absent and when the stored entry is too old. */
+  private def getFresh(key: CacheKey): Option[IQIntegration.VerificationResult] = {
+    Option(cache.get(key)) match {
+      case None => None
+      case Some(entry) =>
+        if (nowMs() - entry.timestamp > ttlMs) {
+          cache.remove(key)
+          None
+        } else Some(entry.result)
+    }
+  }
+
   def get(
       command: IQMcpClient.CommandInfo,
       proofText: String
   ): Option[IQIntegration.VerificationResult] = synchronized {
-    val key = keyFor(command, proofText)
-    Option(cache.get(key)).map(_.result)
+    getFresh(keyFor(command, proofText))
   }
 
   private[assistant] def getByKey(
@@ -99,8 +116,7 @@ object VerificationCache {
     commandSource: String,
     proofText: String
   ): Option[IQIntegration.VerificationResult] = synchronized {
-    val key = CacheKey(nodeName, commandId, commandSource, proofText)
-    Option(cache.get(key)).map(_.result)
+    getFresh(CacheKey(nodeName, commandId, commandSource, proofText))
   }
 
   def putIfCacheable(
@@ -111,7 +127,7 @@ object VerificationCache {
     synchronized {
       if (shouldCacheResult(result)) {
         val key = keyFor(command, proofText)
-        cache.put(key, CacheEntry(result, System.currentTimeMillis()))
+        cache.put(key, CacheEntry(result, nowMs()))
         true
       } else false
     }
@@ -132,7 +148,26 @@ object VerificationCache {
     result: IQIntegration.VerificationResult
   ): Unit = synchronized {
     val key = CacheKey(nodeName, commandId, commandSource, proofText)
-    val _ = cache.put(key, CacheEntry(result, System.currentTimeMillis()))
+    val _ = cache.put(key, CacheEntry(result, nowMs()))
+  }
+
+  /** Invalidate every entry whose node path matches the given name.
+    * Called after a theory file has been edited so that stale cached
+    * outcomes for that theory cannot satisfy later look-ups. */
+  def invalidateNode(nodeName: String): Int = synchronized {
+    if (nodeName == null || nodeName.isEmpty) 0
+    else {
+      val it = cache.entrySet().iterator()
+      var removed = 0
+      while (it.hasNext) {
+        val e = it.next()
+        if (e.getKey.nodeName == nodeName) {
+          it.remove()
+          removed += 1
+        }
+      }
+      removed
+    }
   }
 
   def clear(): Unit = synchronized { cache.clear() }

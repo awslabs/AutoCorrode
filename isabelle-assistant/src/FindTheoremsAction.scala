@@ -12,18 +12,31 @@ object FindTheoremsAction {
   def findTheoremsForGoal(view: View): Unit = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    GoalExtractor.getGoalState(buffer, offset).flatMap(extractGoalPattern) match {
-      case Some(pattern) => findTheorems(view, Some(pattern))
-      case None =>
-        GUI.warning_dialog(
-          view,
-          "Isabelle Assistant",
-          "No goal at cursor position"
-        )
+
+    // The goal-state lookup is an MCP round trip. Run it on a background
+    // thread before dispatching to findTheorems.
+    AssistantDockable.setStatus("Reading goal state…")
+    val _ = Isabelle_Thread.fork(name = "assistant-find-theorems-goal") {
+      val patternOpt =
+        GoalExtractor.getGoalState(buffer, offset).flatMap(extractGoalPattern)
+      GUI_Thread.later {
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+        patternOpt match {
+          case Some(pattern) => findTheorems(view, Some(pattern))
+          case None =>
+            GUI.warning_dialog(
+              view,
+              "Isabelle Assistant",
+              AssistantConstants.UIText.NO_GOAL_AT_CURSOR
+            )
+        }
+      }
     }
   }
 
   def findTheorems(view: View, initialPattern: Option[String]): Unit = {
+    // The input dialog needs to run on the EDT. Resolve the pattern here,
+    // then hand off to the background thread for the MCP work.
     val patternOpt = initialPattern.filter(_.trim.nonEmpty).orElse {
       Option(JOptionPane.showInputDialog(view, "Search pattern:", "Find Theorems", JOptionPane.PLAIN_MESSAGE))
         .map(_.trim).filter(_.nonEmpty)
@@ -35,36 +48,44 @@ object FindTheoremsAction {
       if (!IQAvailable.isAvailable) {
         GUI.warning_dialog(view, "Isabelle Assistant", "I/Q plugin not available")
       } else {
-        val searchPattern = toSearchPattern(pattern, view)
         val buffer = view.getBuffer
         val offset = view.getTextArea.getCaretPosition
 
-        CommandExtractor.getCommandAtOffset(buffer, offset) match {
-          case Some(_) =>
-            AssistantDockable.setStatus("Searching theorems...")
-            val quotedPattern = "\"" + searchPattern + "\""
-
-            IQIntegration.runFindTheoremsAsync(
-              view,
-              quotedPattern,
-              AssistantOptions.getFindTheoremsLimit,
-              AssistantOptions.getFindTheoremsTimeout,
-              {
-                case Right(results) =>
-                  GUI_Thread.later { displayResults(view, searchPattern, results) }
-                case Left(error) =>
-                  GUI_Thread.later {
-                    AssistantDockable.respondInChat(s"Find theorems error: $error")
-                    AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-                  }
-              }
-            )
-          case None =>
-            GUI.warning_dialog(
-              view,
-              "Isabelle Assistant",
-              "No Isabelle command at cursor position"
-            )
+        // toSearchPattern calls GoalExtractor.analyzeGoal (MCP) and
+        // CommandExtractor.getCommandAtOffset is MCP too. Both must run on
+        // a background thread or the EDT freezes.
+        AssistantDockable.setStatus("Searching theorems…")
+        val _ = Isabelle_Thread.fork(name = "assistant-find-theorems") {
+          val searchPattern = toSearchPattern(pattern, view)
+          val hasCommand =
+            CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
+          GUI_Thread.later {
+            if (!hasCommand) {
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+              GUI.warning_dialog(
+                view,
+                "Isabelle Assistant",
+                AssistantConstants.UIText.NO_COMMAND_AT_CURSOR
+              )
+            } else {
+              val quotedPattern = "\"" + searchPattern + "\""
+              IQIntegration.runFindTheoremsAsync(
+                view,
+                quotedPattern,
+                AssistantOptions.getFindTheoremsLimit,
+                AssistantOptions.getFindTheoremsTimeout,
+                {
+                  case Right(results) =>
+                    GUI_Thread.later { displayResults(view, searchPattern, results) }
+                  case Left(error) =>
+                    GUI_Thread.later {
+                      ChatAction.addErrorResponse(error, "find theorems")
+                      AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+                    }
+                }
+              )
+            }
+          }
         }
       }
     }

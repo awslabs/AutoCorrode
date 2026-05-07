@@ -77,7 +77,7 @@ graph TB
 4. I/Q capability backplane for proof-state operations and verification (`IQIntegration`, `IQMcpClient`)
 
 Layering rule: proof execution semantics are owned by I/Q. Assistant-side proof tools should orchestrate and render results, not implement local fallback execution paths.
-The repository enforces this with a failing layering gate (`make check-layering`) in the Assistant build/test flow.
+The repository enforces this with a failing layering gate (`make check-layering`) in the Assistant build/test flow. The gate performs two complementary checks: a per-method body scan for forbidden runtime calls, and a whole-file pass that flags `val`/`def` bindings capturing forbidden symbols by reference (to defeat indirection bypasses like `val f = IQIntegration.verifyProofAsync`).
 Runtime-boundary inventory is tracked in `design-documents/10-assistant-runtime-boundary-inventory.tsv` and is expected to remain empty (header-only) for forbidden low-level touchpoints under the layering policy.
 Read-only UI/context introspection is allowed in designated UI modules for responsive context-menu behavior.
 
@@ -146,9 +146,35 @@ Generate QuickCheck-style test cases and examples for definitions.
 
 ### Configuration
 
-All settings are accessible via **Plugins → Plugin Options → Isabelle Assistant** or the `:set` chat command. Configure AWS region, model selection, temperature, verification timeouts, and more.
+All settings are accessible via **Plugins → Plugin Options → Isabelle Assistant** or the `:set` chat command. Configure AWS region, model selection, verification timeouts, and more.
 
 ![Settings panel](gifs/assistant-settings.gif)
+
+## Getting Started
+
+Once the plugin is installed (see [Setup](#setup)) and a model is selected (**Plugins → Plugin Options → Isabelle Assistant**, or `:set model <model-id>` in the chat panel), a typical first-run flow is:
+
+1. Open a `.thy` file — the Assistant panel appears docked, with a welcome card and clickable `:help` link.
+2. Put your cursor inside a lemma or definition and type `:explain` in the chat. The Assistant explains the code under your cursor.
+3. To generate a proof, put the cursor on an open goal and type `:suggest` (or `:sledgehammer` if I/Q is installed).
+4. To check that a proof works, type `:verify by simp` (or any method) in the chat.
+
+Every feature is discoverable from the chat: type `:help` for the full command list, or `:help <command>` (e.g., `:help suggest`) for per-command details. Right-click inside a `.thy` file to access the same actions via the **Isabelle Assistant** submenu.
+
+## Troubleshooting
+
+| Symptom | What to check |
+|---------|---------------|
+| Chat returns "Network connection failed" | `~/.aws/credentials` exists, or `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` are set. |
+| Chat returns "AWS credentials are invalid or insufficient" | Your IAM role needs `bedrock:InvokeModel` for the region's Anthropic models (see `bedrock:ListFoundationModels`). |
+| Chat returns "AI model is not available" | Run `:models` to list regional models, then `:set model <id>` to pick one. |
+| Chat returns "AWS service limit reached" | Wait and retry, or request a Bedrock quota increase in the AWS console. |
+| Chat returns "Operation timed out" | Increase the relevant timeout via `:set verify_timeout <ms>` or in Plugin Options. |
+| Welcome card shows "No model configured" | Model ID is empty. Use `:models` to see candidates, then `:set model <id>`. |
+| Right-click submenu is missing | The file's mode must be `isabelle` — only `.thy` files trigger the Assistant context menu. |
+| Proof verification is "Unverified" | I/Q is not installed, or the theory does not import `Assistant_Support` / `Isar_Explore`. See [Setup](#setup). |
+
+Check the current plugin version at any time with `:version`. Hover over the I/Q badge in the top-left of the Assistant panel to see which capabilities are enabled.
 
 ## Prerequisites
 
@@ -177,10 +203,11 @@ For full feature support, import the Assistant support theory in your developmen
 imports "Isabelle_Assistant.Assistant_Support"
 ```
 
-This provides Eisbach (for tactic generation) and Isar_Explore (for I/Q integration). The status bar shows the current support level:
-- **Assistant ✓** — `Assistant_Support` imported, all features available
-- **Assistant: Partial** — I/Q or Eisbach available but not both
-- **Assistant (LLM only)** — no I/Q or Eisbach; chat and LLM features still work
+This provides Eisbach (for tactic generation) and Isar_Explore (for I/Q integration). The status-bar model label shows the current support level:
+- **Ready** — `Assistant_Support` imported, all features available.
+- **Partial** — Eisbach is available but I/Q is not imported, or vice versa.
+- **No I/Q** — variant of Partial shown when I/Q specifically is unavailable.
+- **LLM Only** — neither I/Q nor Eisbach detected; chat and LLM features still work.
 
 ## Features
 
@@ -233,23 +260,17 @@ Verification cache semantics: only successful verification outcomes are cached. 
 
 ### Tool Use (Anthropic Models)
 
-With Anthropic Claude models, the LLM can autonomously use tools during chat.
-The table below is a representative subset; the complete toolset in the current build includes read/search/navigation, proof/verification, editing/open/create, user-interaction (`ask_user`), and task-list tools.
+With Anthropic Claude models, the LLM can autonomously use tools during chat. The current build exposes around 50 tools, grouped by capability:
 
-| Tool | Description |
-|------|-------------|
-| `read_theory` | Read lines from an open theory file (auto-truncates large files) |
-| `list_theories` | List all open theory files |
-| `search_theories` | Search for patterns in theory files with flexible scoping |
-| `get_context_info` | Get structured proof/goal context at the cursor (supports quick mode) |
-| `get_goal_state` | Get the current proof goal text |
-| `get_proof_block` | Get the enclosing proof block at the cursor |
-| `get_proof_context` | Get local facts and assumptions |
-| `find_theorems` | Search for library theorems (I/Q) |
-| `get_diagnostics` | Get error or warning messages with count-only mode |
-| `verify_proof` | Verify a proof method (I/Q) |
-| `run_sledgehammer` | Run automated proof search (I/Q) |
-| `find_counterexample` | Search for counterexamples using nitpick or quickcheck (I/Q) |
+- **Theory I/O.** `read_theory`, `list_theories`, `search_theories`, `search_in_theory`, `search_all_theories`, `get_file_stats`, `edit_theory`, `create_theory`, `open_theory`, `set_cursor_position`.
+- **Proof state.** `get_goal_state`, `get_subgoal`, `get_proof_context`, `get_proof_block`, `get_proof_outline`, `get_context_info`, `get_command_text`, `get_type`, `get_sorry_positions`, `get_processing_status`.
+- **Library search & diagnostics.** `find_theorems`, `get_definitions`, `get_dependencies`, `get_entities`, `get_errors`, `get_warnings`, `get_diagnostics`.
+- **Verification & counterexamples.** `verify_proof`, `run_sledgehammer`, `run_nitpick`, `run_quickcheck`, `find_counterexample`, `try_methods`, `execute_step`, `trace_simplifier`.
+- **Web.** `web_search`.
+- **Interactive & planning.** `ask_user`, `plan_approach`.
+- **Persistence & workflow.** `task_list_add`, `task_list_done`, `task_list_irrelevant`, `task_list_next`, `task_list_show`, `task_list_get`, `memory_add`, `memory_delete`, `memory_delete_topic`, `memory_list_topics`, `memory_list`, `memory_get`, `memory_search`.
+
+The authoritative list of wire names is the `ToolId` enum in [`src/ToolId.scala`](src/ToolId.scala); per-tool descriptions and parameters live on the `tools` registry in [`src/AssistantTools.scala`](src/AssistantTools.scala). `AssistantToolsTest.scala` exercises dispatch for every wired tool, so that test suite is the practical source of truth for which tools are fully integrated in a given build.
 
 Implementation note: assistant tool names are stable user-facing abstractions. Internally they route to canonical I/Q MCP capabilities (`get_context_info`, scoped `get_proof_blocks`, and `open_file` creation mode), without assistant-side reimplementation of Isabelle runtime semantics.
 
@@ -308,6 +329,7 @@ Type `:help` in the chat to see all commands. Commands are prefixed with `:`.
 | `:search <theory> <pattern>` | Search in theory |
 | `:models` | Refresh available models |
 | `:set [key [value]]` | View/change settings |
+| `:version` | Show plugin name and version |
 
 ### Target Syntax
 
@@ -339,15 +361,17 @@ Access via **Plugins → Plugin Options → Isabelle Assistant** or `:set` in ch
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `region` | us-east-1 | AWS region |
-| `model` | (none) | Bedrock model ID |
-| `cris` | true | Cross-Region Inference (CRIS) |
-| `temperature` | 0.3 | Sampling temperature (0.0–1.0) |
-| `max_tokens` | 4000 | Max response tokens |
-| `max_tool_iterations` | 10 | Max tool-use iterations (Anthropic) |
+| `model` | (none) | Bedrock model ID (main chat + tool-use model) |
+| `planning_model` | (use main) | Optional separate Bedrock model for `:plan` requests |
+| `summarization_model` | (use main) | Optional separate Bedrock model for context summarization |
+| `cris` | true | Cross-Region Inference (CRIS); alias: `use_cris` |
+| `max_tokens` | 4000 | Max response tokens per request |
+| `max_context_tokens` | 60000 | Max context-window budget (tokens) used for history management |
+| `max_tool_iterations` | 10 | Max tool-use iterations per turn (Anthropic) |
 | `max_retries` | 3 | Verification retry attempts |
 | `verify_timeout` | 30000 | Verification timeout (ms) |
 | `verify_suggestions` | true | Verify proofs via I/Q |
-| `use_sledgehammer` | false | Run sledgehammer in parallel with suggestions |
+| `use_sledgehammer` | false | Run sledgehammer in parallel with suggestions; alias: `sledgehammer` |
 | `sledgehammer_timeout` | 15000 | Sledgehammer timeout (ms) |
 | `quickcheck_timeout` | 5000 | Quickcheck timeout (ms) |
 | `nitpick_timeout` | 5000 | Nitpick timeout (ms) |
@@ -356,6 +380,8 @@ Access via **Plugins → Plugin Options → Isabelle Assistant** or `:set` in ch
 | `find_theorems_timeout` | 10000 | Find theorems timeout (ms) |
 | `trace_timeout` | 10 | Simplifier trace timeout (s) |
 | `trace_depth` | 3 | Simplifier trace depth |
+| `auto_summarize` | true | Automatically summarize older chat history when context grows |
+| `summarization_threshold` | 0.75 | Trigger auto-summarization when context usage exceeds this fraction (0.5 – 0.95) |
 
 ### AWS Credentials
 

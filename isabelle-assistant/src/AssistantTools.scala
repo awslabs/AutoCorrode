@@ -6,10 +6,10 @@ package isabelle.assistant
 import isabelle._
 import org.gjt.sp.jedit.View
 import java.util.concurrent.{CountDownLatch, TimeUnit}
-import java.util.Locale
-import scala.annotation.unused
 import scala.util.control.NonFatal
 import software.amazon.awssdk.thirdparty.jackson.core.JsonGenerator
+
+import ToolArgs._
 
 /** Tool definitions and execution for LLM tool use (Anthropic function
   * calling). Tools give the LLM autonomous access to theory files, goal state,
@@ -17,35 +17,107 @@ import software.amazon.awssdk.thirdparty.jackson.core.JsonGenerator
   */
 object AssistantTools {
 
+  /** One parameter in a tool's JSON-schema signature, as exposed to the LLM.
+    *
+    * @param name        Parameter key as it appears in the tool call JSON
+    * @param typ         JSON-schema primitive name (e.g. "string", "integer",
+    *                    "boolean"). Complex types are expressed as "object"
+    *                    with additional schema described in the description.
+    * @param description Human-readable doc shown to the model; include value
+    *                    shape, defaults, and any validation rules here
+    * @param required    Whether the parameter must be present in the call.
+    *                    Optional parameters should document their default. */
+  /** Internal handler result. Lets downstream handlers branch on the
+    * success/error shape without reparsing a stringly-typed "Error: …"
+    * prefix. The wire format sent back to the LLM is still a plain String
+    * (produced by [[ToolResult.render]]), so this ADT only ever crosses
+    * private method boundaries.
+    *
+    * Use [[Ok]] for a normal payload, [[Err]] with a free-form message for
+    * a recoverable failure, and [[Unavailable]] for the specific
+    * "dependency missing" failure (currently I/Q not running) so callers
+    * that want to display a distinct status can do so. */
+  private sealed trait ToolResult {
+    def render: String = this match {
+      case ToolResult.Ok(text)       => text
+      case ToolResult.Err(message)   => s"Error: $message"
+      case ToolResult.Unavailable(m) => m
+    }
+    def isError: Boolean = this match {
+      case _: ToolResult.Ok => false
+      case _                => true
+    }
+  }
+  private object ToolResult {
+    final case class Ok(text: String) extends ToolResult
+    final case class Err(message: String) extends ToolResult
+    final case class Unavailable(message: String) extends ToolResult
+  }
+
   case class ToolParam(
       name: String,
       typ: String,
       description: String,
       required: Boolean = false
   )
-  case class ToolDef private (
+
+  /** Definition of a single Anthropic tool this plugin exposes.
+    *
+    * Every tool listed in [[tools]] falls into one of four semantic classes
+    * — callers should treat these as the informal typing for each handler:
+    *
+    *   - '''Pure query''': read-only, no side effects (e.g. `read_theory`,
+    *     `search_theories`, `get_entities`). Safe to retry; handler body
+    *     never mutates disk, IDE state, or Isabelle's document model.
+    *   - '''I/Q introspection''': calls into the I/Q MCP backplane to learn
+    *     about the current Isabelle session (e.g. `find_theorems`,
+    *     `get_processing_status`). Requires I/Q plugin available; handlers
+    *     return a user-visible error when it is not.
+    *   - '''Mutation''': writes to the user's disk or to the editor
+    *     (`edit_theory`, `create_theory`). Subject to I/Q's mutation-roots
+    *     authorization; errors on Left should be surfaced verbatim so the
+    *     user can adjust their settings.
+    *   - '''Interactive / heavy''': synchronously blocks the turn on a
+    *     long-running or user-prompt operation (`ask_user`,
+    *     `run_sledgehammer`, `run_nitpick`). These interact with the
+    *     ToolPermissions flow (AskAtFirstUse) and may return ask-user
+    *     denied errors.
+    *
+    * Handlers are wired to tool IDs in the `toolHandlers` map below. When
+    * adding a new tool, also update `ToolPermissions.defaultPermissions`
+    * and `toolDescriptionsById`, and add test coverage in
+    * `ToolIdTest.scala`, `AssistantToolsTest.scala`, and
+    * `ToolPermissionsTest.scala`. See CONTRIBUTING.md 'Adding a New Tool'.
+    *
+    * @param id          Stable identifier; `id.wireName` is the string the
+    *                    LLM sees in tool-use responses
+    * @param description One-line purpose statement shown to the model;
+    *                    include return-shape and edge-case notes here
+    * @param params      JSON-schema parameters the tool accepts */
+  case class ToolDef(
       id: ToolId,
       description: String,
       params: List[ToolParam]
   ) {
     val name: String = id.wireName
   }
-  object ToolDef {
-    def apply(id: ToolId, description: String, params: List[ToolParam]): ToolDef =
-      new ToolDef(id, description, params)
 
-    def apply(name: String, description: String, params: List[ToolParam]): ToolDef =
-      ToolId
-        .fromWire(name)
-        .map(id => new ToolDef(id, description, params))
-        .getOrElse(
-          throw new IllegalArgumentException(s"Unknown tool name in definition: $name")
-        )
-  }
-
+  /** Full registry of tools the Assistant exposes to the LLM.
+    *
+    * Order does not affect selection — Anthropic picks by semantic match
+    * from the descriptions — but grouping related tools together makes the
+    * file easier to audit. Broadly, the list proceeds:
+    *   1. theory I/O (read / list / search / edit / create)
+    *   2. I/Q introspection (find_theorems, verify_proof, diagnostics)
+    *   3. heavy search (sledgehammer, nitpick, quickcheck)
+    *   4. interactive helpers (ask_user, memory_*, task_list_*)
+    *   5. web (web_search, web_fetch) — guarded by ToolPermissions
+    *
+    * See `ToolDef`'s scaladoc for the four semantic classes and pointers
+    * to CONTRIBUTING.md for the "Adding a New Tool" checklist. */
   val tools: List[ToolDef] = List(
     ToolDef(
-      "read_theory",
+      ToolId.ReadTheory,
       "Read lines from an open Isabelle theory file. Returns the file content. Use start_line/end_line to read a specific range.",
       List(
         ToolParam(
@@ -67,12 +139,12 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "list_theories",
+      ToolId.ListTheories,
       "List all currently open Isabelle theory files.",
       Nil
     ),
     ToolDef(
-      "search_in_theory",
+      ToolId.SearchInTheory,
       "Search for a text pattern in an open theory file. Returns matching lines with line numbers.",
       List(
         ToolParam("theory", "string", "Theory name", required = true),
@@ -90,7 +162,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "search_theories",
+      ToolId.SearchTheories,
       "Search for a text pattern in theory files. Unified tool replacing search_in_theory and search_all_theories. Returns matching lines with theory names and line numbers.",
       List(
         ToolParam(
@@ -113,12 +185,12 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_goal_state",
+      ToolId.GetGoalState,
       "Get the current proof goal state at the cursor position. Returns the goal or empty if not in a proof.",
       Nil
     ),
     ToolDef(
-      "get_subgoal",
+      ToolId.GetSubgoal,
       "Extract a single subgoal by index from the current proof state. More efficient than get_goal_state for multi-subgoal proofs when you only need to focus on one subgoal.",
       List(
         ToolParam(
@@ -130,12 +202,12 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_proof_context",
+      ToolId.GetProofContext,
       "Get local facts and assumptions in scope at the cursor position.",
       Nil
     ),
     ToolDef(
-      "find_theorems",
+      ToolId.FindTheorems,
       "Search for Isabelle theorems matching a pattern. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -148,7 +220,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "verify_proof",
+      ToolId.VerifyProof,
       "Verify a proof method against the current goal using Isabelle. Returns success/failure. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -160,22 +232,22 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "run_sledgehammer",
+      ToolId.RunSledgehammer,
       "Run Sledgehammer to find proofs using external ATP provers. Returns found proof methods. Requires I/Q plugin.",
       Nil
     ),
     ToolDef(
-      "run_nitpick",
+      ToolId.RunNitpick,
       "Run Nitpick model finder to search for counterexamples to the current goal. Returns counterexample if found. Requires I/Q plugin.",
       Nil
     ),
     ToolDef(
-      "run_quickcheck",
+      ToolId.RunQuickcheck,
       "Run QuickCheck to test the current goal with random examples. Returns counterexample if found. Requires I/Q plugin.",
       Nil
     ),
     ToolDef(
-      "find_counterexample",
+      ToolId.FindCounterexample,
       "Search for counterexamples to the current goal using Nitpick or QuickCheck. Returns counterexample if found. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -186,17 +258,17 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_type",
+      ToolId.GetType,
       "Get type information for the term at the cursor position. Returns the term and its type.",
       Nil
     ),
     ToolDef(
-      "get_command_text",
+      ToolId.GetCommandText,
       "Get the source text of the Isabelle command at the cursor position.",
       Nil
     ),
     ToolDef(
-      "get_errors",
+      ToolId.GetErrors,
       "Get error messages from PIDE's processed region. IMPORTANT: Only returns errors from the already-processed portion of the theory. To check if a file is completely error-free, first use set_cursor_position to move to the end of the file, then call get_errors. By default returns all errors in the current buffer with line numbers. Use scope='cursor' to get only errors at cursor position.",
       List(
         ToolParam(
@@ -207,7 +279,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_diagnostics",
+      ToolId.GetDiagnostics,
       "Get error or warning messages from PIDE's processed region. IMPORTANT: Only returns diagnostics from the already-processed portion of the theory. To check if a file is completely error/warning-free, first use set_cursor_position to move to the end of the file, then call get_diagnostics.",
       List(
         ToolParam(
@@ -229,7 +301,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_definitions",
+      ToolId.GetDefinitions,
       "Get definitions for specified constant or type names. Returns the definition text for each name. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -241,28 +313,28 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_file_stats",
+      ToolId.GetFileStats,
       "Get file statistics (line count, entity count, processing status) without reading full content. Efficient alternative to read_theory + get_entities for overview. Requires I/Q plugin.",
       List(
         ToolParam("theory", "string", "Theory name", required = true)
       )
     ),
     ToolDef(
-      "get_processing_status",
+      ToolId.GetProcessingStatus,
       "Get PIDE processing status (unprocessed/running/finished/failed command counts). Use this to check if a theory has been fully processed before querying for errors. Requires I/Q plugin.",
       List(
         ToolParam("theory", "string", "Theory name", required = true)
       )
     ),
     ToolDef(
-      "get_sorry_positions",
+      ToolId.GetSorryPositions,
       "Find all sorry/oops commands in a theory file with their line numbers and enclosing proof names. Useful for identifying incomplete proofs. Requires I/Q plugin.",
       List(
         ToolParam("theory", "string", "Theory name", required = true)
       )
     ),
     ToolDef(
-      "execute_step",
+      ToolId.ExecuteStep,
       "Execute a proof step and return the resulting proof state. Use this to explore what happens when you apply a proof method. Returns the new goal state and whether the proof is complete. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -274,7 +346,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "trace_simplifier",
+      ToolId.TraceSimplifier,
       "Trace the simplifier to understand rewriting steps. Returns detailed trace of simp/auto operations. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -285,22 +357,22 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_proof_block",
+      ToolId.GetProofBlock,
       "Get the full proof block (lemma/theorem...qed/done) at the cursor position. Returns the complete proof text including the statement.",
       Nil
     ),
     ToolDef(
-      "get_proof_outline",
+      ToolId.GetProofOutline,
       "Get a structural outline of the proof block at the cursor position. Returns only the proof skeleton (keyword lines) with line numbers, filtering out proof details. Useful for understanding proof structure without full content.",
       Nil
     ),
     ToolDef(
-      "get_context_info",
+      ToolId.GetContextInfo,
       "Get structured context information at cursor: whether in a proof, whether there's a goal, whether on an error, etc. Returns a summary of the cursor context.",
       Nil
     ),
     ToolDef(
-      "search_all_theories",
+      ToolId.SearchAllTheories,
       "Search for a text pattern across all open theory files. Returns matching lines with theory names and line numbers.",
       List(
         ToolParam(
@@ -317,14 +389,14 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_dependencies",
+      ToolId.GetDependencies,
       "Get the import dependencies for a specific theory file. Returns the list of imported theories.",
       List(
         ToolParam("theory", "string", "Theory name", required = true)
       )
     ),
     ToolDef(
-      "get_warnings",
+      ToolId.GetWarnings,
       "Get warning messages from PIDE's processed region. IMPORTANT: Only returns warnings from the already-processed portion of the theory. To check if a file is completely warning-free, first use set_cursor_position to move to the end of the file, then call get_warnings. By default returns all warnings in the current buffer with line numbers. Use scope='cursor' to get only warnings at cursor position.",
       List(
         ToolParam(
@@ -335,7 +407,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "set_cursor_position",
+      ToolId.SetCursorPosition,
       "Move the cursor to a specific line number in the current theory. This allows inspection of goals and context at different positions. Returns confirmation or error.",
       List(
         ToolParam(
@@ -347,7 +419,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "edit_theory",
+      ToolId.EditTheory,
       "Edit a theory file by inserting, replacing, or deleting text at specified line ranges. Use read_theory first to see current content. For multi-line inserts/replacements, include literal \\n characters in the text parameter. All edits are wrapped in compound edits for proper undo support.",
       List(
         ToolParam("theory", "string", "Theory name", required = true),
@@ -376,7 +448,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "try_methods",
+      ToolId.TryMethods,
       "Try multiple proof methods at once and return which ones succeed. More efficient than calling verify_proof repeatedly. Returns results for all methods. Requires I/Q plugin.",
       List(
         ToolParam(
@@ -388,14 +460,14 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "get_entities",
+      ToolId.GetEntities,
       "List all named entities (lemmas, definitions, datatypes, etc.) in a theory file with their line numbers. Returns a structured listing of the theory's contents.",
       List(
         ToolParam("theory", "string", "Theory name", required = true)
       )
     ),
     ToolDef(
-      "web_search",
+      ToolId.WebSearch,
       "Search the web for Isabelle documentation, AFP entries, or formalization patterns. Returns titles, snippets, and URLs from search results.",
       List(
         ToolParam("query", "string", "Search query", required = true),
@@ -407,7 +479,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "create_theory",
+      ToolId.CreateTheory,
       "Create a new Isabelle theory file in the same directory as the current buffer. The file will be opened in jEdit after creation.",
       List(
         ToolParam(
@@ -429,7 +501,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "open_theory",
+      ToolId.OpenTheory,
       "Open an existing theory file that is not currently open. Makes it available for inspection and editing with other tools.",
       List(
         ToolParam(
@@ -441,7 +513,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "ask_user",
+      ToolId.AskUser,
       "Ask the user a multiple-choice question when you are uncertain about something, need clarification on their intent, or want their perspective on a decision. The user will see the question and options in the chat panel and click their choice. Use this sparingly — only when the answer genuinely affects your approach.",
       List(
         ToolParam(
@@ -464,7 +536,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "task_list_add",
+      ToolId.TaskListAdd,
       "Add a new task to the session task list. Each task should have a clear title, detailed description of what needs to be done, and specific acceptance criteria for completion.",
       List(
         ToolParam(
@@ -488,7 +560,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "task_list_done",
+      ToolId.TaskListDone,
       "Mark a task as completed. Use this when a task has been successfully finished and all acceptance criteria have been met.",
       List(
         ToolParam(
@@ -500,7 +572,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "task_list_irrelevant",
+      ToolId.TaskListIrrelevant,
       "Mark a task as irrelevant or no longer needed. Use this when a task is obsolete, out of scope, or superseded by other work.",
       List(
         ToolParam(
@@ -512,17 +584,17 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "task_list_next",
+      ToolId.TaskListNext,
       "Get the next pending task to work on. Returns the first task in the list that has not been completed or marked irrelevant.",
       Nil
     ),
     ToolDef(
-      "task_list_show",
+      ToolId.TaskListShow,
       "Show all tasks in the task list with their current statuses. Displays a visual overview of progress.",
       Nil
     ),
     ToolDef(
-      "task_list_get",
+      ToolId.TaskListGet,
       "Get detailed information about a specific task, including its full description and acceptance criteria.",
       List(
         ToolParam(
@@ -534,7 +606,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "memory_add",
+      ToolId.MemoryAdd,
       "Add a new memory to the persistent knowledge base under a topic. Memories survive across chat sessions. Use this to record important discoveries about the user, Isabelle behavior, project patterns, or useful techniques.",
       List(
         ToolParam(
@@ -558,7 +630,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "memory_delete",
+      ToolId.MemoryDelete,
       "Delete a specific memory by its ID. Use this to remove outdated or incorrect memories.",
       List(
         ToolParam(
@@ -570,7 +642,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "memory_delete_topic",
+      ToolId.MemoryDeleteTopic,
       "Delete an entire topic and all its memories. Use this when a topic is no longer relevant.",
       List(
         ToolParam(
@@ -582,12 +654,12 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "memory_list_topics",
+      ToolId.MemoryListTopics,
       "List all memory topics with their memory counts. Use this to see what knowledge has been recorded.",
       Nil
     ),
     ToolDef(
-      "memory_list",
+      ToolId.MemoryList,
       "List all memories in a specific topic, showing IDs and titles.",
       List(
         ToolParam(
@@ -599,7 +671,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "memory_get",
+      ToolId.MemoryGet,
       "Get the full details of a specific memory, including title, body, and creation timestamp.",
       List(
         ToolParam(
@@ -611,7 +683,7 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "memory_search",
+      ToolId.MemorySearch,
       "Search for memories matching a text pattern across all topics. Returns matching memories with context snippets.",
       List(
         ToolParam(
@@ -623,19 +695,24 @@ object AssistantTools {
       )
     ),
     ToolDef(
-      "plan_approach",
-      "Create a detailed plan to accomplish a complex task. Use this when you need to break down a task into steps, explore options, or think through an approach before executing. The plan should be comprehensive and consider various implementation strategies.",
+      ToolId.PlanApproach,
+      "Run the adaptive tree-of-thought planning agent on a complex problem. Brainstorms three distinct approaches, elaborates each in parallel using read-only exploration tools, and returns a final refined plan. Use BEFORE starting non-trivial multi-step work (complex proofs, multi-file refactors). Returns the selected plan text; the caller should then translate it into concrete task_list_add calls.",
       List(
         ToolParam(
-          "task",
+          "problem",
           "string",
-          "Description of the task to plan for",
+          "Detailed problem description. Include the concrete goal, any known constraints, and the current state if relevant. Longer is better — the planner elaborates from this seed.",
           required = true
+        ),
+        ToolParam(
+          "scope",
+          "string",
+          "Short hint about the planning scope. Typical values: 'proof', 'refactor', 'multi-file'. Used only to steer the brainstorm."
         ),
         ToolParam(
           "context",
           "string",
-          "Additional context about the task, constraints, or preferences"
+          "Optional extra context (goal state, error message, surrounding code). Passed through to the planning sub-agents."
         )
       )
     )
@@ -820,57 +897,57 @@ object AssistantTools {
 
   private val toolHandlers: Map[ToolId, (ResponseParser.ToolArgs, View) => String] =
     Map(
-      ToolId.ReadTheory -> ((a, v) => execReadTheory(a, v)),
-      ToolId.ListTheories -> ((_, _) => execListTheories()),
-      ToolId.SearchInTheory -> ((a, v) => execSearchInTheory(a, v)),
-      ToolId.SearchTheories -> ((a, v) => execSearchTheories(a, v)),
+      ToolId.ReadTheory -> ((a, _) => TheoryNavToolHandler.execReadTheory(a)),
+      ToolId.ListTheories -> ((_, _) => TheoryNavToolHandler.execListTheories()),
+      ToolId.SearchInTheory -> ((a, _) => TheoryNavToolHandler.execSearchInTheory(a)),
+      ToolId.SearchTheories -> ((a, v) => TheoryNavToolHandler.execSearchTheories(a, v)),
       ToolId.GetGoalState -> ((_, v) => execGetGoalState(v)),
       ToolId.GetSubgoal -> ((a, v) => execGetSubgoal(a, v)),
       ToolId.GetProofContext -> ((_, v) => execGetProofContext(v)),
-      ToolId.FindTheorems -> ((a, v) => execFindTheorems(a, v)),
-      ToolId.VerifyProof -> ((a, v) => execVerifyProof(a, v)),
-      ToolId.RunSledgehammer -> ((_, v) => execRunSledgehammer(v)),
-      ToolId.RunNitpick -> ((_, v) => execRunNitpick(v)),
-      ToolId.RunQuickcheck -> ((_, v) => execRunQuickcheck(v)),
-      ToolId.FindCounterexample -> ((a, v) => execFindCounterexample(a, v)),
+      ToolId.FindTheorems -> ((a, _) => execFindTheorems(a)),
+      ToolId.VerifyProof -> ((a, _) => ProofOpsToolHandler.execVerifyProof(a)),
+      ToolId.RunSledgehammer -> ((_, _) => ProofOpsToolHandler.execRunSledgehammer()),
+      ToolId.RunNitpick -> ((_, _) => ProofOpsToolHandler.execRunNitpick()),
+      ToolId.RunQuickcheck -> ((_, _) => ProofOpsToolHandler.execRunQuickcheck()),
+      ToolId.FindCounterexample -> ((a, _) => ProofOpsToolHandler.execFindCounterexample(a)),
       ToolId.GetType -> ((_, v) => execGetType(v)),
       ToolId.GetCommandText -> ((_, v) => execGetCommandText(v)),
       ToolId.GetErrors -> ((a, v) => execGetErrors(a, v)),
       ToolId.GetDiagnostics -> ((a, v) => execGetDiagnostics(a, v)),
       ToolId.GetDefinitions -> ((a, v) => execGetDefinitions(a, v)),
-      ToolId.GetFileStats -> ((a, v) => execGetFileStats(a, v)),
-      ToolId.GetProcessingStatus -> ((a, v) => execGetProcessingStatus(a, v)),
-      ToolId.GetSorryPositions -> ((a, v) => execGetSorryPositions(a, v)),
-      ToolId.ExecuteStep -> ((a, v) => execExecuteStep(a, v)),
-      ToolId.TraceSimplifier -> ((a, v) => execTraceSimplifier(a, v)),
+      ToolId.GetFileStats -> ((a, _) => TheoryMetadataToolHandler.execGetFileStats(a)),
+      ToolId.GetProcessingStatus -> ((a, _) => TheoryMetadataToolHandler.execGetProcessingStatus(a)),
+      ToolId.GetSorryPositions -> ((a, _) => TheoryMetadataToolHandler.execGetSorryPositions(a)),
+      ToolId.ExecuteStep -> ((a, _) => ProofOpsToolHandler.execExecuteStep(a)),
+      ToolId.TraceSimplifier -> ((a, _) => ProofOpsToolHandler.execTraceSimplifier(a)),
       ToolId.GetProofBlock -> ((_, v) => execGetProofBlock(v)),
       ToolId.GetProofOutline -> ((_, v) => execGetProofOutline(v)),
       ToolId.GetContextInfo -> ((_, v) => execGetContextInfo(v)),
-      ToolId.SearchAllTheories -> ((a, v) => execSearchAllTheories(a, v)),
-      ToolId.GetDependencies -> ((a, v) => execGetDependencies(a, v)),
+      ToolId.SearchAllTheories -> ((a, _) => TheoryNavToolHandler.execSearchAllTheories(a)),
+      ToolId.GetDependencies -> ((a, _) => TheoryNavToolHandler.execGetDependencies(a)),
       ToolId.GetWarnings -> ((a, v) => execGetWarnings(a, v)),
       ToolId.SetCursorPosition -> ((a, v) => execSetCursorPosition(a, v)),
-      ToolId.EditTheory -> ((a, v) => execEditTheory(a, v)),
+      ToolId.EditTheory -> ((a, _) => execEditTheory(a)),
       ToolId.TryMethods -> ((a, v) => execTryMethods(a, v)),
-      ToolId.GetEntities -> ((a, v) => execGetEntities(a, v)),
-      ToolId.WebSearch -> ((a, _) => execWebSearch(a)),
+      ToolId.GetEntities -> ((a, _) => execGetEntities(a)),
+      ToolId.WebSearch -> ((a, _) => WebSearchToolHandler.execWebSearch(a)),
       ToolId.CreateTheory -> ((a, v) => execCreateTheory(a, v)),
       ToolId.OpenTheory -> ((a, v) => execOpenTheory(a, v)),
-      ToolId.AskUser -> ((a, v) => execAskUser(a, v)),
-      ToolId.TaskListAdd -> ((a, v) => execTaskListAdd(a, v)),
-      ToolId.TaskListDone -> ((a, v) => execTaskListDone(a, v)),
-      ToolId.TaskListIrrelevant -> ((a, v) => execTaskListIrrelevant(a, v)),
-      ToolId.TaskListNext -> ((_, v) => execTaskListNext(v)),
-      ToolId.TaskListShow -> ((_, v) => execTaskListShow(v)),
-      ToolId.TaskListGet -> ((a, v) => execTaskListGet(a, v)),
-      ToolId.MemoryAdd -> ((a, v) => execMemoryAdd(a, v)),
-      ToolId.MemoryDelete -> ((a, v) => execMemoryDelete(a, v)),
-      ToolId.MemoryDeleteTopic -> ((a, v) => execMemoryDeleteTopic(a, v)),
-      ToolId.MemoryListTopics -> ((_, v) => execMemoryListTopics(v)),
-      ToolId.MemoryList -> ((a, v) => execMemoryList(a, v)),
-      ToolId.MemoryGet -> ((a, v) => execMemoryGet(a, v)),
-      ToolId.MemorySearch -> ((a, v) => execMemorySearch(a, v)),
-      ToolId.PlanApproach -> ((a, v) => execPlanApproach(a, v))
+      ToolId.AskUser -> ((a, v) => AskUserToolHandler.execAskUser(a, v)),
+      ToolId.TaskListAdd -> ((a, v) => TaskListToolHandler.execTaskListAdd(a, v)),
+      ToolId.TaskListDone -> ((a, v) => TaskListToolHandler.execTaskListDone(a, v)),
+      ToolId.TaskListIrrelevant -> ((a, v) => TaskListToolHandler.execTaskListIrrelevant(a, v)),
+      ToolId.TaskListNext -> ((_, v) => TaskListToolHandler.execTaskListNext(v)),
+      ToolId.TaskListShow -> ((_, v) => TaskListToolHandler.execTaskListShow(v)),
+      ToolId.TaskListGet -> ((a, v) => TaskListToolHandler.execTaskListGet(a, v)),
+      ToolId.MemoryAdd -> ((a, v) => MemoryToolHandler.execMemoryAdd(a, v)),
+      ToolId.MemoryDelete -> ((a, v) => MemoryToolHandler.execMemoryDelete(a, v)),
+      ToolId.MemoryDeleteTopic -> ((a, v) => MemoryToolHandler.execMemoryDeleteTopic(a, v)),
+      ToolId.MemoryListTopics -> ((_, v) => MemoryToolHandler.execMemoryListTopics(v)),
+      ToolId.MemoryList -> ((a, v) => MemoryToolHandler.execMemoryList(a, v)),
+      ToolId.MemoryGet -> ((a, v) => MemoryToolHandler.execMemoryGet(a, v)),
+      ToolId.MemorySearch -> ((a, v) => MemoryToolHandler.execMemorySearch(a, v)),
+      ToolId.PlanApproach -> ((a, v) => PlanApproachToolHandler.execPlanApproach(a, v))
     )
 
   def executeToolWithPermission(
@@ -919,131 +996,50 @@ object AssistantTools {
     }
   }
 
-  /** Maximum length for string arguments from LLM tool calls. */
-  private val MAX_STRING_ARG_LENGTH = 10000
-
-  /** Maximum length for proof text arguments. */
-  private val MAX_PROOF_ARG_LENGTH = 5000
-
-  /** Maximum length for search pattern arguments. */
-  private val MAX_PATTERN_ARG_LENGTH = 500
-
-  private val sensitiveArgTokens =
-    Set("token", "secret", "password", "auth", "credential", "api_key")
-
-  /** Valid theory reference pattern (for referring to already-open theories). */
-  private val THEORY_REFERENCE_PATTERN = """^[A-Za-z0-9_.\-/]+$""".r
-
-  /** Valid new theory file name (single file name, no path separators). */
-  private val CREATE_THEORY_NAME_PATTERN = """^[A-Za-z][A-Za-z0-9_']*$""".r
-
-  /** Sanitize a string argument: trim, limit length, reject control characters.
-    */
-  private def safeStringArg(
-      args: ResponseParser.ToolArgs,
-      key: String,
-      maxLen: Int = MAX_STRING_ARG_LENGTH,
-      trim: Boolean = true
-  ): String = {
-    val raw = args.get(key).map(ResponseParser.toolValueToString).getOrElse("")
-    val cleaned = raw.filter(c => !c.isControl || c == '\n' || c == '\t')
-    val limited = cleaned.take(maxLen)
-    if (trim) limited.trim else limited
-  }
-
-  /** Validate a theory name argument. */
-  private def safeTheoryArg(
-      args: ResponseParser.ToolArgs
-  ): Either[String, String] = {
-    val name = safeStringArg(args, "theory", 200)
-    if (name.isEmpty) Left("Error: theory name required")
-    else if (THEORY_REFERENCE_PATTERN.findFirstIn(name).isEmpty)
-      Left(s"Error: invalid theory name '$name'")
-    else Right(name)
-  }
-
   private[assistant] def isValidCreateTheoryName(name: String): Boolean =
-    CREATE_THEORY_NAME_PATTERN.findFirstIn(name).isDefined
+    ToolArgs.isValidCreateTheoryName(name)
 
   private[assistant] def normalizeReadRange(
       totalLines: Int,
       requestedStart: Int,
       requestedEnd: Int
-  ): (Int, Int) = {
-    if (totalLines <= 0) (1, 0)
-    else {
-      val start = math.max(1, math.min(totalLines, requestedStart))
-      val rawEnd = if (requestedEnd <= 0) totalLines else requestedEnd
-      val end = math.max(start, math.min(totalLines, rawEnd))
-      (start, end)
-    }
-  }
+  ): (Int, Int) = ToolArgs.normalizeReadRange(totalLines, requestedStart, requestedEnd)
 
   private[assistant] def clampOffset(offset: Int, bufferLength: Int): Int =
-    math.max(0, math.min(offset, bufferLength))
+    ToolArgs.clampOffset(offset, bufferLength)
 
-  private val readToolsTimeoutMs: Long =
-    AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS
-
-  private val numberedLinePattern = """^\s*(?:→\s*)?(\d+):(.*)$""".r
-  private final case class ViewStateSnapshot(
-      path: Option[String],
-      caretOffset: Int,
-      bufferLength: Int
-  )
-
-  private def normalizeTheoryFileName(raw: String): String = {
-    val trimmed = raw.trim
-    if (trimmed.endsWith(".thy")) trimmed else s"$trimmed.thy"
+  /** Format the user-facing string for a create_theory outcome.
+    *
+    * Distinguishes five cases by the `(created, opened, tracked)` tuple
+    * returned by the I/Q open_file handler:
+    *
+    *   - (true, true, true)    — happy path: created + opened + tracked
+    *   - (true, true, false)   — created and opened, waiting for PIDE to track
+    *   - (true, false, _)      — created on disk but not opened in jEdit
+    *   - (false, true, _)      — file already existed, opened without rewrite
+    *   - (false, false, _)     — create failed (e.g. mutation-roots denial)
+    */
+  private[assistant] def formatCreateTheoryResult(
+      name: String,
+      normalizedDir: String,
+      result: IQMcpProtocol.OpenFileResult
+  ): String = {
+    val detail = if (result.message.nonEmpty) s" (${result.message})" else ""
+    if (result.created && result.opened && result.tracked)
+      s"Created and opened $name.thy"
+    else if (result.created && result.opened)
+      s"Error: $name.thy was created but is not yet tracked by Isabelle; retry shortly$detail"
+    else if (result.created)
+      s"Error: $name.thy was created but not opened in jEdit$detail"
+    else if (result.opened)
+      s"Note: $name.thy already exists in $normalizedDir and was opened without modification$detail"
+    else
+      s"Error: $name.thy could not be created or opened$detail"
   }
 
-  private def baseName(path: String): String =
-    java.nio.file.Paths.get(path).getFileName.toString
-
-  private def optionalIntArg(args: ResponseParser.ToolArgs, key: String): Option[Int] =
-    args.get(key).map {
-      case ResponseParser.DecimalValue(d) if !d.isWhole =>
-        throw new IllegalArgumentException(
-          s"Parameter '$key' must be an integer, got decimal value: $d"
-        )
-      case ResponseParser.DecimalValue(d) => d.toInt
-      case ResponseParser.IntValue(i)     => i
-      case ResponseParser.StringValue(s) =>
-        scala.util.Try(s.toInt).getOrElse(
-          throw new IllegalArgumentException(
-            s"Parameter '$key' must be an integer, got: '$s'"
-          )
-        )
-      case ResponseParser.BooleanValue(_) | ResponseParser.JsonValue(_) =>
-        throw new IllegalArgumentException(
-          s"Parameter '$key' must be an integer"
-        )
-      case ResponseParser.NullValue =>
-        throw new IllegalArgumentException(
-          s"Parameter '$key' must be an integer"
-        )
-    }
-
-  private def snapshotViewState(view: View): Option[ViewStateSnapshot] =
-    Option(view).flatMap { v =>
-      try {
-        Some(
-          GUI_Thread.now {
-            val bufferOpt = Option(v.getBuffer)
-            val path =
-              bufferOpt.flatMap(b => Option(b.getPath)).map(_.trim).filter(_.nonEmpty)
-            val bufferLength = bufferOpt.map(_.getLength).getOrElse(0)
-            val caretOffset = Option(v.getTextArea).map(_.getCaretPosition).getOrElse(0)
-            ViewStateSnapshot(path, caretOffset, bufferLength)
-          }
-        )
-      } catch {
-        case _: Exception => None
-      }
-    }
-
   private def selectionArgsForCurrentView(view: View): Map[String, Any] =
-    snapshotViewState(view)
+    ToolHelpers
+      .snapshotViewState(view)
       .flatMap(snapshot =>
         snapshot.path.map(path =>
           Map(
@@ -1054,61 +1050,6 @@ object AssistantTools {
         )
       )
       .getOrElse(Map("command_selection" -> "current"))
-
-  private def currentBufferPath(view: View): Either[String, String] =
-    snapshotViewState(view)
-      .flatMap(_.path)
-      .toRight("Error: current buffer has no path")
-
-  private def resolveTheoryPath(
-      theory: String,
-      openOnly: Boolean = true
-  ): Either[String, String] = {
-    val normalized = normalizeTheoryFileName(theory)
-    IQMcpClient
-      .callListFiles(
-        filterOpen = if (openOnly) Some(true) else None,
-        filterTheory = Some(true),
-        sortBy = Some("path"),
-        timeoutMs = readToolsTimeoutMs
-      )
-      .flatMap { result =>
-        val matches = result.files.filter(f => baseName(f.path) == normalized)
-        matches match {
-          case one :: Nil => Right(one.path)
-          case Nil =>
-            val scopeHint =
-              if (openOnly) "open or tracked theory files" else "tracked theory files"
-            Left(s"Theory '$theory' not found in $scopeHint.")
-          case many =>
-            Left(
-              s"Theory '$theory' is ambiguous; matching paths: ${
-                  many.map(_.path).mkString(", ")
-                }"
-            )
-        }
-      }
-  }
-
-  private def lineCountFromNumberedContent(content: String): Int =
-    content.linesIterator.count {
-      case numberedLinePattern(_, _) => true
-      case _                         => false
-    }
-
-  private def stripNumberPrefix(line: String): String = line match {
-    case numberedLinePattern(_, rest) => rest
-    case _                            => line
-  }
-
-  private def stripNumberPrefixes(content: String): String =
-    content.linesIterator.map(stripNumberPrefix).mkString("\n")
-
-  private def firstHighlightedOrFirstLine(context: String): String = {
-    val nonEmpty = context.linesIterator.map(_.trim).filter(_.nonEmpty).toList
-    val picked = nonEmpty.find(_.startsWith("→")).orElse(nonEmpty.headOption).getOrElse("")
-    stripNumberPrefix(picked).trim
-  }
 
   private def formatDiagnosticsMessages(
       diagnostics: IQMcpClient.DiagnosticsResult,
@@ -1124,17 +1065,14 @@ object AssistantTools {
         .mkString("\n")
   }
 
-  private def isSensitiveArgName(argName: String): Boolean = {
-    val lowered = argName.toLowerCase(Locale.ROOT)
-    sensitiveArgTokens.exists(token => lowered.contains(token))
-  }
-
   private def summarizeToolArgsForLog(args: ResponseParser.ToolArgs): String =
     args.map { case (k, v) =>
-      val rendered =
-        if (isSensitiveArgName(k)) "***"
-        else ResponseParser.toolValueToDisplay(v).replace('\n', ' ').take(100)
-      s"$k=$rendered"
+      if (ToolArgs.isSensitiveArgName(k)) "***=***"
+      else {
+        val rendered =
+          ResponseParser.toolValueToDisplay(v).replace('\n', ' ').take(100)
+        s"$k=$rendered"
+      }
     }.mkString(", ")
 
   private def safeLog(message: String): Unit = {
@@ -1143,16 +1081,6 @@ object AssistantTools {
       case NonFatal(_) | _: LinkageError => ()
     }
   }
-
-  private def firstNonEmpty(parts: List[String]): Option[String] =
-    parts.map(_.trim).find(_.nonEmpty)
-
-  private def exploreFailureMessage(
-      result: IQMcpClient.ExploreResult,
-      fallback: String
-  ): String =
-    firstNonEmpty(List(result.error.getOrElse(""), result.message, result.results))
-      .getOrElse(fallback)
 
   /** Execute a tool by name. Returns the result as a string. Called from the
     * agentic loop on a background thread. All arguments are sanitized before
@@ -1182,7 +1110,7 @@ object AssistantTools {
   ): ToolExecResult = {
     val toolName = toolId.wireName
     safeLog(s"[Assistant] Tool call: $toolName(${summarizeToolArgsForLog(args)})")
-    AssistantDockable.setStatus(s"[tool] $toolName...")
+    AssistantDockable.setStatus(s"[tool] $toolName…")
     try {
       toolHandlers.get(toolId) match {
         case Some(handler) => Success(handler(args, view))
@@ -1197,118 +1125,33 @@ object AssistantTools {
     }
   }
 
-  private def execReadTheory(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    safeTheoryArg(args) match {
-      case Left(err)     => err
-      case Right(theory) =>
-        val start = optionalIntArg(args, "start_line")
-        val end = optionalIntArg(args, "end_line")
-        resolveTheoryPath(theory).fold(
-          err => err,
-          path =>
-            IQMcpClient
-              .callReadFileLine(
-                path = path,
-                startLine = start.orElse(Some(1)),
-                endLine = end,
-                timeoutMs = readToolsTimeoutMs
-              )
-              .fold(
-                mcpErr => s"Error: $mcpErr",
-                content =>
-                  if (content.trim.isEmpty) s"Theory $theory is empty."
-                  else s"Theory $theory:\n$content"
-              )
-        )
-    }
-  }
-
-  private def execListTheories(): String = {
-    IQMcpClient
-      .callListFiles(
-        filterOpen = Some(true),
-        filterTheory = Some(true),
-        sortBy = Some("path"),
-        timeoutMs = readToolsTimeoutMs
-      )
-      .fold(
-        err => s"Error: $err",
-        listed => {
-          val theories = listed.files.map(f => baseName(f.path)).distinct.sorted
-          if (theories.nonEmpty) theories.mkString("\n") else "No theory files open."
-        }
-      )
-  }
-
-  private def execSearchInTheory(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
-    safeTheoryArg(args) match {
-      case Left(err)     => err
-      case Right(theory) =>
-        if (pattern.isEmpty) "Error: pattern required"
-        else {
-          val max = math.min(
-            AssistantConstants.MAX_SEARCH_RESULTS,
-            math.max(1, intArg(args, "max_results", 20))
-          )
-          resolveTheoryPath(theory).fold(
-            err => err,
-            path =>
-              IQMcpClient
-                .callReadFileSearch(
-                  path = path,
-                  pattern = pattern,
-                  contextLines = 0,
-                  timeoutMs = readToolsTimeoutMs
-                )
-                .fold(
-                  mcpErr => s"Error: $mcpErr",
-                  matches => {
-                    val shown = matches.take(max)
-                    if (shown.isEmpty) s"No matches for '$pattern' in $theory."
-                    else
-                      shown
-                        .map(m =>
-                          s"${m.lineNumber}: ${firstHighlightedOrFirstLine(m.context)}"
-                        )
-                        .mkString("\n")
-                  }
-                )
-          )
-        }
-    }
-  }
-
-  private def execGetGoalState(view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+  private def getGoalStateResult(view: View): ToolResult = {
+    if (!IQAvailable.isAvailable) ToolResult.Unavailable(AssistantConstants.TOOL_IQ_UNAVAILABLE)
     else
       IQMcpClient
         .callGetContextInfo(
           selectionArgs = selectionArgsForCurrentView(view),
-          timeoutMs = readToolsTimeoutMs
+          timeoutMs = ToolHelpers.readToolsTimeoutMs
         )
         .fold(
-          err => s"Error: $err",
+          err => ToolResult.Err(err),
           ctx =>
             if (ctx.goal.hasGoal && ctx.goal.goalText.trim.nonEmpty)
-              ctx.goal.goalText.trim
-            else "No goal at cursor position."
+              ToolResult.Ok(ctx.goal.goalText.trim)
+            else ToolResult.Ok(AssistantConstants.UIText.NO_GOAL_AT_CURSOR)
         )
   }
 
+  private def execGetGoalState(view: View): String =
+    getGoalStateResult(view).render
+
   private def execGetProofContext(view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else
       IQMcpClient
         .callGetProofContext(
           selectionArgs = selectionArgsForCurrentView(view),
-          timeoutMs = readToolsTimeoutMs
+          timeoutMs = ToolHelpers.readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
@@ -1322,13 +1165,10 @@ object AssistantTools {
         )
   }
 
-  private def execFindTheorems(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
+  private def execFindTheorems(args: ResponseParser.ToolArgs): String = {
     val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
     if (pattern.isEmpty) "Error: pattern required"
-    else if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else {
       val max = math.min(
         AssistantConstants.MAX_FIND_THEOREMS_RESULTS,
@@ -1346,7 +1186,7 @@ object AssistantTools {
           extraParams = Map("max_results" -> max)
         )
         .fold(
-          mcpErr => s"Error: find_theorems failed via I/Q MCP: $mcpErr",
+          mcpErr => s"Error: $mcpErr",
           explore => {
             if (explore.success) {
               val text = explore.results.trim
@@ -1354,115 +1194,19 @@ object AssistantTools {
               else s"No theorems found for: $pattern"
             } else if (explore.timedOut) "find_theorems timed out."
             else
-              s"Error: ${exploreFailureMessage(explore, "find_theorems failed")}"
-          }
-        )
-    }
-  }
-
-  private def execVerifyProof(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
-    if (proof.isEmpty) "Error: proof required"
-    else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val timeout = AssistantOptions.getVerificationTimeout
-      IQMcpClient
-        .callExplore(
-          query = IQMcpClient.ExploreQueryType.Proof,
-          arguments = proof,
-          timeoutMs = timeout
-        )
-        .fold(
-          mcpErr => s"[FAIL] I/Q MCP verification failed: $mcpErr",
-          explore => {
-            if (explore.success) "[ok] Proof verified"
-            else if (explore.timedOut) "[FAIL] Timed out"
-            else
-              s"[FAIL] Failed: ${exploreFailureMessage(explore, "proof verification failed")}"
-          }
-        )
-    }
-  }
-
-  private def execRunSledgehammer(@unused view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val timeout = AssistantOptions.getSledgehammerTimeout
-      IQMcpClient
-        .callExplore(
-          query = IQMcpClient.ExploreQueryType.Sledgehammer,
-          arguments = "",
-          timeoutMs = timeout
-        )
-        .fold(
-          mcpErr => s"Error: sledgehammer failed via I/Q MCP: $mcpErr",
-          explore => {
-            if (explore.success) {
-              val text = explore.results.trim
-              if (text.nonEmpty) text else "No proofs found."
-            } else if (explore.timedOut) "Sledgehammer timed out."
-            else s"Error: ${exploreFailureMessage(explore, "sledgehammer failed")}"
-          }
-        )
-    }
-  }
-
-  private def execRunNitpick(@unused view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val timeout = AssistantOptions.getNitpickTimeout
-      IQMcpClient
-        .callExplore(
-          query = IQMcpClient.ExploreQueryType.Proof,
-          arguments = "nitpick",
-          timeoutMs = timeout
-        )
-        .fold(
-          mcpErr => s"Error: nitpick failed via I/Q MCP: $mcpErr",
-          explore => {
-            if (explore.success) {
-              val text = explore.results.trim
-              if (text.nonEmpty) text else "Nitpick returned no output."
-            } else if (explore.timedOut) "Nitpick timed out."
-            else s"Error: ${exploreFailureMessage(explore, "nitpick failed")}"
-          }
-        )
-    }
-  }
-
-  private def execRunQuickcheck(@unused view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val timeout = AssistantOptions.getQuickcheckTimeout
-      IQMcpClient
-        .callExplore(
-          query = IQMcpClient.ExploreQueryType.Proof,
-          arguments = "quickcheck",
-          timeoutMs = timeout
-        )
-        .fold(
-          mcpErr => s"Error: quickcheck failed via I/Q MCP: $mcpErr",
-          explore => {
-            if (explore.success) {
-              val text = explore.results.trim
-              if (text.nonEmpty) text else "Quickcheck returned no output."
-            } else if (explore.timedOut) "Quickcheck timed out."
-            else s"Error: ${exploreFailureMessage(explore, "quickcheck failed")}"
+              s"Error: ${ProofOpsToolHandler.exploreFailureMessage(explore, "find_theorems failed")}"
           }
         )
     }
   }
 
   private def execGetType(view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else
       IQMcpClient
         .callGetTypeAtSelection(
           selectionArgs = selectionArgsForCurrentView(view),
-          timeoutMs = readToolsTimeoutMs
+          timeoutMs = ToolHelpers.readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
@@ -1475,12 +1219,12 @@ object AssistantTools {
   }
 
   private def execGetCommandText(view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else
       IQMcpClient
         .callResolveCommandTarget(
           selectionArgs = selectionArgsForCurrentView(view),
-          timeoutMs = readToolsTimeoutMs
+          timeoutMs = ToolHelpers.readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
@@ -1488,7 +1232,7 @@ object AssistantTools {
             Option(resolved.command.source)
               .map(_.trim)
               .filter(_.nonEmpty)
-              .getOrElse("No command at cursor position.")
+              .getOrElse(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
         )
   }
 
@@ -1496,7 +1240,7 @@ object AssistantTools {
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
-    val timeoutMs = readToolsTimeoutMs
+    val timeoutMs = ToolHelpers.readToolsTimeoutMs
 
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
@@ -1513,11 +1257,11 @@ object AssistantTools {
           .fold(
             err => s"Error: $err",
             diagnostics =>
-              formatDiagnosticsMessages(diagnostics, "No errors at cursor position.")
+              formatDiagnosticsMessages(diagnostics, AssistantConstants.UIText.NO_ERROR_AT_CURSOR)
           )
 
       case "all" =>
-        currentBufferPath(view).fold(
+        ToolHelpers.currentBufferPath(view).fold(
           err => err,
           path =>
             IQMcpClient
@@ -1538,7 +1282,7 @@ object AssistantTools {
         )
 
       case _ =>
-        resolveTheoryPath(effectiveScope).fold(
+        ToolHelpers.resolveTheoryPath(effectiveScope).fold(
           err => err,
           path =>
             IQMcpClient
@@ -1566,7 +1310,7 @@ object AssistantTools {
   ): String = {
     val names = safeStringArg(args, "names", MAX_STRING_ARG_LENGTH)
     if (names.isEmpty) "Error: names required"
-    else if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else {
       val nameList = names.split("\\s+").toList.filter(_.nonEmpty)
       if (nameList.isEmpty) "Error: no valid names provided"
@@ -1613,91 +1357,13 @@ object AssistantTools {
     }
   }
 
-  private def execExecuteStep(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val proof = safeStringArg(args, "proof", MAX_PROOF_ARG_LENGTH)
-    if (proof.isEmpty) "Error: proof required"
-    else if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val timeout = AssistantOptions.getVerificationTimeout
-      val mcpStart = System.currentTimeMillis()
-          IQMcpClient
-            .callExplore(
-              query = IQMcpClient.ExploreQueryType.Proof,
-              arguments = proof,
-              timeoutMs = timeout
-            )
-        .fold(
-          mcpErr => s"[FAIL] step execution failed via I/Q MCP: $mcpErr",
-          explore => {
-            if (explore.success) {
-              val text = explore.results.trim
-              if (text.isEmpty) "Error: step execution completed without a result."
-              else {
-                val stepResult = IQIntegration.parseStepResult(
-                  text,
-                  System.currentTimeMillis() - mcpStart
-                )
-                val status =
-                  if (stepResult.complete) "[COMPLETE]"
-                  else
-                    stepResult.numSubgoals match {
-                      case Some(n) => s"[$n subgoals]"
-                      case None    => "[subgoal count unknown]"
-                    }
-                s"$status\n${stepResult.stateText}"
-              }
-            } else if (explore.timedOut) "Step execution timed out."
-            else s"[FAIL] ${exploreFailureMessage(explore, "step execution failed")}"
-          }
-        )
-    }
-  }
-
-  private def execTraceSimplifier(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val method = safeStringArg(args, "method", 50)
-    val effectiveMethod =
-      if (method.isEmpty || method == "simp") "simp" else method
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
-    else {
-      val timeout = AssistantOptions.getTraceTimeout
-      val depth = AssistantOptions.getTraceDepth
-      val queryTimeoutMs =
-        timeout * 1000L + AssistantConstants.TIMEOUT_BUFFER_MS
-      val queryArg = s"simp_trace $effectiveMethod $timeout $depth"
-      IQMcpClient
-        .callExplore(
-          query = IQMcpClient.ExploreQueryType.Proof,
-          arguments = queryArg,
-          timeoutMs = queryTimeoutMs
-        )
-        .fold(
-          mcpErr => s"Error: simplifier trace failed via I/Q MCP: $mcpErr",
-          explore => {
-            if (explore.success) {
-              val text = explore.results.trim
-              if (text.nonEmpty) text
-              else "Error: simplifier trace completed without a result."
-            } else if (explore.timedOut) "Simplifier trace timed out."
-            else
-              s"Error: ${exploreFailureMessage(explore, "simplifier trace failed")}"
-          }
-        )
-    }
-  }
-
   private def execGetProofBlock(view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else
       IQMcpClient
         .callGetProofBlocksForSelection(
           selectionArgs = selectionArgsForCurrentView(view),
-          timeoutMs = readToolsTimeoutMs
+          timeoutMs = ToolHelpers.readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
@@ -1706,18 +1372,18 @@ object AssistantTools {
               .map(_.proofText.trim)
               .filter(_.nonEmpty)
               .getOrElse(
-                blocks.message.getOrElse("No proof block at cursor position.")
+                blocks.message.getOrElse(AssistantConstants.UIText.NO_PROOF_BLOCK_AT_CURSOR)
               )
         )
   }
 
   private def execGetContextInfo(view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else
       IQMcpClient
         .callGetContextInfo(
           selectionArgs = selectionArgsForCurrentView(view),
-          timeoutMs = readToolsTimeoutMs
+          timeoutMs = ToolHelpers.readToolsTimeoutMs
         )
         .fold(
           err => s"Error: $err",
@@ -1757,97 +1423,11 @@ object AssistantTools {
         )
   }
 
-  private def execSearchAllTheories(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
-    if (pattern.isEmpty) "Error: pattern required"
-    else {
-      val maxTotal = math.min(200, math.max(1, intArg(args, "max_results", 50)))
-      IQMcpClient
-        .callListFiles(
-          filterOpen = Some(true),
-          filterTheory = Some(true),
-          sortBy = Some("path"),
-          timeoutMs = readToolsTimeoutMs
-        )
-        .fold(
-          err => s"Error: $err",
-          listed => {
-            val allMatches = scala.collection.mutable.ListBuffer[String]()
-            listed.files.iterator.takeWhile(_ => allMatches.length < maxTotal).foreach { file =>
-              val remaining = maxTotal - allMatches.length
-              val matches = IQMcpClient
-                .callReadFileSearch(
-                  path = file.path,
-                  pattern = pattern,
-                  contextLines = 0,
-                  timeoutMs = readToolsTimeoutMs
-                )
-                .getOrElse(Nil)
-                .take(remaining)
-              matches.foreach { m =>
-                allMatches += s"${baseName(file.path)}:${m.lineNumber}: ${
-                    firstHighlightedOrFirstLine(m.context)
-                  }"
-              }
-            }
-
-            if (allMatches.nonEmpty) {
-              val truncated =
-                if (allMatches.length >= maxTotal) s" (showing first $maxTotal)"
-                else ""
-              s"Found ${allMatches.length} matches$truncated:\n${allMatches.mkString("\n")}"
-            } else s"No matches for '$pattern' in any open theory."
-          }
-        )
-    }
-  }
-
-  private def execGetDependencies(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    safeTheoryArg(args) match {
-      case Left(err)     => err
-      case Right(theory) =>
-        resolveTheoryPath(theory).fold(
-          err => err,
-          path =>
-            IQMcpClient
-              .callReadFileLine(
-                path = path,
-                startLine = Some(1),
-                endLine = Some(-1),
-                timeoutMs = readToolsTimeoutMs
-              )
-              .fold(
-                mcpErr => s"Error: $mcpErr",
-                numberedContent => {
-                  val content = stripNumberPrefixes(numberedContent)
-                  val importPattern = """(?s)imports\s+(.*?)(?:\bbegin\b|\z)""".r
-                  importPattern.findFirstMatchIn(content) match {
-                    case Some(m) =>
-                      val tokenPattern = """"[^"]+"|[^\s"]+""".r
-                      val imports =
-                        tokenPattern.findAllIn(m.group(1)).toList.filter(_.nonEmpty)
-                      if (imports.nonEmpty)
-                        s"Dependencies of $theory:\n${imports.mkString("\n")}"
-                      else s"Theory '$theory' has no explicit imports."
-                    case None => s"No imports found in theory '$theory'."
-                  }
-                }
-              )
-        )
-    }
-  }
-
   private def execGetWarnings(
       args: ResponseParser.ToolArgs,
       view: View
   ): String = {
-    val timeoutMs = readToolsTimeoutMs
+    val timeoutMs = ToolHelpers.readToolsTimeoutMs
 
     val rawScope = safeStringArg(args, "scope", 200)
     val effectiveScope = if (rawScope.isEmpty) "all" else rawScope
@@ -1871,7 +1451,7 @@ object AssistantTools {
           )
 
       case "all" =>
-        currentBufferPath(view).fold(
+        ToolHelpers.currentBufferPath(view).fold(
           err => err,
           path =>
             IQMcpClient
@@ -1892,7 +1472,7 @@ object AssistantTools {
         )
 
       case _ =>
-        resolveTheoryPath(effectiveScope).fold(
+        ToolHelpers.resolveTheoryPath(effectiveScope).fold(
           err => err,
           path =>
             IQMcpClient
@@ -1948,10 +1528,7 @@ object AssistantTools {
     }
   }
 
-  private def execEditTheory(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
+  private def execEditTheory(args: ResponseParser.ToolArgs): String = {
     val operation = safeStringArg(args, "operation", 50).toLowerCase
     val text =
       safeStringArg(args, "text", MAX_STRING_ARG_LENGTH, trim = false).replace(
@@ -1976,7 +1553,7 @@ object AssistantTools {
         )
           s"Error: text required for $operation operation"
         else {
-          resolveTheoryPath(theory).fold(
+          ToolHelpers.resolveTheoryPath(theory).fold(
             err => err,
             path =>
               IQMcpClient
@@ -1984,12 +1561,12 @@ object AssistantTools {
                   path = path,
                   startLine = Some(1),
                   endLine = Some(-1),
-                  timeoutMs = readToolsTimeoutMs
+                  timeoutMs = ToolHelpers.readToolsTimeoutMs
                 )
                 .fold(
                   mcpErr => s"Error: $mcpErr",
                   numberedContent => {
-                    val lineCount = lineCountFromNumberedContent(numberedContent)
+                    val lineCount = ToolHelpers.lineCountFromNumberedContent(numberedContent)
                     val canAppendAtEnd = operation == "insert" && startLine == lineCount + 1
                     if (startLine > lineCount && !canAppendAtEnd)
                       s"Error: start_line $startLine out of range (theory has $lineCount lines)"
@@ -2029,6 +1606,10 @@ object AssistantTools {
                       writeResult.fold(
                         err => s"Error: $err",
                         _ => {
+                          // Invalidate any cached verification outcomes for
+                          // this theory — their command IDs / sources may now
+                          // be stale. See VerificationCache.invalidateNode.
+                          val _ = VerificationCache.invalidateNode(path)
                           val contextStart = math.max(1, startLine - 3)
                           val contextEnd = math.max(contextStart, startLine + 5)
                           val context = IQMcpClient
@@ -2036,7 +1617,7 @@ object AssistantTools {
                               path = path,
                               startLine = Some(contextStart),
                               endLine = Some(contextEnd),
-                              timeoutMs = readToolsTimeoutMs
+                              timeoutMs = ToolHelpers.readToolsTimeoutMs
                             )
                             .getOrElse("")
                           val action = operation match {
@@ -2062,7 +1643,7 @@ object AssistantTools {
   ): String = {
     val methodsStr = safeStringArg(args, "methods", MAX_STRING_ARG_LENGTH)
     if (methodsStr.isEmpty) "Error: methods required"
-    else if (!IQAvailable.isAvailable) "I/Q plugin not available."
+    else if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else {
       val methods = methodsStr.split(",").map(_.trim).filter(_.nonEmpty).toList
       if (methods.isEmpty) "Error: no valid methods provided"
@@ -2102,16 +1683,13 @@ object AssistantTools {
     }
   }
 
-  private def execGetEntities(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
+  private def execGetEntities(args: ResponseParser.ToolArgs): String = {
     safeTheoryArg(args) match {
       case Left(err)     => err
       case Right(theory) =>
         val maxResultsRaw = intArg(args, "max_results", 200)
         val maxResults = math.max(1, math.min(1000, maxResultsRaw))
-        resolveTheoryPath(theory).fold(
+        ToolHelpers.resolveTheoryPath(theory).fold(
           err => err,
           path =>
             IQMcpClient
@@ -2141,56 +1719,6 @@ object AssistantTools {
     }
   }
 
-  private def execWebSearch(args: ResponseParser.ToolArgs): String = {
-    val query = safeStringArg(args, "query", MAX_PATTERN_ARG_LENGTH)
-    if (query.isEmpty) "Error: query required"
-    else {
-      val maxResults = math.min(10, math.max(1, intArg(args, "max_results", 5)))
-      try {
-        val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
-        val url = s"https://lite.duckduckgo.com/lite/?q=$encodedQuery"
-
-        val client = java.net.http.HttpClient
-          .newBuilder()
-          .connectTimeout(java.time.Duration.ofSeconds(10))
-          .followRedirects(java.net.http.HttpClient.Redirect.NORMAL)
-          .build()
-        val request = java.net.http.HttpRequest
-          .newBuilder()
-          .uri(java.net.URI.create(url))
-          .timeout(java.time.Duration.ofSeconds(10))
-          .GET()
-          .build()
-
-        val response = client.send(
-          request,
-          java.net.http.HttpResponse.BodyHandlers.ofString()
-        )
-        val html = response.body()
-
-        val results = scala.collection.mutable.ListBuffer[String]()
-        val linkPattern = """<a[^>]+href="([^"]+)"[^>]*>([^<]+)</a>""".r
-
-        import scala.util.boundary, boundary.break
-        boundary {
-          for (m <- linkPattern.findAllMatchIn(html).take(maxResults * 2)) {
-            val href = m.group(1)
-            val title = m.group(2).trim
-            if (!href.startsWith("//duckduckgo.com") && title.nonEmpty) {
-              results += s"$title\n  URL: $href"
-            }
-            if (results.length >= maxResults) break()
-          }
-        }
-
-        if (results.nonEmpty) results.mkString("\n\n")
-        else s"No search results found for: $query"
-      } catch {
-        case ex: Exception => s"Web search error: ${ex.getMessage}"
-      }
-    }
-  }
-
   private def execCreateTheory(
       args: ResponseParser.ToolArgs,
       view: View
@@ -2203,9 +1731,9 @@ object AssistantTools {
 
     if (name.isEmpty) "Error: name required"
     else if (!isValidCreateTheoryName(name))
-      s"Error: invalid theory name '$name'"
+      s"Error: invalid theory name '${describeTheoryName(name)}'"
     else {
-      currentBufferPath(view).fold(
+      ToolHelpers.currentBufferPath(view).fold(
         err => err,
         currentPath => {
           val currentDir = java.nio.file.Paths.get(currentPath).getParent
@@ -2220,12 +1748,28 @@ object AssistantTools {
                   if (content.nonEmpty) content + "\n\n" else ""
                 }end\n"
 
-            if (targetPath.getParent != normalizedDir)
-              s"Error: invalid theory name '$name'"
-            else
+            // Defence-in-depth: isValidCreateTheoryName already rejects any
+            // name containing a path separator, but compare the *real* paths
+            // so that symlinks or case-folded filesystems cannot conceal an
+            // escape from the buffer directory.
+            val realDir =
+              try normalizedDir.toRealPath()
+              catch { case _: java.io.IOException => normalizedDir }
+            val realParent =
+              try targetPath.getParent.toRealPath()
+              catch { case _: java.io.IOException => targetPath.getParent }
+
+            if (realParent != realDir)
+              s"Error: invalid theory name '${describeTheoryName(name)}'"
+            else {
+              // Pass the real-parent-resolved path (not the pre-canonical
+              // targetPath) to the server: a dangling relative symlink in
+              // the parent directory could otherwise redirect the write
+              // after the containment check.
+              val realTargetPath = realParent.resolve(s"$name.thy")
               IQMcpClient
                 .callOpenFile(
-                  path = targetPath.toString,
+                  path = realTargetPath.toString,
                   createIfMissing = true,
                   inView = true,
                   content = Some(theoryContent),
@@ -2234,8 +1778,9 @@ object AssistantTools {
                 )
                 .fold(
                   mcpErr => s"Error: $mcpErr",
-                  _ => s"Created and opened $name.thy"
+                  result => formatCreateTheoryResult(name, normalizedDir.toString, result)
                 )
+            }
           }
         }
       )
@@ -2256,7 +1801,7 @@ object AssistantTools {
           val file = java.io.File(path)
           if (file.isAbsolute) file.getPath
           else
-            currentBufferPath(view).fold(_ => path, current =>
+            ToolHelpers.currentBufferPath(view).fold(_ => path, current =>
               java.nio.file.Paths
                 .get(current)
                 .getParent
@@ -2274,456 +1819,51 @@ object AssistantTools {
           )
           .fold(
             err => s"Error: $err",
-            opened => s"Opened ${baseName(opened.path)}"
+            result => {
+              val detail = if (result.message.nonEmpty) s" (${result.message})" else ""
+              val fileName = ToolHelpers.baseName(result.path)
+              if (!result.opened) s"Error: $fileName failed to open in jEdit$detail"
+              else if (!result.tracked) s"Error: $fileName was opened but is not yet tracked by Isabelle; retry shortly$detail"
+              else s"Opened $fileName"
+            }
           )
       }
     }
   }
 
-  /**
-   * Shared method to prompt the user with multiple choice options.
-   * Returns Some(selectedOption) or None if cancelled/timeout.
-   * Used by both execAskUser and ToolPermissions.promptUser.
-   */
+  /** Forwarder to AskUserToolHandler.promptUserWithChoices.
+    * Kept so ToolPermissions can reach the prompt through the AssistantTools
+    * surface without importing the handler directly.
+    */
   private[assistant] def promptUserWithChoices(
-    question: String, options: List[String], context: String, view: View
-  ): Option[String] = {
-    if (options.length < 2) return None
-    
-    val latch = new CountDownLatch(1)
-    @volatile var selectedOption = ""
-    
-    GUI_Thread.later {
-      val html = buildAskUserHtml(question, context, options, { choice =>
-        selectedOption = choice
-        latch.countDown()
-      })
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html, 
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    AssistantDockable.setStatus("Waiting for your input...")
-    
-    val timeout = 300L
-    var responded = false
-    val endTime = System.currentTimeMillis() + timeout * 1000
-    while (!responded && !AssistantDockable.isCancelled && System.currentTimeMillis() < endTime) {
-      responded = latch.await(500, TimeUnit.MILLISECONDS)
-    }
-    
-    if (AssistantDockable.isCancelled || !responded) {
-      None
-    } else {
-      AssistantDockable.setStatus("Processing your choice...")
-      GUI_Thread.later {
-        ChatAction.addMessage(ChatAction.Message(ChatAction.User, s"Selected: $selectedOption", 
-          java.time.LocalDateTime.now(), transient = true))
-        AssistantDockable.showConversation(ChatAction.getHistory)
-      }
-      Some(selectedOption)
-    }
-  }
+      question: String,
+      options: List[String],
+      context: String,
+      view: View
+  ): Option[String] =
+    AskUserToolHandler.promptUserWithChoices(question, options, context, view)
 
-  private def execAskUser(args: ResponseParser.ToolArgs, view: View): String = {
-    val question = safeStringArg(args, "question", 500)
-    val optionsStr = safeStringArg(args, "options", 1000)
-    val context = safeStringArg(args, "context", 500)
-    
-    if (question.isEmpty) return "Error: question required"
-    
-    val options = optionsStr.split(",").map(_.trim).filter(_.nonEmpty).toList
-    if (options.length < 2) return "Error: at least 2 options required"
-    
-    promptUserWithChoices(question, options, context, view) match {
-      case Some(choice) => choice
-      case None if AssistantDockable.isCancelled => "User cancelled the operation."
-      case None => "User did not respond within the time limit."
-    }
-  }
 
-  private def execTaskListAdd(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val title = safeStringArg(args, "title", 500)
-    val description = safeStringArg(args, "description", 2000)
-    val criteria = safeStringArg(args, "acceptance_criteria", 2000)
-    
-    val result = TaskList.addTask(title, description, criteria)
-    
-    // Inject rich HTML widget
-    GUI_Thread.later {
-      val html = buildTaskAddedHtml(title, description, criteria)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execTaskListDone(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val taskId = intArg(args, "task_id", -1)
-    val result = TaskList.markDone(taskId)
-    
-    // Inject rich HTML widget
-    GUI_Thread.later {
-      val html = buildTaskStatusHtml(taskId, "done", result)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execTaskListIrrelevant(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val taskId = intArg(args, "task_id", -1)
-    val result = TaskList.markIrrelevant(taskId)
-    
-    // Inject rich HTML widget
-    GUI_Thread.later {
-      val html = buildTaskStatusHtml(taskId, "irrelevant", result)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execTaskListNext(@unused view: View): String = {
-    val result = TaskList.getNextTask()
-    
-    // Inject rich HTML widget showing full checklist with next task highlighted
-    GUI_Thread.later {
-      val html = buildTaskListHtml(highlightNext = true)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execTaskListShow(@unused view: View): String = {
-    val result = TaskList.listTasks()
-    
-    // Inject rich HTML widget showing full checklist
-    GUI_Thread.later {
-      val html = buildTaskListHtml(highlightNext = false)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execTaskListGet(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val taskId = intArg(args, "task_id", -1)
-    val result = TaskList.getTask(taskId)
-    
-    // Inject rich HTML widget showing detailed task card
-    GUI_Thread.later {
-      TaskList.getTasks.find(_.id == taskId).foreach { task =>
-        val html = buildTaskDetailHtml(task)
-        ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-          java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-        AssistantDockable.showConversation(ChatAction.getHistory)
-      }
-    }
-    
-    result
-  }
-
-  private def buildTaskAddedHtml(
-      title: String,
-      description: String,
-      criteria: String
-  ): String = {
-    val border = UIColors.TaskList.border
-    val bg = UIColors.TaskList.background
-    val headerText = UIColors.TaskList.headerText
-    val labelColor = UIColors.TaskList.labelColor
-    val taskText = UIColors.TaskList.taskText
-    
-    val truncDesc = if (description.length > 100) description.take(100) + "..." else description
-    val truncCrit = if (criteria.length > 100) criteria.take(100) + "..." else criteria
-    
-    s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-       |border-left:4px solid $border;border-radius:3px;
-       |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:$headerText;margin-bottom:3px;font-weight:bold;'>
-       |+ Task Added</div>
-       |<div style='font-size:11pt;color:$taskText;margin-bottom:2px;'>
-       |"${HtmlUtil.escapeHtml(title)}"</div>
-       |<div style='font-size:9pt;color:$labelColor;margin-top:4px;'>
-       |Description: <span style='color:$taskText;'>${HtmlUtil.escapeHtml(truncDesc)}</span></div>
-       |<div style='font-size:9pt;color:$labelColor;'>
-       |Criteria: <span style='color:$taskText;'>${HtmlUtil.escapeHtml(truncCrit)}</span></div>
-       |</div>""".stripMargin
-  }
-
-  private def buildTaskStatusHtml(taskId: Int, status: String, result: String): String = {
-    val border = UIColors.TaskList.border
-    val bg = UIColors.TaskList.background
-    val headerText = UIColors.TaskList.headerText
-    val icon = if (status == "done") UIColors.TaskList.doneIcon else UIColors.TaskList.irrelevantIcon
-    val symbol = if (status == "done") "✓" else "✗"
-    val action = if (status == "done") "marked as done" else "marked as irrelevant"
-    
-    TaskList.getTasks.find(_.id == taskId) match {
-      case Some(task) =>
-        val (doneCount, todoCount, _) = TaskList.getStatusCounts
-        val progress = s"$doneCount/${TaskList.getTaskCount} done, $todoCount pending"
-        
-        s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-           |border-left:4px solid $border;border-radius:3px;
-           |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-           |<div style='font-size:10pt;color:$headerText;margin-bottom:3px;font-weight:bold;'>
-           |<span style='color:$icon;'>$symbol</span> Task #$taskId $action</div>
-           |<div style='font-size:11pt;margin-bottom:2px;'>
-           |"${HtmlUtil.escapeHtml(task.title)}"</div>
-           |<div style='font-size:9pt;color:${UIColors.TaskList.progressText};'>
-           |Progress: $progress</div>
-           |</div>""".stripMargin
-      case None =>
-        s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-           |border-left:4px solid $border;border-radius:3px;
-           |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-           |<div style='font-size:10pt;color:$headerText;'>
-           |${HtmlUtil.escapeHtml(result)}</div>
-           |</div>""".stripMargin
-    }
-  }
-
-  private def buildTaskListHtml(highlightNext: Boolean): String = {
-    val border = UIColors.TaskList.border
-    val bg = UIColors.TaskList.background
-    val headerText = UIColors.TaskList.headerText
-    val progressText = UIColors.TaskList.progressText
-    val doneIcon = UIColors.TaskList.doneIcon
-    val pendingIcon = UIColors.TaskList.pendingIcon
-    val nextIcon = UIColors.TaskList.nextIcon
-    val irrelevantIcon = UIColors.TaskList.irrelevantIcon
-    val irrelevantText = UIColors.TaskList.irrelevantText
-    val taskText = UIColors.TaskList.taskText
-    
-    val tasks = TaskList.getTasks
-    if (tasks.isEmpty) {
-      return s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-         |border-left:4px solid $border;border-radius:3px;
-         |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-         |<div style='font-size:10pt;color:$headerText;font-weight:bold;'>Task List</div>
-         |<div style='font-size:10pt;color:$progressText;margin-top:4px;'>
-         |Task list is empty. Add tasks to get started.</div>
-         |</div>""".stripMargin
-    }
-    
-    val (doneCount, todoCount, _) = TaskList.getStatusCounts
-    val progress = s"$doneCount/${tasks.length} done, $todoCount pending"
-    
-    val nextTaskId = tasks.find(_.status == TaskList.Todo).map(_.id)
-    
-    val taskItems = tasks.map { task =>
-      val isNext = highlightNext && nextTaskId.contains(task.id)
-      val (icon, iconColor) = task.status match {
-        case TaskList.Done => ("✓", doneIcon)
-        case TaskList.Irrelevant => ("✗", irrelevantIcon)
-        case TaskList.Todo if isNext => ("●", nextIcon)
-        case TaskList.Todo => ("○", pendingIcon)
-      }
-      
-      val titleStyle = task.status match {
-        case TaskList.Irrelevant => s"color:$irrelevantText;text-decoration:line-through;"
-        case _ => s"color:$taskText;"
-      }
-      
-      val nextMarker = if (isNext) " <span style='color:$nextIcon;font-size:9pt;'>← next</span>" else ""
-      
-      s"""<div style='margin:2px 0;'>
-         |<span style='color:$iconColor;font-weight:bold;margin-right:6px;'>$icon</span>
-         |<span style='$titleStyle;font-size:10pt;'>#${task.id}. ${HtmlUtil.escapeHtml(task.title)}</span>$nextMarker
-         |</div>""".stripMargin
-    }.mkString("\n")
-    
-    s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-       |border-left:4px solid $border;border-radius:3px;
-       |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:$headerText;margin-bottom:2px;font-weight:bold;'>
-       |Task List <span style='font-weight:normal;color:$progressText;'>($progress)</span></div>
-       |<div style='margin-top:6px;'>
-       |$taskItems
-       |</div>
-       |</div>""".stripMargin
-  }
-
-  private def buildTaskDetailHtml(task: TaskList.Task): String = {
-    val border = UIColors.TaskList.border
-    val bg = UIColors.TaskList.background
-    val headerText = UIColors.TaskList.headerText
-    val labelColor = UIColors.TaskList.labelColor
-    val taskText = UIColors.TaskList.taskText
-    val (icon, iconColor) = task.status match {
-      case TaskList.Done => ("✓", UIColors.TaskList.doneIcon)
-      case TaskList.Irrelevant => ("✗", UIColors.TaskList.irrelevantIcon)
-      case TaskList.Todo => ("○", UIColors.TaskList.pendingIcon)
-    }
-    
-    s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-       |border-left:4px solid $border;border-radius:3px;
-       |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:$headerText;margin-bottom:4px;font-weight:bold;'>
-       |Task #${task.id}: ${HtmlUtil.escapeHtml(task.title)}
-       |<span style='color:$iconColor;margin-left:8px;'>[$icon]</span></div>
-       |<div style='font-size:9pt;color:$labelColor;margin-top:6px;margin-bottom:2px;'>Description:</div>
-       |<div style='font-size:10pt;color:$taskText;margin-bottom:6px;'>
-       |${HtmlUtil.escapeHtml(task.description)}</div>
-       |<div style='font-size:9pt;color:$labelColor;margin-bottom:2px;'>Acceptance Criteria:</div>
-       |<div style='font-size:10pt;color:$taskText;'>
-       |${HtmlUtil.escapeHtml(task.acceptanceCriteria)}</div>
-       |</div>""".stripMargin
-  }
-
-  private def execMemoryAdd(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val topic = safeStringArg(args, "topic", 100)
-    val title = safeStringArg(args, "title", 200)
-    val body = safeStringArg(args, "body", 2000)
-    
-    val result = MemoryStore.addMemory(topic, title, body)
-    
-    // Inject rich HTML widget
-    GUI_Thread.later {
-      val html = buildMemoryAddedHtml(topic, title, body)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execMemoryDelete(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val memoryId = intArg(args, "memory_id", -1)
-    val result = MemoryStore.deleteMemory(memoryId)
-    
-    // Inject rich HTML widget
-    GUI_Thread.later {
-      val html = buildMemoryStatusHtml("deleted", result)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execMemoryDeleteTopic(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val topic = safeStringArg(args, "topic", 100)
-    val result = MemoryStore.deleteTopic(topic)
-    
-    // Inject rich HTML widget
-    GUI_Thread.later {
-      val html = buildMemoryStatusHtml("topic_deleted", result)
-      ChatAction.addMessage(ChatAction.Message(ChatAction.Widget, html,
-        java.time.LocalDateTime.now(), rawHtml = true, transient = true))
-      AssistantDockable.showConversation(ChatAction.getHistory)
-    }
-    
-    result
-  }
-
-  private def execMemoryListTopics(@unused view: View): String = {
-    MemoryStore.listTopics()
-  }
-
-  private def execMemoryList(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val topic = safeStringArg(args, "topic", 100)
-    MemoryStore.listMemories(topic)
-  }
-
-  private def execMemoryGet(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val memoryId = intArg(args, "memory_id", -1)
-    MemoryStore.getMemory(memoryId)
-  }
-
-  private def execMemorySearch(
-      args: ResponseParser.ToolArgs,
-      @unused view: View
-  ): String = {
-    val query = safeStringArg(args, "query", 500)
-    MemoryStore.searchMemories(query)
-  }
-
-  private def execSearchTheories(args: ResponseParser.ToolArgs, view: View): String = {
-    val pattern = safeStringArg(args, "pattern", MAX_PATTERN_ARG_LENGTH)
-    val scope = safeStringArg(args, "scope", 200)
-    if (pattern.isEmpty) "Error: pattern required"
-    else if (scope.isEmpty) "Error: scope required"
-    else {
-      scope.toLowerCase match {
-        case "current" => execSearchInTheory(args + ("theory" -> ResponseParser.StringValue(currentBufferPath(view).getOrElse(""))), view)
-        case "all" => execSearchAllTheories(args, view)
-        case _ => execSearchInTheory(args + ("theory" -> ResponseParser.StringValue(scope)), view)
-      }
-    }
-  }
 
   private def execGetSubgoal(args: ResponseParser.ToolArgs, view: View): String = {
     val index = intArg(args, "index", -1)
     if (index <= 0) "Error: index must be a positive integer"
-    else {
-      val goalState = execGetGoalState(view)
-      if (goalState.startsWith("Error:") || goalState.startsWith("I/Q") || goalState == "No goal at cursor position.") goalState
-      else {
-        val subgoalPattern = s"""(?s)subgoal\\s+$index(?::|\\s|\\n)(.+?)(?=\\n\\s*(?:subgoal|using|proof|qed|done|by)|\\z)""".r
-        subgoalPattern.findFirstMatchIn(goalState) match {
-          case Some(m) => m.group(1).trim
-          case None => s"Subgoal $index not found in current proof state."
-        }
+    else
+      getGoalStateResult(view) match {
+        case ToolResult.Err(_) | ToolResult.Unavailable(_) =>
+          // Propagate the underlying error verbatim rather than reparsing
+          // its string form.
+          getGoalStateResult(view).render
+        case ToolResult.Ok(goalState) =>
+          if (goalState == AssistantConstants.UIText.NO_GOAL_AT_CURSOR) goalState
+          else {
+            val subgoalPattern = s"""(?s)subgoal\\s+$index(?::|\\s|\\n)(.+?)(?=\\n\\s*(?:subgoal|using|proof|qed|done|by)|\\z)""".r
+            subgoalPattern.findFirstMatchIn(goalState) match {
+              case Some(m) => m.group(1).trim
+              case None    => s"Subgoal $index not found in current proof state."
+            }
+          }
       }
-    }
-  }
-
-  private def execFindCounterexample(args: ResponseParser.ToolArgs, view: View): String = {
-    val method = safeStringArg(args, "method", 50).toLowerCase
-    val effectiveMethod = if (method.isEmpty) "quickcheck" else method
-    
-    effectiveMethod match {
-      case "nitpick" => execRunNitpick(view)
-      case "quickcheck" => execRunQuickcheck(view)
-      case "both" =>
-        val nitpickResult = execRunNitpick(view)
-        if (nitpickResult.contains("Counterexample")) nitpickResult
-        else execRunQuickcheck(view)
-      case _ => s"Error: invalid method '$method', must be 'nitpick', 'quickcheck', or 'both'"
-    }
   }
 
   private def execGetDiagnostics(args: ResponseParser.ToolArgs, view: View): String = {
@@ -2756,85 +1896,12 @@ object AssistantTools {
     }
   }
 
-  private def execGetFileStats(args: ResponseParser.ToolArgs, @unused view: View): String = {
-    safeTheoryArg(args) match {
-      case Left(err) => err
-      case Right(theory) =>
-        if (!IQAvailable.isAvailable) "I/Q plugin not available."
-        else {
-          resolveTheoryPath(theory).fold(
-            err => err,
-            path =>
-              IQMcpClient.callGetFileStats(path, readToolsTimeoutMs).fold(
-                err => s"Error: $err",
-                stats =>
-                  s"""Theory: $theory
-                     |Lines: ${stats.lineCount}
-                     |Entities: ${stats.entityCount}
-                     |Fully Processed: ${stats.fullyProcessed}
-                     |Errors: ${stats.errorCount}
-                     |Warnings: ${stats.warningCount}""".stripMargin
-              )
-          )
-        }
-    }
-  }
-
-  private def execGetProcessingStatus(args: ResponseParser.ToolArgs, @unused view: View): String = {
-    safeTheoryArg(args) match {
-      case Left(err) => err
-      case Right(theory) =>
-        if (!IQAvailable.isAvailable) "I/Q plugin not available."
-        else {
-          resolveTheoryPath(theory).fold(
-            err => err,
-            path =>
-              IQMcpClient.callGetProcessingStatus(path, readToolsTimeoutMs).fold(
-                err => s"Error: $err",
-                status =>
-                  s"""Processing Status for $theory:
-                     |Fully Processed: ${status.fullyProcessed}
-                     |Unprocessed: ${status.unprocessed}
-                     |Running: ${status.running}
-                     |Finished: ${status.finished}
-                     |Failed: ${status.failed}""".stripMargin
-              )
-          )
-        }
-    }
-  }
-
-  private def execGetSorryPositions(args: ResponseParser.ToolArgs, @unused view: View): String = {
-    safeTheoryArg(args) match {
-      case Left(err) => err
-      case Right(theory) =>
-        if (!IQAvailable.isAvailable) "I/Q plugin not available."
-        else {
-          resolveTheoryPath(theory).fold(
-            err => err,
-            path =>
-              IQMcpClient.callGetSorryPositions(path, readToolsTimeoutMs).fold(
-                err => s"Error: $err",
-                sorry =>
-                  if (sorry.positions.isEmpty) s"No sorry/oops found in $theory."
-                  else {
-                    val lines = sorry.positions.map { pos =>
-                      s"Line ${pos.line}: ${pos.keyword} in ${pos.inProof}"
-                    }
-                    s"Found ${sorry.count} sorry/oops in $theory:\n${lines.mkString("\n")}"
-                  }
-              )
-          )
-        }
-    }
-  }
-
-  private def execGetProofOutline(@unused view: View): String = {
-    if (!IQAvailable.isAvailable) "I/Q plugin not available."
+  private def execGetProofOutline(view: View): String = {
+    if (!IQAvailable.isAvailable) AssistantConstants.TOOL_IQ_UNAVAILABLE
     else {
       IQMcpClient.callGetProofBlocksForSelection(
         selectionArgs = selectionArgsForCurrentView(view),
-        timeoutMs = readToolsTimeoutMs
+        timeoutMs = ToolHelpers.readToolsTimeoutMs
       ).fold(
         err => s"Error: $err",
         blocks =>
@@ -2848,136 +1915,10 @@ object AssistantTools {
                 trimmed.startsWith("show") || trimmed.startsWith("have")
               }.mkString("\n")
               if (keywords.nonEmpty) keywords else "No structural keywords found in proof block."
-            case None => blocks.message.getOrElse("No proof block at cursor position.")
+            case None => blocks.message.getOrElse(AssistantConstants.UIText.NO_PROOF_BLOCK_AT_CURSOR)
           }
       )
     }
   }
 
-  private def execPlanApproach(args: ResponseParser.ToolArgs, @unused view: View): String = {
-    val task = safeStringArg(args, "task", 2000)
-    @unused val context = safeStringArg(args, "context", 2000)
-    
-    if (task.isEmpty) "Error: task required"
-    else {
-      "Planning tool invoked. A detailed plan will be generated based on the task."
-    }
-  }
-
-  private def buildMemoryAddedHtml(
-      topic: String,
-      title: String,
-      body: String
-  ): String = {
-    val border = UIColors.Memory.border
-    val bg = UIColors.Memory.background
-    val headerText = UIColors.Memory.headerText
-    val labelColor = UIColors.Memory.labelColor
-    val memoryText = UIColors.Memory.memoryText
-    
-    val truncBody = if (body.length > 100) body.take(100) + "..." else body
-    
-    s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-       |border-left:4px solid $border;border-radius:3px;
-       |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:$headerText;margin-bottom:3px;font-weight:bold;'>
-       |💡 Memory Added</div>
-       |<div style='font-size:11pt;color:$memoryText;margin-bottom:2px;'>
-       |"${HtmlUtil.escapeHtml(title)}"</div>
-       |<div style='font-size:9pt;color:$labelColor;margin-top:4px;'>
-       |Topic: <span style='color:$memoryText;'>${HtmlUtil.escapeHtml(topic)}</span></div>
-       |<div style='font-size:9pt;color:$labelColor;'>
-       |${HtmlUtil.escapeHtml(truncBody)}</div>
-       |</div>""".stripMargin
-  }
-
-  private def buildMemoryStatusHtml(status: String, result: String): String = {
-    val border = UIColors.Memory.border
-    val bg = UIColors.Memory.background
-    val headerText = UIColors.Memory.headerText
-    val memoryText = UIColors.Memory.memoryText
-    
-    val (icon, action) = status match {
-      case "deleted" => ("🗑️", "Memory deleted")
-      case "topic_deleted" => ("📁", "Topic deleted")
-      case _ => ("ℹ️", "Memory operation")
-    }
-    
-    s"""<div style='margin:6px 0;padding:8px 10px;background:$bg;
-       |border-left:4px solid $border;border-radius:3px;
-       |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:$headerText;margin-bottom:3px;font-weight:bold;'>
-       |$icon $action</div>
-       |<div style='font-size:10pt;color:$memoryText;margin-top:2px;'>
-       |${HtmlUtil.escapeHtml(result)}</div>
-       |</div>""".stripMargin
-  }
-
-  private def buildAskUserHtml(
-      question: String,
-      context: String,
-      options: List[String],
-      onChoice: String => Unit
-  ): String = {
-    // Register an action for each option button
-    val optionButtons = options.zipWithIndex
-      .map { case (opt, idx) =>
-        val actionId = AssistantDockable.registerAction(() => onChoice(opt))
-        // Use letters A-Z for first 26 options, then numbers 27+ for any beyond
-        val label =
-          if (idx < 26) ('A' + idx).toChar.toString else (idx + 1).toString
-        // Each option as a clickable list item
-        s"""<div style='margin:2px 0 2px 12px;'>
-         |<a href='action:insert:$actionId' style='text-decoration:none;color:${UIColors.AskUser.optionLetter};font-weight:bold;'>$label.</a>
-         |<a href='action:insert:$actionId' style='text-decoration:none;color:${UIColors.AskUser.optionText};margin-left:8px;'>
-         |${HtmlUtil.escapeHtml(opt)}</a>
-         |</div>""".stripMargin
-      }
-      .mkString("\n")
-
-    val contextHtml = if (context.nonEmpty) {
-      s"<div style='font-size:10pt;color:${UIColors.AskUser.contextText};margin:4px 0 8px;font-style:italic;'>${HtmlUtil.escapeHtml(context)}</div>"
-    } else ""
-
-    // Match the message bubble pattern: white background + colored left border only
-    s"""<div style='margin:6px 0;padding:8px 10px;background:${UIColors.AskUser.background};
-       |border-left:4px solid ${UIColors.AskUser.border};border-radius:3px;
-       |overflow-x:hidden;word-wrap:break-word;box-shadow:0 1px 2px rgba(0,0,0,0.1);'>
-       |<div style='font-size:10pt;color:${UIColors.AskUser.title};margin-bottom:3px;'>
-       |<b>Assistant needs your input</b></div>
-       |<div style='font-size:12pt;color:#333333;margin-bottom:6px;'>
-       |${HtmlUtil.escapeHtml(question)}</div>
-       |$contextHtml
-       |$optionButtons
-       |</div>""".stripMargin
-  }
-
-  private def intArg(
-      args: ResponseParser.ToolArgs,
-      key: String,
-      default: Int
-  ): Int = {
-    args.get(key) match {
-      case Some(ResponseParser.DecimalValue(d)) if !d.isWhole =>
-        throw new IllegalArgumentException(
-          s"Parameter '$key' must be an integer, got decimal value: $d"
-        )
-      case Some(ResponseParser.DecimalValue(d)) => d.toInt
-      case Some(ResponseParser.IntValue(i))     => i
-      case Some(ResponseParser.StringValue(s))  =>
-        scala.util.Try(s.toInt).getOrElse(
-          throw new IllegalArgumentException(
-            s"Parameter '$key' must be an integer, got: '$s'"
-          )
-        )
-      case Some(ResponseParser.BooleanValue(_)) |
-          Some(ResponseParser.JsonValue(_)) =>
-        throw new IllegalArgumentException(
-          s"Parameter '$key' must be an integer"
-        )
-      case Some(ResponseParser.NullValue) =>
-        default
-      case _ => default
-    }
-  }
 }

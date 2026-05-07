@@ -12,7 +12,12 @@ JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
 SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
-TEST_SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all
+# Test flags mirror the production flags except for -Wnonunit-statement:
+# every ScalaTest `shouldBe` call returns an `Assertion` that is implicitly
+# discarded in a test block, so the warning would fire on essentially every
+# assertion. Keep -Werror and -Wvalue-discard — they catch real mistakes
+# without interfering with idiomatic test bodies.
+TEST_SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard
 ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
@@ -33,11 +38,18 @@ CLASSES_DIR ?= $(BUILD_DIR)/classes
 JAR_FILE ?= $(BUILD_DIR)/isabelle_assistant.jar
 INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
 
-# I/Q Plugin (dependency for proof verification features)
+# I/Q Plugin (dependency for proof verification features).
+# Compilation silently failed on an obscure scalac error if neither JAR
+# existed — surface the real cause instead when any non-informational
+# target actually uses the classpath.
 IQ_DIR := $(PLUGIN_DIR)/../iq
 IQ_JAR := $(INSTALL_DIR)/iq_plugin.jar
 IQ_BUILD_JAR := $(IQ_DIR)/build/iq_plugin.jar
 IQ_CLASSPATH = $(firstword $(wildcard $(IQ_JAR) $(IQ_BUILD_JAR)))
+# Lazy guard: only errors if something actually dereferences this variable
+# (e.g. the scalac target) — keeps `make help`, `make clean`, and `make
+# debug` working when I/Q isn't installed yet.
+require-iq-classpath = $(if $(IQ_CLASSPATH),$(IQ_CLASSPATH),$(error I/Q plugin JAR not found at $(IQ_JAR) or $(IQ_BUILD_JAR); run 'make iq-install' first))
 
 SCALA_SOURCES := $(wildcard src/*.scala)
 RESOURCE_FILES := $(wildcard resources/*)
@@ -89,7 +101,7 @@ $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling..."
 	$(JAVA_ENV) $(SCALAC) \
 		$(SCALAC_FLAGS) \
-		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH)" \
+		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(require-iq-classpath)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
 	touch $@
@@ -114,7 +126,17 @@ install: iq-install $(JAR_FILE)
 	cp "$(JAR_FILE)" "$$tmp_jar"; \
 	mv -f "$$tmp_jar" "$(INSTALL_DIR)/isabelle_assistant.jar"
 	mkdir -p $(ISABELLE_SETTINGS_DIR)
-	grep -qxF '$(COMPONENT_LINE)' $(ISABELLE_SETTINGS_DIR)/settings 2>/dev/null || echo '$(COMPONENT_LINE)' >> $(ISABELLE_SETTINGS_DIR)/settings
+	@set -eu; \
+	settings_file="$(ISABELLE_SETTINGS_DIR)/settings"; \
+	component_line='$(COMPONENT_LINE)'; \
+	if grep -qxF "$$component_line" "$$settings_file" 2>/dev/null; then \
+		: ; \
+	else \
+		tmp_settings="$$settings_file.tmp.$$$$"; \
+		if [ -f "$$settings_file" ]; then cp "$$settings_file" "$$tmp_settings"; else : > "$$tmp_settings"; fi; \
+		printf '%s\n' "$$component_line" >> "$$tmp_settings"; \
+		mv -f "$$tmp_settings" "$$settings_file"; \
+	fi
 	echo "Installed. Restart Isabelle/jEdit to load the plugin."
 	echo "NOTE: Atomic install avoids partial writes, but running jEdit must still be restarted."
 
@@ -128,7 +150,7 @@ test: build fetch-test-deps check-layering check-test-sanity verify-test-coverag
 	mkdir -p $(TEST_CLASSES_DIR)
 	$(JAVA_ENV) $(SCALAC) \
 		$(TEST_SCALAC_FLAGS) \
-		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(IQ_CLASSPATH):$(CLASSES_DIR):$(TEST_CLASSPATH)" \
+		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_SWING_JAR):$(LIB_CLASSPATH):$(require-iq-classpath):$(CLASSES_DIR):$(TEST_CLASSPATH)" \
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
 	echo "Running tests..."
@@ -161,39 +183,39 @@ check-test-sanity:
 	fi
 
 verify-test-coverage:
-	@if command -v rg >/dev/null 2>&1; then \
-		CHECK_CMD='rg -q -w'; \
-	else \
-		CHECK_CMD='grep -R -q -w'; \
-	fi; \
-	for module in GoalExtractor PromptLoader IQIntegration AssistantOptions AssistantTools AssistantStatusSubscription VerificationCache LLMResponseCache ResponseParser PayloadBuilder BedrockModels ErrorHandler TargetParser ProofTextUtil ChatAction SuggestAction; do \
-		$$CHECK_CMD "$$module" src/test/scala || { \
-			echo "ERROR: missing test ownership for module $$module"; \
+	@# Require each critical module to have at least one corresponding test
+	@# file and at least one test(...) block that references the module.
+	@# The previous implementation grepped the module name across the whole
+	@# tree, which a passing mention in a comment could satisfy. This version
+	@# also requires a non-comment `$$module.` or `$$module(` usage on a line
+	@# that isn't the copyright header, plus a `test(` block in a file in the
+	@# same suite.
+	@set -eu; \
+	modules='GoalExtractor PromptLoader IQIntegration AssistantOptions AssistantTools AssistantStatusSubscription VerificationCache LLMResponseCache ResponseParser PayloadBuilder BedrockModels ErrorHandler TargetParser ProofTextUtil ChatAction SuggestAction'; \
+	for module in $$modules; do \
+		hits=$$(grep -Rl -E "\b$$module[._(]" src/test/scala 2>/dev/null | head -20); \
+		if [ -z "$$hits" ]; then \
+			echo "ERROR: no test file references module $$module (expected something like $${module}Test.scala with a test(\"...\") block that uses $$module)"; \
 			exit 1; \
-		}; \
+		fi; \
+		has_test_block=0; \
+		for f in $$hits; do \
+			if grep -q -E '^\s*test\(' "$$f"; then \
+				has_test_block=1; \
+				break; \
+			fi; \
+		done; \
+		if [ $$has_test_block -eq 0 ]; then \
+			echo "ERROR: module $$module is referenced in tests but no file that references it has a top-level test(...) block"; \
+			exit 1; \
+		fi; \
 	done
 
 fetch-test-deps:
+	@# Delegate to the SHA-1-verifying shared pipeline so test JARs are
+	@# tamper-resistant like the production deps (see fetch-deps-lib.sh).
 	@if ! ls lib/test/*.jar >/dev/null 2>&1; then \
-		echo "Downloading ScalaTest and ScalaCheck JARs..."; \
-		mkdir -p lib/test; \
-		for jar in \
-			"org/scalatest/scalatest_3/3.2.17/scalatest_3-3.2.17.jar" \
-			"org/scalatest/scalatest-core_3/3.2.17/scalatest-core_3-3.2.17.jar" \
-			"org/scalatest/scalatest-funsuite_3/3.2.17/scalatest-funsuite_3-3.2.17.jar" \
-			"org/scalatest/scalatest-matchers-core_3/3.2.17/scalatest-matchers-core_3-3.2.17.jar" \
-			"org/scalatest/scalatest-shouldmatchers_3/3.2.17/scalatest-shouldmatchers_3-3.2.17.jar" \
-			"org/scalactic/scalactic_3/3.2.17/scalactic_3-3.2.17.jar" \
-			"org/scalatest/scalatest-compatible/3.2.17/scalatest-compatible-3.2.17.jar" \
-			"org/scalacheck/scalacheck_3/1.17.0/scalacheck_3-1.17.0.jar" \
-			"org/scalatestplus/scalacheck-1-17_3/3.2.17.0/scalacheck-1-17_3-3.2.17.0.jar"; \
-		do \
-			filename=$$(basename "$$jar"); \
-			if [ ! -f "lib/test/$$filename" ]; then \
-				echo "  Downloading $$filename..."; \
-				curl -sL "https://repo1.maven.org/maven2/$$jar" -o "lib/test/$$filename"; \
-			fi; \
-		done; \
+		./fetch-test-deps.sh; \
 	fi
 
 uninstall:

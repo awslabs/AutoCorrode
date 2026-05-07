@@ -14,22 +14,28 @@ case class StructuredResponseSchema(
 )
 
 object StructuredResponseSchema {
-  /** Schema for planning agent brainstorm phase: generates 3 distinct approaches. */
-  val PlanningBrainstorm: StructuredResponseSchema = StructuredResponseSchema(
-    name = "brainstorm_approaches",
-    description = "Generate three distinct approaches to solve the given problem.",
-    jsonSchema = """{
+  /** Schema for planning agent brainstorm phase: generates
+    * [[AssistantConstants.PLANNING_NUM_APPROACHES]] distinct approaches.
+    * The JSON string literal is built once at construction time so the count
+    * in the schema, the count in the prompt, and the count in the
+    * orchestrator are all driven by one constant. */
+  val PlanningBrainstorm: StructuredResponseSchema = {
+    val n = AssistantConstants.PLANNING_NUM_APPROACHES
+    StructuredResponseSchema(
+      name = "brainstorm_approaches",
+      description = s"Generate $n distinct approaches to solve the given problem.",
+      jsonSchema = s"""{
       "type": "object",
       "properties": {
         "approaches": {
           "type": "array",
-          "description": "Three distinct approaches to the problem",
+          "description": "$n distinct approaches to the problem",
           "items": {
             "type": "object",
             "properties": {
               "id": {
                 "type": "integer",
-                "description": "Approach ID (1, 2, or 3)"
+                "description": "Approach ID (1-based, distinct per approach)"
               },
               "title": {
                 "type": "string",
@@ -51,13 +57,14 @@ object StructuredResponseSchema {
             },
             "required": ["id", "title", "summary", "key_idea", "exploration_hints"]
           },
-          "minItems": 3,
-          "maxItems": 3
+          "minItems": $n,
+          "maxItems": $n
         }
       },
       "required": ["approaches"]
     }"""
-  )
+    )
+  }
 
   /** Schema for planning agent selection phase: picks best approach and produces final plan. */
   val PlanningSelect: StructuredResponseSchema = StructuredResponseSchema(

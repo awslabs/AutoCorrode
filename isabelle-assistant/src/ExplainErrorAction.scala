@@ -16,27 +16,34 @@ object ExplainErrorAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
 
-    extractErrorAtOffset(buffer, offset) match {
-      case None =>
-        ChatAction.addResponse("No error at cursor position.")
-      case Some(error) =>
-        val commandText =
-          CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
-        val goalState = GoalExtractor.getGoalState(buffer, offset)
-
-        ActionHelper.runAndRespond(
-          "assistant-explain-error",
-          "Explaining error..."
-        ) {
+    // All three extractors go to I/Q MCP, so they must run on the background
+    // thread that ActionHelper.runAsync hands us, not on the EDT.
+    ActionHelper.runAsync(
+      "assistant-explain-error",
+      "Explaining error…"
+    ) {
+      extractErrorAtOffset(buffer, offset) match {
+        case None => ""
+        case Some(error) =>
+          val commandText =
+            CommandExtractor.getCommandAtOffset(buffer, offset).getOrElse("")
+          val goalState = GoalExtractor.getGoalState(buffer, offset)
           val defContext = ContextFetcher.getContext(view)
           val subs = Map("error" -> error, "context" -> commandText) ++
-            goalState.map("goal_state" -> _) ++ defContext.map(
-              "definitions" -> _
-            )
+            goalState.map("goal_state" -> _) ++
+            defContext.map("definitions" -> _)
           val prompt = PromptLoader.load("explain_error.md", subs)
           BedrockClient.invokeInContext(prompt)
-        }
-    }
+      }
+    }(response => {
+      if (response.isEmpty)
+        ChatAction.addResponse(AssistantConstants.UIText.NO_ERROR_AT_CURSOR)
+      else {
+        ChatAction.addMessage(ChatAction.Assistant, response)
+        AssistantDockable.showConversation(ChatAction.getHistory)
+      }
+      AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+    })
   }
 
   def extractErrorAtOffset(buffer: JEditBuffer, offset: Int): Option[String] = {

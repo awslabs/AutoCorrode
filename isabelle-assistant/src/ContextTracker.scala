@@ -139,15 +139,20 @@ object ContextTracker {
 
   /**
    * Estimate token count from text using character-based heuristic.
-   * 
+   *
    * Uses ~3.5 chars/token ratio based on empirical data for Anthropic Claude.
    * This is a rough estimate but sufficient for UI progress indication.
-   * 
+   *
    * @param text Text to estimate tokens for
    * @return Estimated token count
    */
-  def estimateTokens(text: String): Int = {
-    val chars = text.length
+  def estimateTokens(text: String): Int = estimateTokensFromChars(text.length)
+
+  /** Int-keyed overload: use this when only a character count is known, so
+    * callers don't have to allocate a scratch string (the tool-loop
+    * context-bar refresh used to materialise a 200 KB string just to
+    * divide its length by 3.5). */
+  def estimateTokensFromChars(chars: Int): Int = {
     // 3.5 chars per token is a reasonable estimate for Claude
     math.ceil(chars / 3.5).toInt
   }
@@ -208,7 +213,7 @@ object ContextTracker {
     
     // Add active tool loop context (ephemeral msgBuf during agentic tool execution)
     val toolLoopChars = BedrockClient.getActiveToolLoopContextChars
-    val toolLoopTokens = if (toolLoopChars > 0) estimateTokens("a" * toolLoopChars) else 0
+    val toolLoopTokens = if (toolLoopChars > 0) estimateTokensFromChars(toolLoopChars) else 0
     
     // Total tokens used (includes both persisted history and active tool loop)
     val usedTokens = messageTokens + systemTokens + toolLoopTokens

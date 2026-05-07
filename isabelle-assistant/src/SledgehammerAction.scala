@@ -12,7 +12,7 @@ object SledgehammerAction {
     ChatAction.addMessage(ChatAction.User, ":sledgehammer")
     AssistantDockable.showConversation(ChatAction.getHistory)
     
-    ActionHelper.runIQGoalAction("assistant-sledgehammer", "Running sledgehammer...") { v =>
+    ActionHelper.runIQGoalAction("assistant-sledgehammer", "Running sledgehammer…") { v =>
       val timeout = AssistantOptions.getSledgehammerTimeout
       GUI_Thread.later {
         IQIntegration.runSledgehammerAsync(v, timeout, {
@@ -23,7 +23,7 @@ object SledgehammerAction {
             AssistantDockable.respondInChat("Sledgehammer found no proofs.")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
           case Left(error) =>
-            AssistantDockable.respondInChat(s"Sledgehammer error: $error")
+            ChatAction.addErrorResponse(error, "sledgehammer")
             AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
         })
       }

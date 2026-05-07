@@ -68,14 +68,18 @@ object AssistantSupport {
     val hasAssistant = hasAssistantSupport(buffer)
     val hasEisbach = hasEisbachImport(buffer)
     val hasIQ = IQAvailable.isAvailable
-    
+
+    def line(label: String, detail: String, enabled: Boolean): String =
+      if (enabled) s"Enabled: $label"
+      else s"Unavailable: $label ($detail)"
+
     val features = List(
-      if (hasIQ) "[ok] Proof verification (I/Q)" else "[n/a] Proof verification (I/Q not installed)",
-      if (hasIQ) "[ok] Sledgehammer integration" else "[n/a] Sledgehammer (I/Q not installed)",
-      if (hasEisbach || hasAssistant) "[ok] Custom tactic generation (Eisbach)" else "[n/a] Custom tactics (import Eisbach)",
-      if (hasIQ) "[ok] Simplifier tracing" else "[n/a] Simplifier tracing (I/Q not installed)"
+      line("Proof verification", "I/Q not installed", hasIQ),
+      line("Sledgehammer integration", "I/Q not installed", hasIQ),
+      line("Custom tactic generation (Eisbach)", "import Eisbach", hasEisbach || hasAssistant),
+      line("Simplifier tracing", "I/Q not installed", hasIQ)
     ).mkString("\n")
-    
+
     if (hasAssistant && hasIQ) {
       s"""Assistant has full support enabled.
          |

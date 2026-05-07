@@ -63,7 +63,7 @@ object SuggestAction {
                 GUI.warning_dialog(
                   view,
                   "Isabelle Assistant",
-                  "No goal state available at cursor position"
+                  AssistantConstants.UIText.NO_GOAL_AT_CURSOR
                 )
               }
             case Some(goal) =>
@@ -76,7 +76,7 @@ object SuggestAction {
                 AssistantOptions.getUseSledgehammer && IQAvailable.isAvailable
 
               GUI_Thread.later {
-                AssistantDockable.setStatus("Generating suggestions...")
+                AssistantDockable.setStatus("Generating suggestions…")
               }
 
               val _ = ErrorHandler
@@ -422,7 +422,7 @@ object SuggestAction {
 
   private def displayResults(view: View, candidates: List[Candidate]): Unit = {
     if (candidates.isEmpty) {
-      AssistantDockable.respondInChat("No suggestions found.")
+      AssistantDockable.respondInChat(AssistantConstants.UIText.NO_SUGGESTIONS)
     } else {
 
       val verifiedCount =

@@ -219,4 +219,21 @@ object IsabelleKeywords {
   
   /** Keywords that open a proof context (for depth tracking). */
   lazy val proofOpeners: Set[String] = proofStarters ++ Set("proof")
+
+  /** Names of built-in automated proof methods (the arguments to `by`,
+    * `apply`, and `proof`). Not theory-level keywords, but used as a
+    * shared vocabulary across code extraction, pattern detection, and
+    * strategy heuristics. Kept here so all call sites share a single
+    * source of truth.
+    */
+  val automatedProofMethods: Set[String] = Set(
+    "simp",
+    "auto",
+    "blast",
+    "force",
+    "metis",
+    "meson",
+    "arith",
+    "linarith"
+  )
 }

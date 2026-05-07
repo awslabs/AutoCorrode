@@ -6,7 +6,7 @@ package isabelle.assistant
 import isabelle._
 
 import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWriter}
-import java.net.{InetSocketAddress, Socket}
+import java.net.{InetSocketAddress, Socket, SocketTimeoutException}
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.atomic.AtomicLong
 import java.util.Locale
@@ -28,6 +28,18 @@ object IQMcpClient {
   private val host = "127.0.0.1"
   private val connectTimeoutMs = 250
   private val minSocketTimeoutMs = 1000
+  private val CancelPollIntervalMs = 250
+
+  /** Marker for cancellation paths through the connection pool. Thrown
+    * internally and translated to a `Left("cancelled")` at the public API
+    * boundary. */
+  private case object CancelledException extends RuntimeException {
+    override def fillInStackTrace(): Throwable = this
+  }
+
+  /** Error string returned to callers when an MCP call is aborted because
+    * the supplied cancellation token was tripped. */
+  private[assistant] val CancelledErrorMessage = "cancelled"
 
   /** Read the I/Q MCP port from the system property set by the I/Q plugin,
     * falling back to the default if the property is absent or malformed. */
@@ -80,6 +92,91 @@ object IQMcpClient {
       }
     }
     
+    /** Run `f` with a short socket read timeout and poll the cancellation
+      * token between reads. If the token is cancelled, the connection is
+      * discarded (the server may still be computing a response that would
+      * otherwise land on the next caller) and `CancelledException` is thrown.
+      */
+    def withConnectionCancellable[T](
+        timeoutMs: Long,
+        token: CancellationToken,
+        pollIntervalMs: Int = CancelPollIntervalMs
+    )(f: (BufferedReader, PrintWriter, () => Unit) => T): T = {
+      lock.lock()
+      try {
+        val port = currentPort
+        val now = System.currentTimeMillis()
+
+        if (connection.isDefined && now - lastUsedMs > keepaliveIntervalMs) {
+          if (!pingExistingConnection()) {
+            closeQuietly()
+            connection = None
+          }
+        }
+
+        val (socket, reader, writer) = connection match {
+          case Some(conn) => conn
+          case None =>
+            val conn = connectTo(port, minSocketTimeoutMs)
+            connection = Some(conn)
+            conn
+        }
+
+        val effectiveTimeout = math.max(minSocketTimeoutMs.toLong, timeoutMs + AssistantConstants.TIMEOUT_BUFFER_MS)
+        val deadline = System.currentTimeMillis() + effectiveTimeout
+        val bounded = math.max(1, math.min(pollIntervalMs, minSocketTimeoutMs))
+        socket.setSoTimeout(bounded)
+
+        val checkCancellation: () => Unit = () => {
+          if (token.isCancelled) {
+            closeQuietly()
+            connection = None
+            throw CancelledException
+          }
+          if (System.currentTimeMillis() > deadline) {
+            closeQuietly()
+            connection = None
+            throw new SocketTimeoutException(s"I/Q MCP cancellable read exceeded ${effectiveTimeout}ms")
+          }
+        }
+
+        try {
+          lastUsedMs = System.currentTimeMillis()
+          f(reader, writer, checkCancellation)
+        } catch {
+          case CancelledException =>
+            // Already discarded connection; propagate.
+            throw CancelledException
+          case ex: java.io.IOException =>
+            closeQuietly()
+            connection = None
+
+            if (token.isCancelled) throw CancelledException
+
+            val (freshSocket, freshReader, freshWriter) = connectTo(port, bounded)
+            connection = Some((freshSocket, freshReader, freshWriter))
+            lastUsedMs = System.currentTimeMillis()
+
+            try {
+              f(freshReader, freshWriter, checkCancellation)
+            } catch {
+              case CancelledException =>
+                throw CancelledException
+              case ex2: Exception =>
+                closeQuietly()
+                connection = None
+                throw ex2
+            }
+          case ex: Exception =>
+            closeQuietly()
+            connection = None
+            throw ex
+        }
+      } finally {
+        lock.unlock()
+      }
+    }
+
     def withConnection[T](timeoutMs: Long)(f: (BufferedReader, PrintWriter) => T): T = {
       lock.lock()
       try {
@@ -236,7 +333,7 @@ object IQMcpClient {
   private def summarizeRoots(roots: String): String = {
     val compact = Option(roots).map(_.trim.replaceAll("\\s+", " ")).getOrElse("")
     if (compact.length <= 600) compact
-    else compact.take(600) + "..."
+    else compact.take(600) + "…"
   }
 
   private def rootDeniedMessage(
@@ -367,6 +464,69 @@ object IQMcpClient {
     }
   }
   
+  private def callToolCancellable(
+      toolName: String,
+      arguments: Map[String, Any],
+      timeoutMs: Long,
+      token: CancellationToken
+  ): Either[String, Map[String, Any]] = {
+    if (toolName.trim.isEmpty) {
+      return Left("Tool name is required")
+    }
+
+    // Fast path: caller already aborted before we even acquired a connection.
+    if (token.isCancelled) return Left(CancelledErrorMessage)
+
+    val request = Map(
+      "jsonrpc" -> "2.0",
+      "id" -> nextRequestId(),
+      "method" -> "tools/call",
+      "params" -> Map("name" -> toolName, "arguments" -> arguments)
+    )
+
+    try {
+      connectionPool.withConnectionCancellable(timeoutMs, token) {
+        (reader, writer, checkCancellation) =>
+          writer.println(JSON.Format(request))
+          val responseLine = readLineWithPoll(reader, checkCancellation)
+
+          if (responseLine == null) {
+            Left("I/Q MCP server closed connection without a response")
+          } else {
+            parseToolCallResponse(responseLine, Some(toolName))
+          }
+      }
+    } catch {
+      case CancelledException => Left(CancelledErrorMessage)
+      case NonFatal(ex) =>
+        Left(
+          makeToolErrorUserFriendly(
+            Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName),
+            Some(toolName)
+          )
+        )
+    }
+  }
+
+  /** Read a line from the MCP connection, polling the cancellation token on
+    * each socket-read timeout. The connection pool has configured a short
+    * `SO_TIMEOUT` so reads wake periodically; between wakes we give the
+    * caller a chance to abort. */
+  private def readLineWithPoll(
+      reader: BufferedReader,
+      checkCancellation: () => Unit
+  ): String = {
+    while (true) {
+      checkCancellation()
+      try {
+        return reader.readLine()
+      } catch {
+        case _: SocketTimeoutException => // loop and poll again
+      }
+    }
+    throw new IllegalStateException("unreachable") // appease the type checker
+  }
+
   /** Close the connection pool. Called from plugin shutdown. */
   def closePool(): Unit = {
     connectionPool.close()
@@ -651,13 +811,16 @@ object IQMcpClient {
     * @param arguments arguments for the query (e.g., proof text, search pattern)
     * @param timeoutMs MCP call timeout in milliseconds
     * @param extraParams additional parameters (e.g., max_results, selection context)
+    * @param token optional cancellation token; when tripped the in-flight
+    *   MCP call is aborted and the pooled connection discarded
     * @return Either error message or explore result with success status and output
     */
   def callExplore(
       query: ExploreQueryType,
       arguments: String,
       timeoutMs: Long,
-      extraParams: Map[String, Any] = Map.empty
+      extraParams: Map[String, Any] = Map.empty,
+      token: Option[CancellationToken] = None
   ): Either[String, ExploreResult] = {
     val args =
       Map(
@@ -666,7 +829,11 @@ object IQMcpClient {
         "arguments" -> arguments
       ) ++ extraParams
 
-    callTool("explore", args, timeoutMs).map(IQMcpDecoder.decodeExploreResult)
+    val raw = token match {
+      case Some(t) => callToolCancellable("explore", args, timeoutMs, t)
+      case None => callTool("explore", args, timeoutMs)
+    }
+    raw.map(IQMcpDecoder.decodeExploreResult)
   }
 
   /** Lightweight ping to check if the I/Q MCP server is responsive.

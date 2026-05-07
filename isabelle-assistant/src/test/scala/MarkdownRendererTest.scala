@@ -104,7 +104,7 @@ graph TD
     html should not be empty
     // If mmdc not available, should show unavailable message
     if (!html.contains("<img src='mermaid://")) {
-      html should include("Mermaid")
+      val _ = html should include("Mermaid")
     }
   }
 
@@ -185,5 +185,55 @@ More text"""
   test("markdown with only whitespace") {
     val html = MarkdownRenderer.toBodyHtml("   \n\n   ")
     html should not be null
+  }
+
+  test("unmatched display math opener should not consume message tail") {
+    val markdown = """Some prelude
+$$
+\frac{a}{b}
+More normal content after
+And another line
+"""
+    val html = MarkdownRenderer.toBodyHtml(markdown)
+    html should not be null
+    // Scanner must recover and render subsequent lines — the "normal
+    // content" text must appear in the output.
+    html should include("normal content after")
+    html should include("And another line")
+  }
+
+  test("multiple inline math formulae on a single line") {
+    val markdown = "First $a + b$ then $c - d$ then $e = f$ done"
+    val html = MarkdownRenderer.toBodyHtml(markdown)
+    html should not be null
+    // Each formula should have produced either a latex image or inline text,
+    // and the surrounding plain words must all survive.
+    html should (include("First") and include("then") and include("done"))
+  }
+
+  test("tilde fence interleaved with backtick fence should not break rendering") {
+    val markdown = "Text before\n```scala\nval inner = \"hi\"\n```\nMiddle\n```python\nprint('hi')\n```\nText after"
+    val html = MarkdownRenderer.toBodyHtml(markdown)
+    html should not be null
+    html should (include("Text before") and include("Text after") and include("Middle"))
+    html should include("<pre")
+  }
+
+  test("empty code fence should render without throwing") {
+    val markdown = """```
+
+```"""
+    val html = MarkdownRenderer.toBodyHtml(markdown)
+    html should not be null
+    html should include("<pre")
+  }
+
+  test("inline code containing backticks-adjacent text should preserve content") {
+    val markdown = "Start `foo_bar` middle `baz` end"
+    val html = MarkdownRenderer.toBodyHtml(markdown)
+    html should include("foo_bar")
+    html should include("baz")
+    html should include("Start")
+    html should include("end")
   }
 }

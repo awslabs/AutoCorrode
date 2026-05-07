@@ -687,4 +687,110 @@ class AssistantToolsTest extends AnyFunSuite with Matchers {
       idParam.get.required shouldBe true
     }
   }
+
+  // formatCreateTheoryResult: distinguishes the five (created, opened, tracked)
+  // outcomes returned by the I/Q open_file handler. Regression test for the
+  // bug where (created=false, opened=true) — i.e. file already existed and was
+  // opened without modification — was reported as "was not created".
+
+  private def mkResult(
+      created: Boolean,
+      opened: Boolean,
+      tracked: Boolean,
+      message: String = ""
+  ): IQMcpProtocol.OpenFileResult =
+    IQMcpProtocol.OpenFileResult(
+      path = "/tmp/Foo.thy",
+      created = created,
+      overwritten = false,
+      opened = opened,
+      inView = true,
+      tracked = tracked,
+      message = message
+    )
+
+  test("formatCreateTheoryResult: happy path reports Created and opened") {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(created = true, opened = true, tracked = true)
+    )
+    msg shouldBe "Created and opened Foo.thy"
+  }
+
+  test(
+    "formatCreateTheoryResult: created + opened but not yet tracked reports retry"
+  ) {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(created = true, opened = true, tracked = false)
+    )
+    msg should startWith("Error:")
+    msg should include("not yet tracked")
+    msg should include("retry")
+  }
+
+  test(
+    "formatCreateTheoryResult: created but not opened reports the open failure"
+  ) {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(created = true, opened = false, tracked = false)
+    )
+    msg should startWith("Error:")
+    msg should include("not opened in jEdit")
+  }
+
+  test(
+    "formatCreateTheoryResult: file already existed is a Note, not an Error"
+  ) {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(created = false, opened = true, tracked = true)
+    )
+    msg should startWith("Note:")
+    msg should include("already exists")
+    msg should include("/tmp")
+    msg should include("without modification")
+  }
+
+  test(
+    "formatCreateTheoryResult: neither created nor opened reports a generic failure"
+  ) {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(created = false, opened = false, tracked = false)
+    )
+    msg should startWith("Error:")
+    msg should include("could not be created or opened")
+  }
+
+  test("formatCreateTheoryResult: appends message detail when present") {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(
+        created = false,
+        opened = false,
+        tracked = false,
+        message = "mutation root denied"
+      )
+    )
+    msg should include("(mutation root denied)")
+  }
+
+  test(
+    "formatCreateTheoryResult: omits parenthesized detail when message is empty"
+  ) {
+    val msg = AssistantTools.formatCreateTheoryResult(
+      "Foo",
+      "/tmp",
+      mkResult(created = false, opened = false, tracked = false, message = "")
+    )
+    msg should not include "("
+  }
 }

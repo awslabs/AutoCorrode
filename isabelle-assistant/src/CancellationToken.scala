@@ -17,8 +17,10 @@ class CancellationToken {
   /** Cancel this operation. */
   def cancel(): Unit = cancelled.set(true)
 
-  /** Reset cancellation state (for reuse, though creating new tokens is
-    * preferred).
+  /** Reset cancellation state. Intentionally package-private — reusing a
+    * token across two operations is error-prone, and callers should
+    * prefer a fresh `CancellationToken` per op. Scoped to
+    * `isabelle.assistant` so tests can still exercise the reset path.
     */
-  def reset(): Unit = cancelled.set(false)
+  private[assistant] def reset(): Unit = cancelled.set(false)
 }

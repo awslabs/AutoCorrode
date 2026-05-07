@@ -35,20 +35,15 @@ object ContextSummarizer {
 
   /**
    * Check if summarization should trigger based on current context usage.
-   * 
+   * Delegates to [[ContextTracker.shouldSummarize]] so the policy lives in
+   * a single place.
+   *
    * @param history Current conversation history
    * @param modelId Model ID to calculate context for
    * @return True if summarization should happen
    */
-  def shouldSummarize(history: List[ChatAction.Message], modelId: String): Boolean = {
-    if (!AssistantOptions.getAutoSummarize) return false
-    
-    val nonTransient = history.filterNot(_.transient)
-    if (nonTransient.length < AssistantConstants.MIN_MESSAGES_FOR_SUMMARIZATION) return false
-    
-    val usage = ContextTracker.calculate(history, modelId)
-    usage.budgetPercentage >= AssistantOptions.getSummarizationThreshold
-  }
+  def shouldSummarize(history: List[ChatAction.Message], modelId: String): Boolean =
+    ContextTracker.shouldSummarize(history, modelId)
 
   /**
    * Perform complete summarization flow: call LLM, format result, replace history.
@@ -60,28 +55,33 @@ object ContextSummarizer {
     ErrorHandler.logOperation("performSummarization") {
       val history = ChatAction.getHistory
       Output.writeln(s"[Assistant] Context summarization triggered - ${history.length} messages")
-      
+
       try {
         // Call summarization agent
         val summary = summarizeConversation(history)
-        
+
         // Format as restoration message
         val restorationMsg = buildRestorationMessage(summary)
-        
+
         // Atomically replace history
         ChatAction.replaceHistoryWithSummary(restorationMsg)
-        
+
         // Show notification to user
         ChatAction.addSummarizationNotice()
-        
+
         val newHistory = ChatAction.getHistory
         Output.writeln(s"[Assistant] Context summarized - reduced from ${history.length} to ${newHistory.length} messages")
-        
+
       } catch {
         case ex: Exception =>
+          // Deliberate swallow: the caller (BedrockClient.invokeChatInternal)
+          // recurses with summarizationAttempted=true regardless, and that
+          // path then applies truncateTurns as a fallback. Rethrowing would
+          // abort the user's chat turn on a failure in a recovery path.
+          // Log loudly enough that the failure is visible in the Isabelle
+          // messages panel.
           Output.warning(s"[Assistant] Context summarization failed: ${ex.getMessage}")
-          Output.warning("[Assistant] Falling back to standard truncation behavior")
-          // Don't rethrow - let the normal flow continue with truncation fallback
+          Output.warning("[Assistant] Falling back to truncation in invokeChatInternal")
       }
     }
   }
@@ -180,17 +180,18 @@ Produce the structured summary now. Remember: the continuing agent will have NO 
     
     // Call LLM with structured response
     val modelId = AssistantOptions.getSummarizationModelId
-    val temperature = AssistantOptions.getEffectiveSummarizationTemperature
-    
-    Output.writeln(s"[Assistant] Calling summarization agent - Model: $modelId, Temp: $temperature")
-    
-    // Use no-cache version to ensure fresh summary each time
+
+    Output.writeln(s"[Assistant] Calling summarization agent - Model: $modelId")
+
+    // Summarization is invoked precisely when history has changed enough to
+    // approach the context limit, so a cache hit can only come from a prior
+    // near-identical run — which is unlikely and not worth the risk of
+    // reviving stale summaries. Always bypass the LLM response cache.
     val args = BedrockClient.invokeNoCacheStructured(
       userPrompt,
       StructuredResponseSchema.ContextSummary,
       systemPrompt,
-      Some(modelId),
-      Some(temperature)
+      Some(modelId)
     )
     
     // Parse structured response

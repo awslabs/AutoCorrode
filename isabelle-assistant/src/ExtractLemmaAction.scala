@@ -52,23 +52,29 @@ object ExtractLemmaAction {
       if (textArea.getSelectionCount > 0) textArea.getSelection(0).getStart
       else textArea.getCaretPosition
 
-    getExtractionContext(buffer, selStart, selectedText) match {
-      case None =>
-        GUI.warning_dialog(
-          view,
-          "Isabelle Assistant",
-          "Could not determine proof context"
-        )
-      case Some(ctx) =>
-        val hasCommand =
-          CommandExtractor.getCommandAtOffset(buffer, selStart).isDefined
-        val canVerify = IQAvailable.isAvailable && hasCommand
+    AssistantDockable.setStatus("Extracting lemma…")
+    AssistantDockable.setBadge(VerificationBadge.Verifying)
 
-        AssistantDockable.setStatus("Extracting lemma...")
-        AssistantDockable.setBadge(VerificationBadge.Verifying)
+    // Every context lookup here (proof block, goal state, command resolution)
+    // goes through I/Q MCP, so all of it has to live on this background
+    // thread, not on the EDT.
+    val _ = Isabelle_Thread.fork(name = "assistant-extract") {
+      try {
+        getExtractionContext(buffer, selStart, selectedText) match {
+          case None =>
+            GUI_Thread.later {
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+              GUI.warning_dialog(
+                view,
+                "Isabelle Assistant",
+                "Could not determine proof context"
+              )
+            }
+          case Some(ctx) =>
+            val hasCommand =
+              CommandExtractor.getCommandAtOffset(buffer, selStart).isDefined
+            val canVerify = IQAvailable.isAvailable && hasCommand
 
-        val _ = Isabelle_Thread.fork(name = "assistant-extract") {
-          try {
             val bundle =
               ProofContextSupport.collect(
                 view,
@@ -113,14 +119,14 @@ object ExtractLemmaAction {
                   AssistantDockable.setStatus("Could not parse extraction result")
                 }
             }
-          } catch {
-            case ex: Exception =>
-              GUI_Thread.later {
-                AssistantDockable.setStatus("Error: " + ex.getMessage)
-                GUI.error_dialog(view, "Extract Lemma Error", ex.getMessage)
-              }
-          }
         }
+      } catch {
+        case ex: Exception =>
+          GUI_Thread.later {
+            AssistantDockable.setStatus("Error: " + ex.getMessage)
+            GUI.error_dialog(view, "Extract Lemma Error", ex.getMessage)
+          }
+      }
     }
   }
 
@@ -175,7 +181,7 @@ object ExtractLemmaAction {
     val timeout = AssistantOptions.getVerificationTimeout
 
     AssistantDockable.setStatus(
-      s"Verifying extracted lemma (attempt $attempt/$maxRetries)..."
+      s"Verifying extracted lemma (attempt $attempt/$maxRetries)…"
     )
 
     GUI_Thread.later {
@@ -186,7 +192,7 @@ object ExtractLemmaAction {
         {
           case IQIntegration.ProofSuccess(_, _) =>
             GUI_Thread.later {
-              AssistantDockable.setStatus("Verifying updated proof...")
+              AssistantDockable.setStatus("Verifying updated proof…")
               IQIntegration.verifyProofAsync(
                 view,
                 result.updatedProof,
@@ -263,7 +269,7 @@ object ExtractLemmaAction {
       maxRetries: Int
   ): Unit = {
     GUI_Thread.later {
-      AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)...")
+      AssistantDockable.setStatus(s"Retrying (${attempt + 1}/$maxRetries)…")
     }
 
     val _ = Isabelle_Thread.fork(name = "assistant-extract-retry") {

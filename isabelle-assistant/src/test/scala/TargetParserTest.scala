@@ -38,6 +38,42 @@ class TargetParserTest extends AnyFunSuite with Matchers {
     TargetParser.parseTarget("nonsense", null) shouldBe None
   }
 
+  test("namedElementMatches treats regex metacharacters in the name as literal") {
+    val keywords = Seq("lemma")
+    // Without Pattern.quote `lem.*` would act as a wildcard matching any
+    // lemma name beginning with "lem". With quoting the name must match
+    // byte-for-byte, so the call returns false.
+    TargetParser.namedElementMatches("lemma lemma_one: x = y", keywords, "lem.*") shouldBe false
+    TargetParser.namedElementMatches("lemma lem_one: x = y", keywords, "lem.*") shouldBe false
+    // Sanity check: a well-formed name still matches the expected line.
+    TargetParser.namedElementMatches("lemma lemma_one: x = y", keywords, "lemma_one") shouldBe true
+  }
+
+  test("namedElementMatches requires a word boundary after the name") {
+    val keywords = Seq("lemma")
+    // "foo" should not match "foobar" even without regex metacharacters.
+    TargetParser.namedElementMatches("lemma foobar: x = y", keywords, "foo") shouldBe false
+    TargetParser.namedElementMatches("lemma foo: x = y", keywords, "foo") shouldBe true
+  }
+
+  test("buildNamedElementPattern matches any of multiple keywords") {
+    val keywords = Seq("lemma", "theorem", "definition")
+    val pattern = TargetParser.buildNamedElementPattern(keywords, "my_thing")
+    pattern.matcher("lemma my_thing: x").matches() shouldBe true
+    pattern.matcher("theorem my_thing: x").matches() shouldBe true
+    pattern.matcher("definition my_thing :: nat").matches() shouldBe true
+    pattern.matcher("corollary my_thing: x").matches() shouldBe false
+  }
+
+  test("buildNamedElementPattern escapes metacharacters in keyword strings too") {
+    // Not a real scenario for entityKeywords, but defensive: a hypothetical
+    // keyword containing `.` should match literally, not as any-char.
+    val keywords = Seq("le.mma")
+    val pattern = TargetParser.buildNamedElementPattern(keywords, "foo")
+    pattern.matcher("le.mma foo: x").matches() shouldBe true
+    pattern.matcher("leXmma foo: x").matches() shouldBe false
+  }
+
   test("formatTarget round-trips") {
     val targets = List(
       TargetParser.CurrentCursor,
