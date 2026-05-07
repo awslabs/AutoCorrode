@@ -41,16 +41,46 @@ object GenerateDocAction {
       .filter(documentableKeywords.contains)
   }
 
-  /** Chat command handler: generate doc for command at cursor. */
+  /** Chat command handler: generate doc for command at cursor.
+    * The MCP-backed command lookup must run on a background thread, not on
+    * the EDT, or the entire jEdit UI freezes for the duration of the round
+    * trip. Capture buffer + caret offset on the EDT (Swing requires it) and
+    * do the resolution inside the async body.
+    */
   def chatGenerate(view: View): Unit = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
-    CommandExtractor.getCommandAtOffset(buffer, offset) match {
-      case Some(commandText) =>
-        generateInternal(view, commandText, "definition")
-      case None =>
-        ChatAction.addResponse("No command found at cursor position.")
-    }
+    ActionHelper.runAsync("assistant-gendoc", "Generating documentation…") {
+      CommandExtractor.getCommandAtOffset(buffer, offset) match {
+        case Some(commandText) =>
+          val prompt = PromptLoader.load(
+            "generate_doc.md",
+            Map("command" -> commandText, "command_type" -> "definition")
+          )
+          BedrockClient.invokeInContext(prompt)
+        case None =>
+          ""
+      }
+    }(response => {
+      if (response.isEmpty) {
+        ChatAction.addResponse(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+      } else {
+        val cleaned = SendbackHelper.stripCodeFences(response.trim)
+        AssistantDockable.respondInChat(
+          "Generated documentation:",
+          Some(
+            (
+              cleaned,
+              () =>
+                view.getBuffer
+                  .insert(view.getTextArea.getCaretPosition, cleaned)
+            )
+          )
+        )
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+      }
+    })
   }
 
   def generate(view: View, commandText: String, commandType: String): Unit = {
@@ -80,7 +110,7 @@ object GenerateDocAction {
     }
 
     promptOpt.foreach { prompt =>
-      ActionHelper.runAsync("assistant-gendoc", "Generating documentation...") {
+      ActionHelper.runAsync("assistant-gendoc", "Generating documentation…") {
         BedrockClient.invokeInContext(prompt)
       }(response => {
         val cleaned = SendbackHelper.stripCodeFences(response.trim)

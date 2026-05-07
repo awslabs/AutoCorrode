@@ -61,15 +61,42 @@ Three thread contexts are used:
 
 ## Adding a New Tool (for Anthropic tool-use)
 
-1. Add a new case to `enum ToolId` in `ToolId.scala` with a unique wire name.
-2. Add a `ToolDef` to the `tools` list in `AssistantTools.scala` using the new `ToolId`.
-3. Add the handler function to the `toolHandlers` map in `AssistantTools.scala`:
+Tools are wired together in three places: the ID enum, the registry (name + schema), and the dispatch map (runtime behaviour). Follow the steps in order.
+
+1. **Declare the tool ID.** Add a new case to `enum ToolId` in `ToolId.scala` with a unique wire name (the string Anthropic sees).
+
+2. **Define the schema.** Add a `ToolDef` to the `tools` list in `AssistantTools.scala`. The `ToolDef` carries the name, description, and JSON-schema parameters.
+
+3. **Implement the handler.** Put the handler body in whichever file is most appropriate:
+   - **Theory-file and proof handlers** (read/write/search theories, verify, sledgehammer, nitpick, etc.) stay as `private def execMyNewTool(...)` methods on `AssistantTools`.
+   - **Memory handlers** live in `MemoryToolHandler.scala` (`MemoryToolHandler.execMemoryAdd`, etc.).
+   - **Task-list handlers** live in `TaskListToolHandler.scala` (`TaskListToolHandler.execTaskListAdd`, etc.).
+   - **Interactive `ask_user`-style handlers** live in `AskUserToolHandler.scala`.
+   - If your tool doesn't fit any of the above, prefer adding it to the most-related existing handler file rather than bloating `AssistantTools.scala`.
+
+4. **Wire up dispatch.** Add a line to the `toolHandlers` map in `AssistantTools.scala` pointing your `ToolId` at the handler:
    ```scala
-   ToolId.MyNewTool -> ((args, view) => execMyNewTool(args, view))
+   // In-class (theory ops, etc.):
+   ToolId.MyNewTool -> ((args, view) => execMyNewTool(args, view)),
+
+   // Delegated to a dedicated handler file (memory/task/ask-user):
+   ToolId.MyNewMemoryTool -> ((a, v) => MemoryToolHandler.execMyNewMemoryTool(a, v)),
    ```
-4. Add the tool to `defaultPermissions` and `toolDescriptionsById` in `ToolPermissions.scala`.
-5. Add test coverage in `ToolIdTest.scala`, `AssistantToolsTest.scala`, and `ToolPermissionsTest.scala`.
-6. Sanitize all input arguments using `safeStringArg` / `safeTheoryArg` / `optionalIntArg` / `boolArg`.
+   If the handler doesn't need `view`, use `((a, _) => ...)` — the layering check rejects unused `@unused view: View` parameters.
+
+5. **Permissions.** Add the tool to `defaultPermissions` and `toolDescriptionsById` in `ToolPermissions.scala`. Classify it as `Always`, `AskAtFirstUse`, or `Never` based on side-effect blast radius.
+
+6. **Input sanitation.** Parse arguments through the `ToolArgs` helpers:
+   - `ToolArgs.safeStringArg(args, key)` / `ToolArgs.safeStringArgEither(args, key)` for strings
+   - `ToolArgs.safeTheoryArg(args)` for a validated theory name
+   - `ToolArgs.optionalIntArg(args, key)` / `ToolArgs.intArg(args, key, default)` for integers
+   - `ToolArgs.boolArg(args, key, default)` for booleans
+
+7. **Tests.**
+   - `ToolIdTest.scala` — verifies the wire name is present and unique.
+   - `AssistantToolsTest.scala` — covers dispatch and happy/error paths.
+   - `ToolPermissionsTest.scala` — pins the permission classification.
+   - If you added a handler file, also extend its own test suite (e.g., `MemoryToolHandlerTest.scala`).
 
 ## Customizing the System Prompt
 

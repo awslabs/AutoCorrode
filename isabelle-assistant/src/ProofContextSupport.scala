@@ -37,8 +37,28 @@ object ProofContextSupport {
       goalStateOpt: Option[String],
       includeDefinitions: Boolean = false
   ): ContextBundle = {
-    val localFacts = fetchLocalFacts(view)
-    val relevantTheorems = fetchRelevantTheorems(view, offset, goalStateOpt)
+    // Dispatch the two I/Q-backed lookups concurrently so their timeouts
+    // overlap instead of stacking serially (cuts worst-case wall time in
+    // half on timeouts).
+    val latch = new CountDownLatch(2)
+    @volatile var localFacts = ""
+    @volatile var relevantTheorems = ""
+
+    dispatchLocalFacts(view, result => {
+      localFacts = result
+      latch.countDown()
+    })
+    dispatchRelevantTheorems(view, offset, goalStateOpt, result => {
+      relevantTheorems = result
+      latch.countDown()
+    })
+
+    val combinedTimeout = math.max(
+      AssistantConstants.CONTEXT_FETCH_TIMEOUT,
+      AssistantOptions.getFindTheoremsTimeout
+    ) + AssistantConstants.TIMEOUT_BUFFER_MS
+    val _ = latch.await(combinedTimeout, TimeUnit.MILLISECONDS)
+
     val definitions =
       if (includeDefinitions)
         ContextFetcher
@@ -53,51 +73,43 @@ object ProofContextSupport {
     )
   }
 
-  private def fetchLocalFacts(view: View): String =
-    if (!IQAvailable.isAvailable) ""
-    else {
-      val latch = new CountDownLatch(1)
-      @volatile var contextResult = ""
-
+  private def dispatchLocalFacts(view: View, onDone: String => Unit): Unit = {
+    if (!IQAvailable.isAvailable) {
+      onDone("")
+    } else {
       GUI_Thread.later {
         PrintContextAction.runPrintContextAsync(
           view,
           AssistantConstants.CONTEXT_FETCH_TIMEOUT,
           { result =>
-            result match {
+            val text = result match {
               case Right(output)
                   if output.trim.nonEmpty && !output.contains("No local facts") =>
-                contextResult = output.trim
-              case _ =>
+                output.trim
+              case _ => ""
             }
-            latch.countDown()
+            onDone(text)
           }
         )
       }
-
-      latch.await(
-        AssistantConstants.CONTEXT_FETCH_TIMEOUT + AssistantConstants.TIMEOUT_BUFFER_MS,
-        TimeUnit.MILLISECONDS
-      )
-      contextResult
     }
+  }
 
-  private def fetchRelevantTheorems(
+  private def dispatchRelevantTheorems(
       view: View,
       offset: Int,
-      goalStateOpt: Option[String]
-  ): String =
+      goalStateOpt: Option[String],
+      onDone: String => Unit
+  ): Unit =
     goalStateOpt.filter(_.trim.nonEmpty) match {
       case Some(goalState) if IQAvailable.isAvailable =>
         val analysisOpt = GoalExtractor.analyzeGoal(view.getBuffer, offset)
         val symbols = extractNamesForFindTheorems(goalState, analysisOpt)
-        if (symbols.isEmpty) ""
+        if (symbols.isEmpty) onDone("")
         else {
           val pattern = symbols.map(s => s"""name: "$s"""").mkString(" ")
           val limit = AssistantOptions.getFindTheoremsLimit
           val timeout = AssistantOptions.getFindTheoremsTimeout
-          val latch = new CountDownLatch(1)
-          @volatile var results: List[String] = Nil
 
           GUI_Thread.later {
             IQIntegration.runFindTheoremsAsync(
@@ -107,21 +119,17 @@ object ProofContextSupport {
               timeout,
               {
                 case Right(found) =>
-                  results = found.take(limit)
-                  latch.countDown()
+                  onDone(found.take(limit).mkString("\n"))
                 case Left(err) =>
                   Output.writeln(
                     s"[Assistant] find_theorems context lookup failed: $err"
                   )
-                  latch.countDown()
+                  onDone("")
               }
             )
           }
-
-          latch.await(timeout + AssistantConstants.TIMEOUT_BUFFER_MS, TimeUnit.MILLISECONDS)
-          results.mkString("\n")
         }
-      case _ => ""
+      case _ => onDone("")
     }
 
   private[assistant] def extractNamesForFindTheorems(

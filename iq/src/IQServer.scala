@@ -3515,13 +3515,15 @@ class IQServer(
       content: Option[String],
       overwriteIfExists: Boolean
   ): OpenFileOperationResult = {
-    val authorizedPath =
-      if (createIfMissing) {
-        authorizeMutationPath("open_file_common(create)", filePath) match {
-          case Right(path) => path
-          case Left(error) => throw new Exception(error)
-        }
-      } else filePath
+    // The caller (handleOpenFile) has already run authorizeMutationPath
+    // against `filePath` before dispatching here through GUI_Thread.now, so
+    // we trust the incoming path. The previous implementation re-
+    // authorised here and threw on denial — but that throw would then
+    // unwind through Swing, which the outer catch at handleOpenFile
+    // translated back into an error string. Returning cleanly through the
+    // existing handleOpenFile Either channel is preferable to tunnelling
+    // through exceptions from inside GUI_Thread.now.
+    val authorizedPath = filePath
 
     val file = new java.io.File(authorizedPath)
     var fileCreated = false

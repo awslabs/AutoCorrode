@@ -10,7 +10,7 @@ package isabelle.assistant
  */
 object LLMResponseCache {
 
-  private case class CacheEntry(response: String, timestamp: Long, hitCount: Int)
+  private case class CacheEntry(response: String, timestamp: Long)
 
   private val maxSize = AssistantConstants.LLM_CACHE_SIZE
   private val maxAge = AssistantConstants.LLM_CACHE_EXPIRY_HOURS * 60 * 60 * 1000L
@@ -23,7 +23,8 @@ object LLMResponseCache {
   def get(prompt: String): Option[String] = synchronized {
     Option(cache.get(prompt)).flatMap { entry =>
       if (System.currentTimeMillis() - entry.timestamp < maxAge) {
-        cache.put(prompt, entry.copy(hitCount = entry.hitCount + 1))
+        // get() on an access-ordered LinkedHashMap already updates recency,
+        // so no put() is needed to bump the entry.
         Some(entry.response)
       } else {
         cache.remove(prompt)
@@ -34,7 +35,7 @@ object LLMResponseCache {
 
   def put(prompt: String, response: String): Unit = synchronized {
     if (!looksLikeError(response)) {
-      val _ = cache.put(prompt, CacheEntry(response, System.currentTimeMillis(), 1))
+      val _ = cache.put(prompt, CacheEntry(response, System.currentTimeMillis()))
     }
   }
 
@@ -52,12 +53,4 @@ object LLMResponseCache {
   def clear(): Unit = synchronized { cache.clear() }
 
   def stats: String = synchronized { s"Cache: ${cache.size()} entries" }
-
-  def cleanup(): Unit = synchronized {
-    val now = System.currentTimeMillis()
-    val it = cache.entrySet().iterator()
-    while (it.hasNext) {
-      if (now - it.next().getValue.timestamp > maxAge) it.remove()
-    }
-  }
 }

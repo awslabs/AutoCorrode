@@ -5,7 +5,6 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.View
-import scala.annotation.unused
 import java.util.Locale
 
 /** Integration layer for I/Q (Isabelle/Q) plugin functionality.
@@ -71,6 +70,18 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
 
   private def callbackOnGui[A](callback: A => Unit, result: A): Unit =
     GUI_Thread.later { callback(result) }
+
+  /** Wrap a callback so that if the supplied token is cancelled at dispatch
+    * time the result is silently dropped. The cancelling caller is responsible
+    * for any UI cleanup.
+    */
+  private def guarded[A](
+      token: Option[CancellationToken],
+      callback: A => Unit
+  ): A => Unit =
+    result => {
+      if (!token.exists(_.isCancelled)) callback(result)
+    }
 
   private def runMcpAsync[A](
       threadName: String,
@@ -292,10 +303,12 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       view: View,
       proofText: String,
       timeoutMs: Long,
-      callback: VerificationResult => Unit
+      callback: VerificationResult => Unit,
+      token: Option[CancellationToken] = None
   ): Unit = {
+    val guardedCb = guarded(token, callback)
     if (!IQAvailable.isAvailable) {
-      callbackOnGui(callback, IQUnavailable)
+      callbackOnGui(guardedCb, IQUnavailable)
     } else {
       // Check cache first
       val selectionParams = selectionParamsForView(view)
@@ -304,7 +317,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
         VerificationCache.get(commandInfo, proofText)
       ) match {
         case Some(cachedResult) =>
-          callbackOnGui(callback, cachedResult)
+          callbackOnGui(guardedCb, cachedResult)
         case None =>
           val _ = IQOperationLifecycle.forkJvmThread(
             name = "assistant-verify-via-mcp",
@@ -315,7 +328,8 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                   query = IQMcpClient.ExploreQueryType.Proof,
                   arguments = proofText,
                   timeoutMs = timeoutMs,
-                  extraParams = selectionParams
+                  extraParams = selectionParams,
+                  token = token
                 )
                 .fold(
                   mcpErr => ProofFailure(s"I/Q MCP verification failed: $mcpErr"),
@@ -337,7 +351,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
               commandInfoOpt.foreach(commandInfo =>
                 VerificationCache.put(commandInfo, proofText, result)
               )
-              callbackOnGui(callback, result)
+              callbackOnGui(guardedCb, result)
             }
           )
       }
@@ -445,10 +459,12 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       pattern: String,
       limit: Int,
       timeoutMs: Long,
-      callback: Either[String, List[String]] => Unit
+      callback: Either[String, List[String]] => Unit,
+      token: Option[CancellationToken] = None
   ): Unit = {
+    val guardedCb = guarded(token, callback)
     if (!IQAvailable.isAvailable) {
-      callbackOnGui(callback, Left("I/Q unavailable"))
+      callbackOnGui(guardedCb, Left("I/Q unavailable"))
     } else {
       val selectionParams = selectionParamsForView(view)
       val _ = IQOperationLifecycle.forkJvmThread(
@@ -459,7 +475,8 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
               query = IQMcpClient.ExploreQueryType.FindTheorems,
               arguments = pattern,
               timeoutMs = timeoutMs,
-              extraParams = selectionParams + ("max_results" -> limit)
+              extraParams = selectionParams + ("max_results" -> limit),
+              token = token
             )
             .fold(
               mcpErr => Left(s"find_theorems via I/Q MCP failed: $mcpErr"),
@@ -471,7 +488,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                   Left(explore.failureMessage("find_theorems failed"))
               }
             )
-          callbackOnGui(callback, result)
+          callbackOnGui(guardedCb, result)
         }
       )
     }
@@ -492,13 +509,15 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
       view: View,
       queryArgs: List[String],
       timeoutMs: Long,
-      callback: Either[String, String] => Unit
+      callback: Either[String, String] => Unit,
+      token: Option[CancellationToken] = None
   ): Unit = {
+    val guardedCb = guarded(token, callback)
     if (!IQAvailable.isAvailable) {
-      callbackOnGui(callback, Left("I/Q unavailable"))
+      callbackOnGui(guardedCb, Left("I/Q unavailable"))
     } else {
       val queryText = queryArgs.map(_.trim).filter(_.nonEmpty).mkString(" ").trim
-      if (queryText.isEmpty) callbackOnGui(callback, Left("query arguments required"))
+      if (queryText.isEmpty) callbackOnGui(guardedCb, Left("query arguments required"))
       else {
         val selectionParams = selectionParamsForView(view)
         val _ = IQOperationLifecycle.forkJvmThread(
@@ -509,7 +528,8 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                 query = IQMcpClient.ExploreQueryType.Proof,
                 arguments = queryText,
                 timeoutMs = timeoutMs,
-                extraParams = selectionParams
+                extraParams = selectionParams,
+                token = token
               )
               .fold(
                 mcpErr => Left(s"I/Q MCP query failed: $mcpErr"),
@@ -519,35 +539,12 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                   else Left(explore.failureMessage("query failed"))
                 }
               )
-            callbackOnGui(callback, result)
+            callbackOnGui(guardedCb, result)
           }
         )
       }
     }
   }
-
-  // I/Q Status for dockable header
-
-  /** Status types for I/Q integration. */
-  enum IQStatus {
-
-    /** I/Q plugin is connected and available. */
-    case IQConnected
-
-    /** I/Q plugin is not available. */
-    case IQDisconnected
-  }
-  export IQStatus._
-
-  /** Get I/Q status for a specific buffer.
-    *
-    * @param buffer
-    *   The jEdit buffer to check
-    * @return
-    *   Current I/Q status
-    */
-  def getStatus(@unused buffer: org.gjt.sp.jedit.buffer.JEditBuffer): IQStatus =
-    if (IQAvailable.isAvailable) IQConnected else IQDisconnected
 
   /** Run sledgehammer asynchronously via I/Q MCP. Callback is dispatched on
     * the GUI thread.
@@ -555,10 +552,12 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
   def runSledgehammerAsync(
       view: View,
       timeoutMs: Long,
-      callback: Either[String, List[SledgehammerResult]] => Unit
+      callback: Either[String, List[SledgehammerResult]] => Unit,
+      token: Option[CancellationToken] = None
   ): Unit = {
+    val guardedCb = guarded(token, callback)
     if (!IQAvailable.isAvailable) {
-      callbackOnGui(callback, Left("I/Q unavailable"))
+      callbackOnGui(guardedCb, Left("I/Q unavailable"))
     } else {
       val selectionParams = selectionParamsForView(view)
       val _ = IQOperationLifecycle.forkJvmThread(
@@ -569,7 +568,8 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
               query = IQMcpClient.ExploreQueryType.Sledgehammer,
               arguments = "",
               timeoutMs = timeoutMs,
-              extraParams = selectionParams
+              extraParams = selectionParams,
+              token = token
             )
             .fold(
               mcpErr => Left(s"sledgehammer via I/Q MCP failed: $mcpErr"),
@@ -579,7 +579,7 @@ Replace $IQ_HOME with the path to your I/Q plugin installation."""
                 else Left(explore.failureMessage("sledgehammer failed"))
               }
             )
-          callbackOnGui(callback, result)
+          callbackOnGui(guardedCb, result)
         }
       )
     }

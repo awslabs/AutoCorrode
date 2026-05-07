@@ -22,16 +22,7 @@ object ProofTextUtil {
       else {
         val keywords =
           IsabelleKeywords.proofMethods ++ IsabelleKeywords.proofClosers ++
-            Set(
-              "simp",
-              "auto",
-              "blast",
-              "force",
-              "metis",
-              "meson",
-              "arith",
-              "linarith"
-            )
+            IsabelleKeywords.automatedProofMethods
         response.linesIterator
           .map(_.trim)
           .find(l =>

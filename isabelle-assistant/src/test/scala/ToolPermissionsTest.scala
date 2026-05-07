@@ -134,7 +134,7 @@ class ToolPermissionsTest
     }
   }
 
-  test("prompt details should redact sensitive argument names") {
+  test("prompt details should redact sensitive argument names and values") {
     val decision = ToolPermissions.checkPermission(
       "edit_theory",
       Map(
@@ -144,10 +144,32 @@ class ToolPermissionsTest
     )
     decision match {
       case ToolPermissions.NeedPrompt(ToolId.EditTheory, _, Some(details)) =>
-        details should include("auth_token=***")
+        // Key and value are both redacted so the arg name does not leak
+        // the presence of an auth_token in the conversation.
+        details should include("***=***")
+        details should not include "auth_token"
         details should not include "super-secret-token"
       case other =>
         fail(s"Expected prompt decision with redacted details, got: $other")
+    }
+  }
+
+  test("prompt details should also redact apikey (no underscore) and case variants") {
+    // Common LLM-emitted variants: "apiKey", "apikey", "APIKey".
+    // All must match the sensitive-token list.
+    val decision = ToolPermissions.checkPermission(
+      "edit_theory",
+      Map(
+        "apiKey" -> ResponseParser.StringValue("plaintext-key-value")
+      )
+    )
+    decision match {
+      case ToolPermissions.NeedPrompt(ToolId.EditTheory, _, Some(details)) =>
+        details should include("***=***")
+        details should not include "apiKey"
+        details should not include "plaintext-key-value"
+      case other =>
+        fail(s"Expected prompt decision with redacted apiKey, got: $other")
     }
   }
 
@@ -282,6 +304,25 @@ class ToolPermissionsTest
       ToolPermissions.checkPermission("edit_theory", Map.empty[String, ResponseParser.ToolValue]) shouldBe
         ToolPermissions.NeedPrompt(ToolId.EditTheory, None, None)
     }
+  }
+
+  test("promptUser AskAlways must not offer an 'Allow (for this session)' option") {
+    // Regression: the AskAlways menu previously offered
+    // "Allow (for this session)" which set the session-allowed flag — but
+    // checkPermission for AskAlways never reads that flag, so the user was
+    // re-prompted on the very next call. Keeping the option would be a lie
+    // about the semantics; make sure it never reappears.
+    var capturedOptions: List[String] = Nil
+    ToolPermissions.withPromptChoicesForTest { (_, options, _, _) =>
+      capturedOptions = options
+      Some("Deny Once")
+    } {
+      val _ = ToolPermissions.promptUser("edit_theory", None, None, null)
+    }
+    capturedOptions should contain("Allow Once")
+    capturedOptions should contain("Deny Once")
+    capturedOptions should not contain "Allow (for this session)"
+    capturedOptions should not contain "Deny (for this session)"
   }
 
   test("promptUser deny-session should persist denial in this session") {

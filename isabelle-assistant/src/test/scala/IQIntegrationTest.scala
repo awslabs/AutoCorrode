@@ -7,8 +7,6 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import isabelle.assistant.IQIntegration.VerificationResult
 import isabelle.assistant.IQIntegration.VerificationResult._
-import isabelle.assistant.IQIntegration.IQStatus
-import isabelle.assistant.IQIntegration.IQStatus._
 
 /**
  * Tests for IQIntegration — proof verification, sledgehammer, find_theorems.
@@ -83,13 +81,6 @@ class IQIntegrationTest extends AnyFunSuite with Matchers {
     suggestion should include("Isar_Explore")
     suggestion should include("import")
     suggestion should include("$IQ_HOME")
-  }
-
-  test("IQStatus enum should have connected and disconnected states") {
-    val connected: IQStatus = IQConnected
-    val disconnected: IQStatus = IQDisconnected
-    
-    connected should not be disconnected
   }
 
   test("parseStepResult should parse PROOF_COMPLETE header") {

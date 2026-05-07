@@ -26,42 +26,54 @@ object AnalyzePatternsAction {
         "Isabelle Assistant",
         "I/Q is required for pattern analysis."
       )
-    } else {
-      maybePath match {
-        case None =>
-          GUI.warning_dialog(
-            view,
-            "Isabelle Assistant",
-            "Current buffer has no file path. Save the theory and retry pattern analysis."
-          )
-        case Some(path) =>
+      return
+    }
+
+    maybePath match {
+      case None =>
+        GUI.warning_dialog(
+          view,
+          "Isabelle Assistant",
+          "Current buffer has no file path. Save the theory and retry pattern analysis."
+        )
+      case Some(path) =>
+        // fetchProofBlocks goes to I/Q MCP and must not run on the EDT.
+        ActionHelper.runAsync(
+          "assistant-analyze-patterns",
+          "Analyzing proof patterns…"
+        ) {
           fetchProofBlocks(path) match {
-            case Left(error) =>
-              GUI.warning_dialog(
-                view,
-                "Isabelle Assistant",
-                s"Failed to extract proof blocks: $error"
-              )
-            case Right(proofs) if proofs.isEmpty =>
-              GUI.warning_dialog(
-                view,
-                "Isabelle Assistant",
-                "No proof blocks found in theory."
-              )
+            case Left(error) => s"ERROR:$error"
+            case Right(proofs) if proofs.isEmpty => "EMPTY"
             case Right(proofs) =>
-              ActionHelper.runAndRespond(
-                "assistant-analyze-patterns",
-                "Analyzing proof patterns..."
-              ) {
-                val subs = Map(
-                  "proofs" -> proofs.mkString("\n\n---\n\n"),
-                  "proof_count" -> proofs.length.toString
-                )
-                val prompt = PromptLoader.load("analyze_patterns.md", subs)
-                BedrockClient.invokeInContext(prompt)
-              }
+              val subs = Map(
+                "proofs" -> proofs.mkString("\n\n---\n\n"),
+                "proof_count" -> proofs.length.toString
+              )
+              val prompt = PromptLoader.load("analyze_patterns.md", subs)
+              BedrockClient.invokeInContext(prompt)
           }
-      }
+        }(response => {
+          if (response.startsWith("ERROR:")) {
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            GUI.warning_dialog(
+              view,
+              "Isabelle Assistant",
+              s"Failed to extract proof blocks: ${response.stripPrefix("ERROR:")}"
+            )
+          } else if (response == "EMPTY") {
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            GUI.warning_dialog(
+              view,
+              "Isabelle Assistant",
+              "No proof blocks found in theory."
+            )
+          } else {
+            ChatAction.addMessage(ChatAction.Assistant, response)
+            AssistantDockable.showConversation(ChatAction.getHistory)
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+          }
+        })
     }
   }
 

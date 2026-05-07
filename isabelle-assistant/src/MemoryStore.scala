@@ -9,7 +9,7 @@ import java.time.format.DateTimeFormatter
 import scala.util.control.NonFatal
 import java.io.{File, PrintWriter}
 import scala.io.Source
-import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonToken}
+import software.amazon.awssdk.thirdparty.jackson.core.{JsonFactory, JsonGenerator, JsonToken}
 
 /**
  * Thread-safe persistent memory store for LLM-managed knowledge base.
@@ -43,47 +43,169 @@ object MemoryStore {
   private val MAX_BODY_LENGTH = 2000
   private val TOPIC_NAME_PATTERN = "^[a-z0-9_]+$".r
   
+  /** Toggle for the /tmp storage fallback. Set to "true" in test beforeEach
+    * hooks — or anywhere the test harness needs a writable store without
+    * jEdit wired up. Out of test mode, a null settings directory is treated
+    * as a hard error rather than silently redirecting persistent memories
+    * to a world-readable temp path. */
+  private val TEST_MODE_PROPERTY = "assistant.storage.test_mode"
+  @volatile private var warnedAboutTestFallback: Boolean = false
+
+  private def isTestMode: Boolean =
+    java.lang.Boolean.parseBoolean(System.getProperty(TEST_MODE_PROPERTY, "false"))
+
+  private def tmpFallbackFile(reason: String): File = {
+    // Warn once per JVM so operators notice this path — but not so loudly
+    // that the test suite drowns in log lines.
+    if (!warnedAboutTestFallback) {
+      warnedAboutTestFallback = true
+      safeLog(
+        s"[MemoryStore] Using test-mode /tmp fallback for memory storage ($reason). " +
+        s"Set -D$TEST_MODE_PROPERTY=true only in tests; production writes must go to the jEdit settings directory."
+      )
+    }
+    new File(System.getProperty("java.io.tmpdir"), "assistant-memories-test.json")
+  }
+
   /**
    * Get the storage file path in jEdit settings directory.
-   * Falls back to temp directory during testing.
+   *
+   * Only falls back to the temp directory when `assistant.storage.test_mode`
+   * is explicitly set — a null settings directory in production is a real
+   * configuration problem and should not be masked by silently routing
+   * writes to `/tmp`.
    */
   private def storageFile: File = {
     try {
       val settingsDir = org.gjt.sp.jedit.jEdit.getSettingsDirectory
       if (settingsDir != null) {
         new File(settingsDir, "assistant-memories.json")
+      } else if (isTestMode) {
+        tmpFallbackFile("jEdit.getSettingsDirectory returned null")
       } else {
-        // Fallback for testing
-        new File(System.getProperty("java.io.tmpdir"), "assistant-memories-test.json")
+        throw new IllegalStateException(
+          s"MemoryStore: jEdit settings directory is null. This is a configuration error. " +
+          s"If this is a test, set -D$TEST_MODE_PROPERTY=true."
+        )
       }
     } catch {
-      case _: Throwable =>
-        // jEdit not available (testing environment)
-        new File(System.getProperty("java.io.tmpdir"), "assistant-memories-test.json")
+      case _: IllegalStateException if !isTestMode =>
+        // Re-raise so the caller (ensureLoaded / save) can decide whether
+        // to swallow into a safeLog or propagate. Keeping the type narrow.
+        throw new IllegalStateException(
+          s"MemoryStore: jEdit settings directory not available. " +
+          s"Set -D$TEST_MODE_PROPERTY=true for non-jEdit test contexts."
+        )
+      case NonFatal(_) if isTestMode =>
+        // jEdit classes not available (typical unit-test environment).
+        tmpFallbackFile("jEdit classes not on classpath")
+      case NonFatal(e) =>
+        throw new IllegalStateException(
+          s"MemoryStore: could not resolve storage path: ${e.getMessage}. " +
+          s"Set -D$TEST_MODE_PROPERTY=true for non-jEdit test contexts.",
+          e
+        )
     }
   }
   
   /**
-   * Lazy-load memories from disk on first access.
+   * Lazy-load memories from disk on first access. Also sweeps any leftover
+   * `.tmp` siblings so crashes during `save()` do not leave debris forever.
    */
   private def ensureLoaded(): Unit = lock.synchronized {
     if (!loaded) {
+      cleanupStaleTempFiles()
       load()
       loaded = true
     }
   }
+
+  /** Per-JVM suffix used to name atomic-save temporaries. Two jEdit
+    * processes sharing a settings directory must not clobber each
+    * other's in-progress writes; the UUID makes every tmp path unique
+    * to this JVM instance so the cleanup sweep can age-gate unrelated
+    * tmps without deleting a live one. */
+  private val tmpSuffix: String = java.util.UUID.randomUUID().toString.take(8)
+
+  /** Age (milliseconds) after which an unrelated `.tmp` sibling is
+    * assumed to be abandoned. One hour is far longer than any normal
+    * save takes but short enough that debris is not permanent. */
+  private val staleTmpAgeMs: Long = 60L * 60L * 1000L
+
+  private def tmpFileFor(storage: File): File =
+    new File(storage.getParent, s"${storage.getName}.$tmpSuffix.tmp")
+
+  /** Remove `<storageFile>.*.tmp` siblings from prior crashed saves.
+    *
+    * Two-tier policy:
+    *   - legacy `<storageFile>.tmp` (single canonical name used before
+    *     this fix): delete unconditionally to clean up old debris;
+    *   - `<storageFile>.<uuid>.tmp`: delete only if older than
+    *     `staleTmpAgeMs` AND not the current-JVM tmp. Age-gating makes
+    *     a parallel jEdit process's live tmp safe from this sweep.
+    *
+    * Note: `storageFile` itself can throw an `IllegalStateException`
+    * when `jEdit.getSettingsDirectory` is null outside test mode. That
+    * throw is intentionally swallowed by the outer `catch NonFatal`
+    * below — the cleanup is best-effort, and the real error will
+    * surface from the subsequent `load()` call inside `ensureLoaded`
+    * with its more specific diagnostic path.
+    */
+  private def cleanupStaleTempFiles(): Unit = {
+    try {
+      val file = storageFile
+      val parent = file.getParentFile
+      if (parent == null || !parent.isDirectory) return
+
+      val baseName = file.getName
+      val legacyTmp = new File(parent, s"$baseName.tmp")
+      if (legacyTmp.isFile) {
+        if (legacyTmp.delete()) {
+          safeLog(s"[MemoryStore] Removed legacy ${legacyTmp.getName} from a prior crashed save.")
+        } else {
+          safeLog(s"[MemoryStore] Could not remove legacy ${legacyTmp.getName}; ignoring.")
+        }
+      }
+
+      val suffixedTmpRegex =
+        java.util.regex.Pattern.compile(
+          java.util.regex.Pattern.quote(baseName) + "\\.[A-Za-z0-9-]+\\.tmp"
+        )
+      val currentTmp = tmpFileFor(file).getName
+      val now = System.currentTimeMillis()
+      val children = Option(parent.listFiles()).getOrElse(Array.empty[File])
+      children.foreach { child =>
+        val name = child.getName
+        if (
+          name != currentTmp &&
+          suffixedTmpRegex.matcher(name).matches() &&
+          child.isFile &&
+          now - child.lastModified() > staleTmpAgeMs
+        ) {
+          if (child.delete())
+            safeLog(s"[MemoryStore] Removed stale $name from a prior crashed save.")
+        }
+      }
+    } catch {
+      case NonFatal(e) =>
+        safeLog(s"[MemoryStore] Stale-tmp sweep failed: ${e.getMessage}")
+    }
+  }
   
   /**
-   * Safe logging that doesn't fail if Output is unavailable.
+   * Safe logging that doesn't fail if Output is unavailable. Also swallows
+   * LinkageError because Output.writeln transitively touches classes that
+   * aren't on the test classpath.
    */
   private def safeLog(message: String): Unit = {
     try {
       Output.writeln(message)
     } catch {
-      case _: Throwable => // Ignore if Output not available
+      case NonFatal(_)      => // Ignore if Output not available
+      case _: LinkageError  => // test classpath lacks Output's dependencies
     }
   }
-  
+
   /**
    * Safe cache clearing that doesn't fail if PromptLoader is unavailable.
    */
@@ -91,25 +213,14 @@ object MemoryStore {
     try {
       PromptLoader.clearCache()
     } catch {
-      case _: Throwable => // Ignore if PromptLoader not available
+      case NonFatal(_) => // Ignore if PromptLoader not available
     }
   }
   
-  /**
-   * Escape a string for JSON output.
-   */
-  private def jsonEscape(s: String): String = {
-    s.flatMap {
-      case '"'  => "\\\""
-      case '\\' => "\\\\"
-      case '\n' => "\\n"
-      case '\r' => "\\r"
-      case '\t' => "\\t"
-      case c if c < ' ' => f"\\u${c.toInt}%04x"
-      case c => c.toString
-    }
-  }
-  
+  // Shared Jackson factory for both reading and writing.
+  private val jsonFactory = new JsonFactory()
+
+
   /**
    * Load memories from JSON file using Jackson streaming parser.
    */
@@ -125,7 +236,6 @@ object MemoryStore {
       val source = Source.fromFile(file, "UTF-8")
       val content = try source.mkString finally source.close()
       
-      val jsonFactory = new JsonFactory()
       val parser = jsonFactory.createParser(content)
       val loadedMemories = scala.collection.mutable.Map[String, List[Memory]]()
       
@@ -208,64 +318,69 @@ object MemoryStore {
   
   /**
    * Save memories to JSON file with atomic write (tmp + rename).
+   * On rename failure, leave the tmp file in place rather than rewriting the
+   * original: the tmp has valid data and the destination is untouched, so the
+   * store remains consistent for this session and the tmp is inspectable.
    */
   private def save(): Unit = {
     try {
-      val json = new StringBuilder
-      json.append("{\n")
-      json.append(s"""  "version": 1,\n""")
-      json.append(s"""  "nextId": $nextId,\n""")
-      json.append("""  "topics": {""")
-      
-      val topicEntries = memories.toList.sortBy(_._1).map { case (topic, mems) =>
-        val memEntries = mems.map { mem =>
-          s"""      {
-             |        "id": ${mem.id},
-             |        "title": "${jsonEscape(mem.title)}",
-             |        "body": "${jsonEscape(mem.body)}",
-             |        "created": "${mem.created.format(timeFormatter)}"
-             |      }""".stripMargin
-        }.mkString(",\n")
-        
-        s"""    "$topic": [
-           |$memEntries
-           |    ]""".stripMargin
-      }.mkString(",\n")
-      
-      json.append("\n")
-      json.append(topicEntries)
-      json.append("\n  }\n")
-      json.append("}\n")
-      
+      val json = renderJson()
+
       val file = storageFile
       file.getParentFile.mkdirs()
-      
-      // Atomic write: write to tmp file then rename
-      val tmpFile = new File(file.getParent, file.getName + ".tmp")
+
+      val tmpFile = tmpFileFor(file)
       val writer = new PrintWriter(tmpFile, "UTF-8")
       try {
-        writer.write(json.toString)
+        writer.write(json)
       } finally {
         writer.close()
       }
-      
-      // Atomic rename
+
       if (!tmpFile.renameTo(file)) {
-        // Fallback for systems where rename might fail
-        tmpFile.delete()
-        val directWriter = new PrintWriter(file, "UTF-8")
-        try {
-          directWriter.write(json.toString)
-        } finally {
-          directWriter.close()
-        }
+        safeLog(
+          s"[MemoryStore] Could not rename ${tmpFile.getName} to ${file.getName}; leaving tmp in place for inspection."
+        )
       }
     } catch {
       case NonFatal(e) =>
         safeLog(s"[MemoryStore] Failed to save memories: ${e.getMessage}")
     }
   }
-  
+
+  /**
+   * Render the in-memory store as a pretty-printed JSON string using Jackson.
+   * This replaces the hand-rolled JSON builder + escape logic.
+   */
+  private def renderJson(): String = {
+    val sw = new java.io.StringWriter()
+    val g: JsonGenerator = jsonFactory.createGenerator(sw)
+    g.useDefaultPrettyPrinter()
+    try {
+      g.writeStartObject()
+      g.writeNumberField("version", 1)
+      g.writeNumberField("nextId", nextId)
+      g.writeObjectFieldStart("topics")
+      for ((topic, mems) <- memories.toList.sortBy(_._1)) {
+        g.writeArrayFieldStart(topic)
+        for (mem <- mems) {
+          g.writeStartObject()
+          g.writeNumberField("id", mem.id)
+          g.writeStringField("title", mem.title)
+          g.writeStringField("body", mem.body)
+          g.writeStringField("created", mem.created.format(timeFormatter))
+          g.writeEndObject()
+        }
+        g.writeEndArray()
+      }
+      g.writeEndObject()
+      g.writeEndObject()
+    } finally {
+      g.close()
+    }
+    sw.toString
+  }
+
   /**
    * Validate topic name.
    */
@@ -473,8 +588,8 @@ object MemoryStore {
             val idx = mem.body.toLowerCase.indexOf(lowerQuery)
             val start = math.max(0, idx - 40)
             val end = math.min(mem.body.length, idx + lowerQuery.length + 40)
-            val prefix = if (start > 0) "..." else ""
-            val suffix = if (end < mem.body.length) "..." else ""
+            val prefix = if (start > 0) "…" else ""
+            val suffix = if (end < mem.body.length) "…" else ""
             prefix + mem.body.substring(start, end) + suffix
           }
           matches += ((topic, mem, snippet))
@@ -492,20 +607,30 @@ object MemoryStore {
     }
   }
   
+  /** Cap on the size of the memory summary injected into the system prompt.
+    * 1500 characters works out to roughly 400–600 tokens under the
+    * tokenizers Claude uses. The summary is glued into the system prompt by
+    * `PromptLoader.injectMemorySummary`, so every message of every session
+    * pays for it — keep this tight. */
+  private val MAX_SUMMARY_CHARS = 1500
+
   /**
    * Get a compact summary of all memories for system prompt injection.
-   * Caps output at ~2000 characters to avoid consuming too much token budget.
+   * Caps output at [[MAX_SUMMARY_CHARS]]; the summary is spliced into the
+   * system prompt by `PromptLoader.injectMemorySummary` and rendered anew
+   * whenever `PromptLoader.clearCache()` is called (which happens after
+   * every successful add/delete/deleteTopic via [[safeClearCache]]).
    */
   def getAllMemoriesSummary(): String = lock.synchronized {
     ensureLoaded()
-    
+
     if (memories.isEmpty)
       "No memories recorded yet."
     else {
       val lines = scala.collection.mutable.ListBuffer[String]()
       val sorted = memories.toList.sortBy(_._1)
       var charCount = 0
-      val maxChars = 2000
+      val maxChars = MAX_SUMMARY_CHARS
       var truncated = false
       
       for ((topic, mems) <- sorted if !truncated) {
@@ -539,7 +664,7 @@ object MemoryStore {
       }
       
       val result = lines.mkString("\n")
-      if (truncated) result + "\n\n(Summary truncated at 2000 characters)" else result
+      if (truncated) result + s"\n\n(Summary truncated at $MAX_SUMMARY_CHARS characters)" else result
     }
   }
   

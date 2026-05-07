@@ -55,12 +55,10 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
 
   test("parseSnapshot should clamp numeric values to configured bounds") {
     val snapshot = parse(Map(
-      "assistant.temperature" -> "-1.0",
       "assistant.max.tokens" -> "99999999",
       "assistant.trace.depth" -> "0",
       "assistant.verify.timeout" -> "1"
     ))
-    snapshot.temperature shouldBe AssistantConstants.MIN_TEMPERATURE
     snapshot.maxTokens shouldBe 99999999 // No upper clamp - supports large token counts
     snapshot.traceDepth shouldBe 1
     snapshot.verifyTimeout shouldBe 5000L
@@ -68,11 +66,9 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
 
   test("parseSnapshot should fall back to defaults for non-numeric values") {
     val snapshot = parse(Map(
-      "assistant.temperature" -> "not-a-number",
       "assistant.max.tokens" -> "nan",
       "assistant.trace.timeout" -> "oops"
     ))
-    snapshot.temperature shouldBe AssistantConstants.DEFAULT_TEMPERATURE
     snapshot.maxTokens shouldBe AssistantConstants.DEFAULT_MAX_TOKENS
     snapshot.traceTimeout shouldBe AssistantConstants.DEFAULT_TRACE_TIMEOUT
   }
@@ -133,32 +129,8 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
     snapshot.planningBaseModelId shouldBe ""
   }
 
-  test("parseSnapshot should parse valid planning temperature") {
-    val snapshot = parse(Map("assistant.planning.temperature" -> "0.5"))
-    snapshot.planningTemperature shouldBe Some(0.5)
-  }
-
-  test("parseSnapshot should treat empty planning temperature as None") {
-    val snapshot = parse(Map("assistant.planning.temperature" -> ""))
-    snapshot.planningTemperature shouldBe None
-  }
-
-  test("parseSnapshot should reject out-of-range planning temperature") {
-    val snapshot1 = parse(Map("assistant.planning.temperature" -> "1.5"))
-    snapshot1.planningTemperature shouldBe None
-    
-    val snapshot2 = parse(Map("assistant.planning.temperature" -> "-0.5"))
-    snapshot2.planningTemperature shouldBe None
-  }
-
-  test("parseSnapshot should reject invalid planning temperature string") {
-    val snapshot = parse(Map("assistant.planning.temperature" -> "not-a-number"))
-    snapshot.planningTemperature shouldBe None
-  }
-
-  test("planning_model and planning_temperature should be in settingDefs") {
+  test("planning_model should be in settingDefs") {
     AssistantOptions.hasSettingKey("planning_model") shouldBe true
-    AssistantOptions.hasSettingKey("planning_temperature") shouldBe true
   }
 
   test("parseSnapshot should accept valid summarization model ID") {
@@ -174,24 +146,6 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
   test("parseSnapshot should allow empty summarization model ID (use main model)") {
     val snapshot = parse(Map("assistant.summarization.model.id" -> ""))
     snapshot.summarizationBaseModelId shouldBe ""
-  }
-
-  test("parseSnapshot should parse valid summarization temperature") {
-    val snapshot = parse(Map("assistant.summarization.temperature" -> "0.0"))
-    snapshot.summarizationTemperature shouldBe Some(0.0)
-  }
-
-  test("parseSnapshot should treat empty summarization temperature as None") {
-    val snapshot = parse(Map("assistant.summarization.temperature" -> ""))
-    snapshot.summarizationTemperature shouldBe None
-  }
-
-  test("parseSnapshot should reject out-of-range summarization temperature") {
-    val snapshot1 = parse(Map("assistant.summarization.temperature" -> "1.5"))
-    snapshot1.summarizationTemperature shouldBe None
-    
-    val snapshot2 = parse(Map("assistant.summarization.temperature" -> "-0.5"))
-    snapshot2.summarizationTemperature shouldBe None
   }
 
   test("parseSnapshot should parse autoSummarize boolean") {
@@ -220,6 +174,11 @@ class AssistantOptionsTest extends AnyFunSuite with Matchers {
     AssistantOptions.hasSettingKey("auto_summarize") shouldBe true
     AssistantOptions.hasSettingKey("summarization_threshold") shouldBe true
     AssistantOptions.hasSettingKey("summarization_model") shouldBe true
-    AssistantOptions.hasSettingKey("summarization_temperature") shouldBe true
+  }
+
+  test("temperature-related keys should not be in settingDefs") {
+    AssistantOptions.hasSettingKey("temperature") shouldBe false
+    AssistantOptions.hasSettingKey("planning_temperature") shouldBe false
+    AssistantOptions.hasSettingKey("summarization_temperature") shouldBe false
   }
 }

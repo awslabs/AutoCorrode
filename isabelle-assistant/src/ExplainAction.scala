@@ -14,7 +14,7 @@ object ExplainAction {
     ChatAction.addMessage(ChatAction.User, s":explain ${TargetParser.formatTarget(target)}")
     AssistantDockable.showConversation(ChatAction.getHistory)
     
-    ActionHelper.runAndRespond("assistant-explain", "Explaining code...") {
+    ActionHelper.runAndRespond("assistant-explain", "Explaining code…") {
       val context = ContextFetcher.getContext(view, AssistantConstants.CONTEXT_FETCH_TIMEOUT)
       val subs = Map("theorem" -> commandText) ++ context.map("context" -> _)
       val prompt = PromptLoader.load("explain_with_context.md", subs)

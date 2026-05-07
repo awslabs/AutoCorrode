@@ -12,7 +12,7 @@ object TryMethodsAction {
   private val methods = List("by simp", "by auto", "by blast", "by force", "by fastforce")
 
   def run(view: View): Unit = {
-    ActionHelper.runIQGoalAction("assistant-try-methods", "Trying methods...") { v =>
+    ActionHelper.runIQGoalAction("assistant-try-methods", "Trying methods…") { v =>
       val timeout = AssistantOptions.getVerificationTimeout
 
       val results =

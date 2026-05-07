@@ -78,7 +78,10 @@ object ResponseParser {
         }
       }
     }
-    if (results.nonEmpty) Some(results.mkString("\n")) else None
+    // Join with a blank line so distinct text blocks keep a paragraph
+    // boundary. A single "\n" used to run two separate blocks together
+    // when both ended on a non-blank line, losing the model's formatting.
+    if (results.nonEmpty) Some(results.mkString("\n\n")) else None
   }
 
   /** Typed tool argument values (avoid Map[String, Any] dynamic dispatch). */

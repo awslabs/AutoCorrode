@@ -36,7 +36,7 @@ object BedrockClient {
   /** Simple rate limiter: tracks the last API call timestamp and enforces a minimum
    *  interval between calls to avoid overwhelming the Bedrock API. */
   private val lastApiCallMs = new java.util.concurrent.atomic.AtomicLong(0L)
-  private val minIntervalMs = 200L // minimum 200ms between API calls
+  private val minIntervalMs = AssistantConstants.MIN_API_INTERVAL_MS
 
   enum ModelValidationError {
     case MissingModel
@@ -75,57 +75,84 @@ object BedrockClient {
   }
 
   /** Circuit breaker: after consecutive failures, fail fast without calling the API.
-   *  Resets after a cooldown period or on a successful call. */
-  private val consecutiveFailures = new java.util.concurrent.atomic.AtomicInteger(0)
-  private val circuitOpenUntilMs = new java.util.concurrent.atomic.AtomicLong(0L)
+   *  Resets after a cooldown period or on a successful call.
+   *
+   *  All state transitions are guarded by `circuitLock` so that
+   *  `consecutiveFailures` and `circuitOpenUntilMs` stay consistent — they
+   *  must be updated as a pair. Reads outside the lock see whatever the most
+   *  recent lock-holder published (volatile via the lock's release).
+   */
+  private val circuitLock = new Object()
+  private var consecutiveFailures: Int = 0
+  private var circuitOpenUntilMs: Long = 0L
   private val circuitBreakerThreshold = 5      // open after 5 consecutive failures
   private val circuitBreakerCooldownMs = 30000L // 30 seconds cooldown
 
-  private def checkCircuitBreaker(): Unit = {
-    val failures = consecutiveFailures.get()
-    if (failures >= circuitBreakerThreshold) {
+  private def checkCircuitBreaker(): Unit = circuitLock.synchronized {
+    if (consecutiveFailures >= circuitBreakerThreshold) {
       val now = System.currentTimeMillis()
-      val openUntil = circuitOpenUntilMs.get()
-      if (now < openUntil) {
-        val remaining = (openUntil - now) / 1000
+      if (now < circuitOpenUntilMs) {
+        val remaining = (circuitOpenUntilMs - now) / 1000
         throw new RuntimeException(
-          s"Service temporarily unavailable (${remaining}s cooldown after $failures consecutive failures). " +
+          s"Service temporarily unavailable (${remaining}s cooldown after $consecutiveFailures consecutive failures). " +
           "Check your network connection and AWS credentials.")
       } else {
-        // Cooldown elapsed — allow a probe request and reduce failure count to threshold-1
-        // so that another failure will re-open the circuit, but a success will reset fully
-        if (circuitOpenUntilMs.compareAndSet(openUntil, 0L) && 
-            consecutiveFailures.compareAndSet(failures, circuitBreakerThreshold - 1)) {
-          Output.writeln("[Assistant] Circuit breaker: cooldown elapsed, allowing probe request")
-        }
+        // Cooldown elapsed — allow a probe request. Reduce failure count to
+        // threshold-1 so that another failure will re-open the circuit, but
+        // a success (which resets to 0) clears it fully.
+        circuitOpenUntilMs = 0L
+        consecutiveFailures = circuitBreakerThreshold - 1
+        Output.writeln("[Assistant] Circuit breaker: cooldown elapsed, allowing probe request")
       }
     }
   }
 
-  private def recordSuccess(): Unit = {
-    val currentFailures = consecutiveFailures.getAndSet(0)
-    if (currentFailures > 0) {
-      Output.writeln(s"[Assistant] Circuit breaker: reset after success (was $currentFailures failures)")
-      circuitOpenUntilMs.set(0L)
+  private def recordSuccess(): Unit = circuitLock.synchronized {
+    if (consecutiveFailures > 0) {
+      Output.writeln(s"[Assistant] Circuit breaker: reset after success (was $consecutiveFailures failures)")
+      consecutiveFailures = 0
+      circuitOpenUntilMs = 0L
     }
   }
 
-  private def recordFailure(): Unit = {
-    val failures = consecutiveFailures.incrementAndGet()
-    if (failures >= circuitBreakerThreshold) {
-      circuitOpenUntilMs.set(System.currentTimeMillis() + circuitBreakerCooldownMs)
-      Output.writeln(s"[Assistant] Circuit breaker OPEN: $failures consecutive failures, cooldown ${circuitBreakerCooldownMs / 1000}s")
+  private def recordFailure(): Unit = circuitLock.synchronized {
+    consecutiveFailures += 1
+    if (consecutiveFailures >= circuitBreakerThreshold) {
+      circuitOpenUntilMs = System.currentTimeMillis() + circuitBreakerCooldownMs
+      Output.writeln(s"[Assistant] Circuit breaker OPEN: $consecutiveFailures consecutive failures, cooldown ${circuitBreakerCooldownMs / 1000}s")
     }
   }
 
+  /**
+   * Token-bucket-ish rate limiter: serialize API calls by reserving the next
+   * allowed slot atomically, then sleeping only if the slot is still in the
+   * future. Concurrent callers each claim distinct slots instead of all
+   * sleeping for `now-lastCall` and stampeding when they wake up.
+   */
   private def enforceRateLimit(): Unit = {
-    val now = System.currentTimeMillis()
-    val lastCall = lastApiCallMs.get()
-    val elapsed = now - lastCall
-    if (elapsed < minIntervalMs) {
-      Thread.sleep(minIntervalMs - elapsed)
+    var reserved = 0L
+    var done = false
+    while (!done) {
+      val now = System.currentTimeMillis()
+      val prev = lastApiCallMs.get()
+      val target = math.max(now, prev + minIntervalMs)
+      if (lastApiCallMs.compareAndSet(prev, target)) {
+        reserved = target
+        done = true
+      }
     }
-    lastApiCallMs.set(System.currentTimeMillis())
+    val wait = reserved - System.currentTimeMillis()
+    if (wait > 0) {
+      try Thread.sleep(wait)
+      catch {
+        case _: InterruptedException =>
+          // Restore the interrupt flag so downstream cancellation checks
+          // (e.g. CancellationToken polling) still see the signal. Without
+          // this, sleep would silently swallow the interrupt and the
+          // caller would keep running past the cancel request.
+          Thread.currentThread().interrupt()
+      }
+    }
   }
 
   /**
@@ -159,14 +186,56 @@ object BedrockClient {
     }
   }
 
+  /** Truncate on a code-point boundary so the stuck-loop signature can
+    * never bisect a multi-byte UTF-8 character. `String.take(n)` works
+    * on UTF-16 code units, which is fine for BMP characters but can
+    * split a surrogate pair in half; matching against such a
+    * half-formed signature with `distinct.size == 1` is still correct,
+    * but the log messages are nicer when every truncated value is
+    * valid Unicode. */
+  private def truncateSafely(s: String, maxCodeUnits: Int): String = {
+    if (s == null || s.length <= maxCodeUnits) s
+    else {
+      val lastChar = s.charAt(maxCodeUnits - 1)
+      val cutoff =
+        if (Character.isHighSurrogate(lastChar)) maxCodeUnits - 1
+        else maxCodeUnits
+      s.substring(0, cutoff)
+    }
+  }
+
   private val currentViewTL = new ThreadLocal[org.gjt.sp.jedit.View]()
-  
+
   /** Track active tool loop context size for accurate context bar display.
-    * Volatile for thread-safe read from GUI thread. Updated during tool loops. */
-  @volatile private var activeToolLoopContextChars: Int = 0
+    * Atomic because parallel planning sub-agents can update the high-water
+    * mark concurrently — a plain @volatile would lose updates on concurrent
+    * writes (read-modify-write is not atomic on volatile ints). */
+  private val activeToolLoopContextChars = new java.util.concurrent.atomic.AtomicInteger(0)
+
+  /** Dedicated executor for planning sub-agents.
+    *
+    * Previously sub-agents ran on `Isabelle_Thread.fork`, which shares a
+    * pool with PIDE command processing and the I/Q backplane. Three
+    * long-running HTTP tool-use loops on that pool can starve PIDE. A
+    * small fixed pool (sized to the number of approaches we brainstorm
+    * plus a little headroom for re-runs) keeps planning work on its own
+    * thread budget while still letting the JVM reclaim threads if planning
+    * isn't in use. */
+  private val planningExecutor: java.util.concurrent.ExecutorService = {
+    val poolSize = math.max(2, AssistantConstants.PLANNING_NUM_APPROACHES + 1)
+    val threadCounter = new java.util.concurrent.atomic.AtomicInteger(0)
+    java.util.concurrent.Executors.newFixedThreadPool(
+      poolSize,
+      (r: Runnable) => {
+        val t = new Thread(r, s"assistant-planning-${threadCounter.incrementAndGet()}")
+        t.setDaemon(true)
+        t
+      }
+    )
+  }
 
   /** Get current tool loop context size (0 if no active loop). */
-  def getActiveToolLoopContextChars: Int = activeToolLoopContextChars
+  def getActiveToolLoopContextChars: Int = activeToolLoopContextChars.get()
 
   private[assistant] enum BedrockRole(val wireValue: String) {
     case User extends BedrockRole("user")
@@ -302,31 +371,51 @@ object BedrockClient {
   /**
    * Invoke a single prompt with structured output via forced tool_choice.
    * Stateless with cache. Returns parsed tool arguments.
-   * 
+   *
    * @param modelIdOverride Optional model ID override (defaults to main model)
-   * @param temperatureOverride Optional temperature override (defaults to main temperature)
    */
   def invokeStructured(
-      prompt: String, 
-      schema: StructuredResponseSchema, 
+      prompt: String,
+      schema: StructuredResponseSchema,
       systemPrompt: String = "",
-      modelIdOverride: Option[String] = None,
-      temperatureOverride: Option[Double] = None
+      modelIdOverride: Option[String] = None
   ): ToolArgs = {
     ErrorHandler.logOperation("invokeStructured") {
-      val cacheKey = s"structured:${schema.name}:$prompt"
+      val cacheKey = structuredCacheKey(schema, systemPrompt, prompt)
       LLMResponseCache.get(cacheKey) match {
         case Some(cached) =>
           Output.writeln(s"[Assistant] Using cached structured response")
           ResponseParser.parseToolArgsJsonObject(cached)
         case None =>
           val args = retryWithBackoff(maxRetries) {
-            invokeStructuredInternal(prompt, schema, systemPrompt, modelIdOverride, temperatureOverride)
+            invokeStructuredInternal(prompt, schema, systemPrompt, modelIdOverride)
           }
           LLMResponseCache.put(cacheKey, ResponseParser.toolArgsToJson(args))
           args
       }
     }
+  }
+
+  /** Build a cache key that binds the cached response to the full schema
+    * definition and system prompt, not just the schema's display name. Two
+    * schemas that happened to share a name but differed in field set, or the
+    * same schema with a different system prompt, would otherwise collide.
+    */
+  private def structuredCacheKey(
+      schema: StructuredResponseSchema,
+      systemPrompt: String,
+      prompt: String
+  ): String = {
+    val md = java.security.MessageDigest.getInstance("SHA-256")
+    md.update(schema.name.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    md.update(0.toByte)
+    md.update(schema.description.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    md.update(0.toByte)
+    md.update(schema.jsonSchema.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    md.update(0.toByte)
+    md.update(systemPrompt.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+    val hex = md.digest().take(8).map(b => f"${b & 0xff}%02x").mkString
+    s"structured:${schema.name}:$hex:$prompt"
   }
 
   /**
@@ -365,34 +454,31 @@ object BedrockClient {
 
   /**
    * Invoke a single prompt with structured output, bypassing cache.
-   * Extended version with model and temperature overrides.
+   * Extended version with model override.
    * Use for operations like summarization where caching is undesirable.
    */
   def invokeNoCacheStructured(
       prompt: String,
       schema: StructuredResponseSchema,
       systemPrompt: String,
-      modelIdOverride: Option[String],
-      temperatureOverride: Option[Double]
+      modelIdOverride: Option[String]
   ): ToolArgs = {
     ErrorHandler.logOperation("invokeNoCacheStructured") {
       retryWithBackoff(maxRetries) {
-        invokeStructuredInternal(prompt, schema, systemPrompt, modelIdOverride, temperatureOverride)
+        invokeStructuredInternal(prompt, schema, systemPrompt, modelIdOverride)
       }
     }
   }
 
   /** Single-prompt structured invocation. */
   private def invokeStructuredInternal(
-    prompt: String, 
-    schema: StructuredResponseSchema, 
+    prompt: String,
+    schema: StructuredResponseSchema,
     systemPrompt: String,
-    modelIdOverride: Option[String] = None,
-    temperatureOverride: Option[Double] = None
+    modelIdOverride: Option[String] = None
   ): ToolArgs = {
     val modelId = modelIdOverride.getOrElse(AssistantOptions.getModelId)
     requireAnthropicModel(modelId)
-    val temperature = temperatureOverride.getOrElse(AssistantOptions.getTemperature)
     val maxTokens = AssistantOptions.getMaxTokens
 
     val fullSystemPrompt = List(PromptLoader.getSystemPrompt, systemPrompt).filter(_.nonEmpty).mkString("\n\n")
@@ -400,7 +486,7 @@ object BedrockClient {
     Output.writeln(s"[Assistant] invokeStructured - Model: $modelId, Schema: ${schema.name}")
 
     val payload = PayloadBuilder.buildAnthropicStructuredPayload(
-      fullSystemPrompt, List(("user", prompt)), schema, temperature, maxTokens
+      fullSystemPrompt, List(("user", prompt)), schema, maxTokens
     )
 
     val request = InvokeModelRequest.builder()
@@ -413,7 +499,7 @@ object BedrockClient {
     val responseJson = response.body().asUtf8String()
 
     ResponseParser.extractForcedToolArgs(responseJson).getOrElse(
-      throw new RuntimeException("Structured response contained no tool_use block")
+      throw new RuntimeException("The model did not return a structured response. Try rephrasing your request or use a different model.")
     )
   }
 
@@ -424,7 +510,6 @@ object BedrockClient {
   ): ToolArgs = {
     val modelId = AssistantOptions.getModelId
     requireAnthropicModel(modelId)
-    val temperature = AssistantOptions.getTemperature
     val maxTokens = AssistantOptions.getMaxTokens
 
     val fullSystemPrompt = PromptLoader.getSystemPrompt
@@ -441,7 +526,6 @@ object BedrockClient {
       fullSystemPrompt,
       fromTurns(merged),
       schema,
-      temperature,
       maxTokens
     )
 
@@ -455,7 +539,7 @@ object BedrockClient {
     val responseJson = response.body().asUtf8String()
 
     ResponseParser.extractForcedToolArgs(responseJson).getOrElse(
-      throw new RuntimeException("Structured response contained no tool_use block")
+      throw new RuntimeException("The model did not return a structured response. Try rephrasing your request or use a different model.")
     )
   }
 
@@ -486,7 +570,16 @@ object BedrockClient {
             // Cap exponential backoff at 30 seconds
             val delay = math.min(30000L, baseRetryDelayMs * math.pow(2, attempt - 1).toLong)
             Output.writeln(s"[Assistant] Attempt $attempt failed, retrying in ${delay}ms: ${ErrorHandler.makeUserFriendly(ex.getMessage, "request")}")
-            Thread.sleep(delay)
+            try Thread.sleep(delay)
+            catch {
+              case _: InterruptedException =>
+                // Preserve the interrupt so cancellation polling downstream
+                // still sees it — without this, a cancel during retry sleep
+                // would be silently swallowed and the next attempt would
+                // proceed regardless.
+                Thread.currentThread().interrupt()
+                throw new RuntimeException("Operation cancelled")
+            }
             retry(attempt + 1, Some(ex))
           } else {
             // Final attempt failed - record failure before throwing
@@ -536,13 +629,31 @@ object BedrockClient {
   ): List[(String, String)] =
     fromTurns(truncateTurns(toTurns(messages), maxChars, systemCost))
 
-  /** Merge consecutive same-role messages (Anthropic requires strict alternation). */
-  private def mergeConsecutiveTurns(messages: List[ChatTurn]): List[ChatTurn] =
-    messages.foldLeft(List.empty[ChatTurn]) {
-      case (acc, msg) if acc.nonEmpty && acc.last.role == msg.role =>
-        acc.init :+ acc.last.copy(content = acc.last.content + "\n\n" + msg.content)
-      case (acc, msg) => acc :+ msg
+  /** Merge consecutive same-role messages (Anthropic requires strict alternation).
+    *
+    * Implementation note: accumulates into a `ListBuffer`, collecting content
+    * chunks per run and emitting one `ChatTurn` per role-change. The previous
+    * `foldLeft` implementation rebuilt the accumulator on every matching
+    * message (`acc.init :+ acc.last.copy(...)`), producing O(n^2) work on
+    * long histories with many same-role runs.
+    */
+  private def mergeConsecutiveTurns(messages: List[ChatTurn]): List[ChatTurn] = {
+    val out = scala.collection.mutable.ListBuffer.empty[ChatTurn]
+    var currentRole: Option[BedrockRole] = None
+    val currentContent = new StringBuilder
+    for (msg <- messages) {
+      if (currentRole.contains(msg.role)) {
+        currentContent.append("\n\n").append(msg.content)
+      } else {
+        currentRole.foreach(r => out += ChatTurn(r, currentContent.toString))
+        currentRole = Some(msg.role)
+        currentContent.setLength(0)
+        currentContent.append(msg.content)
+      }
     }
+    currentRole.foreach(r => out += ChatTurn(r, currentContent.toString))
+    out.toList
+  }
 
   /** Public tuple-based wrapper used by tests. */
   private[assistant] def mergeConsecutiveRoles(
@@ -563,7 +674,6 @@ object BedrockClient {
     val modelId = AssistantOptions.getModelId
     requireAnthropicModel(modelId)
 
-    val temperature = AssistantOptions.getTemperature
     val maxTokens = AssistantOptions.getMaxTokens
 
     val fullSystemPrompt = List(PromptLoader.getSystemPrompt, systemPrompt).filter(_.nonEmpty).mkString("\n\n")
@@ -595,7 +705,7 @@ object BedrockClient {
       )
     }
 
-    invokeChatWithTools(modelId, fullSystemPrompt, merged, temperature, maxTokens)
+    invokeChatWithTools(modelId, fullSystemPrompt, merged, maxTokens)
   }
 
   /**
@@ -607,10 +717,10 @@ object BedrockClient {
     modelId: String,
     systemPrompt: String,
     initialMessages: List[ChatTurn],
-    temperature: Double, maxTokens: Int
+    maxTokens: Int
   ): String = {
     invokeChatWithToolsTestable(
-      modelId, systemPrompt, initialMessages, temperature, maxTokens,
+      modelId, systemPrompt, initialMessages, maxTokens,
       request => getClient.invokeModel(request).body().asUtf8String(),
       (toolName, args) => {
         val view = Option(currentViewTL.get())
@@ -624,11 +734,10 @@ object BedrockClient {
   /**
    * Testable version of the agentic tool-use loop.
    * Accepts function parameters for API calls and tool execution, enabling mock-based testing.
-   * 
+   *
    * @param modelId The Bedrock model ID
    * @param systemPrompt System prompt for the conversation
    * @param initialMessages Initial message history
-   * @param temperature Sampling temperature
    * @param maxTokens Maximum tokens to generate
    * @param invoker Function that takes an InvokeModelRequest and returns the response JSON
    * @param toolExecutor Function that takes (toolName, args) and returns the result string
@@ -638,7 +747,7 @@ object BedrockClient {
     modelId: String,
     systemPrompt: String,
     initialMessages: List[ChatTurn],
-    temperature: Double, maxTokens: Int,
+    maxTokens: Int,
     invoker: InvokeModelRequest => String,
     toolExecutor: (String, ResponseParser.ToolArgs) => String
   ): String = {
@@ -650,23 +759,29 @@ object BedrockClient {
     val textParts = scala.collection.mutable.ListBuffer[String]()
     var continue = true
     val recentCalls = scala.collection.mutable.Queue[String]()
-    val LOOP_DETECTION_WINDOW = 6
+
+    // Track running total of all message content sizes so we only invoke
+    // pruning when it actually exceeds the budget, instead of rebuilding the
+    // sum from scratch every iteration.
+    var runningChars = msgBuf.foldLeft(0)(_ + _.content.length)
 
     while (continue) {
       iteration += 1
       if (AssistantDockable.isCancelled) throw new RuntimeException("Operation cancelled")
-      pruneToolLoopMessagesInPlace(msgBuf, AssistantConstants.MAX_CHAT_CONTEXT_CHARS)
-      
+      if (runningChars > AssistantConstants.MAX_CHAT_CONTEXT_CHARS) {
+        pruneToolLoopMessagesInPlace(msgBuf, AssistantConstants.MAX_CHAT_CONTEXT_CHARS)
+        runningChars = msgBuf.foldLeft(0)(_ + _.content.length)
+      }
+
       // Update active tool loop context size for context bar
-      activeToolLoopContextChars = msgBuf.map(_.content.length).sum
+      activeToolLoopContextChars.set(runningChars)
 
       val hitLimit = maxIter match {
         case Some(limit) => iteration > limit
         case None => false
       }
       if (hitLimit) {
-        try { Output.warning(s"[Assistant] Hit max tool iteration limit ($iteration iterations)") }
-        catch { case _: Exception | _: LinkageError => () }
+        ErrorHandler.safeWarn(s"[Assistant] Hit max tool iteration limit ($iteration iterations)")
         msgBuf += ChatTurn(
           BedrockRole.User,
           "You have reached the maximum tool iteration limit. Please provide a summary of what you've learned and any conclusions you can make without additional tool calls."
@@ -675,14 +790,13 @@ object BedrockClient {
         val payload = PayloadBuilder.buildAnthropicToolPayload(
           systemPrompt,
           fromTurns(msgBuf.toList),
-          temperature,
           maxTokens
         )
         val request = InvokeModelRequest.builder()
           .modelId(modelId)
           .body(SdkBytes.fromUtf8String(payload))
           .build()
-        
+
         enforceRateLimit()
         try {
           val responseJson = invoker(request)
@@ -690,16 +804,14 @@ object BedrockClient {
           val summaryText = blocks.collect { case ResponseParser.TextBlock(t) => t }
           if (summaryText.nonEmpty) textParts ++= summaryText
         } catch {
-          case ex: Exception => 
-            try { Output.warning(s"[Assistant] Final summary call failed: ${ex.getMessage}") }
-            catch { case _: Exception | _: LinkageError => () }
+          case ex: Exception =>
+            ErrorHandler.safeWarn(s"[Assistant] Final summary call failed: ${ex.getMessage}")
         }
         continue = false
       } else {
         val payload = PayloadBuilder.buildAnthropicToolPayload(
           systemPrompt,
           fromTurns(msgBuf.toList),
-          temperature,
           maxTokens
         )
         val request = InvokeModelRequest.builder()
@@ -723,61 +835,81 @@ object BedrockClient {
           continue = false
         } else {
           // Append assistant message with the raw response content
-          msgBuf += ChatTurn(BedrockRole.Assistant, rawContentJson(blocks))
+          val assistantTurn = ChatTurn(BedrockRole.Assistant, rawContentJson(blocks))
+          msgBuf += assistantTurn
+          runningChars += assistantTurn.content.length
 
           // Execute each tool and build tool_result message
           val iterStr = maxIter.map(_.toString).getOrElse("∞")
           val resultBlocks = toolUses.map { tu =>
             // Enhanced stuck-loop detection: track tool name + ALL input params
             // This ensures different arguments produce different signatures
-            val paramStr = tu.input.toSeq.sortBy(_._1).map { case (k, v) => 
-              s"$k=${ResponseParser.toolValueToString(v).take(50)}" 
+            val paramStr = tu.input.toSeq.sortBy(_._1).map { case (k, v) =>
+              s"$k=${truncateSafely(ResponseParser.toolValueToString(v), 50)}"
             }.mkString(",")
             val signature = s"${tu.name}($paramStr)"
             recentCalls.enqueue(signature)
-            if (recentCalls.length > LOOP_DETECTION_WINDOW) {
+            if (recentCalls.length > AssistantConstants.LOOP_DETECTION_WINDOW) {
               val _ = recentCalls.dequeue()
             }
-            
-            // Check for exact repetition (3+ identical calls in window)
-            if (recentCalls.length >= 3 && recentCalls.takeRight(3).distinct.size == 1) {
-              try { Output.warning(s"[Assistant] Detected stuck loop: same tool call '${recentCalls.last}' repeated 3+ times") }
-              catch { case _: Exception | _: LinkageError => () }
+
+            // Check for exact repetition (N+ identical consecutive calls)
+            val repeatThreshold = AssistantConstants.LOOP_DETECTION_REPEAT_THRESHOLD
+            if (recentCalls.length >= repeatThreshold
+                && recentCalls.takeRight(repeatThreshold).distinct.size == 1) {
+              ErrorHandler.safeWarn(s"[Assistant] Detected stuck loop: same tool call '${recentCalls.last}' repeated $repeatThreshold+ times")
               throw new RuntimeException(s"Stuck in loop: tool '${tu.name}' called repeatedly with identical arguments and no progress. Try a different approach.")
             }
-            
+
             // Check for alternating pattern (A-B-A-B)
             if (recentCalls.length >= 4) {
               val last4 = recentCalls.takeRight(4).toList
               if (last4(0) == last4(2) && last4(1) == last4(3)) {
-                try { Output.warning(s"[Assistant] Detected alternating loop: ${last4(0)} <-> ${last4(1)}") }
-                catch { case _: Exception | _: LinkageError => () }
+                ErrorHandler.safeWarn(s"[Assistant] Detected alternating loop: ${last4(0)} <-> ${last4(1)}")
                 throw new RuntimeException(s"Stuck in alternating loop between two tool calls with no progress. Try a different approach.")
               }
             }
             
-            try { Output.writeln(s"[Assistant] Tool use ($iteration/$iterStr): ${tu.name}") }
-            catch { case _: Exception | _: LinkageError => () }
-            try { AssistantDockable.setStatus(s"[tool] ${tu.name} ($iteration/$iterStr)...") }
-            catch { case _: Exception | _: LinkageError => () }
-            
+            ErrorHandler.safeLog(s"[Assistant] Tool use ($iteration/$iterStr): ${tu.name}")
+            ErrorHandler.safeUi("BedrockClient.toolLoop.setStatus") {
+              AssistantDockable.setStatus(s"[tool] ${tu.name} ($iteration/$iterStr)…")
+            }
+
             // Skip tool call bubble for tools that inject their own widgets
-            val skipToolCallBubble = tu.name.startsWith("task_list_") || tu.name == "ask_user" || tu.name == "plan_approach"
+            val skipToolCallBubble =
+              tu.name.startsWith("task_list_") ||
+                tu.name == ToolId.AskUser.wireName ||
+                tu.name == ToolId.PlanApproach.wireName
             if (!skipToolCallBubble) {
-              try {
+              ErrorHandler.safeUi("BedrockClient.toolLoop.addToolMessage") {
                 GUI_Thread.later {
                   ChatAction.addToolMessage(tu.name, tu.input)
                 }
-              } catch { case _: Exception | _: LinkageError => () }
+              }
             }
-            
-            val result = toolExecutor(tu.name, tu.input)
+
+            // A throwing tool handler must not abort the whole agentic
+            // session. Surface the error as a tool_result string so the
+            // LLM can course-correct, while stuck-loop detection above
+            // still throws to abort pathological runs.
+            val result =
+              try toolExecutor(tu.name, tu.input)
+              catch {
+                case NonFatal(ex) =>
+                  ErrorHandler.safeWarn(
+                    s"[Assistant] Tool '${tu.name}' threw: ${ex.getMessage}"
+                  )
+                  s"Error (tool=${tu.name}): ${Option(ex.getMessage).getOrElse(ex.getClass.getSimpleName)}"
+              }
 
             // Skip tool result bubble for tools that inject their own widgets
             // (task_list_*, ask_user, and plan_approach already show rich UI widgets)
-            val skipToolResultBubble = tu.name.startsWith("task_list_") || tu.name == "ask_user" || tu.name == "plan_approach"
+            val skipToolResultBubble =
+              tu.name.startsWith("task_list_") ||
+                tu.name == ToolId.AskUser.wireName ||
+                tu.name == ToolId.PlanApproach.wireName
             if (!skipToolResultBubble) {
-              try {
+              ErrorHandler.safeUi("BedrockClient.toolLoop.toolResultBubble") {
                 GUI_Thread.later {
                   val html = WidgetRenderer.toolResult(
                     tu.name,
@@ -788,13 +920,15 @@ object BedrockClient {
                     java.time.LocalDateTime.now(), rawHtml = true, transient = true))
                   AssistantDockable.showConversation(ChatAction.getHistory)
                 }
-              } catch { case _: Exception | _: LinkageError => () }
+              }
             }
             (tu.id, result)
           }
 
           // Append user message with tool results
-          msgBuf += ChatTurn(BedrockRole.User, toolResultsJson(resultBlocks))
+          val resultTurn = ChatTurn(BedrockRole.User, toolResultsJson(resultBlocks))
+          msgBuf += resultTurn
+          runningChars += resultTurn.content.length
         }
       }
     }
@@ -802,17 +936,15 @@ object BedrockClient {
     try {
       val finalText = textParts.mkString("\n\n")
       if (finalText.isEmpty) {
-        try { Output.warning("[Assistant] Tool-use loop completed without text response") }
-        catch { case _: Exception | _: LinkageError => () }
+        ErrorHandler.safeWarn("[Assistant] Tool-use loop completed without text response")
         "I processed the request using tools but could not generate a text summary. Please try again or rephrase your question."
       } else {
-        try { Output.writeln(s"[Assistant] Tool loop completed in $iteration iterations, response: ${finalText.length} chars") }
-        catch { case _: Exception | _: LinkageError => () }
+        ErrorHandler.safeLog(s"[Assistant] Tool loop completed in $iteration iterations, response: ${finalText.length} chars")
         finalText
       }
     } finally {
       // Clear tool loop context tracking when loop exits
-      activeToolLoopContextChars = 0
+      activeToolLoopContextChars.set(0)
     }
   }
 
@@ -870,34 +1002,35 @@ object BedrockClient {
   private def rawContentJson(blocks: List[ResponseParser.ContentBlock]): String = {
     val sw = new StringWriter()
     val g = jsonFactory.createGenerator(sw)
-    g.writeStartArray()
-    for (b <- blocks) b match {
-      case ResponseParser.TextBlock(text) =>
-        g.writeStartObject()
-        g.writeStringField("type", "text")
-        g.writeStringField("text", text)
-        g.writeEndObject()
-      case ResponseParser.ToolUseBlock(id, name, input) =>
-        g.writeStartObject()
-        g.writeStringField("type", "tool_use")
-        g.writeStringField("id", id)
-        g.writeStringField("name", name)
-        g.writeObjectFieldStart("input")
-        for ((k, v) <- input) v match {
-          case ResponseParser.StringValue(s) => g.writeStringField(k, s)
-          case ResponseParser.IntValue(n) => g.writeNumberField(k, n)
-          case ResponseParser.DecimalValue(n) => g.writeNumberField(k, n)
-          case ResponseParser.BooleanValue(b) => g.writeBooleanField(k, b)
-          case ResponseParser.JsonValue(json) =>
-            g.writeFieldName(k)
-            g.writeRawValue(json)
-          case ResponseParser.NullValue => g.writeNullField(k)
-        }
-        g.writeEndObject()
-        g.writeEndObject()
-    }
-    g.writeEndArray()
-    g.close()
+    try {
+      g.writeStartArray()
+      for (b <- blocks) b match {
+        case ResponseParser.TextBlock(text) =>
+          g.writeStartObject()
+          g.writeStringField("type", "text")
+          g.writeStringField("text", text)
+          g.writeEndObject()
+        case ResponseParser.ToolUseBlock(id, name, input) =>
+          g.writeStartObject()
+          g.writeStringField("type", "tool_use")
+          g.writeStringField("id", id)
+          g.writeStringField("name", name)
+          g.writeObjectFieldStart("input")
+          for ((k, v) <- input) v match {
+            case ResponseParser.StringValue(s) => g.writeStringField(k, s)
+            case ResponseParser.IntValue(n) => g.writeNumberField(k, n)
+            case ResponseParser.DecimalValue(n) => g.writeNumberField(k, n)
+            case ResponseParser.BooleanValue(b) => g.writeBooleanField(k, b)
+            case ResponseParser.JsonValue(json) =>
+              g.writeFieldName(k)
+              g.writeRawValue(json)
+            case ResponseParser.NullValue => g.writeNullField(k)
+          }
+          g.writeEndObject()
+          g.writeEndObject()
+      }
+      g.writeEndArray()
+    } finally g.close()
     sw.toString
   }
 
@@ -905,16 +1038,17 @@ object BedrockClient {
   private def toolResultsJson(results: List[(String, String)]): String = {
     val sw = new StringWriter()
     val g = jsonFactory.createGenerator(sw)
-    g.writeStartArray()
-    for ((id, content) <- results) {
-      g.writeStartObject()
-      g.writeStringField("type", "tool_result")
-      g.writeStringField("tool_use_id", id)
-      g.writeStringField("content", content)
-      g.writeEndObject()
-    }
-    g.writeEndArray()
-    g.close()
+    try {
+      g.writeStartArray()
+      for ((id, content) <- results) {
+        g.writeStartObject()
+        g.writeStringField("type", "tool_result")
+        g.writeStringField("tool_use_id", id)
+        g.writeStringField("content", content)
+        g.writeEndObject()
+      }
+      g.writeEndArray()
+    } finally g.close()
     sw.toString
   }
 
@@ -926,8 +1060,7 @@ object BedrockClient {
   private def invokeInternal(prompt: String): String = {
     val modelId = AssistantOptions.getModelId
     requireAnthropicModel(modelId)
-    
-    val temperature = AssistantOptions.getTemperature
+
     val maxTokens = AssistantOptions.getMaxTokens
     val region = AssistantOptions.getRegion
 
@@ -951,11 +1084,11 @@ object BedrockClient {
 
     Output.writeln(s"[Assistant] Region: $region")
     Output.writeln(s"[Assistant] Model: $modelId")
-    Output.writeln(s"[Assistant] Temperature: $temperature, Max tokens: $maxTokens")
+    Output.writeln(s"[Assistant] Max tokens: $maxTokens")
     Output.writeln(s"[Assistant] Prompt length: ${totalLength} chars (system: ${systemPrompt.length}, user: ${prompt.length})")
 
     // Build payload with system prompt
-    val payload = PayloadBuilder.buildChatPayload(systemPrompt, List(("user", prompt)), temperature, maxTokens)
+    val payload = PayloadBuilder.buildChatPayload(systemPrompt, List(("user", prompt)), maxTokens)
 
     val request = InvokeModelRequest.builder()
       .modelId(modelId)
@@ -976,24 +1109,31 @@ object BedrockClient {
 
   /**
    * Orchestrate the adaptive tree-of-thought planning process.
-   * Phase 1: Brainstorm 3 approaches
+   * Phase 1: Brainstorm a configurable number of distinct approaches
    * Phase 2: Elaborate each approach in parallel using exploration tools
    * Phase 3: Select the best approach and return a refined plan
-   * 
+   *
    * @param problem Detailed problem description
-   * @param scope Scope hint (e.g., "proof", "refactor")
+   * @param scope Scope hint (e.g., "proof", "refactor", "multi-file")
+   * @param context Optional extra context provided by the caller
    * @param view Current jEdit view for context
-   * @return The final detailed plan text
+   * @return The final detailed plan text, or an error / cancellation message
    */
-  def invokePlanningAgent(problem: String, scope: String, view: View): String = {
+  def invokePlanningAgent(
+      problem: String,
+      scope: String,
+      context: String,
+      view: View
+  ): String = {
     ErrorHandler.logOperation("invokePlanningAgent") {
       val planningModelId = AssistantOptions.getPlanningModelId
-      val planningTemp = AssistantOptions.getEffectivePlanningTemperature
       val usingCustomModel = AssistantOptions.getPlanningBaseModelId.nonEmpty
-      val modelInfo = if (usingCustomModel) s" using planning model: $planningModelId" else s" using main model: $planningModelId"
-      Output.writeln(s"[Assistant] Planning agent: starting adaptive tree-of-thought$modelInfo (temp: $planningTemp)")
+      val modelInfo =
+        if (usingCustomModel) s" using planning model: $planningModelId"
+        else s" using main model: $planningModelId"
+      Output.writeln(s"[Assistant] Planning agent: starting adaptive tree-of-thought$modelInfo")
       Output.writeln(s"[Assistant] Problem: ${problem.take(80)}")
-      
+
       // Show initial planning widget
       GUI_Thread.later {
         val html = WidgetRenderer.planningInProgress(problem, "brainstorm")
@@ -1001,16 +1141,22 @@ object BedrockClient {
           java.time.LocalDateTime.now(), rawHtml = true, transient = true))
         AssistantDockable.showConversation(ChatAction.getHistory)
       }
-      
-      // Capture context snapshot from current state
-      val contextSnapshot = captureContextSnapshot(view)
-      
-      // Phase 1: Brainstorm 3 approaches (single API call)
+
+      // Capture context snapshot from current state, then merge in the
+      // caller's optional context. We keep them separate because the
+      // buffer-derived snapshot is structured (current file, goal) while
+      // the LLM-supplied context is free-form.
+      val viewContext = captureContextSnapshot(view)
+      val contextSnapshot =
+        if (context.trim.isEmpty) viewContext
+        else s"$viewContext\n\nCaller-provided context:\n${context.trim}"
+
+      // Phase 1: Brainstorm approaches (single API call)
       Output.writeln("[Assistant] Planning Phase 1: Brainstorming approaches...")
       val approaches = brainstormApproaches(problem, contextSnapshot, scope)
-      
+
       if (AssistantDockable.isCancelled) {
-        "Planning cancelled by user."
+        "Error: planning cancelled by user."
       } else {
         // Update widget for elaborate phase
         val approachTitles = approaches.map(_.title)
@@ -1020,13 +1166,13 @@ object BedrockClient {
             java.time.LocalDateTime.now(), rawHtml = true, transient = true))
           AssistantDockable.showConversation(ChatAction.getHistory)
         }
-        
-        // Phase 2: Elaborate each approach in parallel (3 agentic loops)
+
+        // Phase 2: Elaborate each approach in parallel (agentic loops)
         Output.writeln(s"[Assistant] Planning Phase 2: Elaborating ${approaches.length} approaches in parallel...")
-        val elaboratedPlans = elaborateApproachesInParallel(problem, approaches, view)
-        
+        val elaboratedPlans = elaborateApproachesInParallel(problem, approaches, context, view)
+
         if (AssistantDockable.isCancelled) {
-          "Planning cancelled by user."
+          "Error: planning cancelled by user."
         } else {
           // Update widget for select phase
           GUI_Thread.later {
@@ -1035,18 +1181,18 @@ object BedrockClient {
               java.time.LocalDateTime.now(), rawHtml = true, transient = true))
             AssistantDockable.showConversation(ChatAction.getHistory)
           }
-          
+
           // Phase 3: Select best plan (single API call)
           Output.writeln("[Assistant] Planning Phase 3: Selecting best approach...")
-          val finalPlan = selectBestPlan(problem, elaboratedPlans)
-          
+          val finalPlan = selectBestPlan(problem, approaches, elaboratedPlans)
+
           Output.writeln(s"[Assistant] Planning complete: selected approach ${finalPlan.selectedApproach}")
-          
+
           // Show final planning result widget
           GUI_Thread.later {
             val html = WidgetRenderer.planningResult(
               problem,
-              approachTitles,
+              approaches.map(a => (a.id, a.title)),
               finalPlan.selectedApproach,
               finalPlan.reasoning,
               finalPlan.plan,
@@ -1056,7 +1202,7 @@ object BedrockClient {
               java.time.LocalDateTime.now(), rawHtml = true, transient = true))
             AssistantDockable.showConversation(ChatAction.getHistory)
           }
-          
+
           finalPlan.plan
         }
       }
@@ -1088,7 +1234,11 @@ object BedrockClient {
           )
         }).getOrElse(Map("command_selection" -> "current"))
         
-        IQMcpClient.callGetContextInfo(selectionArgs, 5000L).toOption.foreach { ctx =>
+        // Short timeout: this is speculative context gathered before the
+        // first planning API call. A slow I/Q backplane shouldn't delay the
+        // brainstorm visible to the user — the planning sub-agents will do
+        // their own focused context fetches when they actually need them.
+        IQMcpClient.callGetContextInfo(selectionArgs, 1000L).toOption.foreach { ctx =>
           if (ctx.goal.hasGoal && ctx.goal.goalText.trim.nonEmpty) {
             contextParts += s"\nCurrent goal state:\n${ctx.goal.goalText.trim}"
           }
@@ -1098,50 +1248,56 @@ object BedrockClient {
       if (contextParts.nonEmpty) contextParts.mkString("\n\n")
       else "No additional context available."
     } catch {
-      case _: Exception => "Context capture failed."
+      // Use NonFatal so OutOfMemoryError / VirtualMachineError / thread
+      // interrupts propagate to the caller instead of being suppressed.
+      case NonFatal(ex) =>
+        Output.warning(s"[Assistant] Context capture failed: ${ex.getMessage}")
+        "Context capture failed."
     }
   }
 
-  /** Phase 1: Brainstorm 3 distinct approaches using structured output. */
+  /** Phase 1: Brainstorm distinct approaches using structured output.
+    *
+    * Returns [[AssistantConstants.PLANNING_NUM_APPROACHES]] approaches on
+    * success. On malformed or short output, throws a RuntimeException —
+    * the pipeline must not silently degrade to a single-approach run,
+    * because the downstream widgets, prompts, and select phase all assume
+    * diversity.
+    */
   private def brainstormApproaches(
     problem: String,
     contextSnapshot: String,
     scope: String
   ): List[Approach] = {
+    val numApproaches = AssistantConstants.PLANNING_NUM_APPROACHES
     val scopeHint = if (scope.nonEmpty) s"\n\nScope: $scope" else ""
     val prompt = s"""$problem$scopeHint
-    
+
 $contextSnapshot
 
-Generate exactly 3 distinct approaches to solve this problem. Each approach should use a different strategy or technique. Focus on diversity - the approaches should explore different angles rather than minor variations of the same idea."""
+Generate exactly $numApproaches distinct approaches to solve this problem. Each approach should use a different strategy or technique. Focus on diversity - the approaches should explore different angles rather than minor variations of the same idea. Each approach must have a unique positive integer `id`."""
 
     val planningModelId = AssistantOptions.getPlanningModelId
-    val planningTemp = AssistantOptions.getEffectivePlanningTemperature
 
-    val args = BedrockClient.invokeStructured(
+    // Bypass the structured-output cache: brainstorm is creative work and
+    // cache hits would re-serve the same approaches for identical prompts
+    // (very likely when users retry the same question), defeating the
+    // point of the phase.
+    val args = BedrockClient.invokeNoCacheStructured(
       prompt,
       StructuredResponseSchema.PlanningBrainstorm,
-      systemPrompt = "You are a problem-solving strategist. Your task is to brainstorm multiple distinct approaches to a given problem.",
-      modelIdOverride = Some(planningModelId),
-      temperatureOverride = Some(planningTemp)
+      systemPrompt = PromptLoader.load("planning_brainstorm_system.md", Map.empty),
+      modelIdOverride = Some(planningModelId)
     )
-    
-    // Parse the structured response
+
     val approaches = parseApproaches(args)
-    
-    // Guard against empty list - create fallback if parsing failed
-    if (approaches.isEmpty) {
-      Output.warning("[Assistant] Brainstorm returned no approaches, creating fallback")
-      List(Approach(
-        1,
-        "Direct Implementation",
-        "Implement the solution directly using available tools and techniques.",
-        "Apply straightforward problem-solving without overthinking the approach.",
-        List("Explore available resources", "Check for similar patterns", "Verify assumptions")
-      ))
-    } else {
-      approaches
+    if (approaches.length < numApproaches) {
+      throw new RuntimeException(
+        s"Planning brainstorm returned ${approaches.length} valid approaches (needed $numApproaches). " +
+          "The model may have produced malformed output; try rephrasing the request or using a different planning model."
+      )
     }
+    approaches
   }
 
   /** Parse approaches from structured response arguments. */
@@ -1153,13 +1309,20 @@ Generate exactly 3 distinct approaches to solve this problem. Each approach shou
     explorationHints: List[String]
   )
 
+  /** Parse approaches from the brainstorm phase's structured response.
+    *
+    * Drops entries with missing / blank required fields (`id`, `title`,
+    * `summary`, `keyIdea`) rather than emitting sentinel `Approach(0, ...)`
+    * rows that would flow through elaboration and pollute the UI. The
+    * caller (brainstormApproaches) is responsible for deciding what to do
+    * when too few valid entries come back. */
   private def parseApproaches(args: ResponseParser.ToolArgs): List[Approach] = {
     args.get("approaches") match {
       case Some(ResponseParser.JsonValue(json)) =>
-        // Parse JSON array using core Jackson parser
         val parser = jsonFactory.createParser(json)
         val approaches = scala.collection.mutable.ListBuffer[Approach]()
-        
+        val seenIds = scala.collection.mutable.Set.empty[Int]
+
         try {
           if (parser.nextToken() == JsonToken.START_ARRAY) {
             while (parser.nextToken() != JsonToken.END_ARRAY) {
@@ -1169,7 +1332,7 @@ Generate exactly 3 distinct approaches to solve this problem. Each approach shou
                 var summary = ""
                 var keyIdea = ""
                 val hints = scala.collection.mutable.ListBuffer[String]()
-                
+
                 while (parser.nextToken() != JsonToken.END_OBJECT) {
                   val fieldName = parser.currentName()
                   parser.nextToken()
@@ -1187,14 +1350,25 @@ Generate exactly 3 distinct approaches to solve this problem. Each approach shou
                     case _ => val _ = parser.skipChildren()
                   }
                 }
-                approaches += Approach(id, title, summary, keyIdea, hints.toList)
+
+                val isValid =
+                  id > 0 && !seenIds.contains(id) &&
+                  title.trim.nonEmpty && summary.trim.nonEmpty && keyIdea.trim.nonEmpty
+                if (isValid) {
+                  seenIds += id
+                  approaches += Approach(id, title.trim, summary.trim, keyIdea.trim, hints.toList)
+                } else {
+                  Output.warning(
+                    s"[Assistant] Planning: dropping malformed brainstorm entry (id=$id, title=${title.take(40)})"
+                  )
+                }
               }
             }
           }
         } finally {
           parser.close()
         }
-        
+
         approaches.toList
       case _ => List.empty
     }
@@ -1206,63 +1380,118 @@ Generate exactly 3 distinct approaches to solve this problem. Each approach shou
   private def elaborateApproachesInParallel(
     problem: String,
     approaches: List[Approach],
+    context: String,
     view: View
   ): List[ElaboratedPlan] = {
+    if (approaches.isEmpty) return Nil
+
     val latch = new CountDownLatch(approaches.length)
     val results = new java.util.concurrent.ConcurrentHashMap[Int, ElaboratedPlan]()
-    
-    // Launch one sub-agent per approach with 200ms stagger
+
+    // Stagger sub-agent starts so we don't trip Bedrock's concurrency
+    // throttle by firing all three initial requests at the same instant.
+    // We schedule each fork via TimeoutGuard.scheduleAction so the calling
+    // thread isn't blocked on Thread.sleep; fires after (idx * stagger) ms.
+    val staggerMs = 200L
+    val cancels = scala.collection.mutable.ListBuffer.empty[() => Unit]
+
     approaches.zipWithIndex.foreach { case (approach, idx) =>
-      if (idx > 0) Thread.sleep(200) // Stagger to avoid Bedrock throttling
-      
-      val _ = Isabelle_Thread.fork(name = s"planning-elaborate-${approach.id}") {
-        try {
-          if (!AssistantDockable.isCancelled) {
-            val prompt = buildElaborationPrompt(problem, approach)
-            val plan = runPlanningSubAgent(prompt, view)
-            val _ = results.put(approach.id, ElaboratedPlan(approach.id, approach.title, plan))
-          }
-        } catch {
-          case ex: Exception =>
-            Output.warning(s"[Assistant] Planning sub-agent ${approach.id} failed: ${ex.getMessage}")
-            val _ = results.put(approach.id, ElaboratedPlan(
-              approach.id,
-              approach.title,
-              s"Elaboration failed: ${ex.getMessage}"
-            ))
-        } finally {
+      val cancel = TimeoutGuard.scheduleAction(idx * staggerMs) {
+        if (AssistantDockable.isCancelled) {
+          val _ = results.put(approach.id, ElaboratedPlan(
+            approach.id, approach.title, "Error: planning cancelled by user."
+          ))
           latch.countDown()
+        } else {
+          val _ = planningExecutor.submit(new Runnable {
+            def run(): Unit = {
+              try {
+                if (!AssistantDockable.isCancelled) {
+                  val prompt = buildElaborationPrompt(problem, approach, context)
+                  val plan = runPlanningSubAgent(prompt, view)
+                  val _ = results.put(approach.id, ElaboratedPlan(approach.id, approach.title, plan))
+                } else {
+                  val _ = results.put(approach.id, ElaboratedPlan(
+                    approach.id, approach.title, "Error: planning cancelled by user."
+                  ))
+                }
+              } catch {
+                case NonFatal(ex) =>
+                  Output.warning(s"[Assistant] Planning sub-agent ${approach.id} failed: ${ex.getMessage}")
+                  val _ = results.put(approach.id, ElaboratedPlan(
+                    approach.id,
+                    approach.title,
+                    s"Error: elaboration failed: ${ex.getMessage}"
+                  ))
+              } finally {
+                latch.countDown()
+              }
+            }
+          })
         }
       }
+      cancels += cancel
     }
-    
-    // Wait for all 3 sub-agents to complete (with generous timeout)
-    val totalTimeout = (AssistantOptions.getMaxToolIterations.getOrElse(15) * 30L + 60L) * 1000L
-    val _ = latch.await(totalTimeout, TimeUnit.MILLISECONDS)
-    
-    // Return results in original order
-    approaches.map(a => 
+
+    // Wait for all sub-agents to complete (with capped timeout). Capping
+    // before the arithmetic prevents overflow when a pathological
+    // getMaxToolIterations is configured. We also bound below by the
+    // global PLANNING_TOTAL_TIMEOUT_MS so a single stuck call can't
+    // monopolise the tool loop indefinitely.
+    val iters = math.max(1, math.min(AssistantOptions.getMaxToolIterations.getOrElse(15), 10_000))
+    val derivedTimeout = (iters.toLong * 30L + 60L) * 1000L
+    val totalTimeout = math.min(derivedTimeout, AssistantConstants.PLANNING_TOTAL_TIMEOUT_MS)
+
+    val allCompleted =
+      try latch.await(totalTimeout, TimeUnit.MILLISECONDS)
+      catch {
+        case _: InterruptedException =>
+          Thread.currentThread().interrupt()
+          false
+      }
+
+    if (!allCompleted) {
+      Output.warning(
+        s"[Assistant] Planning elaboration timed out after ${totalTimeout}ms; returning partial results"
+      )
+      // Cancel any scheduled forks that haven't started yet — forks that
+      // have already begun are left to complete on their own because the
+      // Bedrock SDK call is the expensive part and is not itself cancellable.
+      cancels.foreach(_.apply())
+    }
+
+    // Return results in original order (by approach position, not ID).
+    approaches.map(a =>
       results.getOrDefault(a.id, ElaboratedPlan(
         a.id,
         a.title,
-        "Elaboration did not complete in time."
+        "Error: elaboration did not complete in time."
       ))
     )
   }
 
   /** Build the prompt for a sub-agent to elaborate an approach. */
-  private def buildElaborationPrompt(problem: String, approach: Approach): String = {
-    val hintsSection = if (approach.explorationHints.nonEmpty) {
-      s"\n\nExploration hints:\n${approach.explorationHints.map(h => s"- $h").mkString("\n")}"
-    } else ""
-    
+  private def buildElaborationPrompt(
+      problem: String,
+      approach: Approach,
+      context: String
+  ): String = {
+    val hintsSection =
+      if (approach.explorationHints.nonEmpty)
+        s"\n\nExploration hints:\n${approach.explorationHints.map(h => s"- $h").mkString("\n")}"
+      else ""
+
+    val contextSection =
+      if (context.trim.isEmpty) ""
+      else s"\n\nAdditional context from the caller:\n${context.trim}"
+
     s"""Problem: $problem
 
 Assigned Approach: ${approach.title}
 
 Summary: ${approach.summary}
 
-Key Idea: ${approach.keyIdea}$hintsSection
+Key Idea: ${approach.keyIdea}$hintsSection$contextSection
 
 Your task is to elaborate this approach into a detailed, actionable plan. Use the available exploration tools to:
 1. Verify that referenced entities (theorems, definitions, etc.) actually exist
@@ -1281,17 +1510,15 @@ Produce a structured plan with:
   private def runPlanningSubAgent(prompt: String, view: View): String = {
     val modelId = AssistantOptions.getPlanningModelId
     requireAnthropicModel(modelId)
-    val temperature = AssistantOptions.getEffectivePlanningTemperature
     val maxTokens = AssistantOptions.getMaxTokens
     val planningSystemPrompt = PromptLoader.load("planning_agent_system.md", Map.empty)
     val messages = List(ChatTurn(BedrockRole.User, prompt))
-    
+
     // Custom agentic loop with planning-specific payload builder
     runPlanningSubAgentLoop(
       modelId,
       planningSystemPrompt,
       messages,
-      temperature,
       maxTokens,
       view
     )
@@ -1302,11 +1529,18 @@ Produce a structured plan with:
     modelId: String,
     systemPrompt: String,
     initialMessages: List[ChatTurn],
-    temperature: Double,
     maxTokens: Int,
     view: View
   ): String = {
-    val maxIter = 12 // Planning sub-agents get reduced iteration limit
+    // Planning sub-agents get a reduced iteration limit. If the user has
+    // configured a tighter main-loop limit than the planning default, honour
+    // that as well — the user's ceiling should always be the tighter one.
+    val defaultSubLimit = AssistantConstants.PLANNING_SUB_AGENT_MAX_ITERATIONS
+    val mainIter = AssistantOptions.getMaxToolIterations
+    val maxIter = mainIter match {
+      case Some(n) => math.max(1, math.min(n, defaultSubLimit))
+      case None => defaultSubLimit
+    }
     val msgBuf = scala.collection.mutable.ListBuffer[ChatTurn]()
     msgBuf ++= initialMessages
 
@@ -1314,15 +1548,27 @@ Produce a structured plan with:
     val textParts = scala.collection.mutable.ListBuffer[String]()
     var continue = true
     val recentCalls = scala.collection.mutable.Queue[String]()
-    val LOOP_DETECTION_WINDOW = 6
+    var runningChars = msgBuf.foldLeft(0)(_ + _.content.length)
 
+    try {
     while (continue) {
       iteration += 1
       if (AssistantDockable.isCancelled) throw new RuntimeException("Operation cancelled")
-      
-      // Prune messages to stay within context budget
-      pruneToolLoopMessagesInPlace(msgBuf, AssistantConstants.MAX_CHAT_CONTEXT_CHARS)
-      
+
+      // Prune messages only when we actually exceed the budget.
+      if (runningChars > AssistantConstants.MAX_CHAT_CONTEXT_CHARS) {
+        pruneToolLoopMessagesInPlace(msgBuf, AssistantConstants.MAX_CHAT_CONTEXT_CHARS)
+        runningChars = msgBuf.foldLeft(0)(_ + _.content.length)
+      }
+
+      // Expose the sub-agent's current context size so the UI's context
+      // bar stays accurate during the parallel elaboration phase. We take
+      // the max across concurrent sub-agents so the bar never under-reports
+      // while any sub-agent is still working — do it atomically so two
+      // sub-agents racing to publish their runningChars can't lose the
+      // higher value.
+      val _ = activeToolLoopContextChars.updateAndGet(prev => math.max(prev, runningChars))
+
       if (iteration > maxIter) {
         msgBuf += ChatTurn(
           BedrockRole.User,
@@ -1332,14 +1578,13 @@ Produce a structured plan with:
         val payload = PayloadBuilder.buildPlanningAgentToolPayload(
           systemPrompt,
           fromTurns(msgBuf.toList),
-          temperature,
           maxTokens
         )
         val request = InvokeModelRequest.builder()
           .modelId(modelId)
           .body(SdkBytes.fromUtf8String(payload))
           .build()
-        
+
         enforceRateLimit()
         try {
           val responseJson = getClient.invokeModel(request).body().asUtf8String()
@@ -1347,14 +1592,20 @@ Produce a structured plan with:
           val summaryText = blocks.collect { case ResponseParser.TextBlock(t) => t }
           if (summaryText.nonEmpty) textParts ++= summaryText
         } catch {
-          case _: Exception => ()
+          // Preserve the no-throw contract (we still want to return whatever
+          // the sub-agent accumulated), but don't lose the diagnostic: a
+          // silent catch made it impossible to tell whether the summary
+          // actually returned content or was suppressed by an exception.
+          case NonFatal(e) =>
+            ErrorHandler.safeWarn(
+              s"[Assistant] Planning sub-agent final summary failed: ${e.getMessage}"
+            )
         }
         continue = false
       } else {
         val payload = PayloadBuilder.buildPlanningAgentToolPayload(
           systemPrompt,
           fromTurns(msgBuf.toList),
-          temperature,
           maxTokens
         )
         val request = InvokeModelRequest.builder()
@@ -1374,7 +1625,9 @@ Produce a structured plan with:
         if (toolUses.isEmpty) {
           continue = false
         } else {
-          msgBuf += ChatTurn(BedrockRole.Assistant, rawContentJson(blocks))
+          val assistantTurn = ChatTurn(BedrockRole.Assistant, rawContentJson(blocks))
+          msgBuf += assistantTurn
+          runningChars += assistantTurn.content.length
 
           val resultBlocks = toolUses.map { tu =>
             // Stuck-loop detection for planning sub-agent
@@ -1383,16 +1636,18 @@ Produce a structured plan with:
             }.mkString(",")
             val signature = s"${tu.name}($paramStr)"
             recentCalls.enqueue(signature)
-            if (recentCalls.length > LOOP_DETECTION_WINDOW) {
+            if (recentCalls.length > AssistantConstants.LOOP_DETECTION_WINDOW) {
               val _ = recentCalls.dequeue()
             }
-            
-            // Check for exact repetition (3+ identical calls)
-            if (recentCalls.length >= 3 && recentCalls.takeRight(3).distinct.size == 1) {
+
+            // Check for exact repetition (N+ identical consecutive calls)
+            val repeatThreshold = AssistantConstants.LOOP_DETECTION_REPEAT_THRESHOLD
+            if (recentCalls.length >= repeatThreshold
+                && recentCalls.takeRight(repeatThreshold).distinct.size == 1) {
               Output.warning(s"[Assistant] Planning sub-agent stuck loop detected: '${recentCalls.last}'")
               throw new RuntimeException(s"Planning sub-agent stuck: tool '${tu.name}' called repeatedly with no progress.")
             }
-            
+
             // Check for alternating pattern (A-B-A-B)
             if (recentCalls.length >= 4) {
               val last4 = recentCalls.takeRight(4).toList
@@ -1402,17 +1657,23 @@ Produce a structured plan with:
               }
             }
             
-            // Execute tool with planning-only filter
+            // Execute tool with planning-only filter AND ToolPermissions
+            // enforcement. Even "read-only" tools in planningToolIds can be
+            // configured as AskAtFirstUse (e.g. FindTheorems, GetDefinitions
+            // — see ToolPermissions.defaultPermissions): the sub-agent must
+            // respect the user's policy the same way the main agent does.
             val result = ToolId.fromWire(tu.name) match {
               case Some(id) if ToolId.planningToolIds.contains(id) =>
-                AssistantTools.executeTool(tu.name, tu.input, view)
+                AssistantTools.executeToolWithPermission(tu.name, tu.input, view)
               case _ =>
                 s"Tool '${tu.name}' is not available to the planning agent. Use only read-only exploration tools."
             }
             (tu.id, result)
           }
 
-          msgBuf += ChatTurn(BedrockRole.User, toolResultsJson(resultBlocks))
+          val resultTurn = ChatTurn(BedrockRole.User, toolResultsJson(resultBlocks))
+          msgBuf += resultTurn
+          runningChars += resultTurn.content.length
         }
       }
     }
@@ -1423,19 +1684,31 @@ Produce a structured plan with:
     } else {
       finalText
     }
+    } finally {
+      // Don't zero the high-water mark here: three sub-agents run in
+      // parallel under one planning call, so one finishing must not make
+      // the UI under-report the remaining sub-agents. The outer chat
+      // tool-loop re-publishes on its next iteration and will correct any
+      // lingering value once planning as a whole returns.
+      ()
+    }
   }
 
   /** Phase 3: Select the best plan using structured output. */
   private case class SelectedPlan(selectedApproach: Int, reasoning: String, plan: String)
 
-  private def selectBestPlan(problem: String, plans: List[ElaboratedPlan]): SelectedPlan = {
+  private def selectBestPlan(
+      problem: String,
+      approaches: List[Approach],
+      plans: List[ElaboratedPlan]
+  ): SelectedPlan = {
     val plansSection = plans.map { p =>
       s"""Approach ${p.approachId}: ${p.title}
 ${p.planText}
 
 ---"""
     }.mkString("\n\n")
-    
+
     val prompt = s"""Problem: $problem
 
 The following approaches have been elaborated:
@@ -1451,20 +1724,37 @@ Review all approaches and select the best one. Consider:
 Select the best approach and produce a final refined plan."""
 
     val planningModelId = AssistantOptions.getPlanningModelId
-    val planningTemp = AssistantOptions.getEffectivePlanningTemperature
 
-    val args = BedrockClient.invokeStructured(
+    // Planning responses should not be cached: Phase 1 and Phase 3 both run
+    // non-deterministic creative work, and cache hits would re-serve the
+    // same three approaches (or the same "best" selection) on identical
+    // inputs, defeating diversity.
+    val args = BedrockClient.invokeNoCacheStructured(
       prompt,
       StructuredResponseSchema.PlanningSelect,
-      systemPrompt = "You are a technical reviewer selecting the best implementation plan from multiple options.",
-      modelIdOverride = Some(planningModelId),
-      temperatureOverride = Some(planningTemp)
+      systemPrompt = PromptLoader.load("planning_select_system.md", Map.empty),
+      modelIdOverride = Some(planningModelId)
     )
-    
+
+    val rawSelection = args.get("selected_approach").collect {
+      case ResponseParser.IntValue(n) => n
+    }
+    val validIds = approaches.map(_.id).toSet
+    val fallbackId = approaches.headOption.map(_.id).getOrElse(1)
+    val selected = rawSelection match {
+      case Some(n) if validIds.contains(n) => n
+      case Some(n) =>
+        Output.warning(
+          s"[Assistant] Planning: model selected approach $n which is not in ${validIds.mkString("{", ", ", "}")}; falling back to $fallbackId"
+        )
+        fallbackId
+      case None =>
+        Output.warning("[Assistant] Planning: model did not return selected_approach; falling back")
+        fallbackId
+    }
+
     SelectedPlan(
-      selectedApproach = args.get("selected_approach").collect {
-        case ResponseParser.IntValue(n) => n
-      }.getOrElse(1),
+      selectedApproach = selected,
       reasoning = args.get("reasoning").collect {
         case ResponseParser.StringValue(s) => s
       }.getOrElse("No reasoning provided."),
@@ -1484,5 +1774,7 @@ Select the best approach and produce a final refined plan."""
     }
     cachedClient = None
     currentViewTL.remove()
+    try planningExecutor.shutdown()
+    catch { case NonFatal(_) => () }
   }
 }

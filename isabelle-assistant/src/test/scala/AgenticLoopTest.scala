@@ -37,7 +37,6 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
       modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
       systemPrompt = "test",
       initialMessages = List.empty,
-      temperature = 0.3,
       maxTokens = 100,
       invoker = invoker,
       toolExecutor = toolExecutor
@@ -70,7 +69,6 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
       modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
       systemPrompt = "test",
       initialMessages = List.empty,
-      temperature = 0.3,
       maxTokens = 100,
       invoker = invoker,
       toolExecutor = toolExecutor
@@ -99,7 +97,6 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
       modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
       systemPrompt = "test",
       initialMessages = List.empty,
-      temperature = 0.3,
       maxTokens = 100,
       invoker = invoker,
       toolExecutor = toolExecutor
@@ -124,7 +121,6 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
         modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
         systemPrompt = "test",
         initialMessages = List.empty,
-        temperature = 0.3,
         maxTokens = 100,
         invoker = invoker,
         toolExecutor = toolExecutor
@@ -146,7 +142,6 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
         modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
         systemPrompt = "test",
         initialMessages = List.empty,
-        temperature = 0.3,
         maxTokens = 100,
         invoker = invoker,
         toolExecutor = toolExecutor
@@ -168,7 +163,7 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
         buildMockTextResponse("The tool failed, but here's my answer anyway.")
       }
     }
-    
+
     val toolExecutor: (String, ResponseParser.ToolArgs) => String = (name, _) => {
       // Tool returns an error message (as a string result, not thrown exception)
       s"Error: tool $name failed"
@@ -178,12 +173,42 @@ class AgenticLoopTest extends AnyFunSuite with Matchers {
       modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
       systemPrompt = "test",
       initialMessages = List.empty,
-      temperature = 0.3,
       maxTokens = 100,
       invoker = invoker,
       toolExecutor = toolExecutor
     )
 
     result should include("The tool failed, but here's my answer anyway.")
+  }
+
+  test("invokeChatWithToolsTestable should keep running when a tool handler throws") {
+    var apiCallCount = 0
+    val invoker: InvokeModelRequest => String = _ => {
+      apiCallCount += 1
+      if (apiCallCount == 1) {
+        buildMockToolUseResponse("tool-1", "read_theory", """{"theory":"Foo"}""")
+      } else {
+        buildMockTextResponse("Recovered after tool crash.")
+      }
+    }
+
+    var toolCallCount = 0
+    val toolExecutor: (String, ResponseParser.ToolArgs) => String = (_, _) => {
+      toolCallCount += 1
+      throw new RuntimeException("handler boom")
+    }
+
+    val result = BedrockClient.invokeChatWithToolsTestable(
+      modelId = "anthropic.claude-3-7-sonnet-20250219-v1:0",
+      systemPrompt = "test",
+      initialMessages = List.empty,
+      maxTokens = 100,
+      invoker = invoker,
+      toolExecutor = toolExecutor
+    )
+
+    apiCallCount shouldBe 2
+    toolCallCount shouldBe 1
+    result should include("Recovered after tool crash.")
   }
 }

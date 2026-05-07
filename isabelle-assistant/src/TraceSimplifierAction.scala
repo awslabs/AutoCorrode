@@ -15,24 +15,28 @@ object TraceSimplifierAction {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
 
-    (GoalExtractor.getGoalState(buffer, offset),
-     CommandExtractor.getCommandAtOffset(buffer, offset),
-     IQAvailable.isAvailable) match {
-      case (None, _, _) =>
-        GUI.warning_dialog(view, "Isabelle Assistant", "No goal at cursor")
-      case (_, _, false) =>
-        GUI.warning_dialog(view, "Isabelle Assistant", "I/Q required for tracing")
-      case (Some(goal), Some(_), true) =>
-        AssistantDockable.setStatus(s"Running $method with trace...")
-        GUI_Thread.later {
-          runSimpTrace(view, goal, method)
+    if (!IQAvailable.isAvailable) {
+      GUI.warning_dialog(view, "Isabelle Assistant", "I/Q required for tracing")
+      return
+    }
+
+    // Goal and command lookups go through I/Q MCP and cannot run on the EDT.
+    AssistantDockable.setStatus(s"Running $method with trace…")
+    val _ = Isabelle_Thread.fork(name = "assistant-trace-resolve") {
+      val goalOpt = GoalExtractor.getGoalState(buffer, offset)
+      val commandOpt = CommandExtractor.getCommandAtOffset(buffer, offset)
+      GUI_Thread.later {
+        (goalOpt, commandOpt) match {
+          case (None, _) =>
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            GUI.warning_dialog(view, "Isabelle Assistant", "No goal at cursor")
+          case (Some(goal), Some(_)) =>
+            runSimpTrace(view, goal, method)
+          case (Some(_), None) =>
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            GUI.warning_dialog(view, "Isabelle Assistant", "No command at cursor")
         }
-      case (Some(_), None, true) =>
-        GUI.warning_dialog(
-          view,
-          "Isabelle Assistant",
-          "No command at cursor"
-        )
+      }
     }
   }
 
@@ -69,7 +73,7 @@ object TraceSimplifierAction {
       // Check if it timed out
       val timedOut = traceOutput.contains("TIMED_OUT")
 
-      AssistantDockable.setStatus("Explaining trace...")
+      AssistantDockable.setStatus("Explaining trace…")
 
       val _ = Isabelle_Thread.fork(name = "explain-trace") {
         try {

@@ -36,7 +36,7 @@ object MarkdownRenderer {
     "'Source Code Pro', 'Menlo', 'Consolas', 'Monaco', monospace"
 
   def toHtml(markdown: String): String =
-    s"<html><body style='font-family:sans-serif;font-size:12pt;padding:8px;'>${toBodyHtml(markdown)}</body></html>"
+    s"<html><body style='font-family:sans-serif;font-size:${UIDesign.FontSize.md};padding:${UIDesign.Space.md};'>${toBodyHtml(markdown)}</body></html>"
 
   /** Render markdown to HTML body fragment (no clickable isabelle blocks). */
   def toBodyHtml(markdown: String): String = renderBody(markdown, None)
@@ -105,38 +105,35 @@ object MarkdownRenderer {
           val id = register(codeStr)
           appendClickableBlock(sb, escaped, id)
         case None =>
-          val codeBg = UIColors.CodeBlock.background
-          val codeBorder = UIColors.CodeBlock.border
           val highlighted = highlightIsabelle(escaped)
-          sb.append(
-            s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;"
-          )
-          sb.append(
-            s"padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;"
-          )
-          sb.append("white-space:pre;overflow-x:auto;line-height:1.5;'>")
-          sb.append(highlighted)
-          sb.append("</pre>")
+          appendPreBlock(sb, highlighted)
       }
     } else if (tagName == "mermaid") {
       appendMermaidBlock(sb, codeStr)
     } else {
-      val codeBg = UIColors.CodeBlock.background
-      val codeBorder = UIColors.CodeBlock.border
       // Apply syntax highlighting if it's an isabelle block
       val highlighted =
         if (tagName == "isabelle") highlightIsabelle(escaped) else escaped
-      sb.append(
-        s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;"
-      )
-      sb.append(
-        s"padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;"
-      )
-      sb.append("white-space:pre;overflow-x:auto;line-height:1.5;'>")
-      sb.append(highlighted)
-      sb.append("</pre>")
+      appendPreBlock(sb, highlighted)
     }
     i + 1 // skip closing ```
+  }
+
+  /** Standard `<pre>` code-block wrapper used by non-clickable code fences.
+    * All tokens come from `UIDesign` so font/radius/padding stay consistent. */
+  private def appendPreBlock(sb: StringBuilder, innerHtml: String): Unit = {
+    val codeBg = UIColors.CodeBlock.background
+    val codeBorder = UIColors.CodeBlock.border
+    val codeFg = UIColors.CodeBlock.text
+    sb.append(
+      s"<pre style='font-family:$codeFont;font-size:${UIDesign.FontSize.lg};" +
+        s"background:$codeBg;color:$codeFg;" +
+        s"padding:${UIDesign.Space.lg} ${UIDesign.Space.lg};margin:${UIDesign.Space.sm} 0;" +
+        s"border:1px solid $codeBorder;border-radius:${UIDesign.Radius.sm};" +
+        "white-space:pre;overflow-x:auto;line-height:1.5;'>"
+    )
+    sb.append(innerHtml)
+    sb.append("</pre>")
   }
 
   private case class RenderedImage(url: String, width: Int, height: Int)
@@ -150,7 +147,8 @@ object MarkdownRenderer {
     val diagram = code.trim
     if (diagram.isEmpty) {
       sb.append(
-        "<div style='margin:4px 0;color:#666;font-style:italic;'>Empty Mermaid diagram block.</div>"
+        s"<div style='margin:${UIDesign.Space.sm} 0;color:${UIColors.Muted.text};font-style:italic;'>" +
+          "Empty Mermaid diagram block.</div>"
       )
       return
     }
@@ -158,30 +156,24 @@ object MarkdownRenderer {
     resolveMermaid(diagram) match {
       case MermaidReady(img) =>
         sb.append(
-          s"<div style='margin:8px 0;text-align:center;'><img src='${img.url}' width='${img.width}' height='${img.height}' style='max-width:100%;height:auto;' /></div>"
+          s"<div style='margin:${UIDesign.Space.md} 0;text-align:center;'>" +
+            s"<img src='${img.url}' width='${img.width}' height='${img.height}' " +
+            "style='max-width:100%;height:auto;' /></div>"
         )
       case MermaidPending =>
-        val codeBg = UIColors.CodeBlock.background
-        val codeBorder = UIColors.CodeBlock.border
         sb.append(
-          "<div style='margin:4px 0 2px;color:#666;font-size:10.5pt;'><b>Mermaid:</b> rendering diagram...</div>"
+          s"<div style='margin:${UIDesign.Space.sm} 0 ${UIDesign.Space.xs};" +
+            s"color:${UIColors.Muted.text};font-size:${UIDesign.FontSize.sm};'>" +
+            "<b>Mermaid:</b> rendering diagram…</div>"
         )
-        sb.append(
-          s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;white-space:pre;overflow-x:auto;line-height:1.5;'>"
-        )
-        sb.append(escapeHtml(code))
-        sb.append("</pre>")
+        appendPreBlock(sb, escapeHtml(code))
       case MermaidUnavailable(reason) =>
-        val codeBg = UIColors.CodeBlock.background
-        val codeBorder = UIColors.CodeBlock.border
         sb.append(
-          s"<div style='margin:4px 0 2px;color:#8a3b00;font-size:10.5pt;'><b>Mermaid rendering unavailable:</b> ${escapeHtml(reason)}</div>"
+          s"<div style='margin:${UIDesign.Space.sm} 0 ${UIDesign.Space.xs};" +
+            s"color:${UIColors.Badge.accentText};font-size:${UIDesign.FontSize.sm};'>" +
+            s"<b>Mermaid rendering unavailable:</b> ${escapeHtml(reason)}</div>"
         )
-        sb.append(
-          s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;padding:12px 14px;margin:4px 0;border:1px solid $codeBorder;border-radius:3px;white-space:pre;overflow-x:auto;line-height:1.5;'>"
-        )
-        sb.append(escapeHtml(code))
-        sb.append("</pre>")
+        appendPreBlock(sb, escapeHtml(code))
     }
   }
 
@@ -195,53 +187,48 @@ object MarkdownRenderer {
       .replace("&lt;", "<")
       .replace("&gt;", ">")
     val encodedForUrl = java.net.URLEncoder.encode(rawCode, "UTF-8")
-    // Unified code block with integrated action bar
     val codeBg = UIColors.CodeBlock.background
     val codeBorder = UIColors.CodeBlock.border
+    val codeFg = UIColors.CodeBlock.text
     val actionBg = UIColors.CodeBlock.actionBackground
     val actionBorder = UIColors.CodeBlock.actionBorder
-    val btnBg = UIColors.CodeButton.background
-    val btnText = UIColors.CodeButton.text
-    val btnBorder = UIColors.CodeButton.border
 
     // Apply Isabelle syntax highlighting
     val highlighted = highlightIsabelle(escapedCode)
 
     sb.append(
-      s"<div style='margin:4px 0 6px;border:1px solid $codeBorder;border-radius:4px;overflow:hidden;'>"
+      s"<div style='margin:${UIDesign.Space.sm} 0 ${UIDesign.Space.md};" +
+        s"border:1px solid $codeBorder;border-radius:${UIDesign.Radius.sm};overflow:hidden;'>"
     )
-    // Code area without <a> wrapper - JEditorPane forces blue on links
+    // Code area without <a> wrapper — JEditorPane forces blue on links
     sb.append(
-      s"<pre style='font-family:$codeFont;font-size:13pt;background:$codeBg;color:#383a42;"
-    )
-    sb.append(
-      "padding:14px 18px;margin:0;border:none;white-space:pre;overflow-x:auto;line-height:1.5;'>"
+      s"<pre style='font-family:$codeFont;font-size:${UIDesign.FontSize.lg};" +
+        s"background:$codeBg;color:$codeFg;" +
+        s"padding:${UIDesign.Space.lg} ${UIDesign.Space.xl};margin:0;border:none;" +
+        "white-space:pre;overflow-x:auto;line-height:1.5;'>"
     )
     sb.append(highlighted)
     sb.append("</pre>")
-    // Action bar with minimal button styling
+    // Action bar
     sb.append(
-      s"<div style='padding:8px 14px;background:$actionBg;border-top:1px solid $actionBorder;'>"
+      s"<div style='padding:${UIDesign.Space.md} ${UIDesign.Space.lg};background:$actionBg;border-top:1px solid $actionBorder;'>"
     )
-    // Insert button
-    sb.append(
-      s"<a href='action:insert:$id' style='display:inline-block;text-decoration:none;"
-    )
-    sb.append(s"padding:5px 14px;background:$btnBg;color:$btnText;")
-    sb.append(
-      s"border:1px solid $btnBorder;border-radius:3px;font-weight:normal;font-size:11pt;'>Insert</a>"
-    )
-    // Spacer between buttons
+    sb.append(actionPill(s"action:insert:$id", "Insert"))
     sb.append("&nbsp;&nbsp;")
-    // Copy button
-    sb.append(
-      s"<a href='action:copy:$encodedForUrl' style='display:inline-block;text-decoration:none;"
-    )
-    sb.append(s"padding:5px 14px;background:$btnBg;color:$btnText;")
-    sb.append(
-      s"border:1px solid $btnBorder;border-radius:3px;font-weight:normal;font-size:11pt;'>Copy</a>"
-    )
+    sb.append(actionPill(s"action:copy:$encodedForUrl", "Copy"))
     sb.append("</div></div>")
+  }
+
+  /** Small pill-styled `<a>` button. Shared between the code-block action bar
+    * and the message-bubble copy affordance for consistent affordance. */
+  private def actionPill(href: String, label: String): String = {
+    val bg = UIColors.CodeButton.background
+    val text = UIColors.CodeButton.text
+    val brdr = UIColors.CodeButton.border
+    s"<a href='$href' style='display:inline-block;text-decoration:none;" +
+      s"padding:${UIDesign.Space.sm} ${UIDesign.Space.lg};background:$bg;color:$text;" +
+      s"border:1px solid $brdr;border-radius:${UIDesign.Radius.sm};" +
+      s"font-weight:normal;font-size:${UIDesign.FontSize.base};'>$label</a>"
   }
 
   // Cached compiled patterns for syntax highlighting
@@ -328,12 +315,13 @@ object MarkdownRenderer {
     // Skip separator row (line start+1)
     var i = start + 2
     sb.append(
-      "<table style='border-collapse:collapse;margin:4px 0;table-layout:fixed;width:100%;word-wrap:break-word;'>"
+      s"<table style='border-collapse:collapse;margin:${UIDesign.Space.sm} 0;table-layout:fixed;width:100%;word-wrap:break-word;'>"
     )
     sb.append("<tr>")
     for (cell <- headerCells)
       sb.append(
-        s"<th style='border:1px solid $tableBorder;padding:4px 8px;background:$headerBg;font-size:11pt;text-align:left;'>${processInline(cell)}</th>"
+        s"<th style='border:1px solid $tableBorder;padding:${UIDesign.Space.sm} ${UIDesign.Space.md};" +
+          s"background:$headerBg;font-size:${UIDesign.FontSize.base};text-align:left;'>${processInline(cell)}</th>"
       )
     sb.append("</tr>")
     while (i < lines.length && lines(i).trim.startsWith("|")) {
@@ -341,7 +329,8 @@ object MarkdownRenderer {
       sb.append("<tr>")
       for (cell <- cells)
         sb.append(
-          s"<td style='border:1px solid $tableBorder;padding:4px 8px;font-size:11pt;'>${processInline(cell)}</td>"
+          s"<td style='border:1px solid $tableBorder;padding:${UIDesign.Space.sm} ${UIDesign.Space.md};" +
+            s"font-size:${UIDesign.FontSize.base};'>${processInline(cell)}</td>"
         )
       sb.append("</tr>")
       i += 1
@@ -366,85 +355,149 @@ object MarkdownRenderer {
       // Single-line: $$formula$$
       val formula = first.stripSuffix("$$").trim
       sb.append(
-        s"<div style='text-align:center;margin:6px 0;'>${renderLatex(formula, 18f)}</div>"
+        s"<div style='text-align:center;margin:${UIDesign.Space.md} 0;'>${renderLatex(formula, UIDesign.fp(18f))}</div>"
       )
       start + 1
     } else {
-      // Multi-line: collect until $$
+      // Multi-line: collect until $$, with a cap so a malformed response
+      // (unmatched opening $$) cannot consume the remainder of the message
+      // as a single formula.
       val formulaParts = new StringBuilder
       if (first.nonEmpty) formulaParts.append(first)
       var i = start + 1
-      while (i < lines.length && !lines(i).trim.startsWith("$$")) {
+      val hardStop = math.min(lines.length, start + 1 + maxMultilineFormulaLines)
+      while (i < hardStop && !lines(i).trim.startsWith("$$")) {
         if (formulaParts.nonEmpty) formulaParts.append(" ")
         formulaParts.append(lines(i).trim)
         i += 1
       }
-      sb.append(
-        s"<div style='text-align:center;margin:6px 0;'>${renderLatex(formulaParts.toString, 18f)}</div>"
-      )
-      i + 1 // skip closing $$
+      val foundClose = i < lines.length && lines(i).trim.startsWith("$$")
+      if (foundClose) {
+        sb.append(
+          s"<div style='text-align:center;margin:${UIDesign.Space.md} 0;'>${renderLatex(formulaParts.toString, 18f)}</div>"
+        )
+        i + 1 // skip closing $$
+      } else {
+        // No closing $$ within the cap — emit the consumed lines as literal
+        // text so the rest of the message is still rendered normally.
+        sb.append(s"<div>${escapeHtml("$$")}</div>")
+        for (j <- start + 1 until i) {
+          sb.append(processLine(lines(j)))
+        }
+        i
+      }
     }
   }
 
   private def processLine(line: String): String = {
     if (line.startsWith("### "))
-      s"<h3 style='margin:6px 0 2px;font-size:13pt;'>${processInline(line.drop(4))}</h3>"
+      s"<h3 style='margin:${UIDesign.Space.md} 0 ${UIDesign.Space.xs};font-size:${UIDesign.FontSize.lg};'>${processInline(line.drop(4))}</h3>"
     else if (line.startsWith("## "))
-      s"<h2 style='margin:8px 0 2px;font-size:14pt;'>${processInline(line.drop(3))}</h2>"
+      s"<h2 style='margin:${UIDesign.Space.md} 0 ${UIDesign.Space.xs};font-size:${UIDesign.FontSize.lg};font-weight:bold;'>${processInline(line.drop(3))}</h2>"
     else if (line.startsWith("# "))
-      s"<h1 style='margin:8px 0 4px;font-size:15pt;'>${processInline(line.drop(2))}</h1>"
+      s"<h1 style='margin:${UIDesign.Space.md} 0 ${UIDesign.Space.sm};font-size:${UIDesign.FontSize.xl};'>${processInline(line.drop(2))}</h1>"
     else if (line.startsWith("- "))
-      s"<div style='margin:1px 0;padding-left:12px;'>• ${processInline(line.drop(2))}</div>"
+      s"<div style='margin:1px 0;padding-left:${UIDesign.Space.lg};'>• ${processInline(line.drop(2))}</div>"
     else if (line.matches("""^\d+\.\s.*""")) {
       val content = line.replaceFirst("""^\d+\.\s""", "")
-      s"<div style='margin:1px 0;padding-left:12px;'>${line.takeWhile(_ != ' ')} ${processInline(content)}</div>"
-    } else if (line.trim.isEmpty) "<div style='height:6px;'></div>"
+      s"<div style='margin:1px 0;padding-left:${UIDesign.Space.lg};'>${line.takeWhile(_ != ' ')} ${processInline(content)}</div>"
+    } else if (line.trim.isEmpty) s"<div style='height:${UIDesign.Space.md};'></div>"
     else
       s"<div style='margin:1px 0;line-height:1.4;'>${processInline(line)}</div>"
   }
 
-  /** Process inline formatting: bold, italic, inline code, inline LaTeX math.
-    * NOTE: This uses multiple sequential regex passes. A single-pass state
-    * machine would be faster for very large responses, but the current approach
-    * is simpler and adequate for typical LLM response sizes (<10K chars).
+  /** Process inline formatting in a single pass: inline code, inline LaTeX
+    * math, bold, italic. The scanner walks the string once, emitting either a
+    * ready-made HTML fragment (for code / latex / bold / italic) or an
+    * escaped literal slice (for plain text). Unmatched delimiters fall back
+    * to literal text, mirroring the previous regex-based behavior for inputs
+    * that don't contain inline formatting at all.
     */
   private def processInline(text: String): String = {
-    var result = text
-    // Inline code first — protect contents from other processing
-    result = result.replaceAll("""`([^`]+)`""", "\u0001C$1\u0001c")
-    // Inline LaTeX: $...$ (not $$) — render and protect from HTML escaping
-    val latexRendered = new java.util.concurrent.atomic.AtomicInteger(0)
-    val latexMap = scala.collection.mutable.Map[String, String]()
-    result = inlineLatexPattern.replaceAllIn(
-      result,
-      m => {
-        val formula = m.group(1)
-        val key = s"\u0002L${latexRendered.getAndIncrement()}\u0002"
-        latexMap(key) = renderLatex(formula, 13f)
-        java.util.regex.Matcher.quoteReplacement(key)
+    val out = new StringBuilder(text.length + 16)
+    val literal = new StringBuilder
+    def flushLiteral(): Unit = {
+      if (literal.nonEmpty) {
+        out.append(escapeHtml(literal.toString))
+        literal.setLength(0)
       }
-    )
-    // Bold
-    result = result.replaceAll("""\*\*([\s\S]+?)\*\*""", "\u0001B$1\u0001b")
-    // Italic
-    result = result.replaceAll("""\*([^*]+)\*""", "\u0001I$1\u0001i")
-    result = escapeHtml(result)
-    result = result.replace("\u0001B", "<b>").replace("\u0001b", "</b>")
-    result = result.replace("\u0001I", "<i>").replace("\u0001i", "</i>")
+    }
     val inlineCodeBg = UIColors.inlineCodeBackground
-    result = result
-      .replace(
-        "\u0001C",
-        s"<code style='background:$inlineCodeBg;padding:1px 4px;font-family:$codeFont;font-size:11pt;border-radius:2px;'>"
-      )
-      .replace("\u0001c", "</code>")
-    // Restore LaTeX images (already HTML, must not be escaped)
-    for ((key, html) <- latexMap) result = result.replace(key, html)
-    result
-  }
+    val codeOpen =
+      s"<code style='background:$inlineCodeBg;padding:1px ${UIDesign.Space.sm};font-family:$codeFont;" +
+        s"font-size:${UIDesign.FontSize.base};border-radius:${UIDesign.Radius.sm};'>"
+    val codeClose = "</code>"
 
-  // Match $...$ but not $$ (display math) and not escaped \$
-  private val inlineLatexPattern = """(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)""".r
+    val n = text.length
+    var i = 0
+    while (i < n) {
+      val c = text.charAt(i)
+      c match {
+        case '`' =>
+          val end = text.indexOf('`', i + 1)
+          if (end > i) {
+            flushLiteral()
+            out.append(codeOpen)
+            out.append(escapeHtml(text.substring(i + 1, end)))
+            out.append(codeClose)
+            i = end + 1
+          } else {
+            literal.append(c)
+            i += 1
+          }
+        case '$' if i + 1 < n && text.charAt(i + 1) != '$' &&
+          (i == 0 || text.charAt(i - 1) != '$') =>
+          var j = i + 1
+          var closing = -1
+          while (j < n && closing < 0) {
+            val ch = text.charAt(j)
+            if (ch == '$' && (j + 1 >= n || text.charAt(j + 1) != '$') &&
+              text.charAt(j - 1) != '$') {
+              closing = j
+            } else {
+              j += 1
+            }
+          }
+          if (closing > i + 1) {
+            flushLiteral()
+            out.append(renderLatex(text.substring(i + 1, closing), UIDesign.fp(13f)))
+            i = closing + 1
+          } else {
+            literal.append(c)
+            i += 1
+          }
+        case '*' if i + 1 < n && text.charAt(i + 1) == '*' =>
+          val close = text.indexOf("**", i + 2)
+          if (close > i + 1) {
+            flushLiteral()
+            out.append("<b>")
+            out.append(processInline(text.substring(i + 2, close)))
+            out.append("</b>")
+            i = close + 2
+          } else {
+            literal.append(c)
+            i += 1
+          }
+        case '*' =>
+          val close = text.indexOf('*', i + 1)
+          if (close > i) {
+            flushLiteral()
+            out.append("<i>")
+            out.append(processInline(text.substring(i + 1, close)))
+            out.append("</i>")
+            i = close + 1
+          } else {
+            literal.append(c)
+            i += 1
+          }
+        case _ =>
+          literal.append(c)
+          i += 1
+      }
+    }
+    flushLiteral()
+    out.toString
+  }
 
   /** LRU cache of rendered synthetic images, keyed by synthetic URL for
     * JEditorPane.
@@ -507,6 +560,12 @@ object MarkdownRenderer {
     "assistant.mermaid.disable_subprocess"
   private val maxMermaidChars = 20000
   private val maxMermaidPixels = 8_000_000
+  private val mermaidRenderTimeoutSeconds = 20
+
+  /** Hard cap on how many lines a multi-line `$$...$$` formula may span.
+    * Without this a malformed message (unmatched opening `$$`) would swallow
+    * the remainder of the response as a single formula. */
+  private val maxMultilineFormulaLines = 200
 
   private def isMermaidSubprocessDisabled: Boolean =
     java.lang.Boolean.getBoolean(mermaidDisableSubprocessProp)
@@ -630,15 +689,30 @@ object MarkdownRenderer {
         "transparent"
       ).redirectErrorStream(true).start()
 
-      val finished = process.waitFor(20, TimeUnit.SECONDS)
+      val finished = process.waitFor(mermaidRenderTimeoutSeconds.toLong, TimeUnit.SECONDS)
       if (!finished) {
         process.destroyForcibly()
-        Left("render timed out after 20s")
+        Left(s"render timed out after ${mermaidRenderTimeoutSeconds}s")
       } else {
         val processOutput = {
+          // Cap the read so a pathological mmdc invocation cannot
+          // balloon the JVM heap by streaming unbounded output at us.
+          // The actual payload we care about is a short error message;
+          // anything longer is noise.
+          val cap = 8192
           val in = process.getInputStream
-          try new String(in.readAllBytes(), StandardCharsets.UTF_8).trim
-          finally in.close()
+          try {
+            val buf = new Array[Byte](cap)
+            var total = 0
+            var done = false
+            while (!done && total < cap) {
+              val n = in.read(buf, total, cap - total)
+              if (n < 0) done = true else total += n
+            }
+            new String(buf, 0, total, StandardCharsets.UTF_8).trim
+          } finally {
+            in.close()
+          }
         }
         if (process.exitValue() != 0) {
           val msg =
@@ -699,7 +773,7 @@ object MarkdownRenderer {
       }
     } catch {
       case _: Exception =>
-        s"<i style='color:#666;'>${escapeHtml(formula)}</i>"
+        s"<i style='color:${UIColors.Muted.text};'>${escapeHtml(formula)}</i>"
     }
   }
 

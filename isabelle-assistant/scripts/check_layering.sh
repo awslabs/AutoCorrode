@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 ASSISTANT_SRC="$REPO_ROOT/isabelle-assistant/src"
 ASSISTANT_TOOLS="$REPO_ROOT/isabelle-assistant/src/AssistantTools.scala"
+PROOF_OPS_HANDLER="$REPO_ROOT/isabelle-assistant/src/ProofOpsToolHandler.scala"
+THEORY_NAV_HANDLER="$REPO_ROOT/isabelle-assistant/src/TheoryNavToolHandler.scala"
 IQ_INTEGRATION="$REPO_ROOT/isabelle-assistant/src/IQIntegration.scala"
 THEORY_BROWSER="$REPO_ROOT/isabelle-assistant/src/TheoryBrowserAction.scala"
 MODE="strict"
@@ -56,7 +58,7 @@ if [[ "$MODE" != "strict" && "$MODE" != "report" ]]; then
   exit 2
 fi
 
-for source_file in "$ASSISTANT_TOOLS" "$IQ_INTEGRATION" "$THEORY_BROWSER"; do
+for source_file in "$ASSISTANT_TOOLS" "$PROOF_OPS_HANDLER" "$THEORY_NAV_HANDLER" "$IQ_INTEGRATION" "$THEORY_BROWSER"; do
   if [[ ! -f "$source_file" ]]; then
     echo "ERROR: missing source file: $source_file"
     exit 1
@@ -190,6 +192,68 @@ extract_method() {
   ' "$source_file"
 }
 
+# Whole-file sweep for val-bindings that capture a forbidden symbol by
+# reference. The MCP-only method-body check only scans text inside each
+# method; this catches bypasses like `val f = IQIntegration.verifyProofAsync`
+# at object/class level which could then be called from an MCP-only method
+# via an indirection.
+#
+# We don't have a full Scala AST here — this regex-level sniff is a
+# conservative gate. It deliberately errs on the side of forbidding any
+# val/def/lazy val *definition* (as distinct from a call site) that
+# mentions one of the banned symbols. The current codebase has zero such
+# references, so any future occurrence is almost certainly a genuine
+# bypass or an intentional escape hatch that should be reviewed.
+#
+# Multi-line handling: the file is first flattened through `tr '\n' ' '`
+# into a single line so a binding like
+#
+#   val f =
+#     IQIntegration.verifyProofAsync _
+#
+# still matches the forbidden regex. Single-line diagnostic is recovered
+# by re-running `grep -n` on the original file for the forbidden symbol
+# so the error message points at the real source line.
+check_val_binding_bypasses() {
+  local source_file="$1"
+  local source_label="$2"
+  local forbidden_regex="$3"
+
+  # Combined pattern: `val|def|var` introducer, optional identifier, optional
+  # type annotation, `=`, whitespace, then the forbidden symbol IMMEDIATELY
+  # to the right of `=`. This tight boundary distinguishes a binding from an
+  # ordinary method call: `val f = IQ.foo` matches, but `var x = ""` followed
+  # by a later `IQ.foo(...)` call does not, even after newline flattening.
+  #
+  # The type-annotation segment allows generic brackets (`Option[Foo]`,
+  # `Map[A, B]`, `Option[ Foo.bar.type ]`) by permitting any non-`=`,
+  # non-bracket character inside `[...]` — including whitespace, commas,
+  # and dots. `[^]=]` excludes `=` so we can't greedily swallow the
+  # binding's own `=` if the regex engine decides to be creative.
+  local combined_regex="(private[[:space:]]+|protected[[:space:]]+|implicit[[:space:]]+)*(lazy[[:space:]]+)?(val|def|var)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]]*:[[:space:]]*[A-Za-z_][A-Za-z0-9_.]*(\\[[^]=]*\\])?)?[[:space:]]*=[[:space:]]+(${forbidden_regex})"
+
+  local flattened
+  flattened=$(tr '\n' ' ' < "$source_file")
+
+  # Use `printf '%s\n' | grep` rather than `echo "$flattened" | grep` so that
+  # (a) a flattened file starting with `-n`/`-e` can't be interpreted as an
+  # echo flag, and (b) large flattened payloads survive shells where `echo`
+  # buffers stdin awkwardly. `grep` on a here-string would be nicer, but
+  # plain `/bin/sh` doesn't have `<<<`, and this script is portable to sh.
+  if printf '%s\n' "$flattened" | grep -qE "$combined_regex"; then
+    # Report on the original file so line numbers are meaningful.
+    echo "ERROR: layering violation in $source_label: value binding that captures a forbidden runtime symbol by reference."
+    if command -v rg >/dev/null 2>&1; then
+      rg -n --no-heading --color never "(${forbidden_regex})" "$source_file" || true
+    else
+      grep -n -E "(${forbidden_regex})" "$source_file" || true
+    fi
+    echo "Either delete the binding, route through IQMcpClient, or (if this is a legitimate migration) update this guard explicitly."
+    echo "(Matched against a newline-flattened copy of $source_label, so multi-line bindings cannot bypass this check.)"
+    exit 1
+  fi
+}
+
 check_mcp_only_method() {
   local source_file="$1"
   local source_label="$2"
@@ -217,26 +281,44 @@ check_mcp_only_method() {
   fi
 }
 
+# Dispatcher methods forward to other tool methods rather than calling
+# IQMcpClient directly. They still must avoid the forbidden runtime paths
+# (so bypasses can't hide behind a dispatch), but the required-pattern
+# check is skipped because "dispatches to other execX" is the whole point.
+#
+# Keeping dispatchers in an explicit allowlist (rather than a comment that
+# silently skips them) makes it impossible to demote a genuine MCP-only
+# method to dispatcher-status without touching this file.
+check_dispatcher_method() {
+  local source_file="$1"
+  local source_label="$2"
+  local method_name="$3"
+  local forbidden_regex="$4"
+  local body
+
+  body="$(extract_method "$source_file" "$method_name")"
+
+  if [[ -z "$body" ]]; then
+    echo "ERROR: unable to locate dispatcher method '$method_name' in $source_label"
+    exit 1
+  fi
+
+  if printf '%s\n' "$body" | "${GREP_QUIET[@]}" "$forbidden_regex"; then
+    echo "ERROR: layering violation in dispatcher '$method_name' ($source_label): forbidden execution path."
+    printf '%s\n' "$body" | "${GREP_CMD[@]}" "$forbidden_regex"
+    exit 1
+  fi
+}
+
 run_strict_mcp_guards() {
 assistant_tools_mcp_only_methods=(
-  execReadTheory
-  execListTheories
-  execSearchInTheory
-  execGetGoalState
+  getGoalStateResult
   execGetProofContext
   execFindTheorems
-  execVerifyProof
-  execRunSledgehammer
-  execRunNitpick
-  execRunQuickcheck
   execGetType
   execGetCommandText
-  execExecuteStep
-  execTraceSimplifier
   execGetProofBlock
   execGetContextInfo
-  execSearchAllTheories
-  execGetDependencies
   execGetErrors
   execGetWarnings
   execEditTheory
@@ -256,6 +338,65 @@ for method in "${assistant_tools_mcp_only_methods[@]}"; do
     'IQMcpClient|execExplore'
 done
 
+check_val_binding_bypasses "$ASSISTANT_TOOLS" "AssistantTools.scala" "$assistant_forbidden"
+
+# ProofOpsToolHandler hosts the explore-driven proof-state tools that used
+# to live in AssistantTools. Same layering rules apply.
+proof_ops_mcp_only_methods=(
+  execVerifyProof
+  execRunSledgehammer
+  execRunNitpick
+  execRunQuickcheck
+  execExecuteStep
+  execTraceSimplifier
+)
+
+for method in "${proof_ops_mcp_only_methods[@]}"; do
+  check_mcp_only_method \
+    "$PROOF_OPS_HANDLER" \
+    "ProofOpsToolHandler.scala" \
+    "$method" \
+    "$assistant_forbidden" \
+    'IQMcpClient|execExplore'
+done
+
+check_val_binding_bypasses "$PROOF_OPS_HANDLER" "ProofOpsToolHandler.scala" "$assistant_forbidden"
+
+# TheoryNavToolHandler hosts the read-only theory-navigation tools that used
+# to live in AssistantTools.
+theory_nav_mcp_only_methods=(
+  execReadTheory
+  execListTheories
+  execSearchInTheory
+  execSearchAllTheories
+  execGetDependencies
+)
+
+# Dispatcher methods: forbidden paths still blocked, but no direct
+# IQMcpClient call is required because they delegate to siblings above.
+theory_nav_dispatcher_methods=(
+  execSearchTheories
+)
+
+for method in "${theory_nav_mcp_only_methods[@]}"; do
+  check_mcp_only_method \
+    "$THEORY_NAV_HANDLER" \
+    "TheoryNavToolHandler.scala" \
+    "$method" \
+    "$assistant_forbidden" \
+    'IQMcpClient|execExplore'
+done
+
+for method in "${theory_nav_dispatcher_methods[@]}"; do
+  check_dispatcher_method \
+    "$THEORY_NAV_HANDLER" \
+    "TheoryNavToolHandler.scala" \
+    "$method" \
+    "$assistant_forbidden"
+done
+
+check_val_binding_bypasses "$THEORY_NAV_HANDLER" "TheoryNavToolHandler.scala" "$assistant_forbidden"
+
 theory_browser_mcp_only_methods=(
   theories
   read
@@ -273,6 +414,12 @@ for method in "${theory_browser_mcp_only_methods[@]}"; do
     "$theory_browser_forbidden" \
     'IQMcpClient'
 done
+
+# Note: MenuContext is a legitimate type reference in TheoryBrowserAction
+# (it appears in method signatures). Restrict the val-binding bypass check
+# to the truly forbidden runtime symbols here.
+theory_browser_forbidden_bindings='jEdit\.getBufferManager|getLength\(\)'
+check_val_binding_bypasses "$THEORY_BROWSER" "TheoryBrowserAction.scala" "$theory_browser_forbidden_bindings"
 
 iq_integration_mcp_only_methods=(
   verifyProofAsync
@@ -292,6 +439,8 @@ for method in "${iq_integration_mcp_only_methods[@]}"; do
     "$iq_integration_forbidden" \
     'IQMcpClient'
 done
+
+check_val_binding_bypasses "$IQ_INTEGRATION" "IQIntegration.scala" "$iq_integration_forbidden"
 }
 
 RUNTIME_TOUCHPOINTS_FILE="$(mktemp)"

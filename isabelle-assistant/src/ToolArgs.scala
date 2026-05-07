@@ -47,6 +47,41 @@ private[assistant] object ToolArgs {
     if (trim) limited.trim else limited
   }
 
+  /** Strict sibling of [[safeStringArg]]. Distinguishes the three cases
+    * callers usually want to handle separately:
+    *
+    *   - argument missing entirely => Right("")   (semantically "empty")
+    *   - argument present and string-typed => Right(cleaned value)
+    *   - argument present but a non-string type (number, bool, object, null)
+    *     => Left(explanatory error)
+    *
+    * Use this when the caller needs to produce a specific
+    * "argument X must be a string" message rather than silently coercing.
+    */
+  def safeStringArgEither(
+      args: ResponseParser.ToolArgs,
+      key: String,
+      maxLen: Int = MAX_STRING_ARG_LENGTH,
+      trim: Boolean = true
+  ): Either[String, String] = {
+    args.get(key) match {
+      case None | Some(ResponseParser.NullValue) => Right("")
+      case Some(ResponseParser.StringValue(raw)) =>
+        val cleaned = raw.filter(c => !c.isControl || c == '\n' || c == '\t')
+        val limited = cleaned.take(maxLen)
+        Right(if (trim) limited.trim else limited)
+      case Some(other) =>
+        val typeName = other match {
+          case _: ResponseParser.IntValue     => "integer"
+          case _: ResponseParser.DecimalValue => "number"
+          case _: ResponseParser.BooleanValue => "boolean"
+          case _: ResponseParser.JsonValue    => "object/array"
+          case _                              => "non-string"
+        }
+        Left(s"Error: argument '$key' must be a string, got $typeName")
+    }
+  }
+
   /** Validate a theory name argument.
     *
     * @param args Tool arguments map
@@ -55,11 +90,29 @@ private[assistant] object ToolArgs {
   def safeTheoryArg(
       args: ResponseParser.ToolArgs
   ): Either[String, String] = {
-    val name = safeStringArg(args, "theory", 200)
-    if (name.isEmpty) Left("Error: theory name required")
-    else if (THEORY_REFERENCE_PATTERN.findFirstIn(name).isEmpty)
-      Left(s"Error: invalid theory name '$name'")
-    else Right(name)
+    safeStringArgEither(args, "theory", 200).flatMap { name =>
+      if (name.isEmpty) Left("Error: theory name required")
+      else if (THEORY_REFERENCE_PATTERN.findFirstIn(name).isEmpty)
+        Left(s"Error: invalid theory name '${describeTheoryName(name)}'")
+      else Right(name)
+    }
+  }
+
+  /** Render a theory-name-like argument for inclusion in user-visible error
+    * messages that are later fed back to the LLM. The rejected name may
+    * itself have originated from the LLM, so we strip control characters
+    * (newlines in particular would let the name steer the ongoing tool-use
+    * conversation) and bound the length to a small constant.
+    */
+  def describeTheoryName(name: String): String = {
+    val sanitized = name.map {
+      case c if c == '\n' || c == '\r' || c == '\t' => ' '
+      case c if c.isControl => '?'
+      case c => c
+    }
+    val limit = 80
+    if (sanitized.length <= limit) sanitized
+    else sanitized.take(limit) + "…"
   }
 
   /** Check if a theory name is valid for new file creation (no path separators).
@@ -78,24 +131,23 @@ private[assistant] object ToolArgs {
     * @throws IllegalArgumentException if parameter is present but not convertible to integer
     */
   def optionalIntArg(args: ResponseParser.ToolArgs, key: String): Option[Int] =
-    args.get(key).map {
+    args.get(key).flatMap {
+      case ResponseParser.NullValue => None
       case ResponseParser.DecimalValue(d) if !d.isWhole =>
         throw new IllegalArgumentException(
           s"Parameter '$key' must be an integer, got decimal value: $d"
         )
-      case ResponseParser.DecimalValue(d) => d.toInt
-      case ResponseParser.IntValue(i)     => i
+      case ResponseParser.DecimalValue(d) => Some(d.toInt)
+      case ResponseParser.IntValue(i)     => Some(i)
       case ResponseParser.StringValue(s) =>
-        scala.util.Try(s.toInt).getOrElse(
-          throw new IllegalArgumentException(
-            s"Parameter '$key' must be an integer, got: '$s'"
+        Some(
+          scala.util.Try(s.toInt).getOrElse(
+            throw new IllegalArgumentException(
+              s"Parameter '$key' must be an integer, got: '$s'"
+            )
           )
         )
       case ResponseParser.BooleanValue(_) | ResponseParser.JsonValue(_) =>
-        throw new IllegalArgumentException(
-          s"Parameter '$key' must be an integer"
-        )
-      case ResponseParser.NullValue =>
         throw new IllegalArgumentException(
           s"Parameter '$key' must be an integer"
         )

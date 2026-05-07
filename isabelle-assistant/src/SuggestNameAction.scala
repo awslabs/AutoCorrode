@@ -6,7 +6,6 @@ package isabelle.assistant
 import isabelle._
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.buffer.JEditBuffer
-import java.util.concurrent.{CountDownLatch, TimeUnit}
 
 /** Suggests descriptive names for Isabelle definitions, lemmas, and theorems.
   * Uses LLM with context including command body, type, existing names in scope,
@@ -30,65 +29,60 @@ object SuggestNameAction {
   private def suggestNameInternal(view: View): Unit = {
     val buffer = view.getBuffer
     val offset = view.getTextArea.getCaretPosition
+    AssistantDockable.setStatus("Gathering context…")
 
-    // Get command text and keyword
-    val commandTextOpt = CommandExtractor.getCommandAtOffset(buffer, offset)
-    val keywordOpt = CommandExtractor.getCommandKeyword(buffer, offset)
+    val _ = Isabelle_Thread.fork(name = "assistant-suggest-name") {
+      try {
+        // Command resolution goes through I/Q MCP, so it must live on this
+        // background thread — never call it from the EDT or jEdit freezes.
+        val commandTextOpt = CommandExtractor.getCommandAtOffset(buffer, offset)
+        val keywordOpt = CommandExtractor.getCommandKeyword(buffer, offset)
 
-    (commandTextOpt, keywordOpt) match {
-      case (None, _) =>
-        AssistantDockable.respondInChat("No command at cursor position.")
-      case (_, None) =>
-        AssistantDockable.respondInChat("Could not determine command type.")
-      case (Some(commandText), Some(keyword))
-          if !nameableKeywords.contains(keyword) =>
-        AssistantDockable.respondInChat(
-          s"Command type '$keyword' does not require naming."
-        )
-      case (Some(commandText), Some(keyword)) =>
-        AssistantDockable.setStatus("Gathering context...")
-
-        val _ = Isabelle_Thread.fork(name = "assistant-suggest-name") {
-          try {
-            // Gather context on background thread
-            val context =
-              gatherContext(buffer, offset, commandText)
-
-            // Build prompt
+        (commandTextOpt, keywordOpt) match {
+          case (None, _) =>
+            GUI_Thread.later {
+              AssistantDockable.respondInChat(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            }
+          case (_, None) =>
+            GUI_Thread.later {
+              AssistantDockable.respondInChat("Could not determine command type.")
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            }
+          case (Some(_), Some(keyword)) if !nameableKeywords.contains(keyword) =>
+            GUI_Thread.later {
+              AssistantDockable.respondInChat(
+                s"Command type '$keyword' does not require naming."
+              )
+              AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            }
+          case (Some(commandText), Some(keyword)) =>
+            val context = gatherContext(buffer, offset, commandText)
             val subs = buildPromptSubstitutions(commandText, keyword, context)
             val prompt = PromptLoader.load("suggest_name.md", subs)
 
-            // Call LLM
-            AssistantDockable.setStatus("Generating name suggestions...")
+            AssistantDockable.setStatus("Generating name suggestions…")
             val response = BedrockClient.invokeInContext(prompt)
-
-            // Parse suggestions
             val suggestions = parseNameSuggestions(response)
 
             GUI_Thread.later {
               if (suggestions.isEmpty) {
-                AssistantDockable.respondInChat(
-                  "No name suggestions generated."
-                )
+                AssistantDockable.respondInChat("No name suggestions generated.")
               } else {
-                displaySuggestions(
-                  view,
-                  keyword,
-                  suggestions
-                )
+                displaySuggestions(view, keyword, suggestions)
               }
               AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
             }
-          } catch {
-            case ex: Exception =>
-              GUI_Thread.later {
-                AssistantDockable.respondInChat(
-                  s"Error: ${ErrorHandler.makeUserFriendly(ex.getMessage, "suggest-name")}"
-                )
-                AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
-              }
-          }
         }
+      } catch {
+        case ex: Exception =>
+          GUI_Thread.later {
+            AssistantDockable.respondInChat(
+              s"Error: ${ErrorHandler.makeUserFriendly(ex.getMessage, "suggest-name")}"
+            )
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+          }
+      }
     }
   }
 
@@ -107,33 +101,29 @@ object SuggestNameAction {
     // Extract current name if present
     val currentName = ExplainAction.extractName(commandText)
 
-    // Get existing names in scope from PIDE markup
-    val existingNames = if (javax.swing.SwingUtilities.isEventDispatchThread) {
-      Output.warning(
-        "[Assistant] gatherContext called from GUI thread — skipping entity extraction"
-      )
-      List.empty[String]
-    } else {
-      val latch = new CountDownLatch(1)
-      @volatile var entities: List[(String, String)] = Nil
-
-      GUI_Thread.later {
-        entities = ContextFetcher.extractEntities(buffer, offset)
-        latch.countDown()
-      }
-
-      latch.await(2000, TimeUnit.MILLISECONDS)
-
-      // Extract unique names, filtering out meta-level constants
-      entities
-        .map(_._2)
-        .distinct
-        .filter(n =>
-          !n.startsWith("Pure.") && !n.startsWith("HOL.") &&
-            n != "Trueprop" && !n.contains(".")
+    // extractEntities calls the I/Q MCP backplane synchronously, so it
+    // must stay on this background thread. Dispatching via GUI_Thread.later
+    // used to freeze jEdit for several seconds while waiting on the HTTP
+    // response — the other context-menu actions (e.g. Generate Tests)
+    // avoid this by calling ContextFetcher directly on the fork, same as
+    // we do here.
+    val existingNames =
+      if (javax.swing.SwingUtilities.isEventDispatchThread) {
+        Output.warning(
+          "[Assistant] gatherContext called from GUI thread — skipping entity extraction"
         )
-        .sorted
-    }
+        List.empty[String]
+      } else {
+        ContextFetcher
+          .extractEntities(buffer, offset)
+          .map(_._2)
+          .distinct
+          .filter(n =>
+            !n.startsWith("Pure.") && !n.startsWith("HOL.") &&
+              n != "Trueprop" && !n.contains(".")
+          )
+          .sorted
+      }
 
     // Get theory name from buffer header parsing
     val theoryName = TheoryMetadata.theoryName(buffer)
@@ -175,7 +165,7 @@ object SuggestNameAction {
     subs
   }
 
-  private def parseNameSuggestions(response: String): List[String] = {
+  private[assistant] def parseNameSuggestions(response: String): List[String] = {
     val namePattern = """NAME:\s*([a-zA-Z][a-zA-Z0-9_']*)""".r
     namePattern
       .findAllMatchIn(response)

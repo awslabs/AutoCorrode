@@ -19,29 +19,39 @@ object TidyAction {
   def tidy(view: View): Unit = {
     val buffer = view.getBuffer
     val textArea = view.getTextArea
+    val offset = textArea.getCaretPosition
     val selection = textArea.getSelectedText
+    // Selection text is EDT-safe; command resolution and goal state are not.
+    // Capture EDT-only values here and resolve everything else on the
+    // background thread.
+    val initialCode =
+      if (selection != null && selection.trim.nonEmpty) selection else ""
 
-    val code =
-      if (selection != null && selection.trim.nonEmpty) selection
-      else
-        CommandExtractor
-          .getCommandAtOffset(buffer, textArea.getCaretPosition)
-          .getOrElse("")
+    AssistantDockable.setBadge(VerificationBadge.Verifying)
+    AssistantDockable.setStatus("Tidying code…")
 
-    if (code.isEmpty) {
-      ChatAction.addResponse(
-        "No code to tidy. Select text or place cursor on a command."
-      )
-    } else {
-      val offset = textArea.getCaretPosition
-      val hasCommand =
-        CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
-      val goalState = GoalExtractor.getGoalState(buffer, offset)
+    val _ = Isabelle_Thread.fork(name = "assistant-tidy") {
+      try {
+        val code =
+          if (initialCode.nonEmpty) initialCode
+          else
+            CommandExtractor
+              .getCommandAtOffset(buffer, offset)
+              .getOrElse("")
 
-      AssistantDockable.setBadge(VerificationBadge.Verifying)
+        if (code.isEmpty) {
+          GUI_Thread.later {
+            AssistantDockable.setBadge(VerificationBadge.Unverified)
+            AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+            ChatAction.addResponse(
+              "No code to tidy. Select text or place cursor on a command."
+            )
+          }
+        } else {
+          val hasCommand =
+            CommandExtractor.getCommandAtOffset(buffer, offset).isDefined
+          val goalState = GoalExtractor.getGoalState(buffer, offset)
 
-      val _ = Isabelle_Thread.fork(name = "assistant-tidy") {
-        try {
           val bundle =
             ProofContextSupport.collect(
               view,
@@ -88,13 +98,13 @@ object TidyAction {
               showResult(view, tidied, VerificationBadge.Unverified)
             }
           }
-        } catch {
-          case ex: Exception =>
-            GUI_Thread.later {
-              AssistantDockable.setStatus("Error: " + ex.getMessage)
-              GUI.error_dialog(view, "Tidy Error", ex.getMessage)
-            }
         }
+      } catch {
+        case ex: Exception =>
+          GUI_Thread.later {
+            AssistantDockable.setStatus("Error: " + ex.getMessage)
+            GUI.error_dialog(view, "Tidy Error", ex.getMessage)
+          }
       }
     }
   }

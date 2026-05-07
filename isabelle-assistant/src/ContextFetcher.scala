@@ -22,7 +22,7 @@ object ContextFetcher {
     */
   def getContext(view: View, timeoutMs: Long = 3000): Option[String] = {
     if (SwingUtilities.isEventDispatchThread) {
-      Output.warning(
+      ErrorHandler.safeWarn(
         "[Assistant] ContextFetcher.getContext called from GUI thread — returning None to avoid deadlock"
       )
       return None
@@ -42,20 +42,33 @@ object ContextFetcher {
     else fetchDefinitionsForNames(view, names, timeoutMs)
   }
 
-  /** Extract entity-like names near cursor via goal/context introspection. */
+  /** Extract entity-like names near cursor via goal/context introspection.
+    *
+    * Must NOT be called from the GUI thread — goes through the I/Q MCP
+    * backplane, which does a synchronous HTTP call. Running it on the EDT
+    * freezes jEdit; in that case this returns `Nil` and logs a warning
+    * rather than deadlocking the UI.
+    */
   def extractEntities(buffer: JEditBuffer, offset: Int): List[(String, String)] = {
-    GoalExtractor
-      .analyzeGoal(buffer, offset)
-      .map { analysis =>
-        val constants =
-          analysis.constants
-            .filterNot(isMetaLevel)
-            .distinct
-            .map(Markup.CONSTANT -> _)
-        val free = analysis.freeVars.distinct.map(Markup.FREE -> _)
-        (constants ++ free).distinct
-      }
-      .getOrElse(Nil)
+    if (SwingUtilities.isEventDispatchThread) {
+      ErrorHandler.safeWarn(
+        "[Assistant] ContextFetcher.extractEntities called from GUI thread — returning Nil to avoid freeze"
+      )
+      Nil
+    } else {
+      GoalExtractor
+        .analyzeGoal(buffer, offset)
+        .map { analysis =>
+          val constants =
+            analysis.constants
+              .filterNot(isMetaLevel)
+              .distinct
+              .map(Markup.CONSTANT -> _)
+          val free = analysis.freeVars.distinct.map(Markup.FREE -> _)
+          (constants ++ free).distinct
+        }
+        .getOrElse(Nil)
+    }
   }
 
   /** Fetch definitions for a specific list of names via I/Q get_definitions.
@@ -67,7 +80,7 @@ object ContextFetcher {
       timeoutMs: Long = 3000
   ): Option[String] = {
     if (SwingUtilities.isEventDispatchThread) {
-      Output.warning(
+      ErrorHandler.safeWarn(
         "[Assistant] fetchDefinitionsForNames called from GUI thread — returning None"
       )
       return None

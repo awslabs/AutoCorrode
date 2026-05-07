@@ -13,6 +13,10 @@ import java.io.StringWriter
  * Supports only Anthropic Claude models. The Assistant enforces this requirement
  * via BedrockClient.requireAnthropicModel() which rejects non-Anthropic models
  * before payload construction.
+ *
+ * Payloads deliberately omit `temperature`: newer Claude models (Opus 4.7+)
+ * reject the deprecated field, and earlier models default sensibly in its
+ * absence.
  */
 object PayloadBuilder {
   private val jsonFactory = new JsonFactory()
@@ -24,15 +28,13 @@ object PayloadBuilder {
    *
    * @param systemPrompt The system prompt
    * @param messages The conversation history as (role, content) pairs
-   * @param temperature The sampling temperature (0.0-1.0)
    * @param maxTokens Maximum tokens to generate
    * @return JSON payload string
    */
-  def buildChatPayload(systemPrompt: String, messages: List[(String, String)], temperature: Double, maxTokens: Int): String = {
+  def buildChatPayload(systemPrompt: String, messages: List[(String, String)], maxTokens: Int): String = {
     writeJson { g =>
       g.writeStringField("anthropic_version", "bedrock-2023-05-31")
       g.writeNumberField("max_tokens", maxTokens)
-      g.writeNumberField("temperature", temperature)
       g.writeStringField("system", systemPrompt)
       g.writeArrayFieldStart("messages")
       for ((role, content) <- messages) {
@@ -45,43 +47,16 @@ object PayloadBuilder {
     }
   }
 
-  // --- Single prompt payloads ---
-
-  /**
-   * Build request payload for single prompt interactions (Anthropic only).
-   *
-   * @param prompt The complete prompt text
-   * @param temperature The sampling temperature (0.0-1.0)
-   * @param maxTokens Maximum tokens to generate
-   * @param systemPrompt Optional system prompt
-   * @return JSON payload string
-   */
-  def buildPayload(prompt: String, temperature: Double, maxTokens: Int, systemPrompt: Option[String] = None): String = {
-    writeJson { g =>
-      g.writeStringField("anthropic_version", "bedrock-2023-05-31")
-      g.writeNumberField("max_tokens", maxTokens)
-      g.writeNumberField("temperature", temperature)
-      systemPrompt.filter(_.nonEmpty).foreach(s => g.writeStringField("system", s))
-      g.writeArrayFieldStart("messages")
-      g.writeStartObject()
-      g.writeStringField("role", "user")
-      g.writeStringField("content", prompt)
-      g.writeEndObject()
-      g.writeEndArray()
-    }
-  }
-
   // --- Anthropic tool-use payloads ---
 
   /** Build Anthropic payload with tools. Messages may contain structured content (JSON arrays). */
   def buildAnthropicToolPayload(
     systemPrompt: String, messages: List[(String, String)],
-    temperature: Double, maxTokens: Int
+    maxTokens: Int
   ): String = {
     writeJson { g =>
       g.writeStringField("anthropic_version", "bedrock-2023-05-31")
       g.writeNumberField("max_tokens", maxTokens)
-      g.writeNumberField("temperature", temperature)
       g.writeStringField("system", systemPrompt)
       AssistantTools.writeFilteredToolsJson(g)
       g.writeArrayFieldStart("messages")
@@ -104,12 +79,11 @@ object PayloadBuilder {
     * Used by planning sub-agents to prevent write operations and recursion. */
   def buildPlanningAgentToolPayload(
     systemPrompt: String, messages: List[(String, String)],
-    temperature: Double, maxTokens: Int
+    maxTokens: Int
   ): String = {
     writeJson { g =>
       g.writeStringField("anthropic_version", "bedrock-2023-05-31")
       g.writeNumberField("max_tokens", maxTokens)
-      g.writeNumberField("temperature", temperature)
       g.writeStringField("system", systemPrompt)
       AssistantTools.writePlanningToolsJson(g)
       g.writeArrayFieldStart("messages")
@@ -171,12 +145,11 @@ object PayloadBuilder {
   def buildAnthropicStructuredPayload(
     systemPrompt: String, messages: List[(String, String)],
     schema: StructuredResponseSchema,
-    temperature: Double, maxTokens: Int
+    maxTokens: Int
   ): String = {
     writeJson { g =>
       g.writeStringField("anthropic_version", "bedrock-2023-05-31")
       g.writeNumberField("max_tokens", maxTokens)
-      g.writeNumberField("temperature", temperature)
       if (systemPrompt.nonEmpty) g.writeStringField("system", systemPrompt)
       // Single synthetic tool from schema
       g.writeArrayFieldStart("tools")

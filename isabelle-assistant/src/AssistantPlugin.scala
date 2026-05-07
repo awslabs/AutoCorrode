@@ -9,12 +9,12 @@ import org.gjt.sp.jedit.{EBMessage, EBPlugin}
 /** jEdit plugin lifecycle: starts/stops Assistant services and cleans up resources. */
 class AssistantPlugin extends EBPlugin {
   override def start(): Unit = {
-    Output.writeln("Isabelle Assistant starting...")
+    Output.writeln("Isabelle Assistant starting…")
     IQAvailable.startHeartbeat()
   }
 
   override def stop(): Unit = {
-    Output.writeln("Isabelle Assistant stopping...")
+    Output.writeln("Isabelle Assistant stopping…")
     IQAvailable.stopHeartbeat()
     AssistantDockable.shutdown()
     ToolPermissions.clearSession()

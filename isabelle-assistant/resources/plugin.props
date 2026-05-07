@@ -20,16 +20,18 @@ options.assistant-tool-permissions-options.code=new isabelle.assistant.Assistant
 
 # Menu actions
 plugin.isabelle.assistant.AssistantPlugin.menu.label=Isabelle Assistant
-plugin.isabelle.assistant.AssistantPlugin.menu=assistant-dockable assistant-suggest assistant-explain assistant-sledgehammer
+plugin.isabelle.assistant.AssistantPlugin.menu=assistant-dockable assistant-suggest assistant-suggest-name assistant-explain assistant-sledgehammer
 
 # Action labels
 assistant-suggest.label=Assistant: Suggest Proof Step
+assistant-suggest-name.label=Assistant: Suggest Name
 assistant-explain.label=Assistant: Explain Code
 assistant-sledgehammer.label=Assistant: Run Sledgehammer
 assistant-focus-chat.label=Assistant: Focus Chat Input
 
 # Keyboard shortcuts (CS = Ctrl+Shift on Linux/Windows, Cmd+Shift on macOS)
 assistant-suggest.shortcut=CS+P
+assistant-suggest-name.shortcut=CS+N
 assistant-explain.shortcut=CS+E
 assistant-sledgehammer.shortcut=CS+H
 assistant-focus-chat.shortcut=CS+C

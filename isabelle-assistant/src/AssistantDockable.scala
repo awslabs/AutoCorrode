@@ -12,8 +12,7 @@ import javax.swing.{
   JOptionPane,
   JPanel,
   JScrollPane,
-  JTextArea,
-  JWindow
+  JTextArea
 }
 import javax.swing.event.{HyperlinkEvent, HyperlinkListener}
 
@@ -26,49 +25,37 @@ import org.gjt.sp.jedit.View
   * thread-safe methods for updating the UI from background threads.
   */
 object AssistantDockable {
-  private val insertActions =
-    new java.util.concurrent.ConcurrentHashMap[String, () => Unit]()
-  private val insertActionOrder =
-    new java.util.concurrent.ConcurrentLinkedDeque[String]()
-  private val insertActionsLock = new Object()
-  private val maxInsertActions = AssistantConstants.MAX_INSERT_ACTIONS
-  @volatile private var _cancelled = false
-  @volatile private var _busy = false
-  @volatile private var _busyStartTime = 0L
+  /** Aggregate dockable-wide state: cancellation flag, busy flag, and the
+    * wall-clock time the current busy window started. Held in a single
+    * AtomicReference so transitions are atomic and cross-thread readers
+    * cannot observe inconsistent combinations.
+    */
+  private[assistant] case class BusyState(cancelled: Boolean, busy: Boolean, busyStartMs: Long)
+  private val busyState = new java.util.concurrent.atomic.AtomicReference[BusyState](
+    BusyState(cancelled = false, busy = false, busyStartMs = 0L)
+  )
 
-  def isCancelled: Boolean = _cancelled
+  private[assistant] def currentBusyState: BusyState = busyState.get()
+
+  def isCancelled: Boolean = busyState.get().cancelled
+  def isBusy: Boolean = busyState.get().busy
+  def busyStartMs: Long = busyState.get().busyStartMs
 
   def cancel(): Unit = {
-    _cancelled = true
-    _busy = false
+    val _ = busyState.updateAndGet(s => s.copy(cancelled = true, busy = false))
     setStatus(AssistantConstants.STATUS_CANCELLED)
   }
 
-  def resetCancel(): Unit = { _cancelled = false }
-
-  /** Clear all registered insert actions. Thread-safe with atomic clear. */
-  def clearInsertActions(): Unit = insertActionsLock.synchronized {
-    insertActions.clear()
-    insertActionOrder.clear()
+  def resetCancel(): Unit = {
+    val _ = busyState.updateAndGet(_.copy(cancelled = false))
   }
 
-  /** Register an insert action and return its ID for use in hyperlinks.
-    * Synchronized to ensure HashMap and Deque operations are atomic.
-    */
+  /** Clear all registered insert actions. Thread-safe with atomic clear. */
+  def clearInsertActions(): Unit = AssistantInsertRegistry.clear()
+
+  /** Register an insert action and return its ID for use in hyperlinks. */
   def registerAction(action: () => Unit): String =
-    insertActionsLock.synchronized {
-      val id = java.util.UUID.randomUUID().toString.take(8)
-      insertActions.put(id, action)
-      insertActionOrder.addLast(id)
-      // Evict oldest entries if we exceed the limit
-      while (insertActions.size > maxInsertActions) {
-        val oldest = insertActionOrder.pollFirst()
-        if (oldest != null) {
-          val _ = insertActions.remove(oldest)
-        }
-      }
-      id
-    }
+    AssistantInsertRegistry.register(action)
 
   /** Add a chat response with optional clickable insert link */
   def respondInChat(
@@ -93,11 +80,22 @@ object AssistantDockable {
 
   def setStatus(status: AssistantStatus): Unit = {
     val statusText = status.text
-    val wasBusy = _busy
-    _busy =
-      statusText != AssistantConstants.STATUS_READY && statusText != AssistantConstants.STATUS_CANCELLED && !statusText
-        .startsWith("Error")
-    if (_busy && !wasBusy) _busyStartTime = System.currentTimeMillis()
+    val now = System.currentTimeMillis()
+    val nowBusy =
+      statusText != AssistantConstants.STATUS_READY &&
+        statusText != AssistantConstants.STATUS_CANCELLED &&
+        !statusText.startsWith("Error")
+    val _ = busyState.updateAndGet { prev =>
+      // Preserve the previous `busyStartMs` when transitioning to idle:
+      // the field is only read while `busy` is true, so retaining it
+      // removes a cosmetic ABA window where a quick busy→idle→busy
+      // cycle could briefly surface `elapsed = now - 0`.
+      val startMs =
+        if (nowBusy && !prev.busy) now
+        else if (nowBusy) prev.busyStartMs
+        else prev.busyStartMs
+      prev.copy(busy = nowBusy, busyStartMs = startMs)
+    }
     AssistantEventBus.publish(AssistantEvent.StatusUpdate(status))
   }
 
@@ -110,19 +108,64 @@ object AssistantDockable {
   def refreshModelLabel(): Unit =
     AssistantEventBus.publish(AssistantEvent.ModelLabelRefresh())
 
+  /** Allow-list dispatcher for hyperlinks emitted inside the chat panel.
+    * `action:insert:<id>` fires a previously registered insert action;
+    * `action:copy:<urlencoded-text>` copies the decoded text to the
+    * system clipboard. Every other scheme — including `file:`,
+    * `http(s):`, `mailto:`, `javascript:` — is refused and logged.
+    * Extracted from the Swing listener for testability without a live
+    * JEditorPane.
+    *
+    * @return true when the descriptor matched a supported action,
+    *         false otherwise (including null/empty input). */
+  private[assistant] def dispatchHyperlink(desc: String): Boolean = {
+    if (desc == null || desc.isEmpty) false
+    else if (desc.startsWith("action:insert:")) {
+      val id = desc.stripPrefix("action:insert:")
+      AssistantInsertRegistry.lookup(id).foreach(_())
+      true
+    } else if (desc.startsWith("action:copy:")) {
+      val encoded = desc.stripPrefix("action:copy:")
+      try {
+        val text = java.net.URLDecoder.decode(encoded, "UTF-8")
+        val clipboard =
+          java.awt.Toolkit.getDefaultToolkit.getSystemClipboard
+        clipboard.setContents(
+          new java.awt.datatransfer.StringSelection(text),
+          null
+        )
+        true
+      } catch {
+        case _: IllegalArgumentException =>
+          ErrorHandler.safeWarn(
+            s"[Assistant] Ignoring copy link with malformed URL-encoded payload"
+          )
+          false
+        case _: LinkageError =>
+          // No AWT at all (obscure classloader setups). Treat as a
+          // successful dispatch for routing purposes so callers can
+          // distinguish from "rejected scheme".
+          true
+        case _: java.awt.HeadlessException =>
+          // Headless JVM (tests, CI). Same treatment as above.
+          true
+      }
+    } else {
+      ErrorHandler.safeWarn(
+        s"[Assistant] Ignoring hyperlink with unsupported scheme: ${desc.take(64)}"
+      )
+      false
+    }
+  }
+
   /** Global teardown hook used from plugin stop to avoid leaked dockable
     * state/subscriptions.
     */
   def shutdown(): Unit = {
-    // Notify bus that dockable is effectively dead by pushing cancelled status?
-    // In event-bus architecture, instances clean themselves up. We just clear
-    // the static state actions.
-    synchronized {
-      clearInsertActions()
-      _cancelled = false
-      _busy = false
-      _busyStartTime = 0L
-    }
+    // Instances clean themselves up via the event bus; just reset
+    // the shared static state.
+    clearInsertActions()
+    busyState.set(BusyState(cancelled = false, busy = false, busyStartMs = 0L))
   }
 }
 
@@ -166,12 +209,11 @@ class AssistantDockable(view: View, position: String)
   @volatile private var welcomeShown = false
 
   // Input history navigation
-  private var inputHistory: List[String] = Nil       // Oldest → newest
-  private var inputHistoryIndex: Int = -1             // -1 = not browsing
-  private var savedDraft: String = ""                 // Draft saved when user starts browsing
+  private val inputHistory = new InputHistoryBuffer()
   @volatile private var lastEscapeTime: Long = 0L     // For double-tap Escape
 
   // UI Components
+  private val badgeWidget = new VerificationBadge.BadgeWidget()
   private val badgeContainer = createBadgeContainer()
   private val htmlPane = createHtmlPane()
   private val cardLayout = new CardLayout()
@@ -183,10 +225,29 @@ class AssistantDockable(view: View, position: String)
   private val topPanel = createTopPanel()
   private val (chatInput, sendButton, inputPanel) = createInputPanel()
 
-  // Completion popup state
-  private var completionWindow: Option[JWindow] = None
-  private var completionList: Option[javax.swing.JList[String]] = None
-  private var filteredCompletions: Array[String] = Array.empty
+  // Spinner frames: cycled on a Swing Timer. Repaints only the status label
+  // text so it is cheap even at ~100 ms intervals. The Braille glyphs look
+  // great when the label's font can render them, but on stripped-down
+  // environments they come out as tofu boxes — fall back to an ASCII
+  // spinner when the active font lacks Braille coverage.
+  private val BrailleSpinnerFrames = Array("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+  private val AsciiSpinnerFrames   = Array("|", "/", "-", "\\")
+  private val SpinnerFrames: Array[String] = {
+    try {
+      val font = javax.swing.UIManager.getFont("Label.font")
+      // canDisplayUpTo returns -1 when every code point fits.
+      if (font != null && font.canDisplayUpTo("⠋") == -1) BrailleSpinnerFrames
+      else AsciiSpinnerFrames
+    } catch {
+      case _: Throwable => AsciiSpinnerFrames
+    }
+  }
+  @volatile private var spinnerFrame: Int = 0
+  @volatile private var lastStatusText: String = AssistantConstants.STATUS_READY
+  private val spinnerTimer = new javax.swing.Timer(100, _ => {
+    spinnerFrame = (spinnerFrame + 1) % SpinnerFrames.length
+    updateStatus(lastStatusText)
+  })
 
   // Initialize UI
   initializeUI()
@@ -204,6 +265,7 @@ class AssistantDockable(view: View, position: String)
         javax.swing.UIManager.getColor("Separator.foreground")
       )
     )
+    container.add(badgeWidget, BorderLayout.CENTER)
     container
   }
 
@@ -214,23 +276,8 @@ class AssistantDockable(view: View, position: String)
     pane.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, true)
     pane.addHyperlinkListener(new HyperlinkListener {
       def hyperlinkUpdate(e: HyperlinkEvent): Unit = {
-        if (e.getEventType == HyperlinkEvent.EventType.ACTIVATED) {
-          val desc = e.getDescription
-          if (desc != null && desc.startsWith("action:insert:")) {
-            val id = desc.stripPrefix("action:insert:")
-            val action = AssistantDockable.insertActions.get(id)
-            if (action != null) action()
-          } else if (desc != null && desc.startsWith("action:copy:")) {
-            val encoded = desc.stripPrefix("action:copy:")
-            val text = java.net.URLDecoder.decode(encoded, "UTF-8")
-            val clipboard =
-              java.awt.Toolkit.getDefaultToolkit.getSystemClipboard
-            clipboard.setContents(
-              new java.awt.datatransfer.StringSelection(text),
-              null
-            )
-          }
-        }
+        if (e.getEventType == HyperlinkEvent.EventType.ACTIVATED)
+          val _ = AssistantDockable.dispatchHyperlink(e.getDescription)
       }
     })
     pane
@@ -252,10 +299,12 @@ class AssistantDockable(view: View, position: String)
   private def createStatusLabels(): (JLabel, JLabel) = {
     val iqStatus = new JLabel("I/Q: Unknown")
     iqStatus.setOpaque(true)
-    iqStatus.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4))
+    iqStatus.setBorder(BorderFactory.createEmptyBorder(UIDesign.sp(2), UIDesign.sp(4), UIDesign.sp(2), UIDesign.sp(4)))
+    iqStatus.setToolTipText("Click to view assistant capabilities and setup")
+    iqStatus.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
 
-    val model = new JLabel("Model: Loading...")
-    model.setBorder(BorderFactory.createEmptyBorder(2, 4, 2, 4))
+    val model = new JLabel("Model: Loading…")
+    model.setBorder(BorderFactory.createEmptyBorder(UIDesign.sp(2), UIDesign.sp(4), UIDesign.sp(2), UIDesign.sp(4)))
 
     (iqStatus, model)
   }
@@ -265,15 +314,15 @@ class AssistantDockable(view: View, position: String)
     */
   private def styleTopButton(btn: JButton): Unit = {
     btn.setFocusPainted(true)
-    btn.setFont(btn.getFont.deriveFont(11f))
+    btn.setFont(btn.getFont.deriveFont(UIDesign.fp(11f)))
     btn.setBorder(
       BorderFactory.createCompoundBorder(
         BorderFactory.createLineBorder(
           java.awt.Color.decode(UIColors.TopButton.border),
-          1,
+          UIDesign.sp(1),
           true
         ),
-        BorderFactory.createEmptyBorder(2, 8, 2, 8)
+        BorderFactory.createEmptyBorder(UIDesign.sp(2), UIDesign.sp(8), UIDesign.sp(2), UIDesign.sp(8))
       )
     )
     btn.setBackground(java.awt.Color.decode(UIColors.TopButton.background))
@@ -329,10 +378,13 @@ class AssistantDockable(view: View, position: String)
     input.setLineWrap(true)
     input.setWrapStyleWord(true)
     input.setFont(javax.swing.UIManager.getFont("TextField.font"))
-    input.setBorder(BorderFactory.createEmptyBorder(8, 12, 8, 40)) // Right padding for send button
+    // Right padding leaves room for the send-button overlay; other sides are grid-aligned.
+    input.setBorder(BorderFactory.createEmptyBorder(
+      UIDesign.sp(8), UIDesign.sp(12), UIDesign.sp(8), UIDesign.sp(40)
+    ))
     input.setBackground(Color.decode(UIColors.ChatInput.background))
 
-    // Placeholder label overlay (shows "Ask a question..." when empty)
+    // Placeholder label overlay (shows "Ask a question…" when empty)
     val placeholder = new JLabel(AssistantConstants.CHAT_INPUT_PLACEHOLDER)
     placeholder.setFont(input.getFont)
     placeholder.setForeground(Color.decode(UIColors.ChatInput.placeholder))
@@ -355,44 +407,62 @@ class AssistantDockable(view: View, position: String)
         placeholder.setVisible(input.getText.isEmpty)
     })
 
-    // Modern circular send button with Unicode arrow (➤)
-    val send = new JButton("➤")
-    send.setToolTipText("Send message (Enter)")
-    send.setFont(send.getFont.deriveFont(java.awt.Font.BOLD, 16f))
-    send.setPreferredSize(new java.awt.Dimension(32, 32))
-    send.setMinimumSize(new java.awt.Dimension(32, 32))
-    send.setMaximumSize(new java.awt.Dimension(32, 32))
+    // Vector-painted send button: a right-pointing triangle on a round pill,
+    // anti-aliased via Graphics2D so it's crisp at any DPI. Avoids the
+    // tofu/glyph-rendering risks of relying on a Unicode arrow character.
+    val sendSize = UIDesign.sp(28)
+    val send = new JButton() {
+      private var hovered = false
+      setHovered(false)
+      private def setHovered(b: Boolean): Unit = { hovered = b; repaint() }
+      addMouseListener(new java.awt.event.MouseAdapter {
+        override def mouseEntered(e: java.awt.event.MouseEvent): Unit = setHovered(true)
+        override def mouseExited(e: java.awt.event.MouseEvent): Unit  = setHovered(false)
+      })
+      override def paintComponent(g: java.awt.Graphics): Unit = {
+        val g2 = g.asInstanceOf[java.awt.Graphics2D]
+        g2.setRenderingHint(
+          java.awt.RenderingHints.KEY_ANTIALIASING,
+          java.awt.RenderingHints.VALUE_ANTIALIAS_ON
+        )
+        val w = getWidth
+        val h = getHeight
+        // Pill background (only visible when hovered)
+        if (hovered) {
+          g2.setColor(Color.decode(UIColors.ChatInput.sendButtonHoverBackground))
+          g2.fillOval(0, 0, w - 1, h - 1)
+        }
+        // Filled right-pointing triangle, geometry-based so it scales on HiDPI.
+        val glyphColor =
+          if (hovered) Color.decode(UIColors.ChatInput.sendButtonHover)
+          else Color.decode(UIColors.ChatInput.sendButton)
+        g2.setColor(glyphColor)
+        val pad = w / 4
+        val xs = Array(pad, pad, w - pad)
+        val ys = Array(pad, h - pad, h / 2)
+        g2.fillPolygon(xs, ys, 3)
+      }
+    }
+    send.setToolTipText("Send message (Enter). Shift+Enter for newline. Ctrl+. to cancel.")
+    send.setPreferredSize(new java.awt.Dimension(sendSize, sendSize))
+    send.setMinimumSize(new java.awt.Dimension(sendSize, sendSize))
+    send.setMaximumSize(new java.awt.Dimension(sendSize, sendSize))
     send.setMargin(new java.awt.Insets(0, 0, 0, 0))
     send.setFocusable(true)
     send.setContentAreaFilled(false)
-    send.setForeground(Color.decode(UIColors.ChatInput.sendButton))
+    send.setBorderPainted(false)
     send.setBorder(BorderFactory.createEmptyBorder())
-    send.setCursor(
-      java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR)
-    )
-    
-    // Hover effect for send button
-    send.addMouseListener(new java.awt.event.MouseAdapter {
-      override def mouseEntered(e: java.awt.event.MouseEvent): Unit = {
-        send.setOpaque(true)
-        send.setBackground(Color.decode(UIColors.ChatInput.sendButtonHoverBackground))
-        send.setForeground(Color.decode(UIColors.ChatInput.sendButtonHover))
-      }
-      override def mouseExited(e: java.awt.event.MouseEvent): Unit = {
-        send.setOpaque(false)
-        send.setForeground(Color.decode(UIColors.ChatInput.sendButton))
-      }
-    })
+    send.setCursor(java.awt.Cursor.getPredefinedCursor(java.awt.Cursor.HAND_CURSOR))
 
     // Rounded border with focus ring support
     val normalBorder = BorderFactory.createLineBorder(
       Color.decode(UIColors.ChatInput.border),
-      1,
+      UIDesign.sp(1),
       true
     )
     val focusBorder = BorderFactory.createLineBorder(
       Color.decode(UIColors.ChatInput.focusBorder),
-      2,
+      UIDesign.sp(2),
       true
     )
 
@@ -410,7 +480,9 @@ class AssistantDockable(view: View, position: String)
         scrollPane.setBorder(normalBorder)
     })
 
-    // Layered panel with overlapping children (placeholder, send button over scroll pane)
+    // Layered panel with overlapping children (placeholder, send button over
+    // scroll pane). Layout is metrics-driven so it stays correct across fonts
+    // and HiDPI scaling.
     val layered = new JPanel(null) {
       override def isOptimizedDrawingEnabled: Boolean = false // Fix for overlapping repaints
       override def getPreferredSize: java.awt.Dimension =
@@ -419,14 +491,20 @@ class AssistantDockable(view: View, position: String)
         val w = getWidth
         val h = getHeight
         scrollPane.setBounds(0, 0, w, h)
-        
-        // Position placeholder label at top-left with padding matching input
-        placeholder.setBounds(12, 8, w - 50, 20)
-        
-        // Position send button in bottom-right corner
+
+        // Placeholder aligns with the input's actual text insets and font baseline.
+        val fm = input.getFontMetrics(input.getFont)
+        val inputInsets = input.getInsets
+        val padL = inputInsets.left
+        val padT = inputInsets.top
+        val btnSz = send.getPreferredSize.width
+        val gap = UIDesign.sp(8)
+        placeholder.setBounds(padL, padT, math.max(0, w - padL - btnSz - gap * 2), fm.getHeight)
+
+        // Send button anchored to the bottom-right with a uniform gap.
         val bw = send.getPreferredSize.width
         val bh = send.getPreferredSize.height
-        send.setBounds(w - bw - 8, h - bh - 8, bw, bh)
+        send.setBounds(w - bw - gap, h - bh - gap, bw, bh)
       }
     }
     layered.add(placeholder) // overlay on top
@@ -475,23 +553,26 @@ class AssistantDockable(view: View, position: String)
 
   private def setupChatInputHandlers(): Unit = {
     // Non-focus-stealing auto-completion using JWindow
-    initializeCompletionPopup()
-    
+    val popup = new CompletionPopupManager(
+      chatInput, inputPanel,
+      () => javax.swing.SwingUtilities.getWindowAncestor(this)
+    )
+
     // Document listener to update completion popup as user types
     chatInput.getDocument.addDocumentListener(
       new javax.swing.event.DocumentListener {
         def insertUpdate(e: javax.swing.event.DocumentEvent): Unit =
-          updateCompletionPopup()
+          popup.updateCompletions()
         def removeUpdate(e: javax.swing.event.DocumentEvent): Unit =
-          updateCompletionPopup()
+          popup.updateCompletions()
         def changedUpdate(e: javax.swing.event.DocumentEvent): Unit = {}
       }
     )
-    
+
     // Focus listener to hide popup when input loses focus
     chatInput.addFocusListener(new java.awt.event.FocusAdapter {
       override def focusLost(e: java.awt.event.FocusEvent): Unit =
-        hideCompletionPopup()
+        popup.hide()
     })
 
     val inputMap = chatInput.getInputMap(javax.swing.JComponent.WHEN_FOCUSED)
@@ -504,29 +585,48 @@ class AssistantDockable(view: View, position: String)
 
     inputMap.put(javax.swing.KeyStroke.getKeyStroke("ctrl ENTER"), "send")
     inputMap.put(javax.swing.KeyStroke.getKeyStroke("TAB"), "accept-completion")
-    
+
+    // Platform-neutral "cancel current operation" shortcut. Cross-platform
+    // Ctrl+. is a familiar "stop" binding; on macOS the menu accelerator
+    // mask (Cmd) also maps to the same behaviour so users can keep the
+    // muscle memory of Cmd+. from AppKit.
+    val menuMask = java.awt.Toolkit.getDefaultToolkit.getMenuShortcutKeyMaskEx
+    inputMap.put(javax.swing.KeyStroke.getKeyStroke("ctrl PERIOD"), "assistant-cancel")
+    inputMap.put(
+      javax.swing.KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_PERIOD, menuMask),
+      "assistant-cancel"
+    )
+    actionMap.put(
+      "assistant-cancel",
+      new javax.swing.AbstractAction() {
+        def actionPerformed(e: java.awt.event.ActionEvent): Unit = {
+          if (AssistantDockable.isBusy) AssistantDockable.cancel()
+        }
+      }
+    )
+
     actionMap.put(
       "send-or-complete",
       new javax.swing.AbstractAction() {
         def actionPerformed(e: java.awt.event.ActionEvent): Unit = {
-          if (isCompletionPopupVisible) acceptSelectedCompletion()
+          if (popup.isVisible) popup.acceptSelected()
           else sendChat()
         }
       }
     )
-    
+
     actionMap.put(
       "send",
       new javax.swing.AbstractAction() {
         def actionPerformed(e: java.awt.event.ActionEvent): Unit = sendChat()
       }
     )
-    
+
     actionMap.put(
       "accept-completion",
       new javax.swing.AbstractAction() {
         def actionPerformed(e: java.awt.event.ActionEvent): Unit = {
-          if (isCompletionPopupVisible) acceptSelectedCompletion()
+          if (popup.isVisible) popup.acceptSelected()
         }
       }
     )
@@ -539,16 +639,15 @@ class AssistantDockable(view: View, position: String)
       "cancel-or-clear",
       new javax.swing.AbstractAction() {
         def actionPerformed(e: java.awt.event.ActionEvent): Unit = {
-          if (isCompletionPopupVisible) {
-            hideCompletionPopup()
+          if (popup.isVisible) {
+            popup.hide()
           } else {
             val now = System.currentTimeMillis()
-            if (AssistantDockable._busy) {
+            if (AssistantDockable.isBusy) {
               AssistantDockable.cancel()
             } else if (chatInput.getText.trim.nonEmpty) {
               chatInput.setText("")
-              inputHistoryIndex = -1
-              savedDraft = ""
+              inputHistory.resetNavigation()
               lastEscapeTime = now
             } else if (now - lastEscapeTime < 400) {
               clearChat()
@@ -569,7 +668,7 @@ class AssistantDockable(view: View, position: String)
     inputMap.put(javax.swing.KeyStroke.getKeyStroke("UP"), "completion-or-history-up")
     actionMap.put("completion-or-history-up", new javax.swing.AbstractAction() {
       def actionPerformed(e: java.awt.event.ActionEvent): Unit = {
-        if (isCompletionPopupVisible) navigateCompletionUp()
+        if (popup.isVisible) popup.navigateUp()
         else if (isCaretOnFirstLine) navigateHistoryBack()
         else if (originalUp != null) originalUp.actionPerformed(e)
       }
@@ -578,129 +677,11 @@ class AssistantDockable(view: View, position: String)
     inputMap.put(javax.swing.KeyStroke.getKeyStroke("DOWN"), "completion-or-history-down")
     actionMap.put("completion-or-history-down", new javax.swing.AbstractAction() {
       def actionPerformed(e: java.awt.event.ActionEvent): Unit = {
-        if (isCompletionPopupVisible) navigateCompletionDown()
+        if (popup.isVisible) popup.navigateDown()
         else if (isCaretOnLastLine) navigateHistoryForward()
         else if (originalDown != null) originalDown.actionPerformed(e)
       }
     })
-  }
-
-  /** Initialize the non-focus-stealing completion popup window */
-  private def initializeCompletionPopup(): Unit = {
-    val window = new javax.swing.JWindow(javax.swing.SwingUtilities.getWindowAncestor(this))
-    window.setFocusableWindowState(false)  // Critical: prevents focus stealing
-    window.setAlwaysOnTop(true)
-    
-    val list = new javax.swing.JList[String]()
-    list.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION)
-    list.setVisibleRowCount(8)
-    list.setFont(chatInput.getFont)
-    
-    val scrollPane = new JScrollPane(list)
-    scrollPane.setBorder(BorderFactory.createLineBorder(Color.GRAY, 1))
-    window.add(scrollPane)
-    
-    completionWindow = Some(window)
-    completionList = Some(list)
-  }
-
-  /** Update completion popup based on current input text */
-  private def updateCompletionPopup(): Unit = {
-    javax.swing.SwingUtilities.invokeLater { () =>
-      val text = chatInput.getText
-      
-      // Only show completions for command prefixes (starts with : and no space yet)
-      if (text.startsWith(":") && text.length >= 2 && !text.contains(" ")) {
-        val prefix = text.drop(1).toLowerCase
-        val commands = ChatAction.commandNames
-          .filter(_.startsWith(prefix))
-          .sorted
-          .take(8)
-        
-        if (commands.nonEmpty) {
-          filteredCompletions = commands.map(":" + _).toArray
-          showCompletionPopup(filteredCompletions)
-        } else {
-          hideCompletionPopup()
-        }
-      } else {
-        hideCompletionPopup()
-      }
-    }
-  }
-
-  /** Show the completion popup with the given completions */
-  private def showCompletionPopup(completions: Array[String]): Unit = {
-    // Get the position early, fail fast if component not on screen
-    val locationOpt = try {
-      Some((inputPanel.getLocationOnScreen, inputPanel.getHeight))
-    } catch {
-      case _: java.awt.IllegalComponentStateException => None
-    }
-    
-    locationOpt.foreach { case (inputLocation, inputHeight) =>
-      for {
-        window <- completionWindow
-        list <- completionList
-      } {
-        list.setListData(completions)
-        list.setSelectedIndex(0)
-        
-        // Position popup below the input panel
-        window.setLocation(inputLocation.x, inputLocation.y + inputHeight)
-        
-        // Size to fit content
-        window.pack()
-        val preferredWidth = Math.max(200, inputPanel.getWidth / 2)
-        window.setSize(preferredWidth, window.getHeight)
-        
-        if (!window.isVisible) window.setVisible(true)
-      }
-    }
-  }
-
-  /** Hide the completion popup */
-  private def hideCompletionPopup(): Unit = {
-    completionWindow.foreach(_.setVisible(false))
-  }
-
-  /** Check if completion popup is currently visible */
-  private def isCompletionPopupVisible: Boolean = {
-    completionWindow.exists(_.isVisible)
-  }
-
-  /** Navigate up in the completion list */
-  private def navigateCompletionUp(): Unit = {
-    completionList.foreach { list =>
-      val currentIndex = list.getSelectedIndex
-      if (currentIndex > 0) {
-        list.setSelectedIndex(currentIndex - 1)
-        list.ensureIndexIsVisible(currentIndex - 1)
-      }
-    }
-  }
-
-  /** Navigate down in the completion list */
-  private def navigateCompletionDown(): Unit = {
-    completionList.foreach { list =>
-      val currentIndex = list.getSelectedIndex
-      if (currentIndex < list.getModel.getSize - 1) {
-        list.setSelectedIndex(currentIndex + 1)
-        list.ensureIndexIsVisible(currentIndex + 1)
-      }
-    }
-  }
-
-  /** Accept the currently selected completion */
-  private def acceptSelectedCompletion(): Unit = {
-    completionList.foreach { list =>
-      val selected = list.getSelectedValue
-      if (selected != null) {
-        chatInput.setText(selected + " ")
-        chatInput.setCaretPosition(chatInput.getText.length)
-        hideCompletionPopup()
-      }
-    }
   }
 
   private def setupAccessibilityHandlers(): Unit = {
@@ -741,8 +722,22 @@ class AssistantDockable(view: View, position: String)
 
     iqStatusLabel.getAccessibleContext.setAccessibleName("I/Q status")
     iqStatusLabel.getAccessibleContext.setAccessibleDescription(
-      "Status of the I/Q integration"
+      "Status of the I/Q integration. Click to view assistant capabilities."
     )
+
+    contextBar.getAccessibleContext.setAccessibleName("Context usage meter")
+    contextBar.getAccessibleContext.setAccessibleDescription(
+      "Shows the fraction of the model's context budget used by the current conversation."
+    )
+
+    badgeContainer.getAccessibleContext.setAccessibleName("Verification status")
+    badgeContainer.getAccessibleContext.setAccessibleDescription(
+      "Shows the verification outcome of the most recent proof attempt."
+    )
+
+    // Mirror the status label's accessible description into a tooltip so
+    // mouse and keyboard users see the same information.
+    statusLabel.setToolTipText("Current status of the Isabelle Assistant")
 
     setFocusTraversalPolicy(new java.awt.DefaultFocusTraversalPolicy())
     setFocusCycleRoot(true)
@@ -766,6 +761,7 @@ class AssistantDockable(view: View, position: String)
       statusSubscription.stop()
       AssistantEventBus.unsubscribe(eventBusListener)
       MarkdownRenderer.setSyntheticImageReadyCallback(() => ())
+      if (spinnerTimer.isRunning) spinnerTimer.stop()
     }
   }
 
@@ -779,69 +775,65 @@ class AssistantDockable(view: View, position: String)
     AssistantDockable.clearInsertActions()
     ToolPermissions.clearSession()
     TaskList.clear()
-    htmlPane.setText("")
     badgeContainer.setVisible(false)
     welcomeShown = false
     renderedMessageCount = 0
-    inputHistory = Nil
-    inputHistoryIndex = -1
-    savedDraft = ""
+    inputHistory.clear()
     contextBar.reset()
+    // Re-synchronise the status label with the empty conversation so
+    // the previous operation's text (e.g. "Thinking…") doesn't linger
+    // into the fresh session.
+    lastStatusText = AssistantConstants.STATUS_READY
+    updateStatus(lastStatusText)
     cardLayout.show(contentPanel, "html")
+    // Re-render through the normal path so the welcome card comes back
+    // and the document is rebuilt with our canonical CSS. Setting
+    // htmlPane.setText("") directly leaves JEditorPane's HTMLEditorKit
+    // with a default empty paragraph that styles through the prior CSS
+    // and surfaces as an empty bubble.
+    displayConversation(ChatAction.getHistory)
     chatInput.requestFocus()
   }
 
+  // `getLineOfOffset` is the only documented failure path here; a typed
+  // catch keeps us from swallowing unrelated bugs (NPE, etc.) as "caret
+  // at edge". On BadLocationException the caret is in an undefined state
+  // so defaulting to `true` (the caller then routes to history navigation)
+  // is the safe choice.
   private def isCaretOnFirstLine: Boolean = {
     try {
       val caretPos = chatInput.getCaretPosition
       chatInput.getLineOfOffset(caretPos) == 0
-    } catch { case _: Exception => true }
+    } catch { case _: javax.swing.text.BadLocationException => true }
   }
 
   private def isCaretOnLastLine: Boolean = {
     try {
       val caretPos = chatInput.getCaretPosition
       chatInput.getLineOfOffset(caretPos) == chatInput.getLineCount - 1
-    } catch { case _: Exception => true }
+    } catch { case _: javax.swing.text.BadLocationException => true }
   }
 
-  private def navigateHistoryBack(): Unit = {
-    if (inputHistory.isEmpty) return
-    
-    // If we're not currently browsing, save the current draft
-    if (inputHistoryIndex == -1) {
-      savedDraft = chatInput.getText
-      inputHistoryIndex = 0
-    } else if (inputHistoryIndex < inputHistory.length - 1) {
-      inputHistoryIndex += 1
-    } else {
-      return // Already at oldest entry
-    }
-    
-    // Index 0 = most recent, so reverse-index into the list
-    val entry = inputHistory(inputHistory.length - 1 - inputHistoryIndex)
-    chatInput.setText(entry)
-    chatInput.setCaretPosition(entry.length)
-  }
-
-  private def navigateHistoryForward(): Unit = {
-    if (inputHistoryIndex == -1) return // Not browsing
-    
-    if (inputHistoryIndex > 0) {
-      inputHistoryIndex -= 1
-      val entry = inputHistory(inputHistory.length - 1 - inputHistoryIndex)
+  private def navigateHistoryBack(): Unit =
+    inputHistory.navigateBack(chatInput.getText).foreach { entry =>
       chatInput.setText(entry)
       chatInput.setCaretPosition(entry.length)
-    } else {
-      // Back to draft
-      inputHistoryIndex = -1
-      chatInput.setText(savedDraft)
-      chatInput.setCaretPosition(savedDraft.length)
     }
-  }
+
+  private def navigateHistoryForward(): Unit =
+    inputHistory.navigateForward().foreach { entry =>
+      chatInput.setText(entry)
+      chatInput.setCaretPosition(entry.length)
+    }
 
   private val maxInputLength =
     AssistantConstants.MAX_CHAT_CONTEXT_CHARS / 2 // 50K chars max per message
+
+  /** Rough chars-per-token heuristic shared with `ContextTracker` so
+    * the near-limit warning agrees with the context bar. Actual tokens
+    * depend on the tokenizer, but within 20% is fine for a non-blocking
+    * hint. */
+  private val charsPerTokenHeuristic = 4
 
   private def sendChat(): Unit = {
     val message = chatInput.getText.trim
@@ -854,12 +846,19 @@ class AssistantDockable(view: View, position: String)
           javax.swing.JOptionPane.WARNING_MESSAGE
         )
       } else {
+        val modelCtxTokens = AssistantOptions.getMaxContextTokens
+        val estTokens = message.length / charsPerTokenHeuristic
+        if (modelCtxTokens > 0 && estTokens > 0.8 * modelCtxTokens) {
+          // Non-blocking tooltip update: no modal dialog, no send block.
+          // If the user proceeds, the backend will still apply its own
+          // truncation.
+          val warn =
+            s"Near context limit: ~${"%,d".format(estTokens)} tokens / ${"%,d".format(modelCtxTokens)}"
+          statusLabel.setToolTipText(warn)
+          ErrorHandler.safeLog(s"[Assistant] $warn")
+        }
         chatInput.setText("")
-        // Add to input history (avoid consecutive duplicates)
-        if (inputHistory.isEmpty || inputHistory.last != message)
-          inputHistory = inputHistory :+ message
-        inputHistoryIndex = -1
-        savedDraft = ""
+        inputHistory.record(message)
         AssistantDockable.resetCancel()
         ChatAction.chat(view, message)
       }
@@ -867,14 +866,8 @@ class AssistantDockable(view: View, position: String)
   }
 
   def updateBadge(badge: VerificationBadge.BadgeType): Unit = {
-    badgeContainer.removeAll()
-    badgeContainer.add(
-      VerificationBadge.createBadgePanel(badge),
-      BorderLayout.CENTER
-    )
+    badgeWidget.updateBadge(badge)
     badgeContainer.setVisible(true)
-    badgeContainer.revalidate()
-    badgeContainer.repaint()
     statusLabel.setText(VerificationBadge.toStatus(badge))
   }
 
@@ -911,7 +904,8 @@ class AssistantDockable(view: View, position: String)
                 msg.content,
                 ChatAction.formatTime(msg.timestamp),
                 msg.rawHtml,
-                registerAction
+                registerAction,
+                msg.kind
               )
           }
         } else
@@ -919,14 +913,16 @@ class AssistantDockable(view: View, position: String)
             msg.content,
             ChatAction.formatTime(msg.timestamp),
             msg.rawHtml,
-            registerAction
+            registerAction,
+            msg.kind
           )
       case _ =>
         ConversationRenderer.createAssistantMessageHtml(
           msg.content,
           ChatAction.formatTime(msg.timestamp),
           msg.rawHtml,
-          registerAction
+          registerAction,
+          msg.kind
         )
     }
   }
@@ -935,10 +931,16 @@ class AssistantDockable(view: View, position: String)
     displayLock.synchronized {
       badgeContainer.setVisible(false)
 
-      val welcome = if (history.isEmpty && !welcomeShown) {
+      // Render the welcome card whenever the conversation is empty (fresh
+      // session, after :clear, or simply reopening the dockable) rather than
+      // only on first load. `welcomeShown` still guards the per-reopen state
+      // used by the incremental-append path below so we don't render it
+      // twice when a message lands.
+      val welcome = if (history.isEmpty) {
         welcomeShown = true
-        ConversationRenderer.createWelcomeHtml(() => 
-          AssistantDockable.registerAction(() => ChatAction.chat(view, ":help"))
+        ConversationRenderer.createWelcomeHtml(
+          () => AssistantDockable.registerAction(() => ChatAction.chat(view, ":help")),
+          Some((cmd: String) => AssistantDockable.registerAction(() => ChatAction.chat(view, cmd)))
         )
       } else ""
 
@@ -955,23 +957,31 @@ class AssistantDockable(view: View, position: String)
         val newMessages = history.drop(renderedMessageCount)
         val newHtml = newMessages.map(renderSingleMessage(_, registerAction)).mkString
 
-        val doc =
-          htmlPane.getDocument.asInstanceOf[javax.swing.text.html.HTMLDocument]
-        try {
-          val root = doc.getDefaultRootElement
-          var body: javax.swing.text.Element = null
-          for (i <- 0 until root.getElementCount if body == null) {
-            val child = root.getElement(i)
-            if (child.getName == "body") body = child
+        // Sanity-parse the fragment into a scratch document before we
+        // splice it into the live DOM. Unclosed tags or other malformed
+        // markup can otherwise leave the live HTMLDocument in a
+        // half-constructed state that no subsequent render can recover.
+        if (!isParsableFragment(newHtml)) {
+          fullRender(history, welcome)
+        } else {
+          val doc =
+            htmlPane.getDocument.asInstanceOf[javax.swing.text.html.HTMLDocument]
+          try {
+            val root = doc.getDefaultRootElement
+            var body: javax.swing.text.Element = null
+            for (i <- 0 until root.getElementCount if body == null) {
+              val child = root.getElement(i)
+              if (child.getName == "body") body = child
+            }
+            if (body != null) {
+              doc.insertBeforeEnd(body, newHtml)
+              renderedMessageCount = history.length
+            } else {
+              fullRender(history, welcome)
+            }
+          } catch {
+            case _: Exception => fullRender(history, welcome)
           }
-          if (body != null) {
-            doc.insertBeforeEnd(body, newHtml)
-            renderedMessageCount = history.length
-          } else {
-            fullRender(history, welcome)
-          }
-        } catch {
-          case _: Exception => fullRender(history, welcome)
         }
       } else {
         fullRender(history, welcome)
@@ -986,6 +996,26 @@ class AssistantDockable(view: View, position: String)
       cardLayout.show(contentPanel, "html")
     }
 
+  /** Pre-flight check for `HTMLDocument.insertBeforeEnd`. Parses the
+    * fragment into a throwaway document wrapped in an HTML shell; if the
+    * parse throws, we fall back to a full re-render rather than risk
+    * corrupting the live DOM with an unclosed tag. Always returns true on
+    * empty input — there's nothing to splice. */
+  private def isParsableFragment(fragment: String): Boolean = {
+    if (fragment == null || fragment.isEmpty) true
+    else {
+      try {
+        val kit = new javax.swing.text.html.HTMLEditorKit()
+        val scratch = kit.createDefaultDocument()
+        val wrapped = s"<html><body>$fragment</body></html>"
+        kit.read(new java.io.StringReader(wrapped), scratch, 0)
+        true
+      } catch {
+        case _: Exception => false
+      }
+    }
+  }
+
   private def fullRender(
       history: List[ChatAction.Message],
       welcome: String
@@ -997,8 +1027,8 @@ class AssistantDockable(view: View, position: String)
     val htmlContent = history.map(renderSingleMessage(_, registerAction)).mkString
 
     val fullHtml = s"""<html><head><style>
-      |body { font-family: 'Segoe UI', 'Helvetica Neue', sans-serif; font-size: 12pt;
-      |       margin: 0; padding: 8px; overflow-x: hidden; }
+      |body { font-family: 'Segoe UI', 'Helvetica Neue', sans-serif; font-size: ${UIDesign.FontSize.md};
+      |       margin: 0; padding: ${UIDesign.Space.md}; overflow-x: hidden; }
       |a { color: ${UIColors.linkColor}; text-decoration: none; }
       |a:hover { text-decoration: underline; }
       |img { max-width: 100%; }
@@ -1011,30 +1041,32 @@ class AssistantDockable(view: View, position: String)
   }
 
   def updateStatus(status: String): Unit = {
+    lastStatusText = status
+    val snapshot = AssistantDockable.currentBusyState
     val displayStatus =
-      if (AssistantDockable._busy && AssistantDockable._busyStartTime > 0) {
-        val elapsed =
-          (System.currentTimeMillis() - AssistantDockable._busyStartTime) / 1000
+      if (snapshot.busy && snapshot.busyStartMs > 0) {
+        val elapsed = (System.currentTimeMillis() - snapshot.busyStartMs) / 1000
         if (elapsed >= 2) s"$status (${elapsed}s)" else status
       } else status
 
-    // Add colored dot indicator based on status
-    val (dot, color) =
-      if (status.startsWith("Error") || status.startsWith("[FAIL]")) {
-        ("●", UIColors.StatusDot.error)
-      } else if (
-        status == AssistantConstants.STATUS_READY || status == AssistantConstants.STATUS_CANCELLED
-      ) {
-        ("●", UIColors.StatusDot.ready)
-      } else {
-        ("●", UIColors.StatusDot.busy)
-      }
+    // Per-state glyph gives colorblind + screen-reader users a second channel
+    // alongside colour. Busy states animate through a braille spinner driven
+    // by spinnerTimer; idle states are static glyphs.
+    val isError = status.startsWith("Error") || status.startsWith("[FAIL]")
+    val isReady = status == AssistantConstants.STATUS_READY ||
+      status == AssistantConstants.STATUS_CANCELLED
+    val (glyph, color) =
+      if (isError) ("✖", UIColors.StatusDot.error)
+      else if (isReady) ("✓", UIColors.StatusDot.ready)
+      else (SpinnerFrames(spinnerFrame), UIColors.StatusDot.busy)
 
-    // Create HTML with colored dot
+    if (snapshot.busy && !spinnerTimer.isRunning) spinnerTimer.start()
+    else if (!snapshot.busy && spinnerTimer.isRunning) spinnerTimer.stop()
+
     val htmlStatus =
-      s"<html><span style='color:$color;'>$dot</span> $displayStatus</html>"
+      s"<html><span style='color:$color;font-weight:bold;'>$glyph</span> $displayStatus</html>"
     statusLabel.setText(htmlStatus)
-    cancelButton.setVisible(AssistantDockable._busy)
+    cancelButton.setVisible(snapshot.busy)
   }
 
   def updateAssistantStatus(): Unit = {
@@ -1074,9 +1106,11 @@ class AssistantDockable(view: View, position: String)
 
   private def showAssistantHelp(): Unit = {
     val buffer = view.getBuffer
+    val body = AssistantSupport.helpText(buffer) +
+      "\n\nKeyboard shortcuts: Enter sends, Shift+Enter for newline, Ctrl+. to cancel a running operation."
     JOptionPane.showMessageDialog(
       this,
-      AssistantSupport.helpText(buffer),
+      body,
       "Isabelle Assistant Help",
       JOptionPane.INFORMATION_MESSAGE
     )
@@ -1097,15 +1131,17 @@ class AssistantDockable(view: View, position: String)
       val shortName = HtmlUtil.escapeHtml(afterProvider.take(30))
       val escapedModelId = HtmlUtil.escapeHtml(modelId)
       val mutedColor = UIColors.ModelLabel.muted
+      val sz = UIDesign.FontSize.sm
       (
-        s"<html><span style='color:$mutedColor;font-size:10pt;'>Model:</span> <b style='font-size:10pt;'>$shortName</b></html>",
+        s"<html><span style='color:$mutedColor;font-size:$sz;'>Model:</span> <b style='font-size:$sz;'>$shortName</b></html>",
         s"Model: $escapedModelId"
       )
     } else {
       val mutedColor = UIColors.ModelLabel.muted
       val unconfiguredColor = UIColors.ModelLabel.unconfigured
+      val sz = UIDesign.FontSize.sm
       (
-        s"<html><span style='color:$mutedColor;font-size:10pt;'>Model:</span> <b style='font-size:10pt;color:$unconfiguredColor;'>Not configured</b></html>",
+        s"<html><span style='color:$mutedColor;font-size:$sz;'>Model:</span> <b style='font-size:$sz;color:$unconfiguredColor;'>Not configured</b></html>",
         "No model configured — use :set model <id>"
       )
     }

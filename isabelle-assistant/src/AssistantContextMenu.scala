@@ -9,6 +9,36 @@ import org.gjt.sp.jedit.textarea.JEditTextArea
 import java.awt.event.MouseEvent
 import javax.swing.{JMenu, JMenuItem}
 
+/** Pure decisions about which menu groups/items a given MenuContext.Context
+  * should expose. Split out of the class body so it can be exercised in
+  * unit tests without standing up a Swing JEditTextArea. */
+private[assistant] object AssistantContextMenuEnablement {
+  import MenuContext.Context
+
+  def showExplain(ctx: Context): Boolean = ctx.hasCommand || ctx.hasSelection
+  def showExplainError(ctx: Context): Boolean = ctx.onError
+  def showShowType(ctx: Context): Boolean = ctx.hasTypeInfo
+
+  def showProofSubmenu(ctx: Context): Boolean = ctx.inProof
+  def showIQProofItems(ctx: Context): Boolean = ctx.inProof && ctx.iqAvailable
+  def showExtractLemma(ctx: Context): Boolean = ctx.inProof && ctx.hasSelection
+  def showRefactorToIsar(ctx: Context): Boolean = ctx.inProof && ctx.hasApplyProof
+
+  def showFindTheoremsTop(ctx: Context): Boolean = ctx.iqAvailable
+
+  def showGenerateSubmenu(ctx: Context): Boolean = ctx.hasCommand || ctx.hasSelection
+  def showGenerateOnDefinition(ctx: Context): Boolean =
+    showGenerateSubmenu(ctx) && ctx.onDefinition
+  def showSuggestName(ctx: Context): Boolean =
+    showGenerateSubmenu(ctx) && ctx.onDefinition
+  def showTidyUp(ctx: Context): Boolean =
+    showGenerateSubmenu(ctx) && (ctx.hasSelection || ctx.inProof)
+  def showGenerateTactic(ctx: Context): Boolean =
+    showGenerateSubmenu(ctx) && ctx.hasSelection
+
+  def showAnalyzePatterns(ctx: Context): Boolean = ctx.hasCommand
+}
+
 /** Dynamic right-click context menu for Isabelle/jEdit. Adapts available
   * actions based on cursor context: proof state, selection, error presence,
   * definition type, and I/Q availability.
@@ -30,27 +60,39 @@ class AssistantContextMenu extends DynamicContextMenuService {
         val ctx = MenuContext.analyzeLocal(view, buffer, offset, selection)
         val menu = new JMenu("Isabelle Assistant")
 
+        import AssistantContextMenuEnablement._
+
         // === Understanding ===
         val understandMenu = new JMenu("Understanding")
-        if (ctx.hasCommand || ctx.hasSelection) {
+        if (showExplain(ctx)) {
           addItem(understandMenu, "Explain") { _ =>
-            val text = selection
-              .filter(_.trim.nonEmpty)
-              .orElse(CommandExtractor.getCommandAtOffset(buffer, offset))
-            text match {
+            // Selection is EDT-safe; if no selection, resolve the command
+            // on a background thread (CommandExtractor goes to I/Q MCP).
+            selection.filter(_.trim.nonEmpty) match {
               case Some(t) => ExplainAction.explain(view, t)
-              case None    =>
-                AssistantDockable.respondInChat("No command at cursor.")
+              case None =>
+                AssistantDockable.setStatus("Resolving command…")
+                val _ = Isabelle_Thread.fork(name = "menu-explain-resolve") {
+                  val t = CommandExtractor.getCommandAtOffset(buffer, offset)
+                  GUI_Thread.later {
+                    AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+                    t match {
+                      case Some(cmd) => ExplainAction.explain(view, cmd)
+                      case None =>
+                        AssistantDockable.respondInChat(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+                    }
+                  }
+                }
             }
           }
         }
 
-        if (ctx.onError)
+        if (showExplainError(ctx))
           addItem(understandMenu, "Explain Error")(_ =>
             ExplainErrorAction.explainError(view)
           )
 
-        if (ctx.hasTypeInfo)
+        if (showShowType(ctx))
           addItem(understandMenu, "Show Type")(_ =>
             ShowTypeAction.showType(view)
           )
@@ -61,7 +103,7 @@ class AssistantContextMenu extends DynamicContextMenuService {
         menu.add(understandMenu)
 
         // === Proof (only in proof context) ===
-        if (ctx.inProof) {
+        if (showProofSubmenu(ctx)) {
           val proofMenu = new JMenu("Proof")
 
           addItem(proofMenu, "Suggest Proof Step")(_ =>
@@ -71,7 +113,7 @@ class AssistantContextMenu extends DynamicContextMenuService {
             SuggestStrategyAction.suggest(view)
           )
 
-          if (ctx.iqAvailable) {
+          if (showIQProofItems(ctx)) {
             proofMenu.addSeparator()
             addItem(proofMenu, "Find Theorems for Goal")(_ =>
               FindTheoremsAction.findTheoremsForGoal(view)
@@ -91,12 +133,12 @@ class AssistantContextMenu extends DynamicContextMenuService {
                 CounterexampleFinderAction.Quickcheck
               )
             )
-            addItem(proofMenu, "Try Methods")(_ => TryMethodsAction.run(view))
+            addItem(proofMenu, "Suggest Methods")(_ => TryMethodsAction.run(view))
             proofMenu.addSeparator()
-            addItem(proofMenu, "Trace Simp")(_ =>
+            addItem(proofMenu, "Trace Simplifier")(_ =>
               TraceSimplifierAction.trace(view, "simp")
             )
-            addItem(proofMenu, "Trace Auto")(_ =>
+            addItem(proofMenu, "Trace Auto Method")(_ =>
               TraceSimplifierAction.trace(view, "auto")
             )
             addItem(proofMenu, "Print Context")(_ =>
@@ -104,17 +146,25 @@ class AssistantContextMenu extends DynamicContextMenuService {
             )
           }
 
-          if (ctx.hasSelection)
+          if (showExtractLemma(ctx))
             addItem(proofMenu, "Extract Lemma")(_ =>
               selection.foreach(ExtractLemmaAction.extract(view, _))
             )
 
-          if (ctx.hasApplyProof) {
+          if (showRefactorToIsar(ctx)) {
             addItem(proofMenu, "Refactor to Isar") { _ =>
-              val block = selection
-                .filter(_.trim.nonEmpty)
-                .orElse(ProofExtractor.getProofBlockAtOffset(buffer, offset))
-              block.foreach(RefactorAction.refactor(view, _))
+              selection.filter(_.trim.nonEmpty) match {
+                case Some(t) => RefactorAction.refactor(view, t)
+                case None =>
+                  AssistantDockable.setStatus("Locating proof block…")
+                  val _ = Isabelle_Thread.fork(name = "menu-refactor-resolve") {
+                    val block = ProofExtractor.getProofBlockAtOffset(buffer, offset)
+                    GUI_Thread.later {
+                      AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+                      block.foreach(RefactorAction.refactor(view, _))
+                    }
+                  }
+              }
             }
           }
 
@@ -122,7 +172,7 @@ class AssistantContextMenu extends DynamicContextMenuService {
         }
 
         // === Search ===
-        if (ctx.iqAvailable) {
+        if (showFindTheoremsTop(ctx)) {
           addItem(menu, "Find Theorems") { _ =>
             val pattern = selection.filter(_.trim.nonEmpty)
             FindTheoremsAction.findTheorems(view, pattern)
@@ -130,43 +180,61 @@ class AssistantContextMenu extends DynamicContextMenuService {
         }
 
         // === Generation ===
-        if (ctx.hasCommand || ctx.hasSelection) {
+        if (showGenerateSubmenu(ctx)) {
           val genMenu = new JMenu("Generate")
 
-          if (ctx.onDefinition) {
-            addItem(genMenu, "Intro Rule") { _ =>
-              CommandExtractor.getCommandAtOffset(buffer, offset)
-                .foreach(t => GenerateRulesAction.generateIntro(view, t))
+          if (showGenerateOnDefinition(ctx)) {
+            // All four of these do a CommandExtractor MCP call. Route them
+            // through a shared helper that forks to a background thread
+            // first, so clicking the menu does not freeze jEdit.
+            addItem(genMenu, "Generate Intro Rule") { _ =>
+              forkResolveCommand(buffer, offset) {
+                case Some(t) => GenerateRulesAction.generateIntro(view, t)
+                case None => AssistantDockable.respondInChat(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+              }
             }
-            addItem(genMenu, "Elim Rule") { _ =>
-              CommandExtractor.getCommandAtOffset(buffer, offset)
-                .foreach(t => GenerateRulesAction.generateElim(view, t))
+            addItem(genMenu, "Generate Elim Rule") { _ =>
+              forkResolveCommand(buffer, offset) {
+                case Some(t) => GenerateRulesAction.generateElim(view, t)
+                case None => AssistantDockable.respondInChat(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+              }
             }
-            addItem(genMenu, "Test Cases") { _ =>
-              CommandExtractor.getCommandAtOffset(buffer, offset)
-                .foreach(t => GenerateTestsAction.generate(view, t))
+            addItem(genMenu, "Generate Test Cases") { _ =>
+              forkResolveCommand(buffer, offset) {
+                case Some(t) => GenerateTestsAction.generate(view, t)
+                case None => AssistantDockable.respondInChat(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+              }
             }
-            addItem(genMenu, "Doc Comment") { _ =>
-              val commandText = CommandExtractor.getCommandAtOffset(buffer, offset)
-              val commandType = GenerateDocAction.detectCommandTypeAtOffset(buffer, offset)
-              commandText.foreach(text =>
-                GenerateDocAction.generate(
-                  view,
-                  text,
-                  commandType.getOrElse("command")
-                )
-              )
+            addItem(genMenu, "Generate Doc Comment") { _ =>
+              AssistantDockable.setStatus("Resolving command…")
+              val _ = Isabelle_Thread.fork(name = "menu-gendoc-resolve") {
+                val commandText = CommandExtractor.getCommandAtOffset(buffer, offset)
+                val commandType = GenerateDocAction.detectCommandTypeAtOffset(buffer, offset)
+                GUI_Thread.later {
+                  AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+                  commandText match {
+                    case Some(text) =>
+                      GenerateDocAction.generate(
+                        view,
+                        text,
+                        commandType.getOrElse("command")
+                      )
+                    case None =>
+                      AssistantDockable.respondInChat(AssistantConstants.UIText.NO_COMMAND_AT_CURSOR)
+                  }
+                }
+              }
             }
           }
 
-          if (ctx.onDefinition)
+          if (showSuggestName(ctx))
             addItem(genMenu, "Suggest Name")(_ =>
               SuggestNameAction.suggestName(view)
             )
-          if (ctx.hasSelection || ctx.inProof)
+          if (showTidyUp(ctx))
             addItem(genMenu, "Tidy Up")(_ => TidyAction.tidy(view))
 
-          if (ctx.hasSelection)
+          if (showGenerateTactic(ctx))
             addItem(genMenu, "Generate Tactic")(_ =>
               selection.foreach(SuggestTacticAction.suggest(view, _))
             )
@@ -175,7 +243,7 @@ class AssistantContextMenu extends DynamicContextMenuService {
         }
 
         // === Analysis ===
-        if (ctx.hasCommand)
+        if (showAnalyzePatterns(ctx))
           addItem(menu, "Analyze Patterns")(_ =>
             AnalyzePatternsAction.analyze(view)
           )
@@ -192,5 +260,24 @@ class AssistantContextMenu extends DynamicContextMenuService {
     val item = new JMenuItem(label)
     item.addActionListener(_ => action(()))
     val _ = menu.add(item)
+  }
+
+  /** Fork a background thread, resolve the command at `offset`, and run
+    * `onResult` on the EDT with the result. Used by menu items whose action
+    * body needs the command source but can't block the EDT during the MCP
+    * round trip.
+    */
+  private def forkResolveCommand(
+      buffer: org.gjt.sp.jedit.buffer.JEditBuffer,
+      offset: Int
+  )(onResult: Option[String] => Unit): Unit = {
+    AssistantDockable.setStatus("Resolving command…")
+    val _ = Isabelle_Thread.fork(name = "menu-resolve-command") {
+      val t = CommandExtractor.getCommandAtOffset(buffer, offset)
+      GUI_Thread.later {
+        AssistantDockable.setStatus(AssistantConstants.STATUS_READY)
+        onResult(t)
+      }
+    }
   }
 }

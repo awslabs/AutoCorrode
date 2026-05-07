@@ -35,7 +35,7 @@ object PrintContextAction {
   }
 
   def run(view: View): Unit = {
-    AssistantDockable.setStatus("Getting context...")
+    AssistantDockable.setStatus("Getting context…")
     runPrintContextAsync(view, 5000, { result =>
       GUI_Thread.later {
         displayResult(result)
@@ -70,7 +70,7 @@ object PrintContextAction {
       case Right(_) =>
         AssistantDockable.respondInChat("No local facts in scope.")
       case Left(error) =>
-        AssistantDockable.respondInChat(s"Error: $error")
+        ChatAction.addErrorResponse(error, "print-context")
     }
   }
 }

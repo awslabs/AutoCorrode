@@ -5,7 +5,6 @@ package isabelle.assistant
 
 import isabelle._
 import org.gjt.sp.jedit.{jEdit, View}
-import java.util.Locale
 
 /**
  * Capability-based permission system for LLM tool use.
@@ -85,6 +84,16 @@ object ToolPermissions {
   def clearSession(): Unit = sessionLock.synchronized {
     sessionAllowedTools = Set.empty
     sessionDeniedTools = Set.empty
+  }
+
+  /** Snapshot of tool names session-allowed in the current session, sorted. */
+  def sessionAllowedToolNames: List[String] = sessionLock.synchronized {
+    sessionAllowedTools.toList.map(_.wireName).sorted
+  }
+
+  /** Snapshot of tool names session-denied in the current session, sorted. */
+  def sessionDeniedToolNames: List[String] = sessionLock.synchronized {
+    sessionDeniedTools.toList.map(_.wireName).sorted
   }
 
   private[assistant] def setSessionAllowedForTest(toolName: String): Unit =
@@ -284,11 +293,6 @@ object ToolPermissions {
     }
   }
 
-  private def isSensitiveArg(argName: String): Boolean = {
-    val lowered = argName.toLowerCase(Locale.ROOT)
-    AssistantConstants.SENSITIVE_ARG_TOKENS.exists(token => lowered.contains(token))
-  }
-
   private def summarizeArgs(
       args: ResponseParser.ToolArgs,
       maxPairs: Int = 4,
@@ -296,13 +300,13 @@ object ToolPermissions {
   ): Option[String] = {
     if (args.isEmpty) return None
     val summary = args.toList.sortBy(_._1).take(maxPairs).map { case (k, v) =>
-      val value =
-        if (isSensitiveArg(k)) "***"
-        else {
-          val raw = ResponseParser.toolValueToDisplay(v).replace('\n', ' ').trim
-          if (raw.length > maxValueLength) raw.take(maxValueLength) + "..." else raw
-        }
-      s"$k=$value"
+      if (ToolArgs.isSensitiveArgName(k)) "***=***"
+      else {
+        val raw = ResponseParser.toolValueToDisplay(v).replace('\n', ' ').trim
+        val value =
+          if (raw.length > maxValueLength) raw.take(maxValueLength) + "…" else raw
+        s"$k=$value"
+      }
     }
     Some(summary.mkString(", "))
   }
@@ -444,9 +448,13 @@ object ToolPermissions {
         Some(s"Policy: ${level.toDisplayString}")
       ).flatten
     val context = contextLines.mkString("\n")
+    // AskAlways is, by contract, "always prompt": session-wide allow decisions
+    // are never consulted for this level (see checkPermission), so offering
+    // "Allow (for this session)" would be a lie — the user would be asked
+    // again on the very next call regardless. Offer only the honest choices.
     val options =
       if (level == AskAlways)
-        List("Allow (for this session)", "Allow Once", "Deny Once")
+        List("Allow Once", "Deny Once")
       else
         List(
           "Allow (for this session)",

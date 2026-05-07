@@ -96,6 +96,9 @@ object IQMcpProtocol {
     * @param overwritten Whether an existing file was overwritten
     * @param opened Whether the file was successfully opened
     * @param inView Whether the file is now visible in a jEdit buffer
+    * @param tracked Whether Isabelle has registered a document model for the file;
+    *               follow-up tool calls (list_theories, read_theory, ...) only see
+    *               the file once this is true
     * @param message Status message from the operation
     */
   final case class OpenFileResult(
@@ -104,6 +107,7 @@ object IQMcpProtocol {
       overwritten: Boolean,
       opened: Boolean,
       inView: Boolean,
+      tracked: Boolean,
       message: String
   )
 

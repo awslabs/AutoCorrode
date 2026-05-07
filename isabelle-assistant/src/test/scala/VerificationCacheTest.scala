@@ -71,4 +71,47 @@ class VerificationCacheTest extends AnyFunSuite with Matchers {
     VerificationCache.classifyResult(ProofFailure("failed to apply proof method to goal")) shouldBe
       VerificationCache.ResultClass.SemanticFailure
   }
+
+  test("cache should treat entries older than TTL as misses and evict them") {
+    VerificationCache.clear()
+    val originalClock = VerificationCache.nowMs
+    try {
+      var t = 1000L
+      VerificationCache.nowMs = () => t
+      val result = IQIntegration.VerificationResult.ProofSuccess(7L, "ok")
+      VerificationCache.putByKey("Foo.thy", 1L, "lemma foo", "by simp", result)
+      VerificationCache.size shouldBe 1
+
+      VerificationCache.getByKey("Foo.thy", 1L, "lemma foo", "by simp") shouldBe Some(result)
+
+      t = 1000L + AssistantConstants.VERIFICATION_CACHE_TTL_MS + 1L
+      VerificationCache.getByKey("Foo.thy", 1L, "lemma foo", "by simp") shouldBe None
+      VerificationCache.size shouldBe 0
+    } finally VerificationCache.nowMs = originalClock
+  }
+
+  test("invalidateNode should evict only entries for the named theory") {
+    VerificationCache.clear()
+    val a = IQIntegration.VerificationResult.ProofSuccess(1L, "a")
+    val b = IQIntegration.VerificationResult.ProofSuccess(2L, "b")
+    VerificationCache.putByKey("Foo.thy", 1L, "lemma x", "by simp", a)
+    VerificationCache.putByKey("Foo.thy", 2L, "lemma y", "by simp", a)
+    VerificationCache.putByKey("Bar.thy", 3L, "lemma z", "by simp", b)
+    VerificationCache.size shouldBe 3
+
+    VerificationCache.invalidateNode("Foo.thy") shouldBe 2
+
+    VerificationCache.getByKey("Foo.thy", 1L, "lemma x", "by simp") shouldBe None
+    VerificationCache.getByKey("Foo.thy", 2L, "lemma y", "by simp") shouldBe None
+    VerificationCache.getByKey("Bar.thy", 3L, "lemma z", "by simp") shouldBe Some(b)
+  }
+
+  test("invalidateNode should no-op for null/empty names") {
+    VerificationCache.clear()
+    VerificationCache.putByKey("Foo.thy", 1L, "lemma x", "by simp",
+      IQIntegration.VerificationResult.ProofSuccess(1L, "a"))
+    VerificationCache.invalidateNode("") shouldBe 0
+    VerificationCache.invalidateNode(null) shouldBe 0
+    VerificationCache.size shouldBe 1
+  }
 }
