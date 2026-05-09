@@ -15,8 +15,6 @@ adhoc_overloading store_dereference_const \<rightleftharpoons>
   ro_dereference_fun
 
 named_theorems crush_points_to_crules
-named_theorems crush_points_to_cond_rules
-named_theorems crush_points_to_cond_drules
 named_theorems crush_points_to_cond_crules
 
 declare points_to_aentails [crush_points_to_crules]
@@ -64,8 +62,6 @@ lemma points_to_aentails_crule_focusedR[crush_aentails_cond_crules]:
 
 (*
 declare crush_points_to_crules[crush_aentails_crules]
-declare crush_points_to_cond_rules[crush_aentails_cond_rules]
-declare crush_points_to_cond_drules[crush_aentails_cond_drules]
 declare crush_points_to_cond_crules[crush_aentails_cond_crules]
 *)
 

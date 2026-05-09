@@ -553,82 +553,157 @@ lemma
   apply (aentails_rule t)
   oops
 
-subsubsection\<open>Conditional spatial \<^verbatim>\<open>rule\<close>\<close>
+subsubsection\<open>Spatial \<open>crule\<close>\<close>
+
+text\<open>A spatial \<open>crule\<close> (short for "congruence rule") is an entailment \<open>\<alpha> \<longlongrightarrow> \<beta>\<close> that
+is applied to a goal \<open>X \<star> \<alpha> \<star> Y \<longlongrightarrow> X' \<star> \<beta> \<star> Y'\<close> by floating \<open>\<alpha>\<close> to the front of the
+premises and \<open>\<beta>\<close> to the front of the conclusions, then applying monotonicity
+(\<open>asepconj_mono4\<close>: \<open>\<alpha> \<longlongrightarrow> \<alpha>' \<Longrightarrow> \<beta> \<longlongrightarrow> \<beta>' \<Longrightarrow> \<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>' \<star> \<beta>'\<close>).
+The result is a residual goal \<open>X \<star> Y \<longlongrightarrow> X' \<star> Y'\<close>.\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>A \<Longrightarrow> \<psi> [\<rho>]\<longlongrightarrow> \<alpha> \<star> \<tau>\<close>
-  shows \<open>\<chi> \<star> \<rho> \<longlongrightarrow> \<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho>\<close>
-  apply (aentails_cond_rule t)
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>A \<Longrightarrow> \<alpha> \<longlongrightarrow> \<beta>\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<longlongrightarrow> \<epsilon> \<star> \<beta> \<star> \<gamma>\<close>
+  apply (aentails_crule t)
   oops
+
+subsubsection\<open>Conditional spatial \<open>crule\<close>\<close>
+
+text\<open>A conditional crule \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close> is a spatial crule with residue: it rewrites
+\<open>\<alpha>\<close> to \<open>\<beta>\<close> in an entailment goal (like an ordinary crule), but additionally consumes
+a resource \<open>L\<close> from the premises and produces a resource \<open>R\<close> on the conclusions side.
+
+Conditional crules subsume ordinary spatial rules/drules and plain crules:
+
+ • A plain spatial \<open>drule\<close> \<open>\<alpha> \<longlongrightarrow> \<beta>\<close> corresponds to \<open>\<alpha> [UNIV]\<longlongrightarrow>[\<beta>] UNIV\<close>:
+   the consumed resource is \<open>UNIV\<close> (trivial) and the result position is
+   \<open>UNIV\<close> (trivially satisfied), so it is a pure drule from \<open>\<alpha>\<close> to \<open>\<beta>\<close>
+   with no extra obligations.
+
+ • A plain spatial \<open>rule\<close> \<open>\<alpha> \<longlongrightarrow> \<beta>\<close> corresponds to \<open>UNIV [\<alpha>]\<longlongrightarrow>[UNIV] \<beta>\<close>:
+   the matched resource is \<open>UNIV\<close> (trivial) and the produced resource is
+   \<open>UNIV\<close> (trivially satisfied), so it is a pure rule consuming \<open>\<alpha>\<close> and
+   producing \<open>\<beta>\<close> with no extra obligations.
+
+ • A spatial \<open>drule\<close> with extra LHS context corresponds to
+   \<open>\<alpha> [L]\<longlongrightarrow>[\<beta>] UNIV\<close>: the crule rewrites \<open>\<alpha>\<close> to \<open>\<beta>\<close> on the RHS, while
+   \<open>L\<close> must be extracted from the LHS first. The result position
+   (4th argument) is \<open>UNIV\<close>, which is trivially satisfied.
+
+ • A spatial \<open>rule\<close> with extra RHS context corresponds to
+   \<open>UNIV [\<alpha>]\<longlongrightarrow>[R] \<beta>\<close>: no resource is matched on the LHS, while \<open>\<alpha>\<close> is
+   consumed from the conclusions, \<open>\<beta>\<close> is produced as the result, and \<open>R\<close>
+   is added alongside it on the RHS.
+
+Below we demonstrate \<open>aentails_cond_crule\<close> in general form, then as a plain
+crule, and finally in the drule-like and rule-like degenerate forms.\<close>
+
+text\<open>General conditional crule application:\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>A \<Longrightarrow> \<psi> [\<rho>]\<longlongrightarrow> \<alpha> \<star> \<tau>\<close>
-  shows \<open>\<rho> \<longlongrightarrow> \<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho>\<close>
-  apply (aentails_cond_rule t)
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> L R :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<longlongrightarrow> \<epsilon> \<star> \<beta> \<star> \<gamma>\<close>
+  apply (aentails_cond_crule t)
   oops
+
+text\<open>With pure side conditions:\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>A \<Longrightarrow> \<psi> [\<rho>]\<longlongrightarrow> \<alpha> \<star> \<tau>\<close>
-  shows \<open>\<chi> \<star> \<rho> \<longlongrightarrow> \<tau> \<star> \<alpha>\<close>
-  apply (aentails_cond_rule t)
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> L R :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>A \<Longrightarrow> B \<Longrightarrow> \<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<longlongrightarrow> \<epsilon> \<star> \<beta> \<star> \<gamma>\<close>
+  apply (aentails_cond_crule t)
   oops
 
-subsubsection\<open>Spatial \<^verbatim>\<open>drule\<close>\<close>
+text\<open>Plain spatial drule as conditional crule: \<open>\<alpha> [UNIV]\<longlongrightarrow>[\<beta>] UNIV\<close> packages a plain
+entailment \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>. The consumed resource (\<open>L = UNIV\<close>) is trivial and the result
+position (4th argument \<open>UNIV\<close>) is trivially satisfied, so the residual is just the
+frame obligation.\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow> \<epsilon>\<close>
-  shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon>\<close>
-  \<comment>\<open>This identifies and floats matching assumptions to the left, but does not 
-  yet apply \<^verbatim>\<open>t\<close>\<close>
-  apply (tactic \<open>Separation_Logic_Tactics.aentails_float_drule_assms_tac @{thm t} @{context} 1\<close>)
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>\<alpha> [UNIV]\<longlongrightarrow>[\<beta>] UNIV\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<longlongrightarrow> \<epsilon> \<star> \<beta> \<star> \<gamma>\<close>
+  apply (aentails_cond_crule t)
   oops
+
+text\<open>Plain spatial rule as conditional crule: \<open>UNIV [\<alpha>]\<longlongrightarrow>[UNIV] \<beta>\<close> packages a plain
+entailment \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>. The matched resource (1st argument \<open>UNIV\<close>) is trivial and the
+produced resource (\<open>R = UNIV\<close>) is trivially satisfied, so the residual is just the
+frame obligation.\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>A \<Longrightarrow> B \<Longrightarrow> C \<Longrightarrow> \<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow> \<epsilon> \<star> \<iota>\<close>
-  shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon>\<close>
-  \<comment>\<open>Match and float assumptions, apply \<^verbatim>\<open>t\<close>, introduce pure and spatial premises, 
-  normalize associativity\<close>
-  apply (aentails_drule t)
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>UNIV [\<alpha>]\<longlongrightarrow>[UNIV] \<beta>\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<longlongrightarrow> \<epsilon> \<star> \<beta> \<star> \<gamma>\<close>
+  apply (aentails_cond_crule t)
   oops
 
-subsection\<open>Conditional spatial \<^verbatim>\<open>drule\<close>\<close>
+text\<open>Degenerate drule-like form \<open>\<alpha> [L]\<longlongrightarrow>[\<beta>] UNIV\<close>: this is a drule from \<open>\<alpha>\<close> to \<open>\<beta>\<close>
+that additionally requires \<open>L\<close> to be extracted from the LHS first. The result
+position is \<open>UNIV\<close> (trivially satisfied), so the tactic rewrites \<open>\<alpha>\<close> in the LHS,
+produces \<open>\<beta>\<close> on the RHS, and demands \<open>L\<close> from the remaining premises.\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[C] \<tau>\<close>
-      and t' : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[D] \<tau>\<close>
-      and t'' : \<open>\<tau> \<star> \<gamma> \<longlongrightarrow>[E] \<rho> \<close>
-    shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon> \<star> C \<star> E\<close>
-  (* Does not work because conditional D is not present *)
-  (* apply (aentails_cond_drule t') *) 
-  (* Works because conditional C is present *)
-  apply (aentails_cond_drule t)
-  apply (aentails_cond_drule t'')
+  fixes \<alpha> \<beta> \<gamma> \<delta> L :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>\<alpha> [L]\<longlongrightarrow>[\<beta>] UNIV\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> L \<star> \<delta> \<longlongrightarrow> \<gamma> \<star> \<beta> \<star> \<delta>\<close>
+  apply (aentails_cond_crule t)
   oops
 
-\<comment>\<open>Should also work with multiple rules at once\<close>
+text\<open>Same form with additional context — \<open>L\<close> need not be adjacent to \<open>\<alpha>\<close>:\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>\<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[C] \<tau>\<close>
-      and t' : \<open>\<tau> \<star> \<gamma> \<longlongrightarrow>[E] \<rho>\<close>
-    shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon> \<star> C \<star> E\<close>
-  apply (aentails_cond_drule t t')+
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> L :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>\<alpha> [L]\<longlongrightarrow>[\<beta>] UNIV\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<star> L \<star> \<epsilon> \<longlongrightarrow> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<epsilon>\<close>
+  apply (aentails_cond_crule t)
   oops
 
-\<comment>\<open>Should also work with pure premises\<close>
+text\<open>Degenerate rule-like form \<open>UNIV [\<alpha>]\<longlongrightarrow>[R] \<beta>\<close>: this is a generalisation of the
+spatial \<open>rule\<close> \<open>\<alpha> [C]\<longlongrightarrow> \<beta>\<close> (which corresponds to \<open>C \<star> \<alpha> \<longlongrightarrow> \<beta>\<close>). Here no resource is
+matched on the LHS (\<open>1st argument = UNIV\<close>), but the rule consumes \<open>\<alpha>\<close> from the
+conclusions side and produces \<open>\<beta>\<close> as the result, while also yielding \<open>R\<close>.\<close>
 
 lemma
-  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> \<tau> \<rho> :: \<open>'s::sepalg assert\<close>
-  assumes t : \<open>A \<Longrightarrow> \<beta> \<star> \<rho> \<star> \<delta> \<longlongrightarrow>[C] \<tau>\<close>
-    shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> \<star> \<tau> \<star> \<rho> \<longlongrightarrow> \<epsilon> \<star> C\<close>
-  apply (aentails_cond_drule t)
+  fixes \<alpha> \<beta> \<gamma> \<delta> R :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>UNIV [\<alpha>]\<longlongrightarrow>[R] \<beta>\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<delta> \<longlongrightarrow> \<beta> \<star> R \<star> \<gamma> \<star> \<delta>\<close>
+  apply (aentails_cond_crule t)
   oops
+
+text\<open>Same form with more context — \<open>\<alpha>\<close> is found deeper in the goal:\<close>
+
+lemma
+  fixes \<alpha> \<beta> \<gamma> \<delta> \<epsilon> R :: \<open>'s::sepalg assert\<close>
+  assumes t : \<open>UNIV [\<alpha>]\<longlongrightarrow>[R] \<beta>\<close>
+  shows \<open>\<gamma> \<star> \<delta> \<star> \<alpha> \<star> \<epsilon> \<longlongrightarrow> \<beta> \<star> R \<star> \<gamma> \<star> \<delta> \<star> \<epsilon>\<close>
+  apply (aentails_cond_crule t)
+  oops
+
+subsubsection\<open>Strong conditional spatial \<open>crule\<close>\<close>
+
+text\<open>The \<^emph>\<open>strong\<close> variant \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close> is defined as
+\<open>\<alpha> \<longlongrightarrow> R \<star> (L \<Zsurj> \<beta>) \<and> ucincl \<beta>\<close>, internalising the \<open>L\<close>-to-\<open>R\<close> exchange using the
+magic wand. Operationally, when the ordinary variant succeeds in closing the goal
+by producing \<open>R \<star> (L \<Zsurj> G)\<close> on the conclusions, the strong variant succeeds under
+the weaker condition that the \<open>L\<close>-consumption and the \<open>R\<close>-production can be
+reconciled \<^emph>\<open>directly\<close> within the residue, rather than merely via
+separation-logic magic-wand reshuffling.
+
+The distinction only matters when \<^emph>\<open>both\<close> \<open>L\<close> and \<open>R\<close> are non-trivial:
+
+  • If \<open>L = UNIV\<close>, no resource is consumed, so the magic wand \<open>UNIV \<Zsurj> \<beta>\<close>
+    collapses to \<open>\<beta>\<close> (for \<open>ucincl\<close> \<open>\<beta>\<close>) — strong and normal coincide.
+  • If \<open>R = UNIV\<close>, the production is trivial, the conclusions \<open>L \<Zsurj> G\<close>
+    can always be satisfied via \<open>awand_counit\<close>, and again the strong and
+    normal variants agree.
+  • Only when both sides genuinely exchange resources does the order of
+    \<open>L\<close>-consumption vs \<open>R\<close>-production create a distinction, and the strong
+    variant's wand-internalisation allows the residue to be closed more
+    directly.\<close>
 
 subsection\<open>Saturating unfolding of definitions\<close>
 
