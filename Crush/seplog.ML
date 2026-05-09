@@ -351,7 +351,6 @@ sig
 
   val aentails_drule_tac_single :  thm -> Proof.context -> int -> tactic
   val aentails_drule_tac : thm list -> Proof.context -> int -> tactic
-  val aentails_cond_drule_tac : thm list -> Proof.context -> int -> tactic
 
   val aentails_float_assms_concls_tac : term list -> term list -> Proof.context -> int -> tactic
   val aentails_float_crule_tac : thm -> Proof.context -> int -> tactic
@@ -362,10 +361,10 @@ sig
 
   val aentails_float_concls_tac : term list -> Proof.context -> int -> tactic
   val aentails_float_rule_concls_tac : thm -> Proof.context -> int -> tactic
+  val aentails_float_cond_crule_tac : thm -> Proof.context -> int -> tactic
 
   val aentails_rule_tac_single : thm -> Proof.context -> int -> tactic
   val aentails_rule_tac : thm list -> Proof.context -> int -> tactic
-  val aentails_cond_rule_tac : thm list -> Proof.context -> int -> tactic
 
   \<comment> \<open>Moves pure assumptions in a separating entailment to the leftmost position(s)\<close>
   val aentails_float_pure_assms_tac : Proof.context -> int -> tactic
@@ -1891,7 +1890,10 @@ struct
        fun filter arg t = is_unifiable_pair ctxt arg t
        fun float_matching_assms (arg : term) : tactic =
           aentails_pick_assms_tac' (filter arg) ctxt i
+       (* Special-case the case of a single UNIV target -- in this case, we don't float anything *)
+       val is_univ = case sp_assms of [Const (@{const_name top}, _)] => true | _ => false
      in
+       if is_univ then all_tac else
        (List.foldl Tactical.THEN all_tac (List.map float_matching_assms sp_assms))
        THEN (aentails_joinfirst_assms_tac num_assms ctxt i)
      end
@@ -1907,7 +1909,10 @@ struct
        val num_concls = List.length sp_concls
        fun float_matching_concls (arg : term) : tactic =
           aentails_pick_concls_tac' (is_unifiable_pair ctxt arg) ctxt i
+       (* Special-case the case of a single UNIV target -- in this case, we don't float anything *)
+       val is_univ = case sp_concls of [Const (@{const_name top}, _)] => true | _ => false
      in
+       if is_univ then all_tac else
        (List.foldl Tactical.THEN all_tac (List.map float_matching_concls sp_concls))
        THEN (aentails_joinfirst_concls_tac num_concls ctxt i)
      end
@@ -1919,31 +1924,11 @@ struct
            aentails_float_concls_tac sp_concls ctxt
      THEN' aentails_float_assms_tac sp_assms ctxt
 
-  fun dest_aentails_cond_rule ((Const (@{const_name aentails_conditional_rule}, _)) $ P $ C $ Q) = (P, Q, C)
-    | dest_aentails_cond_rule t = raise SeparationLogic((t |> print_term) ^ "is not a conditional entailment rule")
-
-  fun dest_aentails_cond_drule ((Const (@{const_name aentails_conditional_drule}, _)) $ P $ C $ Q) = (P, Q, C)
-    | dest_aentails_cond_drule t = raise SeparationLogic((t |> print_term) ^ "is not a conditional entailment drule")
-
   fun dest_aentails_cond_crule ((Const (@{const_name aentails_conditional_crule}, _)) $ P $ C0 $ C1 $ Q) = (P, Q, C0, C1)
     | dest_aentails_cond_crule t = raise SeparationLogic((t |> print_term) ^ "is not a conditional entailment crule")
 
   fun dest_aentails_cond_crule_strong ((Const (@{const_name aentails_conditional_crule_strong}, _)) $ P $ C0 $ C1 $ Q) = (P, Q, C0, C1)
     | dest_aentails_cond_crule_strong t = raise SeparationLogic((t |> print_term) ^ "is not a conditional entailment strong crule")
-
-  fun extract_spatial_assms_concls_from_cond_rule (thm : thm) =
-    let
-      val (_, b, C) = thm |> Thm.prop_of |> find_metaimp_conclusion |> dest_aentails_cond_rule
-    in
-      (C |> split_asepconj, b |> split_asepconj)
-    end
-
-  fun extract_spatial_assms_concls_from_cond_drule (thm : thm) =
-    let
-      val (a, _, C) = thm |> Thm.prop_of |> find_metaimp_conclusion |> dest_aentails_cond_drule
-    in
-      (a |> split_asepconj, C |> split_asepconj)
-    end
 
   fun extract_spatial_assms_concls_from_cond_crule (thm : thm) =
     let
@@ -1952,20 +1937,6 @@ struct
                          t |> dest_aentails_cond_crule_strong
     in
       (a |> split_asepconj, b |> split_asepconj)
-    end
-
-  fun aentails_float_cond_rule_tac (thm : thm) =
-    let
-      val (sp_assms, sp_concls) = extract_spatial_assms_concls_from_cond_rule thm
-    in
-      aentails_float_assms_concls_tac sp_assms sp_concls
-    end
-
-  fun aentails_float_cond_drule_tac (thm : thm) =
-    let
-      val (sp_assms, sp_concls) = extract_spatial_assms_concls_from_cond_drule thm
-    in
-      aentails_float_assms_concls_tac sp_assms sp_concls
     end
 
   fun aentails_float_cond_crule_tac (thm : thm) =
@@ -1989,18 +1960,22 @@ struct
      THEN_LAST (TRY o (aentails_normalize_assoc_assms_tac ctxt))
 
   fun make_rules_from_thm (thm : thm) =
-     (List.mapPartial (fn t => SOME (t OF [thm]) handle THM _ => NONE)
-        @{thms aentails_conditional_rules
-               aentails_conditional_drules
-               aentails_conditional_crules
-               aentails_conditional_crules_strong})
+    let
+       val try_apply = List.mapPartial (fn t => SOME (t OF [thm]) handle THM _ => NONE)
+       val univ_thms = @{thms aentails_conditional_crules_univ}
+       val nonuniv_thms = @{thms aentails_conditional_crules
+                                 aentails_conditional_crules_strong}
+       val univ_rules = try_apply univ_thms
+     in
+        if length univ_rules <> 0 then univ_rules else try_apply nonuniv_thms
+     end
 
   fun aentails_rule_single float_tac (thm : thm) (ctxt : Proof.context) =
     float_tac thm ctxt THEN' (resolve_tac ctxt (make_rules_from_thm thm))
-    THEN_LAST (TRY o (aentails_normalize_assoc_concls_tac ctxt))
-
-  val aentails_cond_drule_tac_single =
-    aentails_rule_single aentails_float_cond_drule_tac
+    THEN_LAST (
+       REPEAT_DETERM o (resolve_tac ctxt @{thms aentails_top_R awand_adjointI}) THEN'
+       TRY o (aentails_normalize_assoc_concls_tac ctxt)
+    )
 
   val aentails_cond_crule_tac_single =
     aentails_rule_single aentails_float_cond_crule_tac
@@ -2012,9 +1987,6 @@ struct
                             aentails_rule_core0 OF [thm]] handle THM _ => K no_tac
      ))
      THEN_LAST (TRY o (aentails_normalize_assoc_concls_tac ctxt))
-
-  val aentails_cond_rule_tac_single =
-    aentails_rule_single aentails_float_cond_rule_tac
 
   fun aentails_float_crule_tac (thm : thm) (ctxt : Proof.context) =
            aentails_float_rule_concls_tac thm ctxt
@@ -2038,12 +2010,6 @@ struct
 
   fun aentails_rule_tac (thms : thm list) (ctxt : Proof.context) =
     thms |> List.map (fn t => aentails_rule_tac_single t ctxt) |> FIRST'
-
-  fun aentails_cond_drule_tac (thms : thm list) (ctxt : Proof.context) =
-    thms |> List.map (fn t => aentails_cond_drule_tac_single t ctxt) |> FIRST'
-
-  fun aentails_cond_rule_tac (thms : thm list) (ctxt : Proof.context) =
-    thms |> List.map (fn t => aentails_cond_rule_tac_single t ctxt) |> FIRST'
 
   fun aentails_cond_crule_tac (thms : thm list) (ctxt : Proof.context) =
     thms |> List.map (fn t => aentails_cond_crule_tac_single t ctxt) |> FIRST'
@@ -2387,10 +2353,6 @@ local
              (Attrib.thms >> (fn thms => fn _ => (context_tactic_to_method (fn ctxt =>
                 (Separation_Logic_Tactics.aentails_drule_tac thms ctxt 1))))) "")
 
-  val _ = Theory.setup (Method.setup @{binding "aentails_cond_drule"}
-             (Attrib.thms >> (fn thms => fn _ => (context_tactic_to_method (fn ctxt =>
-                (Separation_Logic_Tactics.aentails_cond_drule_tac thms ctxt 1))))) "")
-
   val _ = Theory.setup (Method.setup @{binding "aentails_crule"}
              (Attrib.thms >> (fn thms => fn _ => (context_tactic_to_method (fn ctxt =>
                 (Separation_Logic_Tactics.aentails_crule_tac thms ctxt 1))))) "")
@@ -2402,10 +2364,6 @@ local
   val _ = Theory.setup (Method.setup @{binding "aentails_rule"}
           (Attrib.thms >> (fn thms => fn _ => (context_tactic_to_method (fn ctxt =>
              (Separation_Logic_Tactics.aentails_rule_tac thms ctxt 1))))) "")
-
-  val _ = Theory.setup (Method.setup @{binding "aentails_cond_rule"}
-          (Attrib.thms >> (fn thms => fn _ => (context_tactic_to_method (fn ctxt =>
-             (Separation_Logic_Tactics.aentails_cond_rule_tac thms ctxt 1))))) "")
 
   val _ = Theory.setup (Method.setup @{binding "aentails_hoist_pure_assms"}
           (Scan.succeed (SIMPLE_METHOD' o (Separation_Logic_Tactics.aentails_hoist_pure_assms_tac))) "")
