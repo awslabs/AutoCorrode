@@ -290,12 +290,14 @@ async def server_info(ctx: Context = None) -> str:
     "This is equivalent to writing `theory T imports A B C begin ...` in a .thy file. "
     "This is the ONLY way to make a theory's definitions, lemmas, and notations available. "
     "Theories not in the initial heap must be loaded first with `load_theory`.\n\n"
-    "`theories` is a list of fully qualified theory names. Examples:\n"
+    "`theories` is a list of theory specs. Examples:\n"
     "- [\"Main\"] — start from the standard HOL library\n"
     "- [\"HOL-Library.Multiset\"] — import the Multiset theory\n"
     "- [\"HOL-Library.Multiset\", \"HOL-Library.FSet\"] — import and merge multiple theories\n"
-    "- [\"MySession.MyTheory:42\"] — start from a specific source location (single spec only)\n\n"
-    "When multiple theories are listed, they are merged so the REPL has access to all of them. "
+    "- [\"MySession.MyTheory:42\"] — start from a specific source location (single spec only)\n"
+    "- [\"pin@A\"] — start from the pinned state of REPL A (use `repl_pin` first)\n"
+    "- [\"pin@A\", \"Main\"] — merge a pinned REPL state with a theory\n\n"
+    "When multiple specs are listed, they are merged so the REPL has access to all of them. "
     "Use `theories` to see what is already loaded in the session."
 ))
 async def init(repl: str, theories: list[str], ctx: Context = None) -> str:
@@ -393,6 +395,18 @@ async def timeout(repl: str, secs: int, ctx: Context = None) -> str:
 @mcp.tool(description="Remove a REPL and all its sub-REPLs.")
 async def remove(repl: str, ctx: Context = None) -> str:
     return await _send(ctx, f"Ir.remove {ml_str(repl)};")
+
+@mcp.tool(description="Pin (snapshot) a REPL's current theory state for use as a base in other REPLs (via \"pin@NAME\" in init). The REPL must be at theory level (not mid-proof). If the REPL is subsequently modified, the pin is marked stale until re-pinned.")
+async def repl_pin(repl: str, ctx: Context = None) -> str:
+    return await _send(ctx, f"Ir.pin {ml_str(repl)};")
+
+@mcp.tool(description="Remove a REPL's pin. Fails if other REPLs depend on this pin.")
+async def repl_unpin(repl: str, ctx: Context = None) -> str:
+    return await _send(ctx, f"Ir.unpin {ml_str(repl)};")
+
+@mcp.tool(description="Rebase a REPL onto updated pin states. Updates the base theory and marks all steps stale; call replay afterwards to re-execute them. Fails if any pin is stale (re-pin first).")
+async def rebase(repl: str, ctx: Context = None) -> str:
+    return await _send(ctx, f"Ir.rebase {ml_str(repl)};")
 
 @mcp.tool(description="List all REPL sessions.")
 async def repls(ctx: Context = None) -> str:

@@ -310,6 +310,33 @@ lemma array_of_list_list_update [simp]:
     shows \<open>(array_of_list (xs[i := e])::('a, 'b) array) = array_update (array_of_list xs) i e\<close>
 using assms by (metis array_of_list_to_array array_to_list_update list_to_array_to_list)
 
+subsection\<open>Folding updates over arrays\<close>
+
+lemma foldr_array_update_base:
+  assumes \<open>length xs \<le> j\<close>
+      and \<open>j < LENGTH('l)\<close>
+    shows \<open>array_nth (foldr (\<lambda>(i, x) arr. array_update arr i x)
+     (zip [0..<length xs] xs) (base :: ('v, 'l::len) array)) j = array_nth base j\<close>
+using assms by (induct xs arbitrary: j base rule: rev_induct)
+  (auto simp: array_nth_update nth_append)
+
+lemma foldr_array_update_nth:
+  assumes \<open>i < length xs\<close>
+      and \<open>length (xs::'v list) \<le> LENGTH('l)\<close>
+    shows \<open>array_nth (foldr (\<lambda>(i, x) arr. array_update arr i x)
+     (zip [0..<length xs] xs) (base :: ('v, 'l::len) array)) i = xs ! i\<close>
+using assms proof (induct xs arbitrary: i base rule: rev_induct)
+  case (snoc x xs)
+  then show ?case
+  proof (cases \<open>i < length xs\<close>)
+    case True with snoc show ?thesis by (simp add: array_nth_update nth_append)
+  next
+    case False with snoc have \<open>i = length xs\<close> by simp
+    then show ?thesis using snoc
+      by (simp add: foldr_array_update_base array_nth_update nth_append)
+  qed
+qed simp
+
 (*<*)
 end
 (*>*)

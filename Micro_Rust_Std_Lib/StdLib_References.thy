@@ -232,8 +232,14 @@ ucincl_auto transpose_contract
 lemma transpose_spec[crush_specs]:
   shows \<open>\<Gamma> ; transpose ro_ref \<Turnstile>\<^sub>F transpose_contract ro_ref g v_opt\<close>
   by (crush_boot f: transpose_def contract: transpose_contract_def)
-     (crush_base simp add: ro_ref_from_ref_def unsafe_ref_from_ro_ref_def 
+     (crush_base simp add: ro_ref_from_ref_def unsafe_ref_from_ro_ref_def
         intro!: focused.expand split!: ro_gref.splits option.splits)
+
+lemma prism_compose_allocatable:
+  assumes \<open>can_create_gref_for_prism p\<^sub>1\<close>
+    shows \<open>can_create_gref_for_prism (p\<^sub>1 \<diamondop>\<^sub>p p\<^sub>2)\<close>
+using assms subset_iff unfolding can_create_gref_for_prism_def prism_dom_def prism_compose_def
+  by fastforce
 
 end
 

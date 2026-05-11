@@ -445,6 +445,114 @@ lemma last_butlast_facts:
     and \<open>last xs \<in> set xs\<close>
   using assms(2) drop_last_butlast_facts[where i=0, OF _ assms(1)] by auto
 
+lemma take_append_take_right:
+  shows \<open>take n (xs @ take n ys) = take n (xs @ ys)\<close>
+proof (induction xs)
+  case Nil then show ?case by (simp add: take_take min_def)
+next
+  case (Cons a xs)
+  then show ?case by (cases n) simp_all
+qed
+
+lemma take_Cons_take:
+  assumes \<open>n > 0\<close>
+    shows \<open>take n (a # take (n - 1) ys) = take n (a # ys)\<close>
+using assms by (cases n) simp_all
+
+lemma take_append_Cons_take:
+  assumes \<open>n > 0\<close>
+    shows \<open>take n (xs @ a # take (n - 1) ys) = take n (xs @ a # ys)\<close>
+proof -
+  from assms have \<open>a # take (n - 1) ys = take n (a # ys)\<close>
+    by (cases n) simp_all
+  then have \<open>take n (xs @ a # take (n - 1) ys) = take n (xs @ take n (a # ys))\<close>
+    by simp
+  also have \<open>\<dots> = take n (xs @ a # ys)\<close>
+    by (rule take_append_take_right)
+  finally show ?thesis .
+qed
+
+lemma nth_append_image_technical:
+  assumes \<open>upper \<le> length xs\<close>
+    shows \<open>(!) (xs @ ys) ` {lower..<upper} = (!) xs ` {lower..<upper}\<close>
+by (meson assms atLeastLessThan_iff dual_order.strict_trans1 image_cong nth_append_left)
+
+lemma nth_append_image_technical2:
+  shows \<open>(!) (xs @ ys) ` {length xs ..<length xs + n} = (!) ys ` {0 ..< n}\<close>
+  apply (auto simp add: nth_append image_iff)
+  apply (metis add.commute atLeastLessThan_iff le0 less_diff_conv2)
+  by (metis atLeastLessThan_iff diff_add_inverse diff_add_inverse2 diff_self_eq_0 le0 le_diff_conv less_diff_conv)
+
+lemma nth_append_image_technical3:
+  shows \<open>(!) xs ` {0..<length xs} = set xs\<close>
+by (auto simp add: in_set_conv_nth)
+
+lemma last_take:
+  assumes \<open>0 < n\<close>
+      and \<open>n \<le> length xs\<close>
+    shows \<open>last (take n xs) = xs!(n-1)\<close>
+using assms by (induction n arbitrary: xs, auto simp add: take_Suc_conv_app_nth)
+
+lemma list_find_append_not_in_head:
+  assumes \<open>\<And> x. x \<in> set xs \<Longrightarrow> \<not> P x\<close>
+    shows \<open>List.find P (xs @ ys) = List.find P ys\<close>
+using assms by (induction xs) simp_all
+
+lemma list_find_append:
+  shows \<open>List.find P (xs @ ys) = (case (List.find P xs) of None \<Rightarrow> List.find P ys | Some el \<Rightarrow> Some el)\<close>
+by (auto split: option.splits simp add: find_None_iff find_Some_iff list_find_append_not_in_head nth_append)
+
+lemma list_find_map:
+  shows \<open>List.find P (List.map f xs) = map_option f (List.find (\<lambda> el. P (f el)) xs)\<close>
+by (induction xs; simp)
+
+lemma list_find_or_none:
+  shows \<open>(List.find (\<lambda> l. P l \<or> Q l) xs = None) = (List.find P xs = None \<and> List.find Q xs = None)\<close>
+by (induction xs; simp)
+
+lemma list_find_or_some:
+  assumes \<open>List.find (\<lambda> l. P l \<or> Q l) xs = Some el\<close>
+    shows \<open>List.find P xs = Some el \<or> List.find Q xs = Some el\<close>
+using assms by (auto simp add: find_Some_iff)
+
+lemma list_find_none_rev_none:
+  assumes \<open>List.find P xs = None\<close>
+    shows \<open>List.find P (rev xs) = None\<close>
+using assms by (simp add: find_None_iff)
+
+lemma list_find_rev_none_none:
+  shows \<open>(List.find P (rev xs) = None) = (List.find P xs = None)\<close>
+by (simp add: find_None_iff)
+
+lemma list_find_equiv_pred_none:
+  assumes \<open>List.find P xs = None\<close>
+      and \<open>\<And> x. P x = Q x\<close>
+    shows \<open>List.find Q xs = None\<close>
+using assms by (simp add: find_None_iff)
+
+lemma take_upt_min:
+  shows \<open>take k [n..<m] = [n..<min m (n + k)]\<close>
+by (cases \<open>n + k \<le> m\<close>; simp)
+
+definition sorted_wrt_on :: \<open>('a \<Rightarrow> 'a \<Rightarrow> bool) \<Rightarrow> ('a \<Rightarrow> bool) \<Rightarrow> 'a list \<Rightarrow> bool\<close> where
+  \<open>sorted_wrt_on P I xs \<equiv>
+    \<forall> j < length xs. I (xs ! j) \<longrightarrow> (\<forall> i < j. I (xs ! i) \<longrightarrow> P (xs ! i) (xs ! j))\<close>
+
+lemma sorted_wrt_on_Cons:
+  shows \<open>sorted_wrt_on P I (x # xs) \<longleftrightarrow> (I x \<longrightarrow> (\<forall>y \<in> set xs. I y \<longrightarrow> P x y)) \<and> sorted_wrt_on P I xs\<close>
+by (force simp: sorted_wrt_on_def nth_Cons' in_set_conv_nth split: nat_diff_split)
+
+lemma sorted_wrt_on: \<open>sorted_wrt_on P I xs \<equiv> sorted_wrt P (filter I xs)\<close>
+proof (induction xs)
+  case (Cons a xs)
+  then show ?case
+    by (auto simp add: sorted_wrt_on_Cons)
+qed (simp add: sorted_wrt_on_def)
+
+lemma sorted_wrt_on_map:
+  shows \<open>sorted_wrt_on P I (list.map f xs) = sorted_wrt_on (\<lambda>x y. P (f x) (f y)) (I \<circ> f) xs\<close>
+by (simp add: sorted_wrt_on_def)
+
 (*<*)
 end
 (*>*)

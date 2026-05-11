@@ -551,6 +551,40 @@ translations
        (_urust_shallow_args_app a6 (_urust_shallow_args_app a7
        (_urust_shallow_args_app a8 (_urust_shallow_args_single a9))))))))))"
     \<rightleftharpoons> "CONST funcall10 func a0 a1 a2 a3 a4 a5 a6 a7 a8 a9"
+  "_urust_shallow_fun_with_args func
+       (_urust_shallow_args_app a0 (_urust_shallow_args_app a1
+       (_urust_shallow_args_app a2 (_urust_shallow_args_app a3
+       (_urust_shallow_args_app a4 (_urust_shallow_args_app a5
+       (_urust_shallow_args_app a6 (_urust_shallow_args_app a7
+       (_urust_shallow_args_app a8 (_urust_shallow_args_app a9
+       (_urust_shallow_args_single a10)))))))))))"
+    \<rightleftharpoons> "CONST funcall11 func a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10"
+  "_urust_shallow_fun_with_args func
+       (_urust_shallow_args_app a0 (_urust_shallow_args_app a1
+       (_urust_shallow_args_app a2 (_urust_shallow_args_app a3
+       (_urust_shallow_args_app a4 (_urust_shallow_args_app a5
+       (_urust_shallow_args_app a6 (_urust_shallow_args_app a7
+       (_urust_shallow_args_app a8 (_urust_shallow_args_app a9
+       (_urust_shallow_args_app a10 (_urust_shallow_args_single a11))))))))))))"
+    \<rightleftharpoons> "CONST funcall12 func a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11"
+  "_urust_shallow_fun_with_args func
+       (_urust_shallow_args_app a0 (_urust_shallow_args_app a1
+       (_urust_shallow_args_app a2 (_urust_shallow_args_app a3
+       (_urust_shallow_args_app a4 (_urust_shallow_args_app a5
+       (_urust_shallow_args_app a6 (_urust_shallow_args_app a7
+       (_urust_shallow_args_app a8 (_urust_shallow_args_app a9
+       (_urust_shallow_args_app a10 (_urust_shallow_args_app a11
+       (_urust_shallow_args_single a12)))))))))))))"
+    \<rightleftharpoons> "CONST funcall13 func a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12"
+  "_urust_shallow_fun_with_args func
+       (_urust_shallow_args_app a0 (_urust_shallow_args_app a1
+       (_urust_shallow_args_app a2 (_urust_shallow_args_app a3
+       (_urust_shallow_args_app a4 (_urust_shallow_args_app a5
+       (_urust_shallow_args_app a6 (_urust_shallow_args_app a7
+       (_urust_shallow_args_app a8 (_urust_shallow_args_app a9
+       (_urust_shallow_args_app a10 (_urust_shallow_args_app a11
+       (_urust_shallow_args_app a12 (_urust_shallow_args_single a13))))))))))))))"
+    \<rightleftharpoons> "CONST funcall14 func a0 a1 a2 a3 a4 a5 a6 a7 a8 a9 a10 a11 a12 a13"
 
   \<comment>\<open>These rules decompose method calls into calls using explicit self arguments.
      The translation is one-way; otherwise it fires for basically all functions.\<close>

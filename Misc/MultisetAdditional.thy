@@ -413,6 +413,69 @@ proof -
   finally show ?thesis by simp
 qed
 
+subsection\<open>Multiset-set range splitting\<close>
+
+lemma mset_set_Suc_image:
+  shows \<open>mset_set {Suc 0..<Suc n} = image_mset Suc (mset_set {0..<n})\<close>
+proof -
+  have \<open>{Suc 0..<Suc n} = Suc ` {0..<n}\<close>
+    by auto
+  also have \<open>mset_set ... = image_mset Suc (mset_set {0..<n})\<close>
+    by (rule image_mset_mset_set[symmetric]) (simp add: inj_on_def)
+  finally show ?thesis .
+qed
+
+lemma mset_set_singleton_difference:
+  assumes \<open>l > 0\<close>
+    shows \<open>mset_set {0..<l} - mset_set {Suc 0..<l} = {# 0 #}\<close>
+proof -
+  obtain n where \<open>l = Suc n\<close>
+    using assms gr0_implies_Suc by blast
+  hence \<open>{0..<l} = {0} \<union> {Suc 0..<l}\<close>
+    by force
+  hence \<open>mset_set {0..<l} = {#0#} + mset_set {Suc 0..<l}\<close>
+    by (simp add: mset_set_Union)
+  thus ?thesis
+    by simp
+qed
+
+subsection\<open>Image multisets and cardinality\<close>
+
+lemma count_image_mset_eqcard:
+  assumes \<open>finite A\<close>
+    shows \<open>multiset.count {# f . mset_set A #} a = card {x\<in>A. f x = a}\<close>
+  using assms
+proof induction
+  case empty
+  then show ?case by auto
+next
+  case (insert u A)
+  then have \<section>: \<open>{x \<in> insert u A. f x = a} = (if f u = a then insert u {x\<in>A. f x = a} else {x\<in>A. f x = a})\<close>
+    by auto
+  show ?case
+    using insert unfolding \<section> by auto
+qed
+
+lemma mset_image_bijection:
+  assumes \<open>finite A\<close> \<open>inj h\<close> \<open>range h = UNIV\<close>
+    shows \<open>{# f . mset_set A #} = {# f (h a) . a \<leftarrow> mset_set (h -` A) #}\<close>
+proof -
+  { fix a
+    have \<section>: \<open>bij_betw h {x \<in> h -` A. f (h x) = a} {x \<in> A. f x = a}\<close>
+      using assms by (auto simp: bij_betw_def inj_on_def)
+    have \<open>multiset.count {# f . mset_set A #} a = card {x\<in>A. f x = a}\<close>
+      by (simp add: count_image_mset_eqcard assms(1))
+    also have \<open>... = card {x \<in> h -` A. f (h x) = a}\<close>
+      using "\<section>" bij_betw_same_card by force
+    also have \<open>... = multiset.count {# f (h a) . a \<leftarrow> mset_set (h -` A) #} a\<close>
+      by (simp add: assms count_image_mset_eqcard finite_vimageI)
+    finally
+    have \<open>multiset.count {# f . mset_set A #} a = multiset.count {# f (h a) . a \<leftarrow> mset_set (h -` A) #} a\<close>.
+  } then
+  show ?thesis
+    by (auto simp: multiset_eq_iff count_mset_set')
+qed
+
 (*<*)
 end
 (*>*)
