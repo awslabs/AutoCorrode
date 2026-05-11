@@ -62,6 +62,13 @@ proof -
   from this show \<open>is_array (braun_of a LENGTH('l)) LENGTH('l)\<close>
     by (clarsimp simp add: is_array_def braun_braun_of)
 qed
+lift_definition array_of_fun :: \<open>(nat \<Rightarrow> 'a) \<Rightarrow> ('a, 'l::{len}) array\<close>
+  is \<open>\<lambda>f. braun_of_fun f LENGTH('l)\<close>
+proof -
+  fix f :: \<open>nat \<Rightarrow> 'a\<close>
+  show \<open>is_array (braun_of_fun f LENGTH('l)) LENGTH('l)\<close>
+    by (simp del: braun_of_fun.simps add: is_array_def braun_braun_of_fun size_braun_of_fun)
+qed
 
 lift_definition array_of_list :: \<open>'a list \<Rightarrow> ('a, 'b::len) Array.array\<close>
   is \<open>\<lambda>ls. let a = brauns1 ls;
@@ -220,6 +227,18 @@ using assms proof transfer
   from this show \<open>lookup1 (braun_of v LENGTH('l)) (i + 1) = v\<close>
     using list_braun_of length_replicate nth_list_lookup1 nth_replicate by (metis Suc_eq_plus1
       braun_braun_of size_list)
+qed
+
+lemma array_of_fun_nth [simp]:
+  assumes \<open>i < LENGTH('l::{len})\<close>
+    shows \<open>array_nth (array_of_fun f :: ('a, 'l :: {len}) array) i = f (i + 1)\<close>
+using assms proof transfer
+     fix i
+     and f :: \<open>nat \<Rightarrow> 'a\<close>
+  assume \<open>i < LENGTH('l)\<close>
+  from this show \<open>lookup1 (braun_of_fun f LENGTH('l)) (i + 1) = f (i + 1)\<close>
+    using lookup1_braun_of_fun[of \<open>i + 1\<close> \<open>LENGTH('l)\<close> f]
+    by (simp del: braun_of_fun.simps)
 qed
 
 lemma array_update_overwrite [simp]:

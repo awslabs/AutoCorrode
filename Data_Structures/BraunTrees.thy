@@ -223,7 +223,7 @@ proof (induction t)
     by simp
 next case (Node l a r)
   show ?case
-  proof (cases "height l \<le> height r")
+  proof (cases \<open>height l \<le> height r\<close>)
     case True
     have \<open>size1(Node l a r) = size1 l + size1 r\<close>
       by simp
@@ -610,7 +610,7 @@ using assms proof(induction t)
   thus ?case
     by simp
 next
-  have *: \<open>(*) 2 ` {a..b} \<union> Suc ` (*) 2 ` {a..b} = {2*a..2*b+1}\<close> (is "?l = ?r") for a b
+  have *: \<open>(*) 2 ` {a..b} \<union> Suc ` (*) 2 ` {a..b} = {2*a..2*b+1}\<close> (is \<open>?l = ?r\<close>) for a b
   proof
     show \<open>?l \<subseteq> ?r\<close>
       by auto
@@ -628,7 +628,7 @@ next
       by fastforce
   qed
   case (Node l x r)
-  hence \<open>size l = size r \<or> size l = size r + 1\<close> (is "?A \<or> ?B")
+  hence \<open>size l = size r \<or> size l = size r + 1\<close> (is \<open>?A \<or> ?B\<close>)
     by auto
   thus ?case
   proof
@@ -640,7 +640,7 @@ next
   qed
 qed
 
-text "The other direction is more complicated. The following proof is due to Thomas Sewell."
+text \<open>The other direction is more complicated. The following proof is due to Thomas Sewell.\<close>
 
 lemma disj_evens_odds:
   shows \<open>(*) 2 ` A \<inter> Suc ` (*) 2 ` B = {}\<close>
@@ -689,7 +689,7 @@ proof -
 qed
 
 lemma odd_of_intvl_intvl:
-    fixes S :: "nat set"
+    fixes S :: \<open>nat set\<close>
   assumes \<open>S = {m..n} \<inter> {i. odd i}\<close>
     shows \<open>\<exists>m' n'. S = Suc ` (\<lambda>i. i * 2) ` {m'..n'}\<close>
 proof -
@@ -722,7 +722,7 @@ next case (Node l x r)
   obtain t where t: \<open>t = Node l x r\<close>
     by simp
   from Node.prems have eq: \<open>{2 .. size t} = (\<lambda>i. i * 2) ` braun_indices l \<union> Suc ` (\<lambda>i. i * 2) ` braun_indices r\<close>
-    (is "?R = ?S \<union> ?T")
+    (is \<open>?R = ?S \<union> ?T\<close>)
     apply clarsimp
     apply (drule_tac f=\<open>\<lambda>S. S \<inter> {2..}\<close> in arg_cong)
     apply (simp add: t mult.commute Int_Un_distrib2 image_int_eq_image braun_indices1_le)
@@ -1111,6 +1111,113 @@ by (unfold braun_of_def) (metis eq_fst_iff braun2_of_size_braun)
 corollary list_braun_of:
   shows \<open>braun_list (braun_of x n) = replicate n x\<close>
 by (unfold braun_of_def) (metis eq_fst_iff braun2_of_replicate)
+
+subsubsection\<open>Initialization with a family of elements\<close>
+
+text \<open>Generate a Braun array from a function rather than from a constant\<close>
+
+fun braun_of_fun :: \<open>(nat \<Rightarrow> 'a) \<Rightarrow> nat \<Rightarrow> 'a tree\<close> where
+  \<open>braun_of_fun f n =
+     (if n=0 then
+        Leaf
+      else
+        let m = (n-1) div 2 in
+          if odd n then
+            Node (braun_of_fun (f \<circ> (*)2) m) (f 1) (braun_of_fun (\<lambda>i. f(Suc(2*i))) m)
+          else
+            Node (braun_of_fun (f \<circ> (*)2) (m + 1)) (f 1) (braun_of_fun (\<lambda>i. f(Suc(2*i))) m))\<close>
+
+lemma lookup1_braun_of_fun:
+  shows \<open>i \<in> {1..n} \<Longrightarrow> lookup1 (braun_of_fun f n) i = f i\<close>
+proof (induction n arbitrary: f i rule: less_induct)
+  case (less n f i)
+  show ?case
+  proof (cases \<open>n = 0\<close>)
+    case True
+    with less.prems show ?thesis by simp
+  next
+    case False
+    then have n_pos: \<open>n > 0\<close> by simp
+    define m where m_def: \<open>m = (n - 1) div 2\<close>
+    show ?thesis
+    proof (cases \<open>i = 1\<close>)
+      case True
+      with n_pos show ?thesis by (simp add: Let_def)
+    next
+      case i_ne_1: False
+      with less.prems have i_gt_1: \<open>i > 1\<close> by auto
+      show ?thesis
+      proof (cases \<open>even i\<close>)
+        case even_i: True
+        define sz where sz_def: \<open>sz = (if odd n then m else m + 1)\<close>
+        have sz_lt_n: \<open>sz < n\<close>
+          using n_pos m_def sz_def by auto
+        have div_in: \<open>i div 2 \<in> {1..sz}\<close>
+          using less.prems even_i m_def sz_def even_i i_gt_1
+        proof -
+          from even_i i_gt_1 have \<open>1 \<le> i div 2\<close> by arith
+          moreover have "i div 2 \<le> sz"
+            using less.prems even_i m_def sz_def by simp arith
+          ultimately show ?thesis by simp
+        qed
+        have \<open>lookup1 (braun_of_fun f n) i = lookup1 (braun_of_fun (f \<circ> (*) 2) sz) (i div 2)\<close>
+          using n_pos i_ne_1 even_i by (simp add: Let_def m_def sz_def)
+        also have \<open>\<dots> = (f \<circ> (*) 2) (i div 2)\<close>
+          by (rule less.IH[OF sz_lt_n div_in])
+        also have \<open>\<dots> = f i\<close>
+          using even_i by auto
+        finally show ?thesis .
+      next
+        case odd_i: False
+        then have odd_i_fact: \<open>odd i\<close> by simp
+        have m_lt_n: \<open>m < n\<close>
+          using n_pos m_def by arith
+        have div_in: \<open>i div 2 \<in> {1..m}\<close>
+        proof -
+          from odd_i_fact i_gt_1 have \<open>1 \<le> i div 2\<close> by arith
+          moreover have \<open>i div 2 \<le> m\<close>
+            using less.prems odd_i_fact m_def by simp arith
+          ultimately show ?thesis by simp
+        qed
+        have \<open>lookup1 (braun_of_fun f n) i = lookup1 (braun_of_fun (\<lambda>i. f (Suc (2 * i))) m) (i div 2)\<close>
+          using n_pos i_ne_1 odd_i
+          by (subst braun_of_fun.simps) (simp del: braun_of_fun.simps add: Let_def m_def)
+        also have \<open>\<dots> = (\<lambda>i. f (Suc (2 * i))) (i div 2)\<close>
+          by (rule less.IH[OF m_lt_n div_in])
+        also have \<open>\<dots> = f i\<close>
+          using odd_i_fact by (simp add: odd_two_times_div_two_succ)
+        finally show ?thesis .
+      qed
+    qed
+  qed
+qed
+
+lemma braun_of_fun_works:
+  shows \<open>size (braun_of_fun f n) = n \<and> braun (braun_of_fun f n)\<close>
+proof (induction n arbitrary: f rule: less_induct)
+  case (less n)
+  show ?case
+  proof (cases \<open>n = 0\<close>)
+    case True then show ?thesis by simp
+  next
+    case False
+    define m where \<open>m = (n - 1) div 2\<close>
+    have \<open>m < n\<close> using False m_def by arith
+    show ?thesis
+    proof (cases \<open>odd n\<close>)
+      case True
+      then show ?thesis
+        using less.IH \<open>m < n\<close>
+        by (simp add: braun_of_fun.simps [of f n] Let_def m_def del: braun_of_fun.simps) presburger
+    next
+      case False
+      with \<open>n \<noteq> 0\<close> have \<open>m + 1 < n\<close> using m_def by arith
+      then show ?thesis
+        using less.IH \<open>m < n\<close>
+        by (simp add: braun_of_fun.simps [of f n]Let_def m_def del: braun_of_fun.simps) presburger
+    qed
+  qed
+qed
 
 subsubsection\<open>Proof Infrastructure\<close>
 
