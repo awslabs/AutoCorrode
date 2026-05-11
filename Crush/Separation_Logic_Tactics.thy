@@ -83,6 +83,161 @@ chunked composition instead of ad-hoc generation.\<close>
 local_setup\<open>prove_register_asepconj_pick_upto 75\<close>
 local_setup\<open>prove_register_asepconj_rotate_upto 25\<close>
 
+text\<open>Pre-generate cached hoist-existential theorems for separating conjunctions.
+For positions beyond this limit, \<^verbatim>\<open>asepconj_hoist_conv\<close> in \<^file>\<open>seplog.ML\<close> builds
+the conversion on the fly from distrib + distrib_right.\<close>
+local_setup\<open>prove_register_asepconj_hoist_upto 75\<close>
+
+text\<open>Tests for existential hoisting out of separating conjunctions.
+
+Three implementations are provided in \<^file>\<open>seplog.ML\<close>:
+
+\<^item> \<^bold>\<open>Pre-generated\<close> (\<^verbatim>\<open>asepconj_hoist_existential_pregen_conv\<close>):
+  Scans the right spine for \<open>\<Squnion>(range ...)\<close> components and hoists each one
+  using cached theorems.  For positions within the cache limit (set above via
+  \<^verbatim>\<open>prove_register_asepconj_hoist_upto\<close>), each hoist is a single rewrite; beyond
+  the limit it falls back to chunked composition.
+  Total cost: O(N) scan + O(K) hoists, each O(1) within the cache or O(i/L)
+  beyond it, where L is the cache limit.
+
+\<^item> \<^bold>\<open>Binary tree\<close> (\<^verbatim>\<open>asepconj_hoist_existential_tree_conv\<close>):
+  Re-associates the right-associated chain into a balanced binary tree of
+  depth \<^verbatim>\<open>O(log\<^sub>2 N)\<close>, distributes \<open>\<Squnion>\<close> bottom-up at each internal node using
+  \<^verbatim>\<open>asepconj_Inf_distrib\<close> / \<^verbatim>\<open>asepconj_Inf_distrib_right\<close>, and re-flattens.
+  Total cost: O(N log N), independent of the cache limit.
+
+\<^item> \<^bold>\<open>4-ary tree\<close> (\<^verbatim>\<open>asepconj_hoist_existential_tree4_conv\<close>):
+  Same approach as the binary tree, but re-associates into a 4-ary tree
+  of depth \<^verbatim>\<open>O(log\<^sub>4 N)\<close>.  Each internal node is a right-associated chain of
+  up to 4 children; hoisting uses 4-ary distrib theorems
+  (\<^verbatim>\<open>asepconj_Inf_distrib4_1\<close> through \<^verbatim>\<open>_4\<close>) plus the 2-ary and 3-ary
+  variants for nodes with fewer children.  The shallower tree reduces the
+  number of \<^verbatim>\<open>abs_conv\<close> binder-descent levels during the merge phase.
+
+The tree versions are asymptotically better than the pre-generated approach,
+but have higher constant factors due to balancing and re-flattening.
+With a cache limit of 25, the pre-generated version is faster for small
+chains; the tree versions win for larger N.\<close>
+
+ML\<open>
+local
+  open Separation_Logic_Tactics
+
+  val T = @{typ "'s::sepalg assert"}
+  val fT = @{typ "'s"} --> T
+
+  fun mk_sup_range i =
+    Const (@{const_name Sup}, HOLogic.mk_setT T --> T) $
+     (Const (@{const_name image}, fT --> HOLogic.mk_setT @{typ "'s"} --> HOLogic.mk_setT T) $
+      Free ("R" ^ Int.toString i, fT) $
+      Const (@{const_name top}, HOLogic.mk_setT @{typ "'s"}))
+  fun mk_plain i = Free ("A" ^ Int.toString i, T)
+
+  fun mk_test_chain ctxt n every =
+    let
+      val terms = List.tabulate (n, fn i =>
+        if i mod every = 0 then mk_sup_range i else mk_plain i) @ [Free ("tail", T)]
+    in Thm.cterm_of ctxt (mk_asepconj terms) end
+
+  fun elapsed f =
+    let val start = Timing.start ()
+        val x = f ()
+        val t = Timing.result start
+    in (x, #elapsed t |> Time.toMilliseconds) end
+
+  fun assert_top_is_Sup name result =
+    let val rhs = Thm.rhs_of result |> Thm.term_of
+    in (case rhs of Const (@{const_name Sup}, _) $ _ => ()
+         | _ => error ("FAILED " ^ name ^ ": top of RHS is not Sup.\nGot: " ^
+                       Syntax.string_of_term @{context} rhs))
+    end
+
+  (* Positional hoist tests (pre-generated approach) *)
+  fun test_hoist_conv ctxt i =
+    let
+      val prefix = List.tabulate (i, mk_plain)
+      val ct = Thm.cterm_of ctxt (mk_asepconj (prefix @ [mk_sup_range 99, Free ("tail", T)]))
+      val (_, t) = elapsed (fn () => asepconj_hoist_conv ctxt i ct)
+      val _ = tracing ("  hoist_conv(" ^ Int.toString i ^ "): " ^ Int.toString t ^ "ms")
+    in () end
+
+  fun test_hoist_tail_conv ctxt i =
+    let
+      val prefix = List.tabulate (i + 1, mk_plain)
+      val ct = Thm.cterm_of ctxt (mk_asepconj (prefix @ [mk_sup_range 99]))
+      val (_, t) = elapsed (fn () => asepconj_hoist_tail_conv ctxt i ct)
+      val _ = tracing ("  hoist_tail_conv(" ^ Int.toString i ^ "): " ^ Int.toString t ^ "ms")
+    in () end
+
+  (* Correctness test: mixed chain with both plain and Sup components *)
+  fun test_correctness label conv ctxt terms =
+    let
+      val ct = Thm.cterm_of ctxt (mk_asepconj terms)
+      val (result, t) = elapsed (fn () => conv ctxt ct)
+      val _ = tracing ("  " ^ label ^ ": " ^ Int.toString t ^ "ms")
+      val _ = assert_top_is_Sup label result
+    in () end
+
+  val mixed_terms = [mk_sup_range 1, mk_plain 0, mk_sup_range 2,
+                     mk_plain 1, mk_plain 2, mk_sup_range 3, Free ("tail", T)]
+  val tail_terms  = [mk_plain 0, mk_plain 1, mk_sup_range 1]
+  val tail2_terms = [mk_sup_range 1, mk_plain 0, mk_sup_range 2]
+
+  (* Comparative benchmark *)
+  fun bench ctxt n every =
+    let
+      val ct = mk_test_chain ctxt n every
+      val (_, t_pregen) = elapsed (fn () => asepconj_hoist_existential_pregen_conv ctxt ct)
+                          handle CTERM _ => (Thm.reflexive ct, ~1)
+      val (_, t_tree) = elapsed (fn () => asepconj_hoist_existential_tree_conv ctxt ct)
+                        handle CTERM _ => (Thm.reflexive ct, ~1)
+      val (_, t_tree4) = elapsed (fn () => asepconj_hoist_existential_tree4_conv ctxt ct)
+                         handle CTERM _ => (Thm.reflexive ct, ~1)
+      val _ = tracing ("  n=" ^ Int.toString n ^
+                        " every=" ^ Int.toString every ^
+                        "  pregen=" ^ Int.toString t_pregen ^ "ms" ^
+                        "  tree2=" ^ Int.toString t_tree ^ "ms" ^
+                        "  tree4=" ^ Int.toString t_tree4 ^ "ms")
+    in () end
+in
+  (* Pre-generated: positional hoist within and beyond cache *)
+  val _ = tracing "=== hoist_conv (within cache) ===";
+  val _ = List.app (test_hoist_conv @{context}) [0, 5, 24];
+  val _ = tracing "=== hoist_conv (beyond cache, chunked) ===";
+  val _ = List.app (test_hoist_conv @{context}) [75, 200];
+  val _ = tracing "=== hoist_tail_conv (within cache) ===";
+  val _ = List.app (test_hoist_tail_conv @{context}) [0, 5, 24];
+  val _ = tracing "=== hoist_tail_conv (beyond cache, chunked) ===";
+  val _ = List.app (test_hoist_tail_conv @{context}) [75, 200];
+
+  (* Correctness: pre-generated bulk *)
+  val _ = tracing "=== Correctness: pre-generated ===";
+  val _ = test_correctness "pregen/mixed" asepconj_hoist_existential_pregen_conv @{context} mixed_terms;
+  val _ = test_correctness "pregen/tail"  asepconj_hoist_existential_pregen_conv @{context} tail_terms;
+  val _ = test_correctness "pregen/tail2" asepconj_hoist_existential_pregen_conv @{context} tail2_terms;
+
+  (* Correctness: binary tree *)
+  val _ = tracing "=== Correctness: tree2 ===";
+  val _ = test_correctness "tree2/mixed" asepconj_hoist_existential_tree_conv @{context} mixed_terms;
+  val _ = test_correctness "tree2/tail"  asepconj_hoist_existential_tree_conv @{context} tail_terms;
+  val _ = test_correctness "tree2/tail2" asepconj_hoist_existential_tree_conv @{context} tail2_terms;
+
+  (* Correctness: 4-ary tree *)
+  val _ = tracing "=== Correctness: tree4 ===";
+  val _ = test_correctness "tree4/mixed" asepconj_hoist_existential_tree4_conv @{context} mixed_terms;
+  val _ = test_correctness "tree4/tail"  asepconj_hoist_existential_tree4_conv @{context} tail_terms;
+  val _ = test_correctness "tree4/tail2" asepconj_hoist_existential_tree4_conv @{context} tail2_terms;
+
+  (* Comparative benchmark: pregen vs tree2 vs tree4 at varying sizes and densities *)
+  val _ = tracing "=== Comparison: all Sup (every=1) ===";
+  val tests = [10, 20, 30, 40, 50, 70, 80, 90, 100, 200, 300, 400, 500, 600, 750, 1000]
+  val _ = List.app (fn n => bench @{context} n 1) tests;
+  val _ = tracing "=== Comparison: every 4th ===";
+  val _ = List.app (fn n => bench @{context} n 4) tests
+
+end
+\<close>
+
 ML\<open>
   \<comment>\<open>Stress test for chunked pick composition beyond the cached range.\<close>
 local

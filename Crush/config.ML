@@ -87,6 +87,8 @@ sig
 
   val relevance_filter_max_facts : int Config.T
 
+  val hoist_existential_tree_threshold : int Config.T
+
   val crush_simp_trace_enable : bool Config.T
 
   val crush_force_inline : bool Config.T
@@ -161,6 +163,8 @@ struct
   val enable_base_simps_detect_aentails_contradiction = Attrib.setup_config_bool @{binding "crush_enable_contradiction_detection"} (K true)
 
   val relevance_filter_max_facts = Attrib.setup_config_int @{binding "crush_relevance_filter_max_facts"} (K 20)
+
+  val hoist_existential_tree_threshold = Attrib.setup_config_int @{binding "crush_hoist_existential_tree_threshold"} (K 300)
 
   val simp_general_implies_prems = Attrib.setup_config_bool @{binding "crush_simp_general_implies_prems"} (K false)
   val simp_general_implies_concls = Attrib.setup_config_bool @{binding "crush_simp_general_implies_concls"} (K false)
