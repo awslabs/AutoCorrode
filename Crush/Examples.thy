@@ -336,6 +336,60 @@ next
     done
 end
 
+subsubsection\<open>Hoisting existentials from separating assumptions\<close>
+
+text\<open>When the LHS of a separating entailment contains \<open>\<Squnion>(range ...)\<close> components
+buried inside a separating conjunction, \<^verbatim>\<open>aentails_hoist_existential\<close> hoists them
+all to the top and introduces them via \<^verbatim>\<open>aexists_entailsL\<close>:\<close>
+
+notepad
+begin
+  fix \<phi> \<psi> \<xi> :: \<open>'s::sepalg assert\<close>
+  fix R1 R2 :: \<open>'t \<Rightarrow> 's assert\<close>
+  assume 1: \<open>\<And>x y. R1 x \<star> \<phi> \<star> R2 y \<star> \<psi> \<longlongrightarrow> \<xi>\<close>
+  have \<open>\<Squnion>(range R1) \<star> \<phi> \<star> \<Squnion>(range R2) \<star> \<psi> \<longlongrightarrow> \<xi>\<close>
+    apply aentails_hoist_existential
+    apply (rule 1)
+    done
+next
+  \<comment>\<open>Also works when only some components are existential:\<close>
+  fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close>
+  fix R :: \<open>'t \<Rightarrow> 's assert\<close>
+  assume 1: \<open>\<And>x. \<alpha> \<star> R x  \<star> \<beta> \<star> \<gamma> \<longlongrightarrow> \<gamma>\<close>
+  have \<open>\<alpha> \<star> (\<Squnion>x. R x) \<star> \<beta> \<star> \<gamma> \<longlongrightarrow> \<gamma>\<close>
+    apply aentails_hoist_existential
+    apply (rule 1)
+    done
+next
+  \<comment>\<open>Avoids name clashes with existing variables:\<close>
+  fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close>
+  fix R S :: \<open>'t \<Rightarrow> 's assert\<close>
+  fix x :: \<open>'t\<close>
+  assume 1: \<open>\<And>x y. \<alpha> \<star> R x  \<star> \<beta> \<star> \<gamma> \<star> S y \<longlongrightarrow> \<gamma>\<close>
+  have \<open>\<alpha> \<star> (\<Squnion>x. R x) \<star> \<beta> \<star> \<gamma> \<star> S x \<longlongrightarrow> \<gamma>\<close>
+    apply aentails_hoist_existential
+    apply (rule 1)
+    done
+next
+  \<comment>\<open>Also works with nested existentials:\<close>
+  fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close>
+  fix R :: \<open>'t \<Rightarrow> 't \<Rightarrow> 's assert\<close>
+  assume 1: \<open>\<And>x y. \<alpha> \<star> R x y \<star> \<beta> \<star> \<gamma> \<longlongrightarrow> \<gamma>\<close>
+  have \<open>\<alpha> \<star> (\<Squnion>x y. R x y) \<star> \<beta> \<star> \<gamma> \<longlongrightarrow> \<gamma>\<close>
+    apply aentails_hoist_existential
+    apply (rule 1)
+    done
+next
+  \<comment>\<open>Works for the tail position as well:\<close>
+  fix \<alpha> \<beta> :: \<open>'s::sepalg assert\<close>
+  fix R :: \<open>'t \<Rightarrow> 's assert\<close>
+  assume 1: \<open>\<And>x. \<alpha> \<star> \<beta> \<star> R x \<longlongrightarrow> \<alpha>\<close>
+  have \<open>\<alpha> \<star> \<beta> \<star> \<Squnion>(range R) \<longlongrightarrow> \<alpha>\<close>
+    apply aentails_hoist_existential
+    apply (rule 1)
+    done
+end
+
 subsubsection\<open>Entailment cancellation\<close>
 
 text\<open>Entailment cancellation detects pairs of unifiable spatial premises and conclusions

@@ -141,6 +141,148 @@ in
      | SOME t => t)
 end
 
+(* Hoist-existential theorem infrastructure: generation, caching, and lookup.
+
+   Two families of hoist theorems, analogous to the two picker families (last / non-last):
+
+   "With-tail" hoist at position i (the \<Squnion> is not the last element):
+     \<beta>0 \<star> ... \<star> \<beta>i-1 \<star> (\<Squnion>x. \<phi> x) \<star> \<psi> = (\<Squnion>x. \<beta>0 \<star> ... \<star> \<beta>i-1 \<star> \<phi> x \<star> \<psi>)
+
+   "Tail" hoist at position i (the \<Squnion> is the last element):
+     \<beta>0 \<star> ... \<star> \<beta>i-1 \<star> (\<Squnion>x. \<phi> x) = (\<Squnion>x. \<beta>0 \<star> ... \<star> \<beta>i-1 \<star> \<phi> x)
+
+   Position 0 with-tail is just asepconj_Inf_distrib.
+   Position 0 tail is just asepconj_Inf_distrib_right (on a 2-element conjunction).
+
+   For the chunked composition beyond the cache limit, we need both families,
+   just as the picker needs both pick(n, n-2) and pick(n, n-1). *)
+
+structure ASepconj_Hoist_Thms = Theory_Data
+ (type T = int -> thm option
+  val empty = K NONE
+  fun merge (a,b) i = (case a i of SOME x => SOME x | _ => b i))
+
+structure ASepconj_Hoist_Tail_Thms = Theory_Data
+ (type T = int -> thm option
+  val empty = K NONE
+  fun merge (a,b) i = (case a i of SOME x => SOME x | _ => b i))
+
+structure ASepconj_Hoist_Cache_Limit = Theory_Data
+ (type T = int
+  val empty = 0
+  fun merge (a, b) = Int.max (a, b))
+
+
+local
+  fun int_range' i =
+    let fun core _    0 acc = acc
+          | core base i acc = core (base + 1) (i - 1) (acc @ [base])
+    in core 0 i [] end
+
+  val distrib_meta = @{thm asepconj_Inf_distrib} RS eq_reflection
+  val distrib_right_meta = @{thm asepconj_Inf_distrib_right} RS eq_reflection
+
+  (* Conversion for proving with-tail hoist theorems:
+     Descend i levels, apply distrib, bubble up with distrib_right. *)
+  fun hoist_at_conv 0 : conv = Conv.rewr_conv distrib_meta
+    | hoist_at_conv i =
+        Conv.arg_conv (hoist_at_conv (i - 1))
+        then_conv Conv.rewr_conv distrib_right_meta
+
+  (* Conversion for proving tail hoist theorems:
+     Descend i levels, apply distrib_right (last element), bubble up. *)
+  fun hoist_tail_conv 0 : conv = Conv.rewr_conv distrib_right_meta
+    | hoist_tail_conv i =
+        Conv.arg_conv (hoist_tail_conv (i - 1))
+        then_conv Conv.rewr_conv distrib_right_meta
+
+  (* Rewrite the LHS of an object equality inside Trueprop. *)
+  fun hoist_lhs_conv (c : conv) : conv =
+    Conv.arg_conv (Conv.fun_conv (Conv.arg_conv c))
+
+  fun gen_hoist_varname idx = "\<beta>" ^ (Int.toString idx)
+
+  (* With-tail: \<beta>0 \<star> ... \<star> \<beta>i-1 \<star> (\<Squnion>x. \<phi> x) \<star> \<psi> = (\<Squnion>x. \<beta>0 \<star> ... \<star> \<beta>i-1 \<star> \<phi> x \<star> \<psi>) *)
+  fun prove_asepconj_hoist_at ctxt i : thm =
+    let
+      val alpha_names = List.tabulate (i, gen_hoist_varname)
+      val phi_name = "\<phi>"
+      val psi_name = "\<psi>"
+      val all_names = alpha_names @ [phi_name, psi_name]
+
+      val alphas = String.concatWith " \<star> " (List.tabulate (i, gen_hoist_varname))
+      val lhs_core = "(\<Squnion>x. " ^ phi_name ^ " x) \<star> " ^ psi_name
+      val lhs = if i = 0 then lhs_core
+                else alphas ^ " \<star> " ^ lhs_core
+      val rhs_core = phi_name ^ " x \<star> " ^ psi_name
+      val rhs_inner = if i = 0 then rhs_core
+                      else alphas ^ " \<star> " ^ rhs_core
+      val rhs = "(\<Squnion>x. " ^ rhs_inner ^ ")"
+      val prop_str = lhs ^ " = " ^ rhs
+      val prop = Syntax.read_prop ctxt prop_str
+    in
+      Goal.prove ctxt all_names [] prop
+        (fn {context, ...} =>
+          CONVERSION (hoist_lhs_conv (hoist_at_conv i)) 1
+          THEN resolve_tac context [@{thm refl}] 1)
+    end
+
+  (* Tail: \<beta>0 \<star> ... \<star> \<beta>i \<star> (\<Squnion>x. \<phi> x) = (\<Squnion>x. \<beta>0 \<star> ... \<star> \<beta>i \<star> \<phi> x)
+     Note: position here means the number of leading elements before the \<Squnion>.
+     So tail hoist at position i has i+1 leading betas (\<beta>0..\<beta>i). *)
+  fun prove_asepconj_hoist_tail ctxt i : thm =
+    let
+      val n = i + 1  (* number of leading elements *)
+      val alpha_names = List.tabulate (n, gen_hoist_varname)
+      val phi_name = "\<phi>"
+      val all_names = alpha_names @ [phi_name]
+
+      val alphas = String.concatWith " \<star> " (List.tabulate (n, gen_hoist_varname))
+      val lhs = alphas ^ " \<star> (\<Squnion>x. " ^ phi_name ^ " x)"
+      val rhs_inner = alphas ^ " \<star> " ^ phi_name ^ " x"
+      val rhs = "(\<Squnion>x. " ^ rhs_inner ^ ")"
+      val prop_str = lhs ^ " = " ^ rhs
+      val prop = Syntax.read_prop ctxt prop_str
+    in
+      Goal.prove ctxt all_names [] prop
+        (fn {context, ...} =>
+          CONVERSION (hoist_lhs_conv (hoist_tail_conv i)) 1
+          THEN resolve_tac context [@{thm refl}] 1)
+    end
+
+  fun register_hoist_thm i thm ctxt = ctxt
+     |> (ASepconj_Hoist_Thms.map (fn m => fn i' =>
+          if i' = i then SOME thm else m i') |> Local_Theory.background_theory)
+
+  fun register_hoist_tail_thm i thm ctxt = ctxt
+     |> (ASepconj_Hoist_Tail_Thms.map (fn m => fn i' =>
+          if i' = i then SOME thm else m i') |> Local_Theory.background_theory)
+
+  fun prove_register_asepconj_hoist_at ctxt i =
+    register_hoist_thm i (prove_asepconj_hoist_at ctxt i) ctxt
+
+  fun prove_register_asepconj_hoist_tail ctxt i =
+    register_hoist_tail_thm i (prove_asepconj_hoist_tail ctxt i) ctxt
+in
+  fun prove_register_asepconj_hoist_upto n ctxt =
+    ctxt
+    |> fold (fn i => fn c => prove_register_asepconj_hoist_at c i) (int_range' n)
+    |> fold (fn i => fn c => prove_register_asepconj_hoist_tail c i) (int_range' n)
+    |> Local_Theory.background_theory (ASepconj_Hoist_Cache_Limit.put n)
+
+  fun get_asepconj_hoist_at ctxt i : thm =
+    (case ASepconj_Hoist_Thms.get (Proof_Context.theory_of ctxt) i of
+      NONE => error ("No cached with-tail hoist theorem for position "
+                     ^ Int.toString i ^ ".")
+     | SOME t => t)
+
+  fun get_asepconj_hoist_tail ctxt i : thm =
+    (case ASepconj_Hoist_Tail_Thms.get (Proof_Context.theory_of ctxt) i of
+      NONE => error ("No cached tail hoist theorem for position "
+                     ^ Int.toString i ^ ".")
+     | SOME t => t)
+end
+
 signature SEPARATION_LOGIC_TACTICS =
 sig
 
@@ -270,6 +412,8 @@ sig
 
   val aentails_hoist_pure_assms_tac : Proof.context -> int -> tactic
   val aentails_hoist_pure_concls_tac : Proof.context -> int -> tactic
+  \<comment>\<open>Hoist \<Squnion>(range ...) out of the LHS of an entailment, then intro \<^verbatim>\<open>aexists_entailsL\<close>.\<close>
+  val aentails_hoist_existential_assms_tac : Proof.context -> int -> tactic
   val aentails_simp_core_intro_others_tac : Proof.context -> int -> tactic
   val aentails_simp_core_cancel_univ_prems : Proof.context -> int -> tactic
 
@@ -416,7 +560,11 @@ sig
   \<comment>\<open>Apply separate conversions to the premise and conclusion of a separating entailment
      turned into a Pure proposition via \<^term>\<open>Trueprop\<close>. Strip pure universal quantification
      and premises first, if present.\<close>
+  \<comment>\<open>Warning: The inner conversions don't take a context argument hence cannot know about
+     bound variables. If you need to introduce/move bound variables, use \<^verbatim>\<open>aentails_conv''\<close>.\<close>
   val aentails_conv' : conv -> conv -> Proof.context -> conv
+
+  val aentails_conv'' : (Proof.context -> conv) -> (Proof.context -> conv) -> Proof.context -> conv
 
   \<comment>\<open>Apply conversion to uRust argument in weakest precondition goal. Strip pure universal
      quantification and premises first, if present.\<close>
@@ -457,6 +605,8 @@ sig
   val aentails_pick_many_assm_conv : Proof.context -> int -> int list -> conv
   val aentails_pick_many_concl_conv : Proof.context -> int -> int list -> conv
 
+  val aentails_pick_many_assms_tac: int list -> Proof.context -> int -> tactic
+
   \<comment>\<open>Convenience wrappers inferring the number \<^verbatim>\<open>n\<close> of separating components.\<close>
   val asepconj_pick_conv' : Proof.context -> int -> conv
   val asepconj_pick_many_conv' : Proof.context -> int list -> conv
@@ -474,6 +624,33 @@ sig
   val asepconj_conv_right : conv -> conv
   \<comment>\<open>Apply a conversion to the LHS of a separating conjunction\<close>
   val asepconj_conv_left : conv -> conv
+
+  \<comment>\<open>Hoist \<Squnion> at position i (with tail) out of a right-associated separating conjunction.
+     Uses cached theorems for small i, chunked composition for large i.\<close>
+  val asepconj_hoist_conv : Proof.context -> int -> conv
+  \<comment>\<open>Hoist \<Squnion> at the last position i out of a right-associated separating conjunction.\<close>
+  val asepconj_hoist_tail_conv : Proof.context -> int -> conv
+  \<comment>\<open>Hoist all \<Squnion>(range ...) out of a right-associated separating conjunction.
+     Dispatches between the pre-generated and 4-ary tree approaches based
+     on the chain length.  The switchover threshold defaults to 300 and
+     is configurable via \<^verbatim>\<open>crush_hoist_existential_tree_threshold\<close>.\<close>
+  val asepconj_hoist_existential_conv : Proof.context -> conv
+  \<comment>\<open>Pre-generated variant: walks the right spine and applies hoist at each
+     \<Squnion> component. O(N) when all positions are within the cached range;
+     O(N^2/L) otherwise, where L is the cache limit.\<close>
+  val asepconj_hoist_existential_pregen_conv : Proof.context -> conv
+  \<comment>\<open>Hoist all \<Squnion>(range ...) out of a right-associated separating conjunction,
+     by rebalancing into a binary tree of depth O(log N), distributing bottom-up,
+     and re-flattening. Asymptotically O(N log N) independent of the cache limit,
+     but with higher constants than the pre-generated variant for small N.\<close>
+  val asepconj_hoist_existential_tree_conv : Proof.context -> conv
+  \<comment>\<open>Same as above, but using a 4-ary tree (depth O(log_4 N)).
+     Fewer binder-descent levels during the merge phase, but up to 4
+     distrib rewrites per node instead of 2.  Uses 4-ary distrib theorems
+     (\<^verbatim>\<open>asepconj_Inf_distrib4_1\<close> through \<^verbatim>\<open>_4\<close>) plus 2/3-ary variants.\<close>
+  val asepconj_hoist_existential_tree4_conv : Proof.context -> conv
+  \<comment>\<open>Re-associate a right-associated \<star>-chain of \<^verbatim>\<open>n\<close> elements into a balanced binary tree.\<close>
+  val asepconj_balance_conv : int -> conv
 
   \<comment>\<open>Conversion normalizing the bracketing of a separating conjunction to the right.\<close>
   val asepconj_assoc_normalize_conv : conv
@@ -512,6 +689,8 @@ sig
   val dest_spec_fun_str: term -> string
 
   val is_schematic_spec: thm -> bool
+
+  val is_asepconj: term -> bool
 
   \<comment>\<open>SSA normalization for uRust expressions in WP goal\<close>
   val aentails_wp_ssa_normalize_tac : Proof.context -> int -> tactic
@@ -649,6 +828,9 @@ struct
   fun dest_asepconj_multi ((Const (@{const_name "Assertion_Language.asepconj_multi"}, _)) $ t) = t
      | dest_asepconj_multi _ = raise SeparationLogic "dest_asepconj_multi"
 
+  fun dest_asepconj ((Const (@{const_name "Assertion_Language.asepconj"}, _)) $ lhs $ rhs) = (lhs, rhs)
+     | dest_asepconj _ = raise SeparationLogic "dest_asepconj"
+
   fun dest_mapped_multiset ((Const (@{const_name "Multiset.image_mset"}, _)) $ t0 $ t1) = (t0,t1)
      | dest_mapped_multiset _ = raise SeparationLogic "dest_mapped_multiset"
 
@@ -678,6 +860,7 @@ struct
   val is_ucincl         = succeeds unwrap_ucincl
   val is_points_to      = succeeds dest_points_to
   val is_points_to_raw  = succeeds dest_points_to_raw
+  val is_asepconj       = succeeds dest_asepconj
   val is_asepconj_multi = succeeds dest_asepconj_multi
   val is_pure           = succeeds dest_pure
   val is_wp_call        = succeeds unwrap_wp_call
@@ -1046,8 +1229,9 @@ struct
     ASepconj_Pick_Cache_Limit.get (Proof_Context.theory_of ctxt) - 2
 
   \<comment>\<open>Flatten a single left-nested blob at the top: \<^verbatim>\<open>(a \<star> b) \<star> rest \<leadsto> a \<star> b \<star> rest\<close>.\<close>
-  val asepconj_flatten_blob_conv : conv =
-    Conv.repeat_conv (Conv.rewr_conv asepconj_assoc_meta')
+  fun asepconj_flatten_blob_conv ct =
+    Conv.try_conv (Conv.rewr_conv asepconj_assoc_meta'
+                   then_conv (Conv.arg_conv asepconj_flatten_blob_conv)) ct
 
   fun get_rotate_thm (ctxt : Proof.context) (ct : cterm) : thm =
     let val num = ct |> Thm.term_of |> split_asepconj |> length
@@ -1085,6 +1269,9 @@ struct
      and premises first, if present.\<close>
   fun aentails_conv' (conv_lhs : conv) (conv_rhs: conv) : Proof.context -> conv =
      (Conv.params_conv ~1 (fn _ => (Conv.concl_conv ~1 (aentails_conv (conv_lhs) (conv_rhs)))))
+
+  fun aentails_conv'' (conv_lhs : Proof.context -> conv) (conv_rhs: Proof.context -> conv) : Proof.context -> conv =
+     (Conv.params_conv ~1 (fn ctxt => (Conv.concl_conv ~1 (aentails_conv (conv_lhs ctxt) (conv_rhs ctxt)))))
 
   fun wp_conv (urust_conv : conv) : conv = (fn t =>
     case (Thm.term_of t) of
@@ -1212,6 +1399,14 @@ struct
   \<comment>\<open>Apply a conversion to the LHS of a separating conjunction\<close>
   fun asepconj_conv_left (c : conv) : conv = asepconj_conv' c Conv.all_conv
 
+  \<comment>\<open>Apply a conversion to every conclusion in an (n-fold) separating conjunction; if the term is not
+     a separating conjunction, just apply the conversion.\<close>
+  fun asepconj_conv (c : conv) (t : cterm) : thm =
+     case (Thm.term_of t) of
+        (Const (@{const_name Assertion_Language.sepalg_class.asepconj}, _)) $ _ $ _ =>
+            Conv.binop_conv (Conv.try_conv (asepconj_conv c)) t
+      | _ => c t
+
   (* floating a single formula to the front of a separating conjunction *)
 
   fun aentails_pick_assms_tac i  = fn ctxt => (CONVERSION (aentails_pick_assm_conv'  ctxt i))
@@ -1223,6 +1418,342 @@ struct
   fun aentails_joinfirst_concls_tac i = fn ctxt => (CONVERSION (aentails_joinfirst_concl_conv' ctxt i))
 
   val asepconj_assoc_meta = @{thm asepconj_assoc} RS eq_reflection
+
+  \<comment>\<open>Conversion hoisting \<Squnion> at a given position out of a right-associated separating conjunction.
+     For positions within the cached range, uses cached hoist theorems directly.
+     For larger positions, uses chunked composition analogous to asepconj_pick_conv:
+       1. Group first chunk_size elements into a blob (1 cached hoist at position chunk_size - 1 for the blob tail)
+       ... (fallback: compose hoist_at_conv on the fly)
+
+     asepconj_hoist_conv ctxt i:  applies a with-tail hoist at position i.
+     asepconj_hoist_tail_conv ctxt i:  applies a tail hoist at position i.
+     asepconj_hoist_existential_pregen_conv ctxt: walks the right spine, hoists all \<Squnion>(range ...).\<close>
+
+  local
+    fun repeat_arg_conv 0 c = c
+      | repeat_arg_conv n c = Conv.arg_conv (repeat_arg_conv (n - 1) c)
+  in
+    \<comment>\<open>With-tail hoist at position i: hoists \<Squnion> that is not the last element.
+       For i within the cache, uses a single rewr_conv.
+       For i beyond the cache, uses chunked composition:
+         1. Descend chunk levels via repeated arg_conv
+         2. Recursively hoist at position (i - chunk)
+         3. Apply cached tail hoist at position (chunk - 1) to bubble \<Squnion> past the prefix\<close>
+    fun asepconj_hoist_conv ctxt i : conv =
+      let val limit = ASepconj_Hoist_Cache_Limit.get (Proof_Context.theory_of ctxt) in
+        if i < limit then
+          Conv.rewr_conv (get_asepconj_hoist_at ctxt i RS eq_reflection)
+        else
+          let val chunk = limit in
+            repeat_arg_conv chunk (asepconj_hoist_conv ctxt (i - chunk))
+            then_conv Conv.rewr_conv (get_asepconj_hoist_tail ctxt (chunk - 1) RS eq_reflection)
+          end
+      end
+
+    \<comment>\<open>Tail hoist at position i: hoists \<Squnion> that is the last element.
+       For i within the cache, uses a single rewr_conv.
+       For i beyond the cache, uses chunked composition:
+         1. Descend chunk levels via repeated arg_conv
+         2. Recursively tail-hoist at position (i - chunk)
+         3. Apply cached tail hoist at position (chunk - 1) to bubble \<Squnion> past the prefix\<close>
+    fun asepconj_hoist_tail_conv ctxt i : conv =
+      let val limit = ASepconj_Hoist_Cache_Limit.get (Proof_Context.theory_of ctxt) in
+        if i < limit then
+          Conv.rewr_conv (get_asepconj_hoist_tail ctxt i RS eq_reflection)
+        else
+          let val chunk = limit in
+            repeat_arg_conv chunk (asepconj_hoist_tail_conv ctxt (i - chunk))
+            then_conv Conv.rewr_conv (get_asepconj_hoist_tail ctxt (chunk - 1) RS eq_reflection)
+          end
+      end
+  end
+
+  local
+    (* Descend into the body of \<Squnion>x. ..., i.e., Sup (image (\<lambda>x. body) \<top>) *)
+    fun SUP_body_conv (conv : Proof.context -> conv) ctxt : conv =
+      Conv.arg_conv (Conv.fun_conv (Conv.arg_conv
+        (Conv.abs_conv (fn (_, ctxt') => conv ctxt') ctxt)))
+  in
+    (*  Hoist all \<Squnion>(range ...) out of a right-associated \<star>-chain.
+
+        Algorithm:
+          1. Scan the chain to find positions of all \<Squnion>(range ...) components.
+          2. Hoist from rightmost to leftmost:
+             - Use asepconj_hoist_tail_conv if it's the last element
+             - Use asepconj_hoist_conv otherwise
+             Each hoist wraps the result in \<Squnion>x., so subsequent hoists
+             descend through accumulated binders first.
+
+        Each hoist uses a single cached theorem (O(1)), and the binder
+        descent is O(1) per level. Total: O(N) scan + O(K) hoists. *)
+    fun asepconj_hoist_existential_pregen_conv (ctxt: Proof.context) : conv = fn ct =>
+      let
+        val components = split_asepconj (Thm.term_of ct)
+        val n = length components
+
+        (* Count nested \<Squnion>(range ...) layers at a term.
+           \<Squnion>(range R)       = Sup(image R \<top>)                         has depth 1.
+           \<Squnion>x y. R x y  = Sup(image (\<lambda>x. Sup(image (\<lambda>y. R x y) \<top>)) \<top>)  has depth 2. *)
+        fun sup_depth (Const (@{const_name Sup}, _) $
+              (Const (@{const_name image}, _) $ f $ Const (@{const_name top}, _))) =
+              1 + (case f of Abs (_, _, body) => sup_depth body | _ => 0)
+          | sup_depth _ = 0
+
+        (* Build position list with repetitions for nested Sups, reversed so rightmost first *)
+        val sup_positions =
+          components |> map_index I
+          |> map_filter (fn (i, t) =>
+               let val d = sup_depth t
+               in if d > 0 then SOME (List.tabulate (d, K i)) else NONE end)
+          |> List.concat
+
+        (* Apply a single hoist at position i, choosing tail vs with-tail *)
+        fun hoist1 ctxt i : conv =
+          if i = n - 1 then
+            (* Last element: use tail hoist. Position i means i leading elements. *)
+            asepconj_hoist_tail_conv ctxt (i - 1)
+          else
+            asepconj_hoist_conv ctxt i
+
+        (* Hoist all positions, leftmost first. After each hoist,
+           descend into the \<Squnion>x. body for the next one. *)
+        fun hoist_all [] _ ct = Conv.all_conv ct
+          | hoist_all [i] ctxt ct = hoist1 ctxt i ct
+          | hoist_all (i :: is) ctxt ct =
+              let val thm1 = hoist1 ctxt i ct
+              in Thm.transitive thm1
+                   (SUP_body_conv (fn ctxt' => hoist_all is ctxt') ctxt (Thm.rhs_of thm1))
+              end
+      in
+        if null sup_positions then raise CTERM ("asepconj_hoist_existential_pregen_conv: no change", [ct])
+        else hoist_all sup_positions ctxt ct
+      end
+  end
+
+  \<comment>\<open>Alternative bulk hoist using a balanced binary tree.
+
+     Rather than hoisting one \<Squnion> at a time past a right-associated prefix
+     (which requires chunked composition for positions beyond the cache),
+     this re-associates the chain into a balanced binary tree, distributes
+     \<Squnion> bottom-up with \<^verbatim>\<open>asepconj_Inf_distrib\<close>/\<^verbatim>\<open>asepconj_Inf_distrib_right\<close>,
+     and finally re-flattens. Each internal node performs a constant number of
+     rewrites, so the total cost is O(N log N) and is independent of the
+     cache limit used for \<^verbatim>\<open>asepconj_hoist_existential_pregen_conv\<close>.
+
+     In practice, the binary tree version is asymptotically better but has
+     higher constants; it only starts to win for large N once the
+     pre-generated cache is small relative to the chain length.\<close>
+  local
+    val tree_assoc_meta = @{thm asepconj_assoc} RS eq_reflection
+    val tree_assoc_sym_meta = @{thm asepconj_assoc[symmetric]} RS eq_reflection
+    val tree_distrib_l_meta = @{thm asepconj_Inf_distrib} RS eq_reflection
+    val tree_distrib_r_meta = @{thm asepconj_Inf_distrib_right} RS eq_reflection
+
+    fun tree_count_asepconj (Const (@{const_name asepconj}, _) $ _ $ r) =
+          1 + tree_count_asepconj r
+      | tree_count_asepconj _ = 1
+
+    (* a \<star> (b \<star> c) -> (a \<star> b) \<star> c *)
+    val tree_group_left_once : conv = Conv.rewr_conv tree_assoc_sym_meta
+
+    (* Group the first k+1 elements into a blob:
+       a0 \<star> (a1 \<star> (... \<star> (a_k \<star> rest))) -> (a0 \<star> a1 \<star> ... \<star> a_k) \<star> rest.
+       The resulting left blob is itself right-associated, so no renormalization
+       is needed before recursing. *)
+    fun tree_group_left 0 : conv = Conv.all_conv
+      | tree_group_left k =
+          Conv.arg_conv (tree_group_left (k - 1)) then_conv tree_group_left_once
+
+    (* Recursively balance a right-associated chain of n elements into a
+       balanced binary tree of depth O(log N). *)
+    fun tree_balance_conv 1 : conv = Conv.all_conv
+      | tree_balance_conv 2 = Conv.all_conv
+      | tree_balance_conv n =
+          let
+            val left_size = n div 2
+            val right_size = n - left_size
+          in
+            tree_group_left (left_size - 1)
+            then_conv Conv.combination_conv
+              (Conv.arg_conv (tree_balance_conv left_size))
+              (tree_balance_conv right_size)
+          end
+
+    (* Descend into the body of \<Squnion>x. ..., i.e., Sup (image (\<lambda>x. body) \<top>). *)
+    fun tree_SUP_body_conv (conv : Proof.context -> conv) ctxt : conv =
+      Conv.arg_conv (Conv.fun_conv (Conv.arg_conv
+        (Conv.abs_conv (fn (_, ctxt') => conv ctxt') ctxt)))
+
+    (* Merge (\<Squnion>^k A) \<star> (\<Squnion>^l B) into \<Squnion>^(k+l). A \<star> B
+       by repeatedly applying distrib at the top and descending into
+       the new binder.  O(k+l) rewrites per call. *)
+    fun tree_merge_existentials ctxt : conv =
+      Conv.try_conv (
+        Conv.rewrs_conv [tree_distrib_l_meta, tree_distrib_r_meta]
+        then_conv tree_SUP_body_conv tree_merge_existentials ctxt)
+
+    (* Bottom-up hoist on a balanced tree. At each \<star> node:
+         1. Recursively hoist in both subtrees.
+         2. Merge the resulting existentials at this node. *)
+    fun tree_hoist_conv ctxt : conv = fn ct =>
+      (case Thm.term_of ct of
+        Const (@{const_name asepconj}, _) $ _ $ _ =>
+          (Conv.combination_conv
+            (Conv.arg_conv (tree_hoist_conv ctxt))
+            (tree_hoist_conv ctxt)
+          then_conv tree_merge_existentials ctxt) ct
+      | _ => Conv.all_conv ct)
+
+    (* Right-normalize a tree-shaped \<star> by repeated assoc at the top,
+       then recursing into the right subtree. *)
+    fun tree_reflatten_asepconj (ct : cterm) : thm =
+      ((Conv.repeat_conv (Conv.rewr_conv tree_assoc_meta)
+        then_conv Conv.try_conv (Conv.arg_conv tree_reflatten_asepconj)) ct)
+
+    (* Descend through nested \<Squnion>x. binders, then flatten the \<star>-body. *)
+    fun tree_reflatten_conv ctxt : conv = fn ct =>
+      (case Thm.term_of ct of
+        Const (@{const_name Sup}, _) $ _ =>
+          Conv.arg_conv (Conv.fun_conv (Conv.arg_conv
+            (Conv.abs_conv (fn (_, ctxt') => tree_reflatten_conv ctxt') ctxt))) ct
+      | Const (@{const_name asepconj}, _) $ _ $ _ =>
+          tree_reflatten_asepconj ct
+      | _ => Conv.all_conv ct)
+  in
+    fun asepconj_balance_conv n : conv = tree_balance_conv n
+
+    fun asepconj_hoist_existential_tree_conv (ctxt : Proof.context) : conv = fn ct =>
+      let val n = tree_count_asepconj (Thm.term_of ct) in
+        if n <= 1 then
+          raise CTERM ("asepconj_hoist_existential_tree_conv: nothing to hoist", [ct])
+        else
+          (tree_balance_conv n
+           then_conv tree_hoist_conv ctxt
+           then_conv tree_reflatten_conv ctxt) ct
+      end
+  end
+
+  \<comment>\<open>4-ary tree variant of the existential hoist.  Same algorithm as the
+     binary tree version, but each internal node has up to 4 children.
+     This reduces the tree depth from O(log_2 N) to O(log_4 N), halving
+     the number of \<^verbatim>\<open>abs_conv\<close> binder-descent levels at the cost of up
+     to 3 distrib rewrites per merge (instead of 1).\<close>
+  local
+    val t4_assoc_meta = @{thm asepconj_assoc} RS eq_reflection
+    val t4_assoc_sym_meta = @{thm asepconj_assoc[symmetric]} RS eq_reflection
+
+    val t4_distrib_1 = @{thm asepconj_Inf_distrib4_1} RS eq_reflection
+    val t4_distrib_2 = @{thm asepconj_Inf_distrib4_2} RS eq_reflection
+    val t4_distrib_3 = @{thm asepconj_Inf_distrib4_3} RS eq_reflection
+    val t4_distrib_4 = @{thm asepconj_Inf_distrib4_4} RS eq_reflection
+
+    val t3_distrib_1 = @{thm asepconj_Inf_distrib3_1} RS eq_reflection
+    val t3_distrib_2 = @{thm asepconj_Inf_distrib3_2} RS eq_reflection
+    val t3_distrib_3 = @{thm asepconj_Inf_distrib3_3} RS eq_reflection
+
+    val t2_distrib_1 = @{thm asepconj_Inf_distrib} RS eq_reflection
+    val t2_distrib_2 = @{thm asepconj_Inf_distrib_right} RS eq_reflection
+
+    fun t4_count (Const (@{const_name asepconj}, _) $ _ $ r) = 1 + t4_count r
+      | t4_count _ = 1
+
+    val t4_group_once : conv = Conv.rewr_conv t4_assoc_sym_meta
+    fun t4_group 0 : conv = Conv.all_conv
+      | t4_group k = Conv.arg_conv (t4_group (k - 1)) then_conv t4_group_once
+
+    (* Right-normalize a left-associated blob. *)
+    fun t4_renorm (ct : cterm) : thm =
+      ((Conv.repeat_conv (Conv.rewr_conv t4_assoc_meta)
+        then_conv Conv.try_conv (Conv.arg_conv t4_renorm)) ct)
+
+    (* Balance into a 4-ary tree.  For n <= 4 elements, leave as-is
+       (right-associated chain is already a single node).  Otherwise,
+       split into 4 roughly equal parts and recurse. *)
+    fun t4_balance 1 : conv = Conv.all_conv
+      | t4_balance n =
+          if n <= 4 then Conv.all_conv
+          else
+            let
+              val q = n div 4
+              val r = n mod 4
+              (* Sizes: first r parts get q+1, remaining get q *)
+              val s0 = q + (if r > 0 then 1 else 0)
+              val s1 = q + (if r > 1 then 1 else 0)
+              val s2 = q + (if r > 2 then 1 else 0)
+              val s3 = n - s0 - s1 - s2
+            in
+              (* Split at s0: (part0) ⋆ rest *)
+              t4_group (s0 - 1)
+              then_conv Conv.combination_conv
+                (Conv.arg_conv (t4_renorm then_conv t4_balance s0))
+                (* Split rest at s1: (part1) ⋆ rest' *)
+                (t4_group (s1 - 1)
+                 then_conv Conv.combination_conv
+                   (Conv.arg_conv (t4_renorm then_conv t4_balance s1))
+                   (* Split rest' at s2: (part2) ⋆ part3 *)
+                   (t4_group (s2 - 1)
+                    then_conv Conv.combination_conv
+                      (Conv.arg_conv (t4_renorm then_conv t4_balance s2))
+                      (t4_balance s3)))
+            end
+
+    fun t4_SUP_body (cv : Proof.context -> conv) ctxt : conv =
+      Conv.arg_conv (Conv.fun_conv (Conv.arg_conv
+        (Conv.abs_conv (fn (_, ctxt') => cv ctxt') ctxt)))
+
+    fun t4_merge ctxt : conv =
+      Conv.try_conv (
+        (Conv.rewrs_conv [t4_distrib_1, t4_distrib_2, t4_distrib_3, t4_distrib_4]
+         else_conv Conv.rewrs_conv [t3_distrib_1, t3_distrib_2, t3_distrib_3]
+         else_conv Conv.rewrs_conv [t2_distrib_1, t2_distrib_2])
+        then_conv t4_SUP_body t4_merge ctxt)
+
+     \<comment>\<open>Apply a conversion to every conclusion in a right-associated separating conjunction.
+        If the term is not a separating conjunction, do nothing. Does not recurse. \<close>
+     fun asepconj_conv0 (max : int) (c : conv) (t : cterm) : thm =
+        (case (Thm.term_of t) of
+            (Const (@{const_name Assertion_Language.sepalg_class.asepconj}, _)) $ _ $ _ =>
+               if max > 1 then
+                 (Conv.combination_conv (Conv.arg_conv c) (asepconj_conv0 (max - 1) c)) t
+               else
+                 c t
+         | _ => Conv.all_conv t)
+
+    fun t4_hoist ctxt = fn ct => (asepconj_conv0 4 (t4_hoist ctxt) then_conv (t4_merge ctxt)) ct
+
+    fun t4_reflatten_asepconj (ct : cterm) : thm =
+      ((Conv.repeat_conv (Conv.rewr_conv t4_assoc_meta)
+        then_conv Conv.try_conv (Conv.arg_conv t4_reflatten_asepconj)) ct)
+
+    fun t4_reflatten ctxt : conv = fn ct =>
+      (case Thm.term_of ct of
+        Const (@{const_name Sup}, _) $ _ =>
+          Conv.arg_conv (Conv.fun_conv (Conv.arg_conv
+            (Conv.abs_conv (fn (_, ctxt') => t4_reflatten ctxt') ctxt))) ct
+      | Const (@{const_name asepconj}, _) $ _ $ _ =>
+          t4_reflatten_asepconj ct
+      | _ => Conv.all_conv ct)
+  in
+    fun asepconj_hoist_existential_tree4_conv (ctxt : Proof.context) : conv = fn ct =>
+      let val n = t4_count (Thm.term_of ct) in
+        if n <= 1 then
+          raise CTERM ("asepconj_hoist_existential_tree4_conv: nothing to hoist", [ct])
+        else
+          (t4_balance n
+           then_conv t4_hoist ctxt
+           then_conv t4_reflatten ctxt) ct
+      end
+  end
+
+  fun asepconj_hoist_existential_conv (ctxt : Proof.context) : conv = fn ct =>
+    let
+      val n = ct |> Thm.term_of |> split_asepconj |> length
+      val threshold = Config.get ctxt Crush_Config.hoist_existential_tree_threshold
+    in
+      if n <= threshold
+      then asepconj_hoist_existential_pregen_conv ctxt ct
+      else asepconj_hoist_existential_tree4_conv ctxt ct
+    end
 
   \<comment>\<open>Conversion normalizing the bracketing of a separating conjunction to the right.\<close>
   fun asepconj_assoc_normalize_conv (ct : cterm) =
@@ -1400,24 +1931,24 @@ struct
   fun dest_aentails_cond_crule_strong ((Const (@{const_name aentails_conditional_crule_strong}, _)) $ P $ C0 $ C1 $ Q) = (P, Q, C0, C1)
     | dest_aentails_cond_crule_strong t = raise SeparationLogic((t |> print_term) ^ "is not a conditional entailment strong crule")
 
-  fun extract_spatial_assms_concls_from_cond_rule (thm : thm) = 
+  fun extract_spatial_assms_concls_from_cond_rule (thm : thm) =
     let
       val (_, b, C) = thm |> Thm.prop_of |> find_metaimp_conclusion |> dest_aentails_cond_rule
     in
       (C |> split_asepconj, b |> split_asepconj)
     end
 
-  fun extract_spatial_assms_concls_from_cond_drule (thm : thm) = 
+  fun extract_spatial_assms_concls_from_cond_drule (thm : thm) =
     let
       val (a, _, C) = thm |> Thm.prop_of |> find_metaimp_conclusion |> dest_aentails_cond_drule
     in
       (a |> split_asepconj, C |> split_asepconj)
     end
 
-  fun extract_spatial_assms_concls_from_cond_crule (thm : thm) = 
+  fun extract_spatial_assms_concls_from_cond_crule (thm : thm) =
     let
       val t = thm |> Thm.prop_of |> find_metaimp_conclusion
-      val (a, b, _, _) = t |> dest_aentails_cond_crule handle SeparationLogic _ => 
+      val (a, b, _, _) = t |> dest_aentails_cond_crule handle SeparationLogic _ =>
                          t |> dest_aentails_cond_crule_strong
     in
       (a |> split_asepconj, b |> split_asepconj)
@@ -1439,7 +1970,7 @@ struct
 
   fun aentails_float_cond_crule_tac (thm : thm) =
     let
-      val (sp_assms, sp_concls) = extract_spatial_assms_concls_from_cond_crule thm          
+      val (sp_assms, sp_concls) = extract_spatial_assms_concls_from_cond_crule thm
     in
       aentails_float_assms_concls_tac sp_assms sp_concls
     end
@@ -1458,10 +1989,10 @@ struct
      THEN_LAST (TRY o (aentails_normalize_assoc_assms_tac ctxt))
 
   fun make_rules_from_thm (thm : thm) =
-     (List.mapPartial (fn t => SOME (t OF [thm]) handle THM _ => NONE) 
-        @{thms aentails_conditional_rules 
-               aentails_conditional_drules 
-               aentails_conditional_crules 
+     (List.mapPartial (fn t => SOME (t OF [thm]) handle THM _ => NONE)
+        @{thms aentails_conditional_rules
+               aentails_conditional_drules
+               aentails_conditional_crules
                aentails_conditional_crules_strong})
 
   fun aentails_rule_single float_tac (thm : thm) (ctxt : Proof.context) =
@@ -1691,6 +2222,12 @@ struct
       THEN' intro_tac @{thms apure_entailsR} ctxt
     )
 
+  val aentails_hoist_existential_assms_tac : Proof.context -> int -> tactic = fn ctxt =>
+    CHANGED o (
+      CONVERSION (aentails_conv'' (Conv.changed_conv o asepconj_hoist_existential_conv) (K Conv.all_conv) ctxt)
+      THEN' REPEAT_ALL_NEW (resolve_tac ctxt @{thms aexists_entailsL})
+    )
+
   (* TODO: This is out of sync with the _method_ `aentails_simp_core` *)
   val aentails_simp_core_tac : Proof.context -> int -> tactic = fn ctxt => let
      fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_core) msg
@@ -1700,6 +2237,7 @@ struct
     ORELSE' NOTE "aentails_core_hoist_pure_concls" (aentails_hoist_pure_concls_tac ctxt)
     ORELSE' NOTE "aentails_core_intro_others" (aentails_simp_core_intro_others_tac ctxt)
     ORELSE' NOTE "aentails_core_cancel_univ_prems" (aentails_simp_core_cancel_univ_prems ctxt)
+    ORELSE' NOTE "aentails_core_hoist_existential_assms" (aentails_hoist_existential_assms_tac ctxt)
     ORELSE' NOTE "aentails_core_simps" (aentails_simp_core_simps_tac ctxt)
     ORELSE' NOTE "aentails_core_split" (aentails_simp_core_split_tac ctxt)) end
 
@@ -1721,7 +2259,7 @@ struct
                   (aentails_float_match ctxt (is_cancellable_pair ctxt)))
            THEN' (resolve_tac ctxt @{thms aentails_refl asepconj_mono asepconj_mono5 aentails_cancel_r})
 
-  val aentails_cancel_legacy_points_to : Proof.context -> int -> tactic = fn ctxt => 
+  val aentails_cancel_legacy_points_to : Proof.context -> int -> tactic = fn ctxt =>
      if not (Config.get ctxt Crush_Config.enable_legacy_points_to_tactics) then
        K no_tac
      else
@@ -1744,14 +2282,6 @@ struct
 
   val filter_metavariables = List.filter (fn x =>
     case x of Var _ => false | _ => true)
-
-  \<comment>\<open>Apply a conversion to every conclusion in an (n-fold) separating conjunction; if the term is not
-     a separating conjunction, just apply the conversion.\<close>
-  fun asepconj_conv (c : conv) (t : cterm) : thm =
-     case (Thm.term_of t) of
-        (Const (@{const_name Assertion_Language.sepalg_class.asepconj}, _)) $ _ $ _ =>
-            Conv.binop_conv (Conv.try_conv (asepconj_conv c)) t
-      | _ => c t
 
   \<comment>\<open>Apply separate conversions to pure and spatial premises and conclusions in the current goal.
      If the goal is not a separating entailment, \<^verbatim>\<open>concls\<close> is applied to the entire pure conclusion,
@@ -1879,6 +2409,10 @@ local
 
   val _ = Theory.setup (Method.setup @{binding "aentails_hoist_pure_assms"}
           (Scan.succeed (SIMPLE_METHOD' o (Separation_Logic_Tactics.aentails_hoist_pure_assms_tac))) "")
+
+  val _ = Theory.setup (Method.setup @{binding "aentails_hoist_existential"}
+          (Scan.succeed (SIMPLE_METHOD' o (Separation_Logic_Tactics.aentails_hoist_existential_assms_tac)))
+          "hoist existentials out of the LHS of a separating entailment")
 
   val _ = Theory.setup (Method.setup @{binding "aentails_pick_concl"}
           (Scan.lift Parse.nat >> (SIMPLE_METHOD' oo (Separation_Logic_Tactics.aentails_pick_concls_tac))) "")

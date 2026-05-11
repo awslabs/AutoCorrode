@@ -61,7 +61,7 @@ lemma atriple_union:
   shows \<open>((\<Union>\<Phi>) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) = (\<forall>\<phi>\<in>\<Phi>. (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
     and \<open>((\<Squnion>x. \<phi> x) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) = (\<forall>x. (\<phi> x \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
     and \<open>((\<Squnion>x\<in>S. \<phi> x) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) = (\<forall>x\<in>S. (\<phi> x \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
-by (auto simp add: atriple_def asepconj_simp)
+by (auto simp add: atriple_def asepconj_Inf_distrib' asepconj_simp)
 
 lemma atriple_frame_rule:
   assumes \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>

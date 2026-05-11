@@ -526,13 +526,46 @@ lemma asepconj_Inf_distrib2 [asepconj_simp]:
   shows \<open>\<psi> \<star> (\<Squnion>x. \<phi> x) = (\<Squnion>x. \<phi> x \<star> \<psi>)\<close>
 by (auto simp add: asepconj_comm asepconj_def)
 
+lemma asepconj_Inf_distrib_right:
+  fixes \<psi> :: \<open>'a assert\<close>
+  shows \<open>\<psi> \<star> (\<Squnion>x. \<phi> x) = (\<Squnion>x. \<psi> \<star> \<phi> x)\<close>
+  by (auto simp add: asepconj_comm asepconj_def)
+
+lemma asepconj_Inf_distrib3_1:
+  shows \<open>(\<Squnion>x. \<alpha> x) \<star> \<beta> \<star> \<gamma> = (\<Squnion>x. \<alpha> x \<star> \<beta> \<star> \<gamma>)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
+lemma asepconj_Inf_distrib3_2:
+  shows \<open>\<alpha> \<star> (\<Squnion>x. \<beta> x) \<star> \<gamma> = (\<Squnion>x. \<alpha> \<star> \<beta> x \<star> \<gamma>)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
+lemma asepconj_Inf_distrib3_3:
+  shows \<open>\<alpha> \<star> \<beta> \<star> (\<Squnion>x. \<gamma> x) = (\<Squnion>x. \<alpha> \<star> \<beta> \<star> \<gamma> x)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
+lemma asepconj_Inf_distrib4_1:
+  shows \<open>(\<Squnion>x. \<alpha> x) \<star> \<beta> \<star> \<gamma> \<star> \<delta> = (\<Squnion>x. \<alpha> x \<star> \<beta> \<star> \<gamma> \<star> \<delta>)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
+lemma asepconj_Inf_distrib4_2:
+  shows \<open>\<alpha> \<star> (\<Squnion>x. \<beta> x) \<star> \<gamma> \<star> \<delta> = (\<Squnion>x. \<alpha> \<star> \<beta> x \<star> \<gamma> \<star> \<delta>)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
+lemma asepconj_Inf_distrib4_3:
+  shows \<open>\<alpha> \<star> \<beta> \<star> (\<Squnion>x. \<gamma> x) \<star> \<delta> = (\<Squnion>x. \<alpha> \<star> \<beta> \<star> \<gamma> x \<star> \<delta>)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
+lemma asepconj_Inf_distrib4_4:
+  shows \<open>\<alpha> \<star> \<beta> \<star> \<gamma> \<star> (\<Squnion>x. \<delta> x) = (\<Squnion>x. \<alpha> \<star> \<beta> \<star> \<gamma> \<star> \<delta> x)\<close>
+  by (auto simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+
 lemma asepconj_Inf_distrib3 [asepconj_simp]:
   fixes \<psi> :: \<open>'a assert\<close>
   shows \<open>\<psi> \<star> (\<Squnion>x\<in>S. \<phi> x) = (\<Squnion>x\<in>S. \<phi> x \<star> \<psi>)\<close>
 by (auto simp add: asepconj_comm asepconj_def)
 
 lemma asepconj_Inf_distrib':
-  shows [asepconj_simp]: \<open>(\<Union>\<Phi>) \<star> \<psi> = (\<Squnion>\<phi>\<in>\<Phi>. \<phi> \<star> \<psi>)\<close>
+  shows \<open>(\<Union>\<Phi>) \<star> \<psi> = (\<Squnion>\<phi>\<in>\<Phi>. \<phi> \<star> \<psi>)\<close>
     and \<open>\<psi> \<star> (\<Union>\<Phi>) = (\<Squnion>\<phi>\<in>\<Phi>. \<psi> \<star> \<phi>)\<close>
 by (auto simp add: asepconj_def asat_def)
 
