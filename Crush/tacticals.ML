@@ -115,23 +115,24 @@ struct
 
   val time_to_str = fn t => (t |> #elapsed |> Time.fmt 6) ^ "s"
 
-  fun LOG_pos (ctxt : Proof.context) (pos : Position.T) (enable : bool) 
+  fun LOG_pos (ctxt : Proof.context) (pos : Position.T) (enable : bool)
     : string -> logger -> tactic -> tactic =
+    if not enable then K (K I) else
     let val log_goal = Config.get ctxt Crush_Config.log_goal in
-    if not enable then K (K I) else fn msg => fn log => fn tac =>
-      let val cb = fn (t : thm) => fn (t' : thm option) => fn (time : Timing.timing) => fn success => 
-             if success then 
-               [Pretty.mark_str (Markup.properties (Position.properties_of pos) Markup.position, msg), 
+    fn msg => fn log => fn tac =>
+      let val cb = fn (t : thm) => fn (t' : thm option) => fn (time : Timing.timing) => fn success =>
+             if success then
+               [Pretty.mark_str (Markup.properties (Position.properties_of pos) Markup.position, msg),
                  Pretty.brk 1, Pretty.str "success", Pretty.brk 1,
                  Pretty.enclose "(" ")" (time |> time_to_str |> Pretty.text)]
-                @ (if log_goal then 
+                @ (if log_goal then
                     [Pretty.fbrk,
                       [Pretty.str "Before:", Pretty.brk 1, Thm.major_prem_of t |> Syntax.pretty_term ctxt] |> Pretty.item,
                      Pretty.fbrk,
                       [Pretty.str "After:", Pretty.brk 1] @
                        ([Thm.major_prem_of (Option.valOf t') |> Syntax.pretty_term ctxt]
                         handle THM _ => Pretty.text "Done") |> Pretty.item]
-                   else [])                 
+                   else [])
                  |> Pretty.text_fold |> log
              else ()
       in
