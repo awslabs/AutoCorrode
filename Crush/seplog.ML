@@ -3,6 +3,144 @@
 
 (* Various separation logic tactics *)
 
+(* Picker theorem infrastructure: generation, caching, and lookup *)
+
+structure ASepconj_Pick_Thms = Theory_Data
+ (type T = int -> int -> thm option
+  val empty = K (K NONE)
+  fun merge (a,b) i j = (case a i j of SOME x => SOME x | _ => b i j))
+
+structure ASepconj_Rotate_Thms = Theory_Data
+ (type T = int -> thm option
+  val empty = K NONE
+  fun merge (a,b) n = (case a n of SOME x => SOME x | _ => b n))
+
+(* Records the pre-generation limit so that the chunk size for
+   pick composition can be derived automatically. *)
+structure ASepconj_Pick_Cache_Limit = Theory_Data
+ (type T = int
+  val empty = 0
+  fun merge (a, b) = Int.max (a, b))
+
+local
+  fun register_asepconj_pick_thm thm n i =
+    ASepconj_Pick_Thms.map (fn m => fn n' => fn i' => if n' = n andalso i=i' then SOME thm else m n' i')
+
+  fun register_asepconj_rotate_thm thm n =
+    ASepconj_Rotate_Thms.map (fn m => fn n' => if n' = n then SOME thm else m n')
+
+  fun gen_varname idx = "\<alpha>" ^ (Int.toString idx)
+  fun gen_asepconj_iter_str (idx :: idxs) =
+     fold (fn i => fn s =>  s ^ " \<star> " ^ (gen_varname i)) idxs (gen_varname idx)
+   | gen_asepconj_iter_str _ = ""
+
+  fun gen_asepconj_iter ctxt idxs_lhs idxs_rhs =
+      (gen_asepconj_iter_str idxs_lhs ^ " = " ^ gen_asepconj_iter_str idxs_rhs)
+    |> Syntax.read_prop ctxt
+
+  fun int_range i =
+    let fun core _    0 acc = acc
+          | core base i acc = core (base + 1) (i - 1) (acc @ [base])
+    in core 0 i [] end
+
+  exception ASEPCONJ_PICK_GEN
+
+  fun drop_ith 0 (_ :: xs) = xs
+    | drop_ith i (x :: xs) = x :: (drop_ith (i-1) xs)
+    | drop_ith _ _ = raise ASEPCONJ_PICK_GEN
+  fun float_ith i xs = List.nth (xs,i) :: (drop_ith i xs)
+  fun rotate_list [] = []
+    | rotate_list (x :: xs) = xs @ [x]
+
+  val swap_top_meta = @{thm asepconj_swap_top} RS eq_reflection
+  val comm_meta_prf = @{thm asepconj_comm} RS eq_reflection
+  val assoc_meta_prf = @{thm asepconj_assoc} RS eq_reflection
+
+  (* Conversion that picks element i to the front via repeated swap_top.
+     Falls back to comm for 2-element conjunctions where swap_top doesn't match. *)
+  fun pick_swap_conv 0 : conv = Conv.all_conv
+    | pick_swap_conv i =
+        Conv.arg_conv (pick_swap_conv (i - 1))
+        then_conv (Conv.rewr_conv swap_top_meta else_conv Conv.rewr_conv comm_meta_prf)
+
+  (* Deep flatten: apply assoc at top, then recurse into the right subtree. *)
+  fun deep_flatten_conv (ct : cterm) =
+    ((Conv.rewr_conv assoc_meta_prf then_conv Conv.arg_conv deep_flatten_conv) ct
+     handle CTERM _ => Conv.all_conv ct)
+
+  (* Conversion that rotates by 1: comm + deep flatten. *)
+  val rotate_conv : conv =
+    Conv.rewr_conv comm_meta_prf then_conv deep_flatten_conv
+
+  (* Rewrite the LHS of an object equality inside Trueprop. *)
+  fun lhs_conv (c : conv) : conv =
+    Conv.arg_conv (Conv.fun_conv (Conv.arg_conv c))
+
+  fun prove_asepconj_pick_ith_from_n ctxt n i : thm =
+    let
+      val names = List.tabulate (n, gen_varname)
+      val prop = gen_asepconj_iter ctxt (int_range n) (float_ith i (int_range n))
+    in
+      Goal.prove ctxt names [] prop
+        (fn {context, ...} =>
+          CONVERSION (lhs_conv (pick_swap_conv i)) 1
+          THEN resolve_tac context [@{thm refl}] 1)
+    end
+
+  fun prove_asepconj_rotate_nfold ctxt n : thm =
+    let
+      val names = List.tabulate (n, gen_varname)
+      val prop = gen_asepconj_iter ctxt (int_range n) (rotate_list (int_range n))
+    in
+      Goal.prove ctxt names [] prop
+        (fn {context, ...} =>
+          (if n <= 1 then all_tac
+           else CONVERSION (lhs_conv rotate_conv) 1)
+          THEN resolve_tac context [@{thm refl}] 1)
+    end
+
+  fun register_pick_thm i n thm ctxt = ctxt
+     |> Local_Theory.note ((Binding.empty, @{attributes [asepconj_pick_thms]}), [thm]) |> snd
+     |> (register_asepconj_pick_thm thm n i |> Local_Theory.background_theory)
+
+  fun register_rotate_thm n thm ctxt = ctxt
+     |> Local_Theory.note ((Binding.empty, @{attributes [asepconj_rotate_thms]}), [thm]) |> snd
+     |> (register_asepconj_rotate_thm thm n |> Local_Theory.background_theory)
+
+  fun prove_register_asepconj_pick_ith_from_n ctxt n i =
+    register_pick_thm i n (prove_asepconj_pick_ith_from_n ctxt n i) ctxt
+
+  fun prove_register_asepconj_rotate_nfold ctxt n =
+    register_rotate_thm n (prove_asepconj_rotate_nfold ctxt n) ctxt
+
+  fun prove_register_asepconj_pick_from_n n ctxt =
+    let val idxs = if n = 1 then [0] else [n-2, n-1] in
+    fold (fn i => fn c => prove_register_asepconj_pick_ith_from_n c n i) idxs ctxt end
+in
+  fun prove_register_asepconj_pick_upto n ctxt =
+    fold (fn i => fn c => prove_register_asepconj_pick_from_n (i+1) c) (int_range n) ctxt
+    |> Local_Theory.background_theory (ASepconj_Pick_Cache_Limit.put n)
+
+  fun prove_register_asepconj_rotate_upto n ctxt =
+    fold (fn i => fn c => prove_register_asepconj_rotate_nfold c (i+1)) (int_range n) ctxt
+
+  (* Look up a cached picker theorem. For indices beyond the cache,
+     use the chunked composition in asepconj_pick_conv instead. *)
+  fun get_asepconj_pick_ith_from_n ctxt n i : thm =
+    let val n = if i+1 < n then i+2 else i+1 in
+    (case ASepconj_Pick_Thms.get (Proof_Context.theory_of ctxt) n i of
+      NONE => error ("No cached picker theorem for ("
+                     ^ Int.toString n ^ "," ^ Int.toString i ^ "). "
+                     ^ "Use asepconj_pick_conv for indices beyond the pre-generation limit.")
+     | SOME t => t) end
+
+  fun get_asepconj_rotate ctxt n : thm =
+    (case ASepconj_Rotate_Thms.get (Proof_Context.theory_of ctxt) n of
+      NONE => error ("No cached rotation theorem for n="
+                     ^ Int.toString n ^ ".")
+     | SOME t => t)
+end
+
 signature SEPARATION_LOGIC_TACTICS =
 sig
 
@@ -896,18 +1034,38 @@ struct
 
   \<comment>\<open>Given a separating conjunction, return the generic rotation theorem
      that will apply to it.\<close>
+  \<comment>\<open>Helper constants for chunked pick/rotation composition.\<close>
+  val asepconj_swap_top_meta = @{thm asepconj_swap_top} RS eq_reflection
+  val asepconj_comm_meta = @{thm asepconj_comm} RS eq_reflection
+  val asepconj_assoc_meta' = @{thm asepconj_assoc} RS eq_reflection
+
+  \<comment>\<open>Derive the chunk size from the pre-generation limit stored in
+     \<^verbatim>\<open>ASepconj_Pick_Cache_Limit\<close>. The cache covers non-last-element picks
+     for indices 0..(limit - 2), so the chunk size is limit - 2.\<close>
+  fun get_pick_chunk_size ctxt =
+    ASepconj_Pick_Cache_Limit.get (Proof_Context.theory_of ctxt) - 2
+
+  \<comment>\<open>Flatten a single left-nested blob at the top: \<^verbatim>\<open>(a \<star> b) \<star> rest \<leadsto> a \<star> b \<star> rest\<close>.\<close>
+  val asepconj_flatten_blob_conv : conv =
+    Conv.repeat_conv (Conv.rewr_conv asepconj_assoc_meta')
+
   fun get_rotate_thm (ctxt : Proof.context) (ct : cterm) : thm =
     let val num = ct |> Thm.term_of |> split_asepconj |> length
     in
       get_asepconj_rotate ctxt num
     end
 
-  \<comment>\<open>A conversion for rotating separating conjunctions.\<close>
+  \<comment>\<open>A conversion for rotating separating conjunctions.
+     Uses cached rotation theorem if available, otherwise composes via comm + normalize.\<close>
   fun asepconj_rotate_conv ctxt : conv = fn ct =>
-    let val num = ct |> Thm.term_of |> split_asepconj |> length
-        val rotate_thm = get_asepconj_rotate ctxt num
-    in
-      Conv.rewr_conv (rotate_thm RS eq_reflection) ct
+    let val num = ct |> Thm.term_of |> split_asepconj |> length in
+      if num <= 1 then Conv.all_conv ct
+      else
+        (case ASepconj_Rotate_Thms.get (Proof_Context.theory_of ctxt) num of
+          SOME thm => Conv.rewr_conv (thm RS eq_reflection) ct
+        | NONE =>
+            (Conv.rewr_conv asepconj_comm_meta
+             then_conv asepconj_flatten_blob_conv) ct)
     end
 
   \<comment>\<open>Apply separate conversions to the premise and conclusion of a separating entailment\<close>
@@ -968,11 +1126,37 @@ struct
         find_idxs [] 0 ts
       end
 
-  \<comment>\<open>A conversion picking the i-th element from a separating conjunction of n elements.\<close>
+  \<comment>\<open>A conversion picking the i-th element from a separating conjunction of n elements.
+     For i within the cached range, uses cached picker theorems directly.
+     For larger i, composes picks in chunks:
+       1. Group first chunk_size elements into a blob (1 cached pick + 1 comm)
+       2. Recursively pick (i - chunk_size) from the tail
+       3. Swap the result past the blob
+       4. Re-normalize
+     This gives ceil(i / chunk_size) cached pick operations, where chunk_size
+     is derived from the pre-generation limit in \<^verbatim>\<open>Assertion_Language.thy\<close>.\<close>
   fun asepconj_pick_conv ctxt n i: conv =
-    let val pick_thm = get_asepconj_pick_ith_from_n ctxt n i
-    in
-      Conv.rewr_conv (pick_thm RS eq_reflection)
+    let val chunk = get_pick_chunk_size ctxt in
+    if i <= chunk then
+      let val pick_thm = get_asepconj_pick_ith_from_n ctxt n i
+      in Conv.rewr_conv (pick_thm RS eq_reflection) end
+    else
+      let
+        \<comment>\<open>Inline joinfirst(chunk): pick the tail-blob to front, then comm.\<close>
+        val joinfirst_pick_thm =
+          get_asepconj_pick_ith_from_n ctxt (chunk + 1) chunk
+        val joinfirst_conv =
+          Conv.rewr_conv (joinfirst_pick_thm RS eq_reflection)
+          then_conv Conv.rewr_conv asepconj_comm_meta
+      in
+        joinfirst_conv
+        then_conv
+        Conv.arg_conv (asepconj_pick_conv ctxt (n - chunk) (i - chunk))
+        then_conv
+        Conv.rewr_conv asepconj_swap_top_meta
+        then_conv
+        Conv.arg_conv asepconj_flatten_blob_conv
+      end
     end
   \<comment>\<open>Convenience wrapper inferring the number \<^verbatim>\<open>n\<close> of separating components.\<close>
   fun asepconj_pick_conv' ctxt i: conv = (fn ct =>
@@ -989,8 +1173,7 @@ struct
      The index list provided here must be ascending and can be constructed via
      \<^verbatim>\<open>asepconj_filter_idxs\<close>, for example.\<close>
   fun asepconj_pick_many_conv ctxt n is: conv =
-    let fun pick_thm i = (get_asepconj_pick_ith_from_n ctxt n i) RS eq_reflection
-        fun pick_conv i = pick_thm i |> Conv.rewr_conv
+    let fun pick_conv i = asepconj_pick_conv ctxt n i
         fun inc_ith_by_i_core acc _ [] = acc
           | inc_ith_by_i_core acc base (x :: xs) =
                inc_ith_by_i_core (acc @ [x + base]) (base + 1) xs
