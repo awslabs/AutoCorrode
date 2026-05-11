@@ -536,13 +536,17 @@ struct
 
   val crush_base_step_tac_core = fn ctxt =>
      let
-         fun NOTE' log (msg, pos, tac') = let
-           val msg' = "crush_branch_" ^ msg
-           in
-               tac'
-            |> TIME_pos' ctxt pos (Config.get ctxt Crush_Config.time_toplevel) msg' log
-            |> LOG_pos' ctxt pos (Config.get ctxt Crush_Config.log_toplevel) msg' log
-           end
+         (* Hoisted out of the per-step closure: Config.get for time_toplevel /
+            log_toplevel only happens once per top-level apply, and TIME_pos' /
+            LOG_pos' are partially applied as far as possible, so each per-step
+            invocation only needs to thread `log` through precomputed decorators. *)
+         val time_toplevel_enabled = Config.get ctxt Crush_Config.time_toplevel
+         val log_toplevel_enabled  = Config.get ctxt Crush_Config.log_toplevel
+         fun mk_decorator (msg, pos) =
+           let val msg' = "crush_branch_" ^ msg
+               val time_dec = TIME_pos' ctxt pos time_toplevel_enabled msg'
+               val log_dec  = LOG_pos'  ctxt pos log_toplevel_enabled  msg'
+           in fn log => fn tac' => tac' |> time_dec log |> log_dec log end
          (* We are hoisting this out because it dominates the runtime of very short
             crush calls, and is used 4 times in the branches below; we also defer
             evaluation to when we actually need it *)
@@ -550,7 +554,7 @@ struct
              time_and_report ctxt "crush_instantiation_step_unfold_contract"
              (Config.get ctxt Crush_Config.time_step_instantiation_by_branch)
              (fn _ => crush_base_unfold_contract_tac ctxt))
-         val post_step_tac = crush_post_step_tac ctxt 
+         val post_step_tac = crush_post_step_tac ctxt
          val branches = [
             ("base_simps_tac"          , \<^here>, (fn _ => crush_branch_base_simps_tac ctxt)),
             ("destruct_tac"            , \<^here>, (fn _ => crush_branch_destruct_tac ctxt)),
@@ -579,11 +583,14 @@ struct
             ("clarsimp_filtered"       , \<^here>, (fn _ => crush_branch_filtered_clarsimp_tac ctxt)),
             ("clarsimp_fallback"       , \<^here>, (fn _ => crush_branch_clarsimp_fallback_tac ctxt))
            ] |>
-         List.map (fn (msg, pos, lazy_tac') => (msg, pos, LAZY' (fn _ =>
-           time_and_report ctxt ("crush_instantiation_step_" ^ msg)
-             (Config.get ctxt Crush_Config.time_step_instantiation_by_branch) lazy_tac')))
+         List.map (fn (msg, pos, lazy_tac') =>
+           let val tac = LAZY' (fn _ =>
+                 time_and_report ctxt ("crush_instantiation_step_" ^ msg)
+                   (Config.get ctxt Crush_Config.time_step_instantiation_by_branch) lazy_tac')
+               val decorate = mk_decorator (msg, pos)
+           in (decorate, tac) end)
      in fn log =>
-       let val branches = List.map (NOTE' log) branches in
+       let val branches = List.map (fn (decorate, tac) => decorate log tac) branches in
        fn i => fn st => (FIRST' branches THEN_ALL_NEW (TRY o post_step_tac)) i st
          handle ABORT msg => ("Early abort of crush step: " ^ msg |> Pretty.text |> Pretty.block |> Pretty.writeln; Seq.empty)
      end end
