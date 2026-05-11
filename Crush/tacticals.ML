@@ -26,6 +26,12 @@ sig
   val LOG_pos : Proof.context -> Position.T -> bool -> string -> logger -> tactic -> tactic
   val LOG_pos' : Proof.context -> Position.T -> bool -> string -> logger -> (int -> tactic) -> (int -> tactic)
 
+  (* Log newly-instantiated schematics after each step of the wrapped tactic.
+     If `ask = true`, also pause and prompt the user for Continue / Abort
+     in an interactive frontend; in batch mode the ask component is a no-op. *)
+  val LOG_SCHEMATICS_pos' : Proof.context -> Position.T -> {log: bool, ask: bool}
+    -> string -> logger -> (int -> tactic) -> (int -> tactic)
+
   (* Log and report runtime of successful and failed invocations of tactic *)
   val LOGFULL : Proof.context -> bool -> string -> tactic -> tactic
   val LOGFULL' : Proof.context -> bool -> string -> (int -> tactic) -> (int -> tactic)
@@ -66,6 +72,8 @@ end;
 
 structure Crush_Tacticals: CRUSH_TACTICALS =
 struct
+
+  exception SMART of string
 
   fun IF' (guard : term -> bool) (t :int -> tactic) : int -> tactic =
     SUBGOAL (fn (goal, i) => if guard goal then t i else no_tac)
@@ -160,6 +168,78 @@ struct
 
   val LOG' = fn ctxt => fn enable => fn msg => LOG_pos' ctxt Position.none enable msg default_logger
 
+  fun LOG_SCHEMATICS_pos' (ctxt : Proof.context) (pos : Position.T)
+      ({log = enable_log, ask = enable_ask} : {log: bool, ask: bool})
+    : string -> logger -> (int -> tactic) -> (int -> tactic) =
+    if not (enable_log orelse enable_ask) then K (K I) else
+    fn msg => fn log => fn tac' => fn i => fn st =>
+      let
+        val thy = Proof_Context.theory_of ctxt
+        val vars_before = Term.add_vars (Thm.prop_of st) []
+        val names_before = map fst vars_before
+        val goal_before = SOME (Thm.prem_of st i) handle THM _ => NONE
+        fun pretty_ixn (nm, idx) =
+          Pretty.str ("?" ^ nm ^ (if idx = 0 then "" else "." ^ Int.toString idx))
+        fun pretty_binding value_of ((ixn, T) : (indexname * typ)) =
+          Pretty.block
+            ([pretty_ixn ixn, Pretty.brk 1, Pretty.str "::", Pretty.brk 1,
+              Syntax.pretty_typ ctxt T, Pretty.brk 1, Pretty.str ":="] @
+             (case value_of ixn of
+                SOME t => [Pretty.brk 1, Syntax.pretty_term ctxt t]
+              | NONE   => [Pretty.brk 1, Pretty.str "<unrecovered>"]))
+        fun inspect st' =
+          let
+            val names_after = Term.add_var_names (Thm.prop_of st') []
+            val newly = filter (fn (ixn, _) => not (member (op =) names_after ixn)) vars_before
+          in
+            if null newly then () else
+            let
+              val env_opt =
+                SOME (Pattern.match thy (Thm.prop_of st, Thm.prop_of st')
+                        (Vartab.empty, Vartab.empty))
+                handle Pattern.MATCH => NONE
+              fun value_of ixn =
+                env_opt |> Option.mapPartial (fn (_, tenv) =>
+                  Vartab.lookup tenv ixn |> Option.map snd)
+              val header = Pretty.block
+                [Pretty.mark_str
+                   (Markup.properties (Position.properties_of pos) Markup.position, msg),
+                 Pretty.brk 1, Pretty.str "instantiated:"]
+              val bindings = map (pretty_binding value_of) newly
+              val subgoal_block =
+                case goal_before of
+                  SOME g => [Pretty.item
+                              [Pretty.str "from subgoal:", Pretty.brk 1,
+                               Syntax.pretty_term ctxt g]]
+                | NONE => []
+              val body = header :: bindings @ subgoal_block
+              val _ = if enable_log then Pretty.chunks body |> log else ()
+            in
+              if enable_ask andalso Context_Position.reports_enabled ctxt then
+                let
+                  val (mkbtn, promise) = Active.dialog_text ()
+                  val prompt = Pretty.block
+                    [Pretty.str "Accept instantiation?", Pretty.brk 2,
+                     Pretty.str (mkbtn "Continue"), Pretty.brk 2,
+                     Pretty.str (mkbtn "Abort")]
+                  val _ = Pretty.chunks (body @ [prompt]) |> log
+                  val ans = Future.join promise
+                in
+                  if ans = "Continue" then ()
+                  else raise SMART "schematic instantiation rejected by user"
+                end
+              else ()
+            end
+          end
+        val cb = fn _ => fn t' => fn _ => fn success =>
+          if success then Option.app inspect t' else ()
+      in
+        (* Fast path: if there are no schematics in the pre-state, the wrapped
+           tactic cannot instantiate any, so skip the observation entirely. *)
+        if null names_before then tac' i st
+        else Crush_Time.time_seq cb (tac' i) st
+      end
+
   fun LOGFULL' (ctxt : Proof.context) (enable : bool) : string -> (int -> tactic) -> (int -> tactic) =
      let val l = LOGFULL ctxt enable in fn msg => fn t => l msg o t end
 
@@ -215,7 +295,6 @@ struct
 
   fun intlist_to_string ls = "[" ^ (fold (fn i => fn s => s ^ " " ^ (i |> Int.toString)) ls "") ^ " ]"
 
-  exception SMART of string
   fun REPEAT_SMART (ctxt : Proof.context) (log : logger) (aggressive : bool) (m : logger -> tactic) : tactic = let
 
      fun debug lvl = if lvl <= (Config.get ctxt Crush_Config.debug_level)  then tracing else K ()

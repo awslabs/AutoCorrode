@@ -46,6 +46,10 @@ sig
   val log_calls : bool Config.T
   (* log ucincl discharge *)
   val log_ucincl : bool Config.T
+  (* log schematic variable instantiations performed by each crush branch *)
+  val log_schematics : bool Config.T
+  (* pause after each schematic instantiation and prompt the user *)
+  val ask_schematics : bool Config.T
   (* log sub-branches of transaction tactic *)
   val log_transactions : bool Config.T
   (* log crush setup time *)
@@ -123,6 +127,8 @@ struct
   val log_clarsimp = Attrib.setup_config_bool @{binding "crush_log_clarsimp"} (K false)
   val log_calls = Attrib.setup_config_bool @{binding "crush_log_calls"} (K true)
   val log_ucincl = Attrib.setup_config_bool @{binding "crush_log_ucincl"} (K false)
+  val log_schematics = Attrib.setup_config_bool @{binding "crush_log_schematics"} (K false)
+  val ask_schematics = Attrib.setup_config_bool @{binding "crush_ask_schematics"} (K false)
   val log_aentails_cancel = Attrib.setup_config_bool @{binding "crush_log_aentails_cancel"} (K false)
   val log_aentails_core = Attrib.setup_config_bool @{binding "crush_log_aentails_core"} (K false)
   val log_base_simps = Attrib.setup_config_bool @{binding "crush_log_base_simps"} (K false)

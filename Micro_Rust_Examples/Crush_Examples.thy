@@ -714,6 +714,57 @@ end
 text\<open>There are various other logging options which can be used to trace individual branches.
 See \<^file>\<open>../Crush/config.ML\<close> for a complete list.\<close>
 
+paragraph\<open>Tracing schematic-variable instantiations\<close>
+
+text\<open>A common source of failures deep inside a \<^verbatim>\<open>crush\<close> run is a branch silently picking the
+wrong witness for a schematic variable (e.g. the wrong existential witness in a separation-logic
+entailment). By the time the bad choice is noticed, several further steps have fired on top of it,
+making the root cause hard to locate.
+
+Set \<^verbatim>\<open>crush_log_schematics\<close> asks \<^verbatim>\<open>crush\<close> to log, for every step, any schematic variable that
+was *newly instantiated* by that step, together with the value chosen and the subgoal the branch
+was applied to. This is most useful with \<^verbatim>\<open>stepwise\<close>, which implies \<^verbatim>\<open>crush_log_schematics\<close>.
+You can also set \<^verbatim>\<open>crush_ask_schematics\<close> if you want to be able to confirm every instantiation.\<close>
+
+experiment
+  fixes P Q :: \<open>'a \<Rightarrow> 's::sepalg assert\<close>
+    and \<alpha> \<beta> \<gamma> \<delta> :: \<open>'s assert\<close>
+    and R :: bool
+  assumes PQ: \<open>\<And>x. R \<Longrightarrow> P x \<star> \<beta> \<longlongrightarrow> Q x \<star> \<gamma>\<close>
+     and P_ucincl[ucincl_intros]: \<open>\<And>x. ucincl (P x)\<close>
+begin
+  definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
+ 
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+    using [[crush_log_schematics]]
+    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
+    oops
+
+  \<comment>\<open>Again, but this time implicit in \<^verbatim>\<open>stepwise\<close>, and giving a finer breakdown of steps:\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+    apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ stepwise)
+    step *
+    oops
+    \<comment>\<open>Each line reports the branch name, the bindings it introduced, and the subgoal seen just
+       before the step.\<close>
+end
+
+text\<open>The fact that \<^verbatim>\<open>crush_log_schematics\<close> pinpoints which branch instantiated a schematic makes
+it especially useful in combination with the separation-logic entailment branches
+(\<^verbatim>\<open>aentails_rule_tac\<close>, \<^verbatim>\<open>aentails_drule_tac\<close>, \<^verbatim>\<open>aentails_crule_tac\<close>, \<^verbatim>\<open>schematics_tac\<close>),
+where a wrong witness for an existential is the typical failure mode.
+
+For even tighter control you can set \<^verbatim>\<open>crush_ask_schematics\<close>. This enables the same diff, but
+additionally *pauses* the proof in jEdit after every instantiation and offers a
+\<^verbatim>\<open>Continue\<close>/\<^verbatim>\<open>Abort\<close> dialog in the output panel. Clicking \<^verbatim>\<open>Abort\<close> terminates \<^verbatim>\<open>crush\<close> cleanly
+so the bad step can be inspected with the current proof state intact. In batch builds (no
+interactive frontend) the prompt is silently skipped so \<^verbatim>\<open>crush_ask_schematics\<close> degrades to
+the same behaviour as \<^verbatim>\<open>crush_log_schematics\<close>.
+
+Usage is identical to the other logging options, e.g.
+\<^verbatim>\<open>using [[crush_ask_schematics]]\<close> inside an \<^verbatim>\<open>experiment\<close> block, or
+\<^verbatim>\<open>crush_base (ask schematics: True)\<close> as a method argument.\<close>
+
 paragraph\<open>Comparing two \<^verbatim>\<open>crush\<close> calls\<close>
 
 text\<open>It sometimes happens that one notices one \<^verbatim>\<open>crush\<close> call succeeding and another failing, but it

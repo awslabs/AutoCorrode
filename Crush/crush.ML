@@ -542,11 +542,16 @@ struct
             invocation only needs to thread `log` through precomputed decorators. *)
          val time_toplevel_enabled = Config.get ctxt Crush_Config.time_toplevel
          val log_toplevel_enabled  = Config.get ctxt Crush_Config.log_toplevel
+         val log_schematics        = Config.get ctxt Crush_Config.log_schematics
+         val ask_schematics        = Config.get ctxt Crush_Config.ask_schematics
+         val schematics_flags      = {log = log_schematics, ask = ask_schematics}
          fun mk_decorator (msg, pos) =
            let val msg' = "crush_branch_" ^ msg
-               val time_dec = TIME_pos' ctxt pos time_toplevel_enabled msg'
-               val log_dec  = LOG_pos'  ctxt pos log_toplevel_enabled  msg'
-           in fn log => fn tac' => tac' |> time_dec log |> log_dec log end
+               val time_dec  = TIME_pos'           ctxt pos time_toplevel_enabled msg'
+               val log_dec   = LOG_pos'            ctxt pos log_toplevel_enabled  msg'
+               val schem_dec = LOG_SCHEMATICS_pos' ctxt pos schematics_flags      msg'
+           in fn log => fn tac' =>
+                tac' |> time_dec log |> log_dec log |> schem_dec log end
          (* We are hoisting this out because it dominates the runtime of very short
             crush calls, and is used 4 times in the branches below; we also defer
             evaluation to when we actually need it *)
@@ -781,6 +786,7 @@ struct
                      make_arg_parser "bigstep" Parser.parse_bool  (Config.put Crush_Config.do_big_steps) \<^here>,
                      make_modifier_parser "stepwise" (Config.put Crush_Config.stepwise true #>
                                                       Config.put Crush_Config.log_toplevel true #>
+                                                      Config.put Crush_Config.log_schematics true #>
                                                       Config.put Crush_Config.do_big_steps false) \<^here>,
                      make_modifier_parser "history"  (Config.put Crush_Config.keep_history true #>
                                                       Config.put Crush_Config.do_big_steps false) \<^here>,
@@ -799,7 +805,10 @@ struct
   val log_parsers = [make_log_parser "toplevel" Crush_Config.log_toplevel,
                      make_log_parser "clarsimp" Crush_Config.log_clarsimp,
                      make_log_parser "calls"    Crush_Config.log_calls,
-                     make_log_parser "ucincl"   Crush_Config.log_ucincl]
+                     make_log_parser "ucincl"   Crush_Config.log_ucincl,
+                     make_log_parser "schematics" Crush_Config.log_schematics,
+                     make_arg_parser' (Args.$$$ "ask" -- Args.$$$ "schematics")
+                       Parser.parse_bool (Config.put Crush_Config.ask_schematics) \<^here>]
 
   val add_del_parsers = [
      make_add_parser' (Args.$$$ "seplog" -- Args.$$$ "drule") @{named_theorems crush_aentails_drules} \<^here>,
