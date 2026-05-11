@@ -72,7 +72,73 @@ ML_file "unfold_prems.ML"
 
 subsection\<open>Separation Logic Tactics\<close>
 
+named_theorems asepconj_pick_thms
+named_theorems asepconj_rotate_thms
+
 ML_file "seplog.ML"
+
+text\<open>Pre-generate cached picker and rotation theorems for separating conjunctions.
+For indices beyond this limit, \<^verbatim>\<open>asepconj_pick_conv\<close> in \<^file>\<open>seplog.ML\<close> uses
+chunked composition instead of ad-hoc generation.\<close>
+local_setup\<open>prove_register_asepconj_pick_upto 75\<close>
+local_setup\<open>prove_register_asepconj_rotate_upto 25\<close>
+
+ML\<open>
+  \<comment>\<open>Stress test for chunked pick composition beyond the cached range.\<close>
+local
+  open Separation_Logic_Tactics
+  val T = @{typ "'s::sepalg assert"}
+  fun mk_var i = Free ("a" ^ Int.toString i, T)
+  fun mk_conj n = mk_asepconj (List.tabulate (n, mk_var))
+
+  fun elapsed f =
+    let val start = Timing.start ()
+        val x = f ()
+        val t = Timing.result start
+    in (x, #elapsed t |> Time.toMilliseconds) end
+
+  fun test_pick ctxt n i =
+    let
+      val ct = Thm.cterm_of ctxt (mk_conj n)
+      val (result, t_conv) = elapsed (fn () => asepconj_pick_conv ctxt n i ct)
+      val (lhs_term, rhs_term) = result |> Thm.prop_of |> Logic.dest_equals
+      val lhs = split_asepconj lhs_term
+      val rhs = split_asepconj rhs_term
+      val expected_hd = List.nth (lhs, i)
+      val expected_rest = List.take (lhs, i) @ List.drop (lhs, i + 1)
+      val _ =
+        if hd rhs = expected_hd andalso tl rhs = expected_rest then
+          tracing ("pick(" ^ Int.toString n ^ "," ^ Int.toString i ^ "): "
+                   ^ Int.toString t_conv ^ "ms")
+        else error ("FAILED for pick(" ^ Int.toString n ^ "," ^ Int.toString i ^ ")")
+    in () end
+
+  fun test_rotate ctxt n =
+    let
+      val ct = Thm.cterm_of ctxt (mk_conj n)
+      val (result, t_conv) = elapsed (fn () => asepconj_rotate_conv ctxt ct)
+      val (lhs_term, rhs_term) = result |> Thm.prop_of |> Logic.dest_equals
+      val lhs = split_asepconj lhs_term
+      val rhs = split_asepconj rhs_term
+      val expected = tl lhs @ [hd lhs]
+      val _ =
+        if rhs = expected then
+          tracing ("rotate(" ^ Int.toString n ^ "): "
+                   ^ Int.toString t_conv ^ "ms")
+        else error ("FAILED for rotate(" ^ Int.toString n ^ ")")
+    in () end
+
+  fun test_range ctxt =
+    let val is = List.tabulate (50, fn k => (k + 1) * 50)
+    in List.app (fn i =>
+         (test_pick ctxt (i + 1) i;
+          test_rotate ctxt (i + 1))
+       ) is
+    end
+in
+  val _ = test_range @{context}
+end
+\<close>
 
 subsection\<open>Crush\<close>
 
