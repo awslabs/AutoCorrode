@@ -149,10 +149,33 @@ struct
 
   fun update_guards_shallow_tac (ctxt : Proof.context) : int -> tactic =
     \<comment>\<open>We always want to ignore top-level pure binders\<close>
-    CONVERSION (Conv.params_conv ~1 update_guards_shallow_conv ctxt)
+    let
+      val add_guard_thms = Named_Theorems.get ctxt @{named_theorems add_guards}
+      fun conv_with_thms ctxt' =
+        let val update_single = update_guard_single_conv [] ctxt' add_guard_thms
+            fun core (t : cterm) =
+              (update_single then_conv
+               (is_guard_conv
+                else_conv (Conv.abs_conv (K Conv.all_conv) ctxt')
+                else_conv (Conv.comb_conv core)
+                else_conv Conv.all_conv)
+              ) t
+        in core end
+    in CONVERSION (Conv.params_conv ~1 conv_with_thms ctxt) end
   fun update_guards_deep_tac (ctxt : Proof.context) : int -> tactic =
     \<comment>\<open>We always want to ignore top-level pure binders\<close>
-    CONVERSION (Conv.params_conv ~1 (update_guards_deep_conv []) ctxt)
+    let
+      val add_guard_thms = Named_Theorems.get ctxt @{named_theorems add_guards}
+      fun core_conv (vs : cterm list) (ctxt' : Proof.context) =
+        let fun core (t : cterm) =
+          (update_guard_single_conv vs ctxt' add_guard_thms
+           then_conv (is_guard_conv
+             else_conv (Conv.abs_conv (fn (v, ctxt'') => fn t' => core_conv (v :: vs) ctxt'' t') ctxt')
+             else_conv (Conv.comb_conv core)
+            else_conv Conv.all_conv)
+          ) t
+        in core end
+    in CONVERSION (Conv.params_conv ~1 (core_conv []) ctxt) end
   fun update_guards_tac (deep : bool) : Proof.context -> int -> tactic =
     if deep then update_guards_deep_tac else update_guards_shallow_tac
 
