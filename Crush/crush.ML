@@ -257,8 +257,8 @@ struct
       specs |> filter spec_filter_schematic |> filter spec_filter_eager
     end
 
-  fun crush_branch_call_tac_core (ctxt: Proof.context) (func_name : string) (with_schematics: bool)
-    (eager: bool) (unfold_contract_tac : int -> tactic) : int -> tactic =
+  fun crush_branch_call_tac_core (ctxt: Proof.context) (with_schematics: bool)
+    (eager: bool) (unfold_contract_tac : int -> tactic) : string -> int -> tactic =
     let val LOG : string -> int -> tactic =
       if Config.get ctxt Crush_Config.log_calls then log_tac #> K else K (K all_tac)
     val eager_schematic_str = " (" ^ (eager |> Bool.toString) ^ "," ^ (with_schematics |> Bool.toString) ^ ")"
@@ -266,10 +266,6 @@ struct
     fun TIME_IT msg = time_and_report ctxt msg (Config.get ctxt Crush_Config.time_calls)
     val specs = TIME_IT "crush_branch_call_init_get_specs" (fn _ => crush_get_specs ctxt with_schematics eager)
     val unfold_contract_tac = TIME "crush_branch_call_intro_find_contract" unfold_contract_tac
-    val confirm_no_abort_tac = TIME "crush_branch_call_confirm_no_abort" (
-           (SOLVED' (TRY o unfold_contract_tac THEN' safe_asm_simp_tac (ctxt addsimps @{thms Let_def}))) ORELSE'
-           (LOG ("Failed to show that " ^ func_name ^ " has trivial abort-postcondition") THEN' K no_tac))
-
     val post_call_simp = TIME "crush_branch_post_call_simp" (TIME_IT "crush_branch_call_init_post_call_simp"
       (fn _ => if eager then
         let val post_call_unfold_thms = Named_Theorems.get ctxt @{named_theorems crush_specs_eager_unfold}
@@ -282,30 +278,38 @@ struct
            assumptions of the specification are present as pure premises. *)
         THEN_ALL_NEW assm_tac ctxt)
       ORELSE' assm_tac ctxt))
-    val call_without_abort =
-       TIME "crush_branch_call_intro" (intro_tac @{thms wp_callI} ctxt)
-       THEN'
-        ( find_spec
-          THEN' confirm_no_abort_tac
-          THEN' (
-            ( (unfold_contract_tac ORELSE' (LOG ("No contract for: " ^ func_name)))
-              THEN' post_call_simp
-              THEN' (LOG ("Call function: " ^ func_name) ) )
-            ORELSE' (LOG ("Failed to call function: " ^ func_name) ) ) )
-    val call_with_abort =
+    val intro_wp_call = TIME "crush_branch_call_intro" (intro_tac @{thms wp_callI} ctxt)
+    val intro_wp_call_with_abort =
        TIME "crush_branch_call_intro_with_abort" (intro_tac @{thms wp_call_with_abortI} ctxt)
-       THEN'
-        ( find_spec
-          THEN' (
-            ( (unfold_contract_tac ORELSE' (LOG ("No contract for: " ^ func_name)))
-              THEN' post_call_simp
-              THEN' (LOG ("Call function: " ^ func_name) ) )
-            ORELSE' (LOG ("Failed to call function: " ^ func_name) ) ) )
+
+    (* Hoisted: simpset construction and the goal-independent SOLVED' arm of the abort check. *)
+    val abort_simp_tac = safe_asm_simp_tac (ctxt addsimps @{thms Let_def})
+    val confirm_solved_arm = SOLVED' (TRY o unfold_contract_tac THEN' abort_simp_tac)
+    val time_confirm_no_abort = TIME "crush_branch_call_confirm_no_abort"
     in
-      call_without_abort ORELSE' call_with_abort
+      fn (func_name : string) =>
+        let
+          val log_no_abort_post = LOG ("Failed to show that " ^ func_name ^ " has trivial abort-postcondition")
+          val log_no_contract   = LOG ("No contract for: " ^ func_name)
+          val log_call_ok       = LOG ("Call function: " ^ func_name)
+          val log_call_failed   = LOG ("Failed to call function: " ^ func_name)
+          val confirm_no_abort_tac = time_confirm_no_abort
+                (confirm_solved_arm ORELSE' (log_no_abort_post THEN' K no_tac))
+          val body_after_find_spec =
+                ((unfold_contract_tac ORELSE' log_no_contract)
+                  THEN' post_call_simp
+                  THEN' log_call_ok)
+                ORELSE' log_call_failed
+          val call_without_abort =
+                intro_wp_call THEN' (find_spec THEN' confirm_no_abort_tac THEN' body_after_find_spec)
+          val call_with_abort =
+                intro_wp_call_with_abort THEN' (find_spec THEN' body_after_find_spec)
+        in
+          call_without_abort ORELSE' call_with_abort
+        end
     end
 
-  fun crush_branch_inline_call_tac (ctxt : Proof.context) (func_name : string) =
+  fun crush_branch_inline_call_tac (ctxt : Proof.context) : string -> int -> tactic =
     let
       val TIME = TIME' ctxt (Config.get ctxt Crush_Config.time_calls)
        val LOG : string -> int -> tactic =
@@ -317,18 +321,34 @@ struct
          (@{thm wp_call_inlineI} OF [thm]) handle THM _ => (@{thm wp_call_inline'I} OF [thm])
       val inlined_fun_defs = Named_Theorems.get ctxt @{named_theorems crush_inline}
       val inlined_call_rules = inlined_fun_defs |> List.map (pure_eta_expand #> make_wp_call_rule)
-    in TIME "crush_branch_inline_call" (
-      intro_tac inlined_call_rules ctxt
-      THEN' Separation_Logic_Tactics.aentails_wp_ssa_normalize_tac ctxt
-      THEN' LOG ("Call function: " ^ func_name ^ " (inlined)")
-    ) end
+      val intro_inlined = intro_tac inlined_call_rules ctxt
+      val ssa_normalize = Separation_Logic_Tactics.aentails_wp_ssa_normalize_tac ctxt
+      val timed = TIME "crush_branch_inline_call"
+    in
+      fn (func_name : string) =>
+        timed (intro_inlined
+               THEN' ssa_normalize
+               THEN' LOG ("Call function: " ^ func_name ^ " (inlined)"))
+    end
 
   fun crush_branch_call_tac (ctxt : Proof.context) (with_schematics : bool)
      (unfold_contract_tac : int -> tactic): int -> tactic =
-     IF_with_param' (Separation_Logic_Tactics.find_wp_call_function) (fn func =>
-               (if not with_schematics then crush_branch_inline_call_tac ctxt func else K no_tac)
-       ORELSE' crush_branch_call_tac_core ctxt func with_schematics true unfold_contract_tac
-       ORELSE' crush_branch_call_tac_core ctxt func with_schematics false unfold_contract_tac)
+     let
+       (* Build the per-(with_schematics, eager) call-tactics on first wp-call goal,
+          memoize across subsequent ones via Lazy.force. *)
+       val inline_call_lazy = Lazy.lazy (fn _ =>
+         if with_schematics then K (K no_tac)
+         else crush_branch_inline_call_tac ctxt)
+       val core_eager_lazy = Lazy.lazy (fn _ =>
+         crush_branch_call_tac_core ctxt with_schematics true  unfold_contract_tac)
+       val core_lazy_lazy = Lazy.lazy (fn _ =>
+         crush_branch_call_tac_core ctxt with_schematics false unfold_contract_tac)
+     in
+       IF_with_param' (Separation_Logic_Tactics.find_wp_call_function) (fn func =>
+                 Lazy.force inline_call_lazy func
+         ORELSE' Lazy.force core_eager_lazy  func
+         ORELSE' Lazy.force core_lazy_lazy   func)
+     end
 
   val crush_branch_aentails_core_tac : Proof.context -> int -> tactic = fn ctxt =>
     DWELL' ( IF' Separation_Logic_Tactics.is_entailment (
