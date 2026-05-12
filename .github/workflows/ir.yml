@@ -37,7 +37,7 @@ jobs:
       run: $ISABELLE build -b HOL
 
     - name: Test repl.py TCP server
-      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --stress-runs 50
 
   basic-no-prompt-toolkit:
     name: Basic test (HOL, no prompt_toolkit)
@@ -64,10 +64,10 @@ jobs:
       run: $ISABELLE build -b HOL
 
     - name: Test repl.py TCP server (implicit server-only via missing prompt_toolkit)
-      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --stress-runs 50
 
     - name: Test repl.py TCP server (explicit --server-only)
-      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --server-only
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --server-only --stress-runs 50
 
   record_theories:
     name: Build with record_theories
@@ -96,4 +96,4 @@ jobs:
       run: $ISABELLE build -f -b -o record_theories=true HOL
 
     - name: Test repl.py with recorded segments
-      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --require-source
+      run: python3 ir/test_repl.py --isabelle $ISABELLE --session HOL --require-source --stress-runs 50
