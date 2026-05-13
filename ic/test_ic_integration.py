@@ -84,10 +84,12 @@ def find_free_port():
 class ReplProcess:
     """Manage an I/R REPL subprocess for testing."""
 
-    def __init__(self, session="HOL", dirs=None, no_bash_server=False):
+    def __init__(self, session="HOL", dirs=None, no_bash_server=False,
+                 isabelle=None):
         self.session = session
         self.dirs = dirs or []
         self.no_bash_server = no_bash_server
+        self.isabelle = isabelle
         self.port = find_free_port()
         self.token = secrets.token_urlsafe(24)
         self.proc = None
@@ -106,6 +108,8 @@ class ReplProcess:
                "--session", self.session,
                "--port", str(self.port),
                "--server-only"]
+        if self.isabelle:
+            cmd += ["--isabelle", self.isabelle]
         for d in self.dirs:
             cmd += ["--dir", d]
         if self.no_bash_server:
@@ -197,10 +201,12 @@ class TestICSIntegration(unittest.TestCase):
 
     repl = None
     repl_proc = None
+    isabelle_path = None  # set by main() from --isabelle / $ISABELLE
 
     @classmethod
     def setUpClass(cls):
-        cls.repl_proc = ReplProcess(session="HOL", dirs=[TEST_DIR])
+        cls.repl_proc = ReplProcess(
+            session="HOL", dirs=[TEST_DIR], isabelle=cls.isabelle_path)
         cls.repl = cls.repl_proc.start()
         clean(cls.repl)
 
@@ -1465,12 +1471,18 @@ class TestICSIntegration(unittest.TestCase):
                          msg=resp["target"].get("error"))
 
 
-def find_isabelle():
-    """Find Isabelle installation. Raises unittest.SkipTest if not found."""
+def find_isabelle(isabelle_path=None):
+    """Find Isabelle installation. Raises unittest.SkipTest if not found.
+
+    When `isabelle_path` is given, it is validated via
+    repl.find_isabelle_installation (which accepts either the binary
+    path or the Isabelle home directory). Otherwise falls back to that
+    function's platform-specific default search.
+    """
     sys.path.insert(0, IR_DIR)
     try:
         from repl import find_isabelle_installation
-        return find_isabelle_installation(None)
+        return find_isabelle_installation(isabelle_path)
     except (ImportError, RuntimeError) as e:
         raise unittest.SkipTest(f"Isabelle not found: {e}")
 
@@ -1500,16 +1512,18 @@ class TestHeapTheories(unittest.TestCase):
 
     repl = None
     repl_proc = None
+    isabelle_path = None  # set by main() from --isabelle / $ISABELLE
 
     @classmethod
     def setUpClass(cls):
         install_templates()  # .thy files must exist before build
-        isabelle = find_isabelle()
+        isabelle = find_isabelle(cls.isabelle_path)
         all_dir = fixture_dir("heap_all_tests")
         build_session(isabelle, all_dir, "AllHeapTests")
 
         cls.repl_proc = ReplProcess(
-            session="AllHeapTests", dirs=[all_dir], no_bash_server=True)
+            session="AllHeapTests", dirs=[all_dir], no_bash_server=True,
+            isabelle=cls.isabelle_path)
         cls.repl = cls.repl_proc.start()
         clean(cls.repl)
 
@@ -2566,7 +2580,13 @@ def main():
                    help="Run integration tests only")
     p.add_argument("-k", dest="pattern", default=None,
                    help="Run only tests matching PATTERN")
+    p.add_argument("--isabelle", default=os.environ.get("ISABELLE"),
+                   help="Path to isabelle binary or Isabelle home directory "
+                        "(default: $ISABELLE, else auto-detect)")
     args, remaining = p.parse_known_args()
+
+    TestICSIntegration.isabelle_path = args.isabelle
+    TestHeapTheories.isabelle_path = args.isabelle
 
     if args.unit_only:
         # Run unit tests from test_ic_core.py
