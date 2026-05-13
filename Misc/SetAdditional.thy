@@ -124,6 +124,10 @@ lemma LetE:
     shows \<open>Q\<close>
   using assms by simp
 
+lemma in_set_cons:
+  shows \<open>(x \<in> set (Cons y zs)) = (x = y \<or> x \<in> set zs)\<close>
+  by auto
+
 (*<*)
 end
 (*>*)
