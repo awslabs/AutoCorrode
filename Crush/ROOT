@@ -11,6 +11,7 @@ session Crush = HOL +
   theories [document=false]
     Examples
     Base
+    Shelver
     Separation_Logic_Tactics
     Crush
   document_files
