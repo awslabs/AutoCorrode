@@ -1,0 +1,5 @@
+session external_dep_order = HOL +
+  sessions
+    "HOL-Library"
+  theories
+    EDO_Target

@@ -540,6 +540,29 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(t["status"], "ok",
                          msg=f"error at line {t.get('line')}: {t.get('error')}")
 
+    def test_external_imports_with_hidden_dep_order(self):
+        """Two ExternalImports with a hidden dep relationship don't crash.
+
+        EDO_Target imports HOL-Library.AList_Mapping AND HOL-Library.Mapping
+        directly. AList_Mapping itself imports Mapping, but I/C can't see
+        external imports' dependency graph — both are classified as
+        ExternalImport with no edges between them.
+
+        Topological sort orders ExternalImports alphabetically, so
+        AList_Mapping is loaded first and Ir.load_theory pulls Mapping
+        transitively into the heap. When the executor then runs Mapping's
+        LoadFilePlan, Ir.load_theory returns (success=True, rebuilt=False).
+        execute_load_file_plan must accept this for ExternalImports rather
+        than tripping its `assert rebuilt` (which still guards FileImports).
+        """
+        resp = check(
+            fixture_file("external_dep_order", "EDO_Target"),
+            self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        t = resp["target"]
+        self.assertEqual(t["status"], "ok",
+                         msg=f"error at line {t.get('line')}: {t.get('error')}")
+
     def test_ml_comment_in_imports(self):
         """Theory with (* ... *) comment in imports should check successfully."""
         resp = check(
