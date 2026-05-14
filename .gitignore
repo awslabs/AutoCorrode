@@ -9,3 +9,5 @@ dependencies/
 
 # Other
 Conformance_Testing/
+.DS_Store
+.idea/
