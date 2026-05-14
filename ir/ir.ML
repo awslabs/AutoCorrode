@@ -226,14 +226,34 @@ type repl = {
    (step, edit, replay) atomically transitions Repl -> Claimed before
    running exec_text, then Claimed -> Repl with the result.  Any operation
    that calls the_repl/entry_repl on a Claimed entry fails immediately
-   with "is busy", preventing concurrent mutations from racing. *)
-datatype repl_entry = Repl of repl | Claimed of origin;
+   with "is busy", preventing concurrent mutations from racing.
+
+   Claimed carries a snapshot taken atomically at claim time so that
+   Ir.repls () can render busy entries with the same fields as live ones
+   plus the operation in flight and elapsed time. *)
+datatype claim_op = Op_Step | Op_Edit | Op_Replay | Op_Rebase | Op_Merge;
+
+fun claim_op_str Op_Step   = "step"
+  | claim_op_str Op_Edit   = "edit"
+  | claim_op_str Op_Replay = "replay"
+  | claim_op_str Op_Rebase = "rebase"
+  | claim_op_str Op_Merge  = "merge";
+
+type claim_info = {
+  origin: origin,
+  step_count: int,
+  stale_count: int,
+  operation: claim_op,
+  claimed_at: Time.time
+};
+
+datatype repl_entry = Repl of repl | Claimed of claim_info;
 
 fun entry_repl id (Repl r) = r
   | entry_repl id (Claimed _) = error ("REPL " ^ quote id ^ " is busy");
 
 fun entry_origin (Repl r) = #origin r
-  | entry_origin (Claimed orig) = orig;
+  | entry_origin (Claimed ci) = #origin ci;
 
 (* Sledgehammer bridge: structure-qualified vars survive heap save/load,
    unlike top-level val bindings. Used by ML_Compiler.eval in sledgehammer. *)
@@ -261,10 +281,16 @@ fun descendants tab id =
         | NONE => false
   in filter is_desc (Symtab.keys tab) end;
 
-fun claim id =
+fun claim id op_kind =
   Synchronized.change_result repl_tab (fn tab =>
     let val r = get_repl_in tab id
-    in (r, Symtab.update (id, Claimed (#origin r)) tab) end);
+        val ci : claim_info =
+          {origin = #origin r,
+           step_count = length (#steps r),
+           stale_count = length (filter #stale (#steps r)),
+           operation = op_kind,
+           claimed_at = Time.now ()}
+    in (r, Symtab.update (id, Claimed ci) tab) end);
 
 fun mark_pin_stale (r : repl) : repl =
   case #pin r of
@@ -276,8 +302,8 @@ fun mark_pin_stale (r : repl) : repl =
 fun release id r =
   Synchronized.change repl_tab (Symtab.update (id, Repl (mark_pin_stale r)));
 
-fun with_claim id (f : repl -> repl * 'a) : 'a =
-  let val r = claim id
+fun with_claim id op_kind (f : repl -> repl * 'a) : 'a =
+  let val r = claim id op_kind
   in case Exn.capture f r of
        Exn.Res (r', result) => (release id r'; result)
      | Exn.Exn e => (release id r; Exn.reraise e)
@@ -453,7 +479,7 @@ fun step_repl timeout_secs text (r : repl) : repl =
       steps = #steps r @ [s], timeout = #timeout r, pin = #pin r} end;
 
 fun step id text =
-  with_claim id (fn r =>
+  with_claim id Op_Step (fn r =>
     let val r' = step_repl (#timeout r) text r
     in (r', out (pretty_state (last_state r'))) end);
 
@@ -546,7 +572,7 @@ fun replay_repl (r : repl) : repl =
       timeout = #timeout r, pin = #pin r} end;
 
 fun replay id =
-  with_claim id (fn r =>
+  with_claim id Op_Replay (fn r =>
     let val stale_count = length (filter #stale (#steps r))
         val r' = replay_repl r
     in (r', out ("Replayed " ^ string_of_int stale_count ^ " stale steps")) end);
@@ -559,7 +585,7 @@ fun mark_all_stale (steps : repl_step list) : repl_step list =
    the repl_tab lock.  Does NOT replay steps — leaves them stale for a
    subsequent Ir.replay call. *)
 fun rebase id =
-  with_claim id (fn r =>
+  with_claim id Op_Rebase (fn r =>
     case #origin r of
       From_Theory specs =>
         let val tab = Synchronized.value repl_tab
@@ -600,7 +626,7 @@ fun edit_repl idx new_text (r : repl) : repl =
      then replay_repl r' else r' end;
 
 fun edit id idx new_text =
-  with_claim id (fn r =>
+  with_claim id Op_Edit (fn r =>
     let val r' = edit_repl idx new_text r
         val after_count = length (#steps r) - idx - 1
     in (r', out ("Edited step " ^ string_of_int idx ^ ", " ^
@@ -638,7 +664,7 @@ fun truncate id raw_idx =
 fun back id = truncate id ~1;
 
 fun merge id =
-  let val child = claim id
+  let val child = claim id Op_Merge
       val (pid, pidx) =
         case #origin child of
           From_REPL (p, i) => (p, i)
@@ -646,7 +672,7 @@ fun merge id =
                 error ("REPL " ^ quote id ^ " is not a sub-REPL"))
       val merged_text = String.concatWith "\n" (map #text (#steps child))
   in
-    case Exn.capture (with_claim pid) (fn parent =>
+    case Exn.capture (with_claim pid Op_Merge) (fn parent =>
       let val r' =
             if pidx < length (#steps parent)
             then edit_repl pidx merged_text parent
@@ -682,18 +708,30 @@ fun remove id =
   in out ("Removed " ^ commas (map quote removed)) end;
 
 fun repls () =
-  Symtab.fold (fn (id, entry) => fn () =>
-    case entry of
-      Claimed orig =>
-        out ("    " ^ id ^ " (busy, from " ^ origin_str orig ^ ")")
-    | Repl r =>
-      let val n = length (#steps r)
-          val stale = length (filter #stale (#steps r))
-          val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
-              (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
-              ", from " ^ origin_str (#origin r) ^ pin_str (#pin r) ^ ")"
-      in out ("    " ^ desc) end)
-    (Synchronized.value repl_tab) ();
+  let val tab = Synchronized.value repl_tab
+      val now = Time.now ()
+  in
+    Symtab.fold (fn (id, entry) => fn () =>
+      case entry of
+        Claimed ci =>
+          let val n = #step_count ci
+              val stale = #stale_count ci
+              val elapsed = Time.toReal (Time.- (now, #claimed_at ci))
+              val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
+                  (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
+                  ", from " ^ origin_str (#origin ci) ^
+                  ", busy [" ^ claim_op_str (#operation ci) ^ "] " ^
+                  Real.fmt (StringCvt.FIX (SOME 1)) elapsed ^ "s)"
+          in out ("    " ^ desc) end
+      | Repl r =>
+        let val n = length (#steps r)
+            val stale = length (filter #stale (#steps r))
+            val desc = id ^ " (" ^ string_of_int n ^ " steps" ^
+                (if stale > 0 then ", " ^ string_of_int stale ^ " stale" else "") ^
+                ", from " ^ origin_str (#origin r) ^ pin_str (#pin r) ^ ")"
+        in out ("    " ^ desc) end)
+      tab ()
+  end;
 
 (* Lists theories in the initial heap plus those loaded via load_theory. *)
 fun theories () =
