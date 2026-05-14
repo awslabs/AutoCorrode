@@ -2115,9 +2115,14 @@ def execute_load_file_plan(ctx: CheckContext, ri: ResolvedImport,
     log(ctx, f"  {ri_log_name(ri)}: loading from file...")
     success, rebuilt = load_theory(ctx, load_name)
     if success:
-        assert rebuilt, (
-            f"Expected Ir.load_theory to rebuild {ri_log_name(ri)}, "
-            f"but it used cached version.")
+        # External imports' dep graphs are opaque to I/C: a sibling
+        # ExternalImport earlier in build order may have transitively
+        # loaded this one into the heap. For FileImports the assert
+        # still holds — classification would have produced SkipPlan.
+        if not isinstance(ri, ExternalImport):
+            assert rebuilt, (
+                f"Expected Ir.load_theory to rebuild {ri_log_name(ri)}, "
+                f"but it used cached version.")
         if entry:
             with open(entry.path) as f:
                 disk_hash = file_content_hash(f.read())
