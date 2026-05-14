@@ -57,3 +57,4 @@ pin_transitive_heap
 rebase_import_change
 keywords_in_comment
 missing_end
+external_dep_order
