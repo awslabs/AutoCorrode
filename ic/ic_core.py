@@ -149,8 +149,9 @@ class ReplClean(FileClassBase):
 @dataclass
 class ReplCachedError(FileClassBase):
     """Has REPL, file unchanged, but previous check had an error."""
-    commands: list[object]  # BodyCommand list for error recovery
+    commands: list['BodyCommand']
     body_steps: int         # successful steps before the error
+    line_info: 'LineInfo'   # file-line anchors for log messages
     in_heap: bool = False
 
 
@@ -160,7 +161,7 @@ class ReplChanged(FileClassBase):
     @property
     def is_rebuilding(self) -> bool:
         return True
-    change_info: object  # ChangeInfo (forward ref to avoid circular import)
+    change_info: 'ChangeInfo'
     restep_lines: int
     step_range: tuple[int, int]  # saved from REPL (for incremental truncate)
     new_header: object            # TheoryHeader parsed from disk
@@ -195,9 +196,10 @@ class FileNotLoaded(FileClassBase):
 class SegmentDiff:
     """Result of comparing disk commands against heap segments."""
     segment_spec: str           # init from this segment
-    tail: list[object]          # BodyCommands to step after init
+    tail: list['BodyCommand']   # BodyCommands to step after init
     total_commands: int         # total body commands (for logging)
     content_hash: str           # SHA256 of disk file
+    line_info: 'LineInfo'       # file-line anchors for log messages
 
 
 @dataclass
@@ -289,7 +291,7 @@ class TargetUnchangedPlan(DepPlan):
 @dataclass
 class IncrementalPlan(DepPlan):
     """Incremental rebuild — truncate existing REPL, restep changed tail."""
-    change_info: object  # ChangeInfo
+    change_info: 'ChangeInfo'
     step_range: tuple[int, int]
     segment_spec: str | None = None  # preserved for marker update
 
@@ -307,8 +309,9 @@ class SegmentInitPlan(DepPlan):
 @dataclass
 class RecoverErrorPlan(DepPlan):
     """Re-execute from the failing command for an unchanged broken file."""
-    commands: list[object]  # BodyCommand
+    commands: list['BodyCommand']
     body_steps: int         # successful steps before the error
+    line_info: 'LineInfo'   # file-line anchors for log messages
 
 
 @dataclass
@@ -465,6 +468,21 @@ class BodyCommand:
     file_line: int  # 1-based line number in the .thy file
 
 
+@dataclass
+class LineInfo:
+    """File-line anchors for verbose log messages."""
+    first_changed_line: int   # 1-based file_line where re-stepping begins
+    total_lines: int          # len(file_text.splitlines())
+
+
+@dataclass
+class ChangeInfo:
+    """Diff between old and new commands for a changed file."""
+    old_commands: list[BodyCommand]
+    new_commands: list[BodyCommand]
+    first_diff: int  # index of first differing command
+    line_info: LineInfo
+
 
 @dataclass
 class FileEntry:
@@ -472,6 +490,7 @@ class FileEntry:
     header: TheoryHeader
     session_name: str | None = None
     content_hash: str = ""
+    total_lines: int = 0
     status: FileStatus = FileStatus.PENDING
     error_line: int | None = None
 
