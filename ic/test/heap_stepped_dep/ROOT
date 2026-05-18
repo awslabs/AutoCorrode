@@ -1,0 +1,5 @@
+session HeapSteppedDep = HOL +
+  options [record_theories = true]
+  theories
+    HSD_A
+    HSD_B

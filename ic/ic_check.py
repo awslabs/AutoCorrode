@@ -1470,7 +1470,8 @@ def propagate_staleness(classes: dict[ResolvedImport, FileClassification],
                 classes[ri] = HeapStaleDep(c.qt)
                 rebuilding.add(ri)
         elif isinstance(c, HeapStale):
-            if any(d in rebuilding for d in imp_ris):
+            if any(not isinstance(classes.get(d), InHeap)
+                   for d in imp_ris if d in classes):
                 classes[ri] = HeapStaleDep(c.qt)
         elif isinstance(c, FileLoaded):
             if any(d in rebuilding for d in imp_ris):

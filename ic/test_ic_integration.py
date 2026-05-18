@@ -1813,6 +1813,54 @@ class TestHeapTheories(unittest.TestCase):
                              f"{resp['target']}")
         self.assertGreater(resp["target"]["steps_taken"], 0)
 
+    def test_heap_target_must_see_stepped_dep_state(self):
+        """B's segment init must use A's stepped REPL state, not heap.
+
+        HSD_A and HSD_B are both heap-built. Workflow:
+          1. Edit HSD_A: add a new theorem `new_a_thm` (heap doesn't
+             know about it).
+          2. Check HSD_A — A's REPL is now stepped through `new_a_thm`.
+          3. Edit HSD_B: add `thm new_a_thm`.
+          4. Check HSD_B — B should see the stepped A's `new_a_thm`.
+
+        Expected: B passes (the new theorem is in A's REPL state).
+        Suspected current behavior: B is classified HeapStale → built
+        as SegmentInitPlan, which inits from the heap segment ignoring
+        A's stepped REPL. `thm new_a_thm` then fails because the heap
+        version of A doesn't have that theorem.
+        """
+        dep_dir = fixture_dir("heap_stepped_dep")
+        a_path = os.path.join(dep_dir, "HSD_A.thy")
+        b_path = os.path.join(dep_dir, "HSD_B.thy")
+
+        # Step 1: add a new theorem to A
+        with open(a_path, 'w') as f:
+            f.write('theory HSD_A\n  imports Main\nbegin\n\n'
+                    'definition hsd_val where "hsd_val = (1::nat)"\n\n'
+                    'lemma new_a_thm: "hsd_val + 0 = hsd_val" by simp\n\n'
+                    'end\n')
+
+        # Step 2: check A — A now has a stepped REPL with new_a_thm
+        resp = check(a_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=resp["target"].get("error"))
+        self.assertGreater(resp["target"]["steps_taken"], 0)
+
+        # Step 3: add a reference to new_a_thm in B
+        with open(b_path, 'w') as f:
+            f.write('theory HSD_B\n  imports HSD_A\nbegin\n\n'
+                    'definition hsd_use where "hsd_use = hsd_val + 1"\n\n'
+                    'thm new_a_thm\n\n'
+                    'end\n')
+
+        # Step 4: check B — must see A's stepped state, not heap
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(
+            resp["target"]["status"], "ok",
+            msg=f"B must see A's stepped REPL state. Got: {resp['target']}")
+
     # --- Heap dep change second command (from TestSegmentDep2Change) ---
 
     def test_heap_dep_change_second_command(self):
