@@ -13,6 +13,7 @@ session AllHeapTests = HOL +
     IncrMarker
     MLCounter
     HeapStaleBoth
+    HeapSteppedDep
     diamond_recheck_repl
     DiamondIdentityStale
     StatusDone

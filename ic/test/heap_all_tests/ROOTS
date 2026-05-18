@@ -11,6 +11,7 @@
 ../incremental_marker
 ../ml_counter
 ../heap_stale_both
+../heap_stepped_dep
 ../diamond_recheck_repl
 ../diamond_identity_stale
 ../status_done

@@ -36,6 +36,8 @@ theory All
     MLCounter.MLC_D
     HeapStaleBoth.HSB_A
     HeapStaleBoth.HSB_B
+    HeapSteppedDep.HSD_A
+    HeapSteppedDep.HSD_B
     diamond_recheck_repl.DR_A
     diamond_recheck_repl.DR_B
     diamond_recheck_repl.DR_C
