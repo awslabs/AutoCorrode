@@ -48,7 +48,8 @@ from ic_core import (
     CheckPlan, TargetUnchangedPlan, IncrementalPlan, SegmentInitPlan,
     FileResult, DepInfo, CheckResponse,
     PlanOk, PlanDepFailed, PlanAbort, PlanResult,
-    TheoryHeader, BodyCommand, FileEntry, SessionInfo,
+    TheoryHeader, BodyCommand, ChangeInfo, LineInfo,
+    FileEntry, SessionInfo,
     parse_theory_file, file_content_hash, ml_escape,
     QualifiedTheory, qualify_import, DepGraph,
     split_body_by_offsets, resolve_dependencies, resolve_import, strip_comments,
@@ -693,6 +694,7 @@ def load_session_files(ctx: CheckContext,
                     header=header,
                     session_name=sname,
                     content_hash=file_content_hash(text),
+                    total_lines=len(text.splitlines()),
                 )
                 if not header.body_ended:
                     ctx.parse_errors.append({
@@ -906,14 +908,6 @@ def recover_old_commands(repl: ReplClient,
         return []
     offsets = parse_spans(repl, repl_name, old_text)
     return split_body_by_offsets(old_text, offsets, body_start_line=1)
-
-
-@dataclass
-class ChangeInfo:
-    """Info about a changed file: old/new commands and first diff index."""
-    old_commands: list[BodyCommand]
-    new_commands: list[BodyCommand]
-    first_diff: int  # index of first differing command
 
 
 # --- Diamond detection ---
@@ -1148,7 +1142,15 @@ def classify_stepped_repl(repl: ReplClient, marker: SteppedMarker,
             cmds = all_cmds[-marker.cmd_count:]
         else:
             cmds = all_cmds
-        return ReplCachedError(qt, commands=cmds, body_steps=body_steps)
+        if len(cmds) == 0:
+            first_changed_line = entry.header.body_start_line
+        elif body_steps < len(cmds):
+            first_changed_line = cmds[body_steps].file_line
+        else:
+            first_changed_line = cmds[-1].file_line
+        line_info = LineInfo(first_changed_line, entry.total_lines)
+        return ReplCachedError(qt, commands=cmds, body_steps=body_steps,
+                               line_info=line_info)
     else:
         # File changed — check if imports changed (needs full rebuild).
         if inp.origin_imports is not None:
@@ -1194,7 +1196,14 @@ def make_repl_changed(inp: ClassifyInput,
     first_diff = diff_commands(old_commands, new_commands,
                                 inp.isabelle_symbols)
     restep = len(new_commands) - first_diff
-    change = ChangeInfo(old_commands, new_commands, first_diff)
+    if len(new_commands) == 0:
+        first_changed_line = new_header.body_start_line
+    elif first_diff < len(new_commands):
+        first_changed_line = new_commands[first_diff].file_line
+    else:
+        first_changed_line = new_commands[-1].file_line
+    line_info = LineInfo(first_changed_line, inp.entry.total_lines)
+    change = ChangeInfo(old_commands, new_commands, first_diff, line_info)
     body_steps = body_step_count(inp.repl_info)
     sr = (0, body_steps - 1) if body_steps > 0 else (0, 0)
     return ReplChanged(
@@ -1241,8 +1250,7 @@ def classify_repl_file(repl: ReplClient, inp: ClassifyInput
     try:
         if marker is None:
             return NoRepl(qt)
-        with open(inp.entry.path) as f:
-            disk_hash = file_content_hash(f.read())
+        disk_hash = inp.entry.content_hash
 
         if isinstance(marker, LoadedMarker):
             return classify_loaded_repl(
@@ -1274,8 +1282,7 @@ def classify_file_import(repl: ReplClient, inp: ClassifyInput
         return NoRepl(qt), None
 
     # Heap theory — check freshness
-    with open(entry.path) as f:
-        disk_hash = file_content_hash(f.read())
+    disk_hash = entry.content_hash
 
     # Fast path: check cached HeapVerifiedMarker hash
     if marker is not None:
@@ -1512,7 +1519,7 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
         elif isinstance(c, ReplClean):
             plans[ri] = SkipPlan(c.qt, has_stepped_repl=True)
         elif isinstance(c, ReplCachedError):
-            plans[ri] = RecoverErrorPlan(c.qt, c.commands, c.body_steps)
+            plans[ri] = RecoverErrorPlan(c.qt, c.commands, c.body_steps, c.line_info)
         elif isinstance(c, FileLoaded):
             plans[ri] = SkipPlan(c.qt, has_stepped_repl=False)
         elif isinstance(c, ReplChanged):
@@ -1539,7 +1546,7 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
         elif isinstance(c, ReplClean):
             plans[target] = SkipPlan(c.qt, has_stepped_repl=True)
         elif isinstance(c, ReplCachedError):
-            plans[target] = RecoverErrorPlan(c.qt, c.commands, c.body_steps)
+            plans[target] = RecoverErrorPlan(c.qt, c.commands, c.body_steps, c.line_info)
         elif isinstance(c, ReplChanged):
             plans[target] = IncrementalPlan(c.qt, c.change_info,
                                              c.step_range, c.segment_spec)
@@ -1851,7 +1858,9 @@ def compare_heap_segments(repl: ReplClient, inp: ClassifyInput
     body_range = body_segment_range(segments)
     if not body_range:
         seg_idx = segments[-1].seg_idx
-        return SegmentDiff(f"{qt.name}:{seg_idx}", [], 0, entry.content_hash)
+        line_info = LineInfo(segments[-1].line, entry.total_lines)
+        return SegmentDiff(f"{qt.name}:{seg_idx}", [], 0,
+                           entry.content_hash, line_info)
     body_start, body_end = body_range
     body_seg_count = body_end - body_start + 1
 
@@ -1902,22 +1911,25 @@ def compare_heap_segments(repl: ReplClient, inp: ClassifyInput
         if first_diff_idx == 0:
             if body_start == 0:
                 return None
-            seg_idx = segments[body_start - 1].seg_idx
+            seg = segments[body_start - 1]
             tail = list(commands)
         else:
-            seg_idx = segments[body_start + first_diff_idx - 1].seg_idx
+            seg = segments[body_start + first_diff_idx - 1]
             first_changed_cmd = real_commands[first_diff_idx][0]
             tail = commands[first_changed_cmd:]
     elif len(real_commands) > body_seg_count:
-        seg_idx = segments[body_end].seg_idx
+        seg = segments[body_end]
         first_new_cmd = real_commands[body_seg_count][0]
         tail = commands[first_new_cmd:]
     else:
-        seg_idx = segments[body_end].seg_idx
+        seg = segments[body_end]
         tail = []
 
-    seg_spec = f"{qt.name}:{seg_idx}"
-    return SegmentDiff(seg_spec, tail, len(commands), entry.content_hash)
+    first_changed_line = tail[0].file_line if tail else seg.line
+    line_info = LineInfo(first_changed_line, entry.total_lines)
+    seg_spec = f"{qt.name}:{seg.seg_idx}"
+    return SegmentDiff(seg_spec, tail, len(commands),
+                       entry.content_hash, line_info)
 
 
 def step_after_segment_init(ctx: CheckContext, qt: QualifiedTheory,
@@ -1933,13 +1945,9 @@ def step_after_segment_init(ctx: CheckContext, qt: QualifiedTheory,
     info = ctx.active_repls[qt.repl_name]
     if not tail:
         entry.status = FileStatus.OK
-        log(ctx, f"  {qt.name}: {_GREEN}segment init{_RST} "
-                   f"(0/{total_commands} commands stepped)")
         return FileResult(name=qt.theory_name, status="ok", steps_taken=0)
 
     ensure_timeout(ctx, qt.repl_name)
-    log(ctx, f"  {qt.name}: segment init, "
-               f"stepping {len(tail)}/{total_commands} commands")
     steps_taken = 0
     total = len(tail)
     for cmd in tail:
@@ -1971,7 +1979,6 @@ def check_file(ctx: CheckContext, qt: QualifiedTheory,
 
     info = ctx.active_repls[qt.repl_name]
     ensure_timeout(ctx, qt.repl_name)
-    log(ctx, f"  Stepping {qt.name} ({len(commands)} commands)")
     steps_taken = 0
     total = len(commands)
     for cmd in commands:
@@ -2043,7 +2050,9 @@ def incremental_check_file(ctx: CheckContext, qt: QualifiedTheory,
     truncate_to(ctx, qt.repl_name, truncate_to_step)
 
     tail = new_commands[first_diff:]
-    log(ctx, f"  Incremental {qt.name}: re-stepping {len(tail)} commands from {first_diff + 1}")
+    li = change.line_info
+    log(ctx, f"  {qt.name}: continuing from L{li.first_changed_line} - "
+             f"stepping {len(tail)} commands to L{li.total_lines} (file changed)")
     return step_tail(ctx, qt, tail, first_diff, len(new_commands))
 
 
@@ -2051,8 +2060,9 @@ def execute_recover_error_plan(ctx: CheckContext, ri: ResolvedImport,
                                 plan: RecoverErrorPlan) -> PlanResult:
     """Re-execute from the failing command for an unchanged broken file."""
     tail = plan.commands[plan.body_steps:]
-    log(ctx, f"  Recovering {ri_log_name(ri)}: re-stepping "
-               f"{len(tail)} commands from {plan.body_steps + 1}")
+    li = plan.line_info
+    log(ctx, f"  {ri_log_name(ri)}: continuing from L{li.first_changed_line} - "
+             f"stepping {len(tail)} commands to L{li.total_lines}")
     result = step_tail(ctx, plan.qt, tail, plan.body_steps,
                        len(plan.commands))
     if result.status == "ok":
@@ -2088,10 +2098,8 @@ def execute_skip_plan(ctx: CheckContext, ri: ResolvedImport,
             log(ctx, f"  {ri_log_name(ri)}: {_DIM}loaded (up to date){_RST}")
             return PlanOk(DepInfo(name, "from_file", status="ok"))
         elif isinstance(marker, SteppedMarker):
-            info = ctx.active_repls[plan.qt.repl_name]
             pin_repl(ctx, plan.qt.repl_name)
-            log(ctx, f"  {ri_log_name(ri)}: {_DIM}reusing REPL "
-                       f"({body_step_count(info)} steps){_RST}")
+            log(ctx, f"  {ri_log_name(ri)}: {_DIM}cache matches file{_RST}")
             return PlanOk(DepInfo(name, "repl", status="ok",
                                  steps_taken=0))
         else:
@@ -2124,10 +2132,8 @@ def execute_load_file_plan(ctx: CheckContext, ri: ResolvedImport,
                 f"Expected Ir.load_theory to rebuild {ri_log_name(ri)}, "
                 f"but it used cached version.")
         if entry:
-            with open(entry.path) as f:
-                disk_hash = file_content_hash(f.read())
             write_marker(ctx, plan.qt.name,
-                LoadedMarker(disk_hash, compute_dep_hashes(ctx, ri)))
+                LoadedMarker(entry.content_hash, compute_dep_hashes(ctx, ri)))
         return PlanOk(DepInfo(name, "from_file", status="ok"))
     else:
         return PlanDepFailed(DepInfo(
@@ -2205,6 +2211,8 @@ def execute_check_plan(ctx: CheckContext, ri: ResolvedImport,
     write_marker(ctx, plan.qt.name,
         SteppedMarker(entry.content_hash, len(commands),
                       dep_hashes=compute_dep_hashes(ctx, ri)))
+    log(ctx, f"  {ri_log_name(ri)}: stepwise check - "
+             f"stepping {len(commands)} commands to L{entry.total_lines}")
     file_result = check_file(ctx, plan.qt, commands)
     if file_result.status == "ok":
         pin_repl(ctx, plan.qt.repl_name)
@@ -2224,8 +2232,14 @@ def execute_segment_init_plan(ctx: CheckContext, ri: ResolvedImport,
                                plan: SegmentInitPlan) -> PlanResult:
     """Execute a SegmentInitPlan: init from heap segment, step tail."""
     diff = plan.diff
-    log(ctx, f"  {ri_log_name(ri)}: segment init from heap "
-               f"({len(diff.tail)} commands to step)")
+    li = diff.line_info
+    if diff.tail:
+        log(ctx, f"  {ri_log_name(ri)}: segment init from heap at "
+                 f"L{li.first_changed_line} - stepping {len(diff.tail)} "
+                 f"commands to L{li.total_lines}")
+    else:
+        log(ctx, f"  {ri_log_name(ri)}: segment init from heap at "
+                 f"L{li.first_changed_line} - heap matches file")
     repl_err = ensure_repl(
         ctx, [], plan.qt.repl_name,
         segment_spec=diff.segment_spec)

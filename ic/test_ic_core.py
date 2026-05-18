@@ -431,9 +431,10 @@ class TestParseReplsOutput(unittest.TestCase):
 from ic_core import (
     QualifiedTheory,
     DiamondStrategy, SkipPlan, LoadFilePlan,
-    CheckPlan, IncrementalPlan, SegmentInitPlan,
-    InHeap, ReplClean, ReplChanged, NoRepl,
-    FileLoaded, FileNotLoaded, HeapStale, HeapStaleDep, SegmentDiff,
+    CheckPlan, IncrementalPlan, SegmentInitPlan, RecoverErrorPlan,
+    InHeap, ReplClean, ReplChanged, ReplCachedError, NoRepl,
+    FileLoaded, FileNotLoaded, HeapStale, HeapStaleDep,
+    SegmentDiff, ChangeInfo, LineInfo,
 )
 from ic_check import (
     CheckContext, theory_name_from_repl,
@@ -766,7 +767,8 @@ class TestStalenesssPropagation(unittest.TestCase):
             qt("B"): mock_entry("B", "s", ["A"], 1),
         }
         classes = {
-            fi("A"): HeapStale(qt("A"), SegmentDiff("s.A:1", [], 0, "abc")),
+            fi("A"): HeapStale(qt("A"), SegmentDiff(
+                "s.A:1", [], 0, "abc", LineInfo(1, 1))),
             fi("B"): ReplClean(qt("B")),
         }
         propagate_staleness(classes, [fi("A"), fi("B")], files, {}, {})
@@ -836,8 +838,7 @@ class TestBuildPlans(unittest.TestCase):
 
     def test_repl_changed_preserves_change_info(self):
         """IncrementalPlan from ReplChanged carries change_info and step_range."""
-        from ic_check import ChangeInfo
-        change = ChangeInfo([], [], 0)
+        change = ChangeInfo([], [], 0, LineInfo(1, 1))
         classes = {
             fi("A"): ReplChanged(qt("A"), change, 0,
                              step_range=(1, 3), new_header=None,
@@ -850,7 +851,7 @@ class TestBuildPlans(unittest.TestCase):
 
     def test_heap_stale_maps_to_segment_init(self):
         """HeapStale maps to SegmentInitPlan with SegmentDiff."""
-        diff = SegmentDiff("s.A:3", ["cmd1"], 5, "abc123")
+        diff = SegmentDiff("s.A:3", ["cmd1"], 5, "abc123", LineInfo(3, 5))
         classes = {
             fi("A"): HeapStale(qt("A"), diff),
         }
@@ -1089,7 +1090,7 @@ class TestHasPersistentRepl(unittest.TestCase):
     def test_repl_cached_error(self):
         """ReplCachedError classification -> True."""
         ri = fi("A")
-        c = ReplCachedError(qt("A"), [], 3)
+        c = ReplCachedError(qt("A"), [], 3, LineInfo(1, 1))
         active = {"ic.s.A": ReplInfo("ic.s.A", 5, 0, "theory Main", False)}
         markers = {"s.A": SteppedMarker("abc", 5, None)}
         self.assertTrue(has_persistent_repl(ri, c, active, markers, {}))
