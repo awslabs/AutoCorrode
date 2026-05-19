@@ -1150,24 +1150,29 @@ class TestParseReplsOutputBusy(unittest.TestCase):
     """Unit tests for parse_repls_output busy line parsing."""
 
     def test_busy_line_parsed(self):
-        """Busy lines are parsed into BusyReplInfo with correct name and origin."""
+        """Busy lines populate BusyReplInfo with the new fields."""
         text = (
             "    ic.S.A (3 steps, from theory Main)\n"
-            "    ic.S.B (busy, from theory Main+ic.S.A)\n"
+            "    ic.S.B (4 steps, from theory Main+ic.S.A,"
+            " busy [step] 0.4s)\n"
         )
         active, busy = parse_repls_output(text)
         self.assertEqual(len(active), 1)
         self.assertIn("ic.S.A", active)
         self.assertEqual(len(busy), 1)
-        self.assertIn("ic.S.B", busy)
-        self.assertEqual(busy["ic.S.B"].name, "ic.S.B")
-        self.assertEqual(busy["ic.S.B"].origin, "theory Main+ic.S.A")
+        info = busy["ic.S.B"]
+        self.assertEqual(info.name, "ic.S.B")
+        self.assertEqual(info.origin, "theory Main+ic.S.A")
+        self.assertEqual(info.step_count, 4)
+        self.assertEqual(info.stale_count, 0)
+        self.assertEqual(info.operation, "step")
+        self.assertEqual(info.elapsed, "0.4s")
 
     def test_busy_non_ic_filtered(self):
         """Busy non-ic.* REPLs are filtered out."""
         text = (
-            "    myrepl (busy, from theory Main)\n"
-            "    ic.S.X (busy, from theory Main)\n"
+            "    myrepl (1 steps, from theory Main, busy [step] 0.1s)\n"
+            "    ic.S.X (1 steps, from theory Main, busy [step] 0.1s)\n"
         )
         active, busy = parse_repls_output(text)
         self.assertEqual(len(busy), 1)
@@ -1179,7 +1184,8 @@ class TestParseReplsOutputBusy(unittest.TestCase):
         text = (
             "  > ic.S.A (5 steps, from theory Main)\n"
             "    ic.S.B (2 steps, 1 stale, from theory Main+ic.S.A)\n"
-            "    ic.S.C (busy, from theory pin@ic.S.A+pin@ic.S.B)\n"
+            "    ic.S.C (7 steps, from theory pin@ic.S.A+pin@ic.S.B,"
+            " busy [step] 1.5s)\n"
         )
         active, busy = parse_repls_output(text)
         self.assertEqual(len(active), 2)
@@ -1187,7 +1193,42 @@ class TestParseReplsOutputBusy(unittest.TestCase):
         self.assertTrue(active["ic.S.A"].is_current)
         self.assertFalse(active["ic.S.B"].is_current)
         self.assertEqual(active["ic.S.B"].stale_count, 1)
-        self.assertEqual(busy["ic.S.C"].origin, "theory pin@ic.S.A+pin@ic.S.B")
+        self.assertEqual(busy["ic.S.C"].origin,
+                          "theory pin@ic.S.A+pin@ic.S.B")
+        self.assertEqual(busy["ic.S.C"].step_count, 7)
+
+    def test_busy_with_stale_count(self):
+        """Optional ', N stale' clause is captured on busy lines."""
+        text = ("    ic.S.A (5 steps, 2 stale, from theory Main,"
+                " busy [replay] 1.2s)\n")
+        active, busy = parse_repls_output(text)
+        self.assertEqual(len(busy), 1)
+        info = busy["ic.S.A"]
+        self.assertEqual(info.step_count, 5)
+        self.assertEqual(info.stale_count, 2)
+        self.assertEqual(info.operation, "replay")
+        self.assertEqual(info.elapsed, "1.2s")
+
+    def test_busy_all_operations(self):
+        """All five operation tags from ir.ML are recognized."""
+        ops = ["step", "edit", "replay", "rebase", "merge"]
+        lines = [f"    ic.S.{op} (1 steps, from theory Main,"
+                 f" busy [{op}] 0.0s)\n"
+                 for op in ops]
+        active, busy = parse_repls_output("".join(lines))
+        self.assertEqual(len(busy), len(ops))
+        for op in ops:
+            self.assertEqual(busy[f"ic.S.{op}"].operation, op)
+
+    def test_live_origin_does_not_capture_pinned(self):
+        """', pinned' / ', pinned [stale]' are excluded from origin."""
+        text = (
+            "    ic.S.A (5 steps, from theory Main, pinned)\n"
+            "    ic.S.B (5 steps, from theory Main, pinned [stale])\n"
+        )
+        active, _busy = parse_repls_output(text)
+        self.assertEqual(active["ic.S.A"].origin, "theory Main")
+        self.assertEqual(active["ic.S.B"].origin, "theory Main")
 
 
 if __name__ == "__main__":
