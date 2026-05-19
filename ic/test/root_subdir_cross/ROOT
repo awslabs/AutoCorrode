@@ -1,0 +1,5 @@
+session root_subdir_cross = HOL +
+  sessions
+    root_subdir
+  theories
+    SD_Cross

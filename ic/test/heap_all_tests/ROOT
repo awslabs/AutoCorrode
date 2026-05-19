@@ -1,0 +1,27 @@
+session AllHeapTests = HOL +
+  options [record_theories = true]
+  sessions
+    TestBase
+    SegTest
+    SegDepTest
+    SegDep2Test
+    SegDepChainTest
+    SegQualTest
+    ParFanOut
+    StaleHeapTarget
+    SegDoubleEdit
+    IncrMarker
+    MLCounter
+    HeapStaleBoth
+    HeapSteppedDep
+    diamond_recheck_repl
+    DiamondIdentityStale
+    StatusDone
+    StatusStale
+    StatusHeap
+    StatusPartial
+    StatusSorted
+    StatusAligned
+    PinTransHeap
+  theories
+    All

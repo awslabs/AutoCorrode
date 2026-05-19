@@ -1,0 +1,4 @@
+session ml_comment_in_imports = HOL +
+  theories
+    CH_Dep
+    CH_Main

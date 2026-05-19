@@ -1,0 +1,5 @@
+session StaleHeapTarget = HOL +
+  options [record_theories = true]
+  theories
+    SHT_Dep
+    SHT_Target

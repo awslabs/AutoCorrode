@@ -1,0 +1,5 @@
+session StatusDone = HOL +
+  options [record_theories = true]
+  theories
+    STD_A
+    STD_B

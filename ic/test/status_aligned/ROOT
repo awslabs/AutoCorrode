@@ -1,0 +1,6 @@
+session StatusAligned = HOL +
+  options [record_theories = true]
+  theories
+    STA_X
+    STA_Mid
+    STA_LongName

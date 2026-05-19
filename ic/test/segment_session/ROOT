@@ -1,0 +1,11 @@
+session SegTest = HOL +
+  options [record_theories = true]
+  theories
+    Seg_File
+    Seg_Plain
+    Seg_Error
+    Seg_Proof
+    Seg_Comment
+    Seg_Large
+    HVM_B
+    HVM_Target

@@ -1,0 +1,4 @@
+session dep_reload_broken = HOL +
+  theories
+    DRB_A
+    DRB_B

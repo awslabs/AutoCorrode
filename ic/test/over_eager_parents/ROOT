@@ -1,0 +1,6 @@
+session over_eager_parents = HOL +
+  theories
+    OE_A
+    OE_B
+    OE_C
+    OE_Target

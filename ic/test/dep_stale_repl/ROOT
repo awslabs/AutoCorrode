@@ -1,0 +1,5 @@
+session dep_stale_repl = HOL +
+  theories
+    SR_A
+    SR_B
+    SR_C

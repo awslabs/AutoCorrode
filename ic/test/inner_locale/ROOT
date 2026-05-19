@@ -1,0 +1,3 @@
+session inner_locale = HOL +
+  theories
+    Inner_Test

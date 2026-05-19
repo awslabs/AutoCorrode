@@ -1,0 +1,7 @@
+session MLCounter = HOL +
+  options [record_theories = true]
+  theories
+    MLC_A
+    MLC_B
+    MLC_C
+    MLC_D

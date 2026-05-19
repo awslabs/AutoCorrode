@@ -1,0 +1,4 @@
+session client_dep_ok = HOL +
+  theories
+    Cli_A
+    Cli_B

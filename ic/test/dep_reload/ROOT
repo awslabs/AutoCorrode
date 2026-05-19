@@ -1,0 +1,4 @@
+session dep_reload = HOL +
+  theories
+    DR_A
+    DR_B

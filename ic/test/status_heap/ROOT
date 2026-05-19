@@ -1,0 +1,4 @@
+session StatusHeap = HOL +
+  options [record_theories = true]
+  theories
+    STH_File

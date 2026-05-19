@@ -1,0 +1,3 @@
+session smt_proof = HOL +
+  theories
+    SMT_Test

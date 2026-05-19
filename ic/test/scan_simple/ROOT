@@ -1,0 +1,4 @@
+session scan_simple = HOL +
+  theories
+    Scan_A
+    Scan_B

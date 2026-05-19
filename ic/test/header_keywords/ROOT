@@ -1,0 +1,4 @@
+session header_keywords = HOL +
+  theories
+    KW_Test
+    KW_User

@@ -1,0 +1,5 @@
+session RootDirs = HOL +
+  directories
+    sub
+  theories
+    Top_A

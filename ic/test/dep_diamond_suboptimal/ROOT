@@ -1,0 +1,6 @@
+session dep_diamond_suboptimal = HOL +
+  theories
+    Sub_A
+    Sub_B
+    Sub_C
+    Sub_D

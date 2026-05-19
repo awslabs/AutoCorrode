@@ -1,0 +1,4 @@
+session comment_in_imports = HOL +
+  theories
+    CII_A
+    CII_B
