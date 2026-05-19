@@ -15,7 +15,7 @@ from ic_check import (
 )
 
 
-def _bar(step_count: int, cmd_count: int, width: int = 20) -> str:
+def progress_bar(step_count: int, cmd_count: int, width: int = 20) -> str:
     """Format a progress bar: [====    ] step/total."""
     if cmd_count <= 0:
         filled = width
@@ -23,6 +23,11 @@ def _bar(step_count: int, cmd_count: int, width: int = 20) -> str:
         filled = width * step_count // cmd_count
     bar = "=" * filled + " " * (width - filled)
     return f"[{bar}] {step_count}/{cmd_count}"
+
+
+def has_repl(repl_name: str, active_repls: dict, busy_repls: dict) -> bool:
+    """True if a REPL with this name exists, busy or active."""
+    return repl_name in active_repls or repl_name in busy_repls
 
 
 def status(repl: ReplClient, verbose: int = 0) -> None:
@@ -54,10 +59,18 @@ def status(repl: ReplClient, verbose: int = 0) -> None:
     orphan_repls: list[str] = []
     orphan_markers: list[tuple[str, str]] = []
 
-    # Process busy REPLs (display inline with stepping)
-    for name in sorted(busy_repls):
+    # Process busy REPLs: render same bar as active, with busy suffix
+    for name, info in sorted(busy_repls.items()):
         qt_name = theory_name_from_repl(name).name
-        stepping.append((qt_name, "BUSY"))
+        marker = markers.get(qt_name)
+        busy_tag = f"  busy [{info.operation}] {info.elapsed}"
+        if isinstance(marker, SteppedMarker):
+            bar = progress_bar(info.step_count, marker.cmd_count)
+            seg = (f"  (segment {marker.segment_spec})"
+                   if marker.segment_spec else "")
+            stepping.append((qt_name, f"{bar}{seg}{busy_tag}"))
+        else:
+            orphan_repls.append(qt_name)
 
 
     # Process stepped markers (REPLs)
@@ -68,7 +81,7 @@ def status(repl: ReplClient, verbose: int = 0) -> None:
             orphan_repls.append(qt_name)
             continue
 
-        bar = _bar(info.step_count, marker.cmd_count)
+        bar = progress_bar(info.step_count, marker.cmd_count)
         seg = f"  (segment {marker.segment_spec})" if marker.segment_spec else ""
         line = f"{bar}{seg}"
 
@@ -91,9 +104,9 @@ def status(repl: ReplClient, verbose: int = 0) -> None:
     for name, marker in sorted(markers.items()):
         if isinstance(marker, SteppedMarker):
             # Already handled above via active_repls.
-            # Check for orphan: stepped marker but no active REPL.
+            # Check for orphan: stepped marker but no REPL (active or busy).
             repl_name = f"ic.{name}"
-            if repl_name not in active_repls:
+            if not has_repl(repl_name, active_repls, busy_repls):
                 orphan_markers.append((name, "stepped marker, no REPL"))
         elif isinstance(marker, LoadedMarker):
             loaded.append(name)
