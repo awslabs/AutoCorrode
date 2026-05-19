@@ -74,18 +74,31 @@ class BusyReplInfo:
     """A REPL in Claimed (busy) state."""
     name: str
     origin: str
+    step_count: int
+    stale_count: int
+    operation: str   # "step" | "edit" | "replay" | "rebase" | "merge"
+    elapsed: str     # raw "X.Xs" string from server
 
 
-# Matches: "  > name (3 steps, 2 stale, from theory X+Y)"
+# Matches: "  > name (3 steps, 2 stale, from theory X+Y, pinned [stale])"
 #      or: "    name (5 steps, from theory Main)"
+# The "from" capture stops before ", pinned" so origin is the bare spec list.
 _REPL_PAT = re.compile(
     r'^\s*(>?)\s*(\S+)\s+\((\d+)\s+steps?'
     r'(?:,\s+(\d+)\s+stale)?'
-    r',\s+from\s+(.*?)\)\s*$'
+    r',\s+from\s+(.*?)'
+    r'(?:,\s+pinned(?:\s+\[stale\])?)?'
+    r'\)\s*$'
 )
 
-# Matches: "    name (busy, from theory X+Y)"
-_BUSY_PAT = re.compile(r'^\s*(\S+)\s+\(busy,\s+from\s+(.*?)\)\s*$')
+# Matches: "    name (3 steps, 2 stale, from Main, busy [replay] 2.1s)"
+_BUSY_PAT = re.compile(
+    r'^\s*(\S+)\s+\((\d+)\s+steps?'
+    r'(?:,\s+(\d+)\s+stale)?'
+    r',\s+from\s+(.*?)'
+    r',\s+busy\s+\[(\w+)\]\s+([\d.]+s)'
+    r'\)\s*$'
+)
 
 
 def parse_repls_output(text: str) -> tuple[dict[str, ReplInfo], dict[str, BusyReplInfo]]:
@@ -96,6 +109,21 @@ def parse_repls_output(text: str) -> tuple[dict[str, ReplInfo], dict[str, BusyRe
     result: dict[str, ReplInfo] = {}
     busy: dict[str, BusyReplInfo] = {}
     for line in text.splitlines():
+        # Try busy first: live regex would otherwise greedily capture the
+        # busy suffix into origin.
+        m = _BUSY_PAT.match(line)
+        if m:
+            name = m.group(1)
+            if name.startswith("ic."):
+                busy[name] = BusyReplInfo(
+                    name=name,
+                    step_count=int(m.group(2)),
+                    stale_count=int(m.group(3)) if m.group(3) else 0,
+                    origin=m.group(4),
+                    operation=m.group(5),
+                    elapsed=m.group(6),
+                )
+            continue
         m = _REPL_PAT.match(line)
         if m:
             name = m.group(2)
@@ -108,12 +136,6 @@ def parse_repls_output(text: str) -> tuple[dict[str, ReplInfo], dict[str, BusyRe
                 origin=m.group(5),
                 is_current=m.group(1) == ">",
             )
-            continue
-        m = _BUSY_PAT.match(line)
-        if m:
-            name = m.group(1)
-            if name.startswith("ic."):
-                busy[name] = BusyReplInfo(name=name, origin=m.group(2))
     return result, busy
 
 
