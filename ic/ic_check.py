@@ -223,6 +223,7 @@ class CheckContext:
     locks: ExecutionLocks = field(default_factory=ExecutionLocks)
     pool_size: int = 1
     timeout: int = 0         # per-REPL step timeout (0 = use I/R default)
+    always_stepwise: bool = False  # never use Ir.load_theory for file deps
     is_target: bool = False  # set per-job for logging control
     display: 'ProgressDisplay | None' = None
     job_id: str = ""       # short theory name for progress display
@@ -1518,6 +1519,7 @@ def propagate_staleness(classes: dict[ResolvedImport, FileClassification],
 def build_plans(classes: dict[ResolvedImport, FileClassification],
                  deps_in_order: list[ResolvedImport],
                  rebase_rebuilding: set[ResolvedImport],
+                 always_stepwise: bool = False,
                  ) -> dict[ResolvedImport, DepPlan]:
     """Assign a DepPlan to each dep based on its classification.
 
@@ -1527,10 +1529,9 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
     rebase_set = rebase_rebuilding
     plans: dict[ResolvedImport, DepPlan] = {}
 
-    def check_strategy(ri: ResolvedImport) -> InitStrategy:
-        if ri in rebase_set:
-            return InitStrategy.REBASE
-        return InitStrategy.INIT
+    def build_check_plan(ri: ResolvedImport, qt: QualifiedTheory) -> CheckPlan:
+        strategy = InitStrategy.REBASE if ri in rebase_set else InitStrategy.INIT
+        return CheckPlan(qt, strategy)
 
     # Dependencies: classification-based mapping
     for ri in deps_in_order[:-1]:
@@ -1549,13 +1550,19 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
             plans[ri] = IncrementalPlan(c.qt, c.change_info,
                                           c.step_range, c.segment_spec)
         elif isinstance(c, NoRepl):
-            plans[ri] = LoadFilePlan(c.qt)
+            if always_stepwise and isinstance(ri, FileImport):
+                plans[ri] = build_check_plan(ri, c.qt)
+            else:
+                plans[ri] = LoadFilePlan(c.qt)
         elif isinstance(c, HeapStale):
             plans[ri] = SegmentInitPlan(c.qt, c.diff)
         elif isinstance(c, HeapStaleDep):
-            plans[ri] = CheckPlan(c.qt, check_strategy(ri))
+            plans[ri] = build_check_plan(ri, c.qt)
         elif isinstance(c, FileNotLoaded):
-            plans[ri] = LoadFilePlan(c.qt)
+            if always_stepwise and isinstance(ri, FileImport):
+                plans[ri] = build_check_plan(ri, c.qt)
+            else:
+                plans[ri] = LoadFilePlan(c.qt)
         else:
             raise TypeError(f"Unhandled classification: {type(c)}")
 
@@ -1576,7 +1583,7 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
         elif isinstance(c, HeapStale):
             plans[target] = SegmentInitPlan(c.qt, c.diff)
         else:
-            plans[target] = CheckPlan(c.qt, check_strategy(target))
+            plans[target] = build_check_plan(target, c.qt)
 
     return plans
 
@@ -1588,10 +1595,12 @@ def resolve_diamonds(plans: dict[ResolvedImport, DepPlan],
     """Detect diamond conflicts and override plans where needed.
 
     Mutates `plans`: overrides entries for deps involved in diamond
-    conflicts. Only FileImport deps with NoRepl classification participate.
+    conflicts. Only FileImport deps with LoadFilePlan participate —
+    diamonds are a conflict between Ir.load_theory and stepped REPLs.
     """
     pending = [ri for ri in deps_in_order[:-1]
-               if isinstance(ri, FileImport) and isinstance(classes[ri], NoRepl)]
+               if isinstance(ri, FileImport)
+               and isinstance(plans.get(ri), LoadFilePlan)]
     dep_conflicts: dict[ResolvedImport, set[str]] = {}
     repl_to_pending: dict[str, set[ResolvedImport]] = defaultdict(set)
     for ri in pending:
@@ -1684,7 +1693,8 @@ def assign_methods(ctx: CheckContext,
     rebase_rebuilding = propagate_staleness(
         classes, deps_in_order, ctx.files,
         markers=ctx.markers, active_repls=ctx.active_repls)
-    plans = build_plans(classes, deps_in_order, rebase_rebuilding)
+    plans = build_plans(classes, deps_in_order, rebase_rebuilding,
+                        always_stepwise=ctx.always_stepwise)
     resolve_diamonds(plans, classes, deps_in_order, ctx)
     return plans
 
@@ -2445,6 +2455,7 @@ def check(path: str, repl: ReplClient,
           pool_size: int = 1,
           timeout: int = 0,
           interactive: bool = False,
+          always_stepwise: bool = False,
           ) -> dict:
     """Check a .thy file. Stateless: all state recovered from I/R + disk."""
     path = os.path.realpath(path)
@@ -2464,6 +2475,12 @@ def check(path: str, repl: ReplClient,
               'show_theory_in_source=show_theory_in_source, '
               'auto_replay=auto_replay})'))
 
+    if always_stepwise and diamond_strategy != DiamondStrategy.REPL:
+        if verbose >= 1:
+            print("  --always-stepwise forces diamond strategy to REPL",
+                  file=sys.stderr)
+        diamond_strategy = DiamondStrategy.REPL
+
     markers = read_all_markers(repl)
     if not markers and interactive:
         print("I/C: no cached state, comparing heap to files on disk "
@@ -2480,6 +2497,7 @@ def check(path: str, repl: ReplClient,
         isabelle_symbols=load_isabelle_symbols(repl),
         pool_size=pool_size,
         timeout=timeout,
+        always_stepwise=always_stepwise,
     )
 
     log(ctx, f"  {_DIM}{len(loaded_theories)} loaded theories, "

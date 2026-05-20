@@ -1,0 +1,5 @@
+session stepwise_recheck = HOL +
+  theories
+    SWR_A
+    SWR_B
+    SWR_C

@@ -39,11 +39,18 @@ from ic_check import check, clean
 from ic_client import print_response
 from ic_status import status
 
+_is_remote = bool(os.environ.get("ISABELLE_REMOTE"))
+
 # IC_POOL_SIZE=N overrides the default pool_size for all check() calls,
 # allowing the full test suite to exercise parallel execution.
 _pool_size = int(os.environ.get("IC_POOL_SIZE", 1))
 if _pool_size > 1:
     check = functools.partial(check, pool_size=_pool_size)
+
+# ISABELLE_REMOTE implies always_stepwise (Ir.load_theory can't read
+# local files on the remote host).
+if os.environ.get("ISABELLE_REMOTE"):
+    check = functools.partial(check, always_stepwise=True)
 
 IR_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), "ir")
 TEMPLATE_DIR = os.path.join(TEST_DIR, "_templates")
@@ -357,7 +364,46 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["steps_taken"], 4)
         dc_a = find_dep(resp, "DC_A")
         self.assertIsNotNone(dc_a)
-        self.assertEqual(dc_a["resolution"], "from_file")
+        if not _is_remote:
+            self.assertEqual(dc_a["resolution"], "from_file")
+
+    def test_always_stepwise_steps_dep_via_repl(self):
+        """--always-stepwise uses CheckPlan instead of Ir.load_theory for file deps."""
+        resp = check(
+            fixture_file("stepwise_basic", "SW_B"),
+            self.repl, always_stepwise=True)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok")
+        sw_a = find_dep(resp, "SW_A")
+        self.assertIsNotNone(sw_a)
+        self.assertEqual(sw_a["resolution"], "repl")
+        self.assertGreater(sw_a["steps_taken"], 0)
+
+    def test_always_stepwise_recheck_after_dep_change(self):
+        """--always-stepwise: changing a dep and re-checking must not crash.
+
+        Regression: resolve_diamonds treated all NoRepl deps as
+        LoadFilePlan candidates and overwrote their CheckPlan(REBASE)
+        with CheckPlan(INIT), triggering a REBASE/INIT conflict in
+        remove_stale_repls when pin-dep expansion added the target.
+        """
+        dep_dir = fixture_dir("stepwise_recheck")
+        a_path = os.path.join(dep_dir, "SWR_A.thy")
+        c_path = os.path.join(dep_dir, "SWR_C.thy")
+
+        resp = check(c_path, self.repl, always_stepwise=True)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        with open(a_path, 'w') as f:
+            f.write('theory SWR_A\n  imports Main\nbegin\n\n'
+                    'definition swr_val where "swr_val = (42::nat)"\n\n'
+                    'end\n')
+
+        resp = check(c_path, self.repl, always_stepwise=True)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "error")
+        self.assertIn("42 + 1 = 2", resp["target"]["error"])
 
     def test_dep_chain_a_broken(self):
         """When DCA_A is broken, Ir.load_theory fails and DCA_B is stale."""
@@ -534,6 +580,7 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(t["status"], "ok",
                          msg=f"error at line {t.get('line')}: {t.get('error')}")
 
+    @unittest.skipIf(_is_remote, "requires Ir.load_theory for keywords dep")
     def test_header_keywords(self):
         """Keywords theory can't be checked directly, but importing it works."""
         resp = check(
@@ -798,6 +845,7 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "ok",
                          msg=resp["target"].get("error"))
 
+    @unittest.skipIf(_is_remote, "requires Ir.load_theory")
     def test_diamond_reload_strategy(self):
         """Diamond resolved via reload: A is loaded from source."""
         d = fixture_dir("dep_diamond_reload")
@@ -834,6 +882,7 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(b_dep["resolution"], "repl")
         self.assertEqual(b_dep["status"], "ok")
 
+    @unittest.skipIf(_is_remote, "requires Ir.load_theory")
     def test_diamond_heuristic_picks_reload(self):
         """Heuristic picks reload when A is small and B is large."""
         d = fixture_dir("dep_diamond_heur_reload")
@@ -868,6 +917,7 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(b_dep["resolution"], "repl")
         self.assertEqual(b_dep["status"], "ok")
 
+    @unittest.skipIf(_is_remote, "requires Ir.load_theory")
     def test_diamond_heuristic_global_resolution(self):
         """Global diamond resolution: both B and C use RELOAD.
 
@@ -1166,6 +1216,7 @@ class TestICSIntegration(unittest.TestCase):
                          'At command "by"\n')
         self.assertEqual(err, "")
 
+    @unittest.skipIf(_is_remote, "requires Ir.load_theory")
     def test_client_dep_failure_shows_reason(self):
         """Dep fails to load: dep error and target stale shown."""
         resp = check(
@@ -1349,6 +1400,7 @@ class TestICSIntegration(unittest.TestCase):
             self.repl.send(f'Ir.show "{ml_escape(repl_name)}"')))
         self.assertIn("timeout=99s", raw2)
 
+    @unittest.skipIf(_is_remote, "requires Ir.load_theory")
     def test_diamond_recheck_after_dep_change(self):
         """Diamond via load_theory: D imports B,C; both import A.
 

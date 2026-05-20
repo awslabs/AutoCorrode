@@ -3,6 +3,6 @@ theory SMT_Test
 begin
 
 lemma "(x::int) + y = y + x"
-  by smt
+  by (smt (verit))
 
 end
