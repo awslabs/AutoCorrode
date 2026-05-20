@@ -162,24 +162,45 @@ def bootstrap(repl: ReplClient) -> tuple[set[str], dict[str, ReplInfo], dict[str
 
 
 def load_isabelle_symbols(repl: ReplClient) -> dict[str, str]:
-    """Load Isabelle symbol table (\\<name> -> Unicode) from $ISABELLE_HOME/etc/symbols."""
-    isabelle_home = strip_ml_noise(
-        ml_expect(repl.send('writeln (getenv "ISABELLE_HOME")'))).strip()
-    if not isabelle_home:
+    """Load Isabelle symbol table (\\<name> -> Unicode) via the ML process.
+
+    Reads $ISABELLE_HOME/etc/symbols as raw bytes through ML and hex-
+    encodes the result, bypassing I/R's symbol auto-correction which
+    would otherwise convert \\<name> sequences to Unicode in the output.
+    Works regardless of whether Isabelle runs locally or on a remote
+    host (e.g. via I/P proxy).
+    """
+    result = repl.send(
+        'let val path = getenv "ISABELLE_HOME" ^ "/etc/symbols"\n'
+        '    val is = BinIO.openIn path\n'
+        '    val bytes = BinIO.inputAll is\n'
+        '    val _ = BinIO.closeIn is\n'
+        '    fun hex b = StringCvt.padLeft #"0" 2 '
+        '(Int.fmt StringCvt.HEX (Word8.toInt b))\n'
+        'in writeln (String.concat '
+        '(Word8Vector.foldr (fn (b, acc) => hex b :: acc) [] bytes)) end',
+        timeout=30)
+    if isinstance(result, MlError):
         return {}
-    symbols_path = os.path.join(isabelle_home, "etc", "symbols")
-    mapping: dict[str, str] = {}
+    payload = strip_ml_noise(result.output).strip()
+    if not payload:
+        return {}
     try:
-        with open(symbols_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split()
-                if len(parts) >= 3 and parts[1] == "code:":
-                    mapping[parts[0]] = chr(int(parts[2], 16))
-    except (IOError, ValueError):
-        pass
+        raw = bytes.fromhex(payload)
+    except ValueError:
+        return {}
+    text = raw.decode('iso-8859-1')
+    mapping: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] == "code:":
+            try:
+                mapping[parts[0]] = chr(int(parts[2], 16))
+            except ValueError:
+                continue
     return mapping
 
 

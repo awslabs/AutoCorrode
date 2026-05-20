@@ -1769,10 +1769,28 @@ def find_isabelle(isabelle_path=None):
         raise unittest.SkipTest(f"Isabelle not found: {e}")
 
 
+def parse_isabelle_remote_opts() -> list[str]:
+    """Parse ISABELLE_REMOTE env var into a list of Isabelle -o values."""
+    import shlex
+    raw = os.environ.get("ISABELLE_REMOTE", "")
+    if not raw:
+        return []
+    tokens = shlex.split(raw)
+    opts = []
+    i = 0
+    while i < len(tokens):
+        if tokens[i] == '-o' and i + 1 < len(tokens):
+            opts.append(tokens[i + 1])
+            i += 2
+        else:
+            i += 1
+    return opts
+
+
 def build_session(isabelle, directory, session, extra_opts=None):
     """Build an Isabelle session. Raises unittest.SkipTest on failure."""
     cmd = [isabelle, "build", "-d", directory]
-    for opt in (extra_opts or []):
+    for opt in (extra_opts or []) + parse_isabelle_remote_opts():
         cmd += ["-o", opt]
     cmd += ["-b", session]
     try:
@@ -1803,8 +1821,12 @@ class TestHeapTheories(unittest.TestCase):
         all_dir = fixture_dir("heap_all_tests")
         build_session(isabelle, all_dir, "AllHeapTests")
 
+        # Skip Bash.Server locally (saves ~5s, only needed for sledgehammer).
+        # The I/P proxy requires it as its communication bridge, so keep it
+        # when ISABELLE_REMOTE is set.
         cls.repl_proc = ReplProcess(
-            session="AllHeapTests", dirs=[all_dir], no_bash_server=True,
+            session="AllHeapTests", dirs=[all_dir],
+            no_bash_server=not os.environ.get("ISABELLE_REMOTE"),
             isabelle=cls.isabelle_path)
         cls.repl = cls.repl_proc.start()
         clean(cls.repl)
