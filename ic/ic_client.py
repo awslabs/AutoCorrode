@@ -125,6 +125,8 @@ def main():
                          help="Number of parallel jobs (default: 1)")
     check_p.add_argument("--timeout", type=int, default=0,
                          help="Per-step timeout in seconds (default: 0 = use I/R default)")
+    check_p.add_argument("--always-stepwise", action="store_true",
+                         help="Never use Ir.load_theory for file deps (for remote I/R)")
 
     sub.add_parser("clean", help="Remove all ic.* REPLs",
                     parents=[verbose_parent])
@@ -162,6 +164,8 @@ def main():
                 pool_size=args.jobs,
                 timeout=args.timeout,
                 interactive=True,
+                always_stepwise=args.always_stepwise
+                    or bool(os.environ.get("ISABELLE_REMOTE")),
             )
         elif args.command == "clean":
             response = clean(repl)

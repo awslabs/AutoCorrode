@@ -1,0 +1,4 @@
+session stepwise_basic = HOL +
+  theories
+    SW_A
+    SW_B
