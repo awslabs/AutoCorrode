@@ -155,7 +155,7 @@ def main():
     try:
         if args.command == "check":
             response = check(
-                os.path.abspath(args.path),
+                os.path.realpath(args.path),
                 repl,
                 DiamondStrategy(args.diamond_strategy),
                 verbose=args.verbose,

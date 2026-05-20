@@ -629,7 +629,7 @@ def tokenize_root(text: str) -> list[str]:
 
 def parse_root_file(root_path: str) -> SessionInfo:
     """Parse a ROOT file and return a SessionInfo."""
-    root_path = os.path.abspath(root_path)
+    root_path = os.path.realpath(root_path)
     root_dir = os.path.dirname(root_path)
 
     with open(root_path, 'r') as f:
@@ -681,9 +681,9 @@ def parse_root_file(root_path: str) -> SessionInfo:
     for entry in theory_names:
         thy_name = os.path.basename(entry)  # flatten: folder/A → A
         thy_path = os.path.join(root_dir, entry.replace('/', os.sep) + '.thy')
-        theories[thy_name] = os.path.abspath(thy_path)
+        theories[thy_name] = os.path.realpath(thy_path)
 
-    extra_dirs = [os.path.abspath(os.path.join(root_dir, d))
+    extra_dirs = [os.path.realpath(os.path.join(root_dir, d))
                    for d in directory_names]
 
     return SessionInfo(
@@ -695,7 +695,7 @@ def parse_root_file(root_path: str) -> SessionInfo:
 
 def parse_roots_file(roots_path: str) -> list[str]:
     """Parse a ROOTS file and return absolute directory paths."""
-    roots_dir = os.path.dirname(os.path.abspath(roots_path))
+    roots_dir = os.path.dirname(os.path.realpath(roots_path))
     dirs = []
     with open(roots_path, 'r') as f:
         for line in f:
@@ -715,7 +715,7 @@ def discover_sessions(dirs: list[str]) -> dict[str, SessionInfo]:
     visited: set[str] = set()
 
     def scan_dir(d: str) -> None:
-        d = os.path.abspath(d)
+        d = os.path.realpath(d)
         if d in visited:
             return
         visited.add(d)
