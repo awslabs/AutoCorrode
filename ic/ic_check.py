@@ -623,7 +623,7 @@ def ensure_sessions_scanned(ctx: CheckContext, dirs: list[str],
         return {"status": "error", "error": str(e)}
 
     # Find which session contains the target file
-    target_path = os.path.abspath(target_path)
+    target_path = os.path.realpath(target_path)
     target_session = None
     for sname, sinfo in ctx.sessions.items():
         if target_path in sinfo.theories.values():
@@ -631,7 +631,7 @@ def ensure_sessions_scanned(ctx: CheckContext, dirs: list[str],
             break
         # Also check unlisted files in session/extra directories
         for scan_dir in [sinfo.directory] + sinfo.directories:
-            if target_path.startswith(os.path.abspath(scan_dir) + os.sep):
+            if target_path.startswith(os.path.realpath(scan_dir) + os.sep):
                 target_session = sname
                 break
         if target_session:
@@ -2447,7 +2447,7 @@ def check(path: str, repl: ReplClient,
           interactive: bool = False,
           ) -> dict:
     """Check a .thy file. Stateless: all state recovered from I/R + disk."""
-    path = os.path.abspath(path)
+    path = os.path.realpath(path)
     if not os.path.isfile(path):
         return {"status": "error", "error": f"File not found: {path}"}
 

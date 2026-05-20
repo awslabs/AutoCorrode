@@ -245,6 +245,28 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "ok")
         self.assertEqual(resp["target"]["steps_taken"], 3)
 
+    def test_symlinked_target_path_resolution(self):
+        """Target whose path traverses a symlink should resolve to its session.
+
+        Mirrors a reported failure where the user's CWD reached a session
+        through a symlink (e.g. /Users/x/workplace -> /Volumes/workplace),
+        so the absolute target path didn't share a prefix with the
+        session's stored directory and produced 'File not in any session'.
+        """
+        real_dir = fixture_dir("check_all")
+        tmpdir = tempfile.mkdtemp(prefix="ic_symlink_")
+        try:
+            link = os.path.join(tmpdir, "check_all_link")
+            os.symlink(real_dir, link)
+            link_thy = os.path.join(link, "Check_All.thy")
+            resp = check(link_thy, self.repl)
+            self.assertEqual(
+                resp["status"], "ok",
+                msg=f"Symlinked target should resolve: {resp}")
+            self.assertEqual(resp["target"]["status"], "ok")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
     def test_recheck_no_changes(self):
         """Re-checking an unchanged file reports steps_taken=0."""
         path = fixture_file("check_all", "Check_All")
