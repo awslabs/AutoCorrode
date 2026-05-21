@@ -477,6 +477,75 @@ class TestICSIntegration(unittest.TestCase):
                          'At command "by"')
         self.assertEqual(resp["target"]["line"], 6)
 
+    def test_orphan_marker_after_dep_failure(self):
+        """Marker must not survive pre-execution REPL removal when a dep fails.
+
+        remove_stale_repls (in execute_plans) destroys the target's REPL
+        up front based on its plan. If a dep then fails, run_dep_job
+        short-circuits before the target's plan runs, so the plan body
+        that would have written a fresh marker never executes. The
+        invariant "SteppedMarker exists ⇔ matching ic.* REPL exists"
+        must therefore be preserved by remove_stale_repls itself, by
+        deleting the paired marker alongside the REPL.
+
+        Without that, on the next check() the classify worker reads the
+        orphan SteppedMarker, finds repl_info=None so body_step_count=0
+        < cmd_count, falls into the cached-error branch, and calls
+        Ir.step on the missing REPL — RuntimeError, check() crashes.
+
+        Sequence:
+        1. check(OM_B) — OM_A loads, OM_B steps OK.
+        2. Edit OM_A so its proof breaks.
+        3. check(OM_B) — OM_A fails to load; B's CheckPlan(INIT) drives
+           remove_stale_repls to drop ic.orphan_marker.OM_B, then
+           run_dep_job sees A's failure and returns stale without
+           writing any new marker for B. The OM_B marker must also be
+           cleared, otherwise the next check crashes.
+        4. check(OM_B) — must not crash; target reports stale because
+           OM_A still fails to load.
+        """
+        dep_dir = fixture_dir("orphan_marker")
+        a_path = os.path.join(dep_dir, "OM_A.thy")
+        b_path = os.path.join(dep_dir, "OM_B.thy")
+
+        # Step 1: both files OK.
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        # Step 2: break OM_A so Ir.load_theory will fail on it.
+        with open(a_path, 'w') as f:
+            f.write('theory OM_A\n  imports Main\nbegin\n\n'
+                    'lemma broken: "(0::nat) = 1" by (rule TrueI)\n\n'
+                    'end\n')
+
+        # Step 3: OM_A fails to load -> OM_B comes back stale, B's
+        # REPL is removed, and B's SteppedMarker should be cleared.
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["target"]["status"], "stale",
+                         msg=f"Expected stale target, got {resp['target']}")
+        a_dep = find_dep(resp, "OM_A")
+        self.assertIsNotNone(a_dep)
+        self.assertEqual(a_dep["status"], "error")
+
+        # Invariant check: REPL is gone AND its marker is gone.
+        from ic_check import read_all_markers, parse_repls_output, ml_expect
+        markers = read_all_markers(self.repl)
+        repls_raw = ml_expect(self.repl.send('Ir.repls ()'))
+        active, _ = parse_repls_output(repls_raw)
+        self.assertNotIn("ic.orphan_marker.OM_B", active,
+                         msg="REPL should have been destroyed by "
+                             "remove_stale_repls")
+        self.assertNotIn("orphan_marker.OM_B", markers,
+                         msg="SteppedMarker must be cleared alongside "
+                             "the REPL it pointed at")
+
+        # Step 4: re-checking must not crash on an orphan marker.
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["target"]["status"], "stale",
+                         msg=f"Expected stale target on recheck, "
+                             f"got {resp['target']}")
+
     def test_dep_reload_broken_not_stale(self):
         """Breaking a dep should not silently use stale loaded version.
 
