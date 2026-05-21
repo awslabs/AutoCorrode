@@ -60,3 +60,4 @@ missing_end
 external_dep_order
 stepwise_basic
 stepwise_recheck
+status_stale_repl

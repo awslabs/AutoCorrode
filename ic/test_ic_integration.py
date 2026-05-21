@@ -1567,6 +1567,57 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "ok",
                          msg=resp["target"].get("error"))
 
+    def test_status_shows_stale_no_orphans_repl_chain(self):
+        """status() reports a stale marker without orphaning it.
+
+        Plain HOL chain: X, A imports X, B imports A. After all three
+        are checked individually and X is then changed, re-checking A
+        as target rebases A (REPL kept alive, parent pins re-resolved,
+        marker rewritten with the new dep_hashes[X]). B is never
+        touched, so its marker still points at A's old hash and B's
+        REPL still pins@ic.A.
+
+        status() must:
+        - report B in the Stale section (its dep A's marker changed),
+        - emit no Orphan section (every stepped marker still has a
+          live REPL: X via IncrementalPlan, A via REBASE, B untouched).
+        """
+        dep_dir = fixture_dir("status_stale_repl")
+        x_path = os.path.join(dep_dir, "SSR_X.thy")
+        a_path = os.path.join(dep_dir, "SSR_A.thy")
+        b_path = os.path.join(dep_dir, "SSR_B.thy")
+
+        # Step 1: check X, A, B — each gets a REPL with the right pin chain.
+        for p in (x_path, a_path, b_path):
+            resp = check(p, self.repl)
+            self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+            self.assertEqual(resp["target"]["status"], "ok",
+                             msg=resp["target"].get("error"))
+
+        # Step 2: change X, then check A (target). A is ReplClean →
+        # NoRepl by propagate, but rebase-compatible → CheckPlan(REBASE).
+        with open(x_path, 'w') as f:
+            f.write('theory SSR_X\n  imports Main\nbegin\n\n'
+                    'definition ssr_x where "ssr_x = (2::nat)"\n\n'
+                    'end\n')
+        resp = check(a_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=resp["target"].get("error"))
+
+        # Status: B is stale (dep A's marker changed); no orphans.
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status(self.repl, verbose=0)
+        out = out.getvalue()
+        self.assertIn("Stale", out,
+                      msg=f"Expected stale section in status:\n{out}")
+        self.assertIn("status_stale_repl.SSR_B", out)
+        self.assertIn("marker changed", out)
+        self.assertNotIn("Orphan", out,
+                         msg="No marker should be orphaned when REBASE "
+                             f"keeps the dep's REPL alive:\n{out}")
+
 
 def find_isabelle(isabelle_path=None):
     """Find Isabelle installation. Raises unittest.SkipTest if not found.
@@ -2548,6 +2599,10 @@ class TestHeapTheories(unittest.TestCase):
         self.assertIn("Stale", out)
         self.assertIn("StatusStale.STS_B", out)
         self.assertIn("marker changed", out)
+        # B is also an orphan: its REPL got cascade-removed when A
+        # went CheckPlan(INIT), but B's marker was preserved as the
+        # staleness signal. Document the current behavior.
+        self.assertIn("Orphan markers", out)
 
     def test_status_shows_heap_verified(self):
         """Status shows heap verified markers at verbose>=1."""
