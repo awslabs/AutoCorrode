@@ -2956,11 +2956,15 @@ class TestHeapNoRecord(unittest.TestCase):
     def test_dep_in_heap_without_segments_does_not_error(self):
         """Only the target gates on NO_SEGMENTS. A non-heap target
         whose *dep* lives in a no-record_theories heap must succeed,
-        with the dep reported as resolution=from_heap.
+        with the dep reported as resolution=from_heap. A single
+        per-check warning must fire on stderr, naming the session
+        only (not the qualified theory name).
         """
         use_path = os.path.join(fixture_dir("heap_no_record"),
                                 "client", "HNR_Use.thy")
-        resp = check(use_path, self.repl)
+        err_buf = io.StringIO()
+        with contextlib.redirect_stderr(err_buf):
+            resp = check(use_path, self.repl)
         self.assertEqual(resp["status"], "ok",
                          msg=f"Expected ok, got: {resp}")
         self.assertEqual(resp["target"]["status"], "ok")
@@ -2970,6 +2974,12 @@ class TestHeapNoRecord(unittest.TestCase):
         self.assertIsNotNone(a_dep, msg=f"HNR_A dep missing from {resp}")
         self.assertEqual(a_dep["resolution"], "from_heap",
                          msg=f"Expected HNR_A from_heap, got {a_dep}")
+        err = err_buf.getvalue()
+        self.assertIn("record_theories=true", err)
+        self.assertIn("HeapNoRecord", err)
+        # Theory name must NOT appear — only the session name.
+        # (Covers qualified form too: "HeapNoRecord.HNR_A" contains "HNR_A".)
+        self.assertNotIn("HNR_A", err)
 
 
 def main():
