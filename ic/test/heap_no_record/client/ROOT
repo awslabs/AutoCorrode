@@ -1,0 +1,3 @@
+session HeapNoRecordClient = HeapNoRecord +
+  theories
+    HNR_Use

@@ -127,6 +127,23 @@ class HeapFreshness(enum.Enum):
 
 
 @dataclass
+class FromFile:
+    """Target was loaded by a previous Ir.load_theory call;
+    classify_loaded_repl just verified content_hash + dep_hashes."""
+    pass
+
+
+@dataclass
+class FromHeap:
+    """Target lives in the Isabelle heap. Freshness depends on whether
+    recorded segments were available for diffing against disk."""
+    freshness: HeapFreshness
+
+
+UnchangedSource = FromFile | FromHeap
+
+
+@dataclass
 class InHeap(FileClassBase):
     """Theory in heap, not changed (or unknown)."""
     freshness: HeapFreshness = HeapFreshness.VERIFIED
@@ -284,6 +301,8 @@ class TargetUnchangedPlan(DepPlan):
     to the conflicting identities in the parent ancestry. By not
     creating REPLs for unchanged targets, we avoid this scenario.
     """
+    source: UnchangedSource
+
     def import_name(self) -> str:
         return self.qt.name
 

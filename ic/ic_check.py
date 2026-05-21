@@ -43,6 +43,7 @@ from ic_core import (
     ResolvedImport, FileImport, HeapImport, ExternalImport,
     InHeap, HeapFreshness, HeapStaleDep, ReplClean, ReplCachedError,
     ReplChanged, NoRepl, FileLoaded, FileNotLoaded, HeapStale,
+    FromFile, FromHeap,
     SegmentDiff, FileClassification,
     DepPlan, SkipPlan, LoadFilePlan, RecoverErrorPlan,
     CheckPlan, TargetUnchangedPlan, IncrementalPlan, SegmentInitPlan,
@@ -1584,8 +1585,11 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
         target = deps_in_order[-1]
         c = classes[target]
 
-        if isinstance(c, (InHeap, FileLoaded)):
-            plans[target] = TargetUnchangedPlan(c.qt)
+        if isinstance(c, InHeap):
+            plans[target] = TargetUnchangedPlan(
+                c.qt, source=FromHeap(c.freshness))
+        elif isinstance(c, FileLoaded):
+            plans[target] = TargetUnchangedPlan(c.qt, source=FromFile())
         elif isinstance(c, ReplClean):
             plans[target] = SkipPlan(c.qt, has_stepped_repl=True)
         elif isinstance(c, ReplCachedError):
@@ -2268,6 +2272,14 @@ def execute_check_plan(ctx: CheckContext, ri: ResolvedImport,
 def execute_target_unchanged_plan(ctx: CheckContext, ri: ResolvedImport,
                                    plan: TargetUnchangedPlan) -> PlanResult:
     """Execute a TargetUnchangedPlan: report ok with 0 steps."""
+    if (isinstance(plan.source, FromHeap)
+            and plan.source.freshness == HeapFreshness.NO_SEGMENTS):
+        return PlanAbort(
+            f"Cannot determine freshness: {plan.qt.name} is part of a "
+            f"heap that was built without record_theories=true. Either "
+            f"restart the I/R server using a --session without "
+            f"{plan.qt.name}, or rebuild the heap with "
+            f"-o record_theories=true, and then restart the I/R server.")
     log(ctx, f"  {ri_log_name(ri)}: {_DIM}unchanged (in heap){_RST}")
     return PlanOk(DepInfo(ri_name(ri), "repl", status="ok",
                           steps_taken=0))
