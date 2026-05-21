@@ -5,24 +5,27 @@ ifndef V
 .SILENT:
 endif
 
-# Paths (configurable via environment variables)
+# Paths — sourced directly from Isabelle's own environment
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
-ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
-JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
-JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
-SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
-SCALAC ?= $(SCALA_HOME)/bin/scalac
-SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
-SCALA ?= $(SCALA_HOME)/bin/scala
-SCALA_PARSER_JAR := $(wildcard $(SCALA_HOME)/lib/scala-parser-combinators_3-*.jar)
-XZ_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz-*.jar $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz.jar))
-ZSTD_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/zstd-jni-*/lib/zstd-jni-*.jar))
-ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
-JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
+ISABELLE_BIN ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,isabelle)
+
+isabelle_getenv = $(shell $(ISABELLE_BIN) getenv -b $(1) 2>/dev/null)
+JAVA_HOME ?= $(call isabelle_getenv,JAVA_HOME)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
 JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
 JAVA_ENV = $(if $(JAVA_HOME),JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH",)
+SCALA_HOME ?= $(call isabelle_getenv,SCALA_HOME)
+SCALAC ?= $(SCALA_HOME)/bin/scalac
+ISABELLE_SCALAC_OPTIONS ?= $(call isabelle_getenv,ISABELLE_SCALAC_OPTIONS)
+SCALAC_FLAGS ?= -deprecation -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
+SCALA ?= $(SCALA_HOME)/bin/scala
+JEDIT_JAR ?= $(call isabelle_getenv,JEDIT_JAR)
+ISABELLE_JAR ?= $(call isabelle_getenv,ISABELLE_SCALA_JAR)
+ISABELLE_CLASSPATH := $(call isabelle_getenv,ISABELLE_CLASSPATH)
+SCALA_PARSER_JAR := $(shell echo "$(ISABELLE_CLASSPATH)" | tr ':' '\n' | grep 'scala-parser-combinators.*\.jar$$')
+XZ_JAR := $(shell echo "$(ISABELLE_CLASSPATH)" | tr ':' '\n' | grep '/xz.*\.jar$$')
+ZSTD_JAR := $(shell echo "$(ISABELLE_CLASSPATH)" | tr ':' '\n' | grep '/zstd.*\.jar$$')
 
 # Output directories (configurable via environment variables)
 BUILD_DIR ?= $(PLUGIN_DIR)/build
@@ -43,9 +46,19 @@ all:
 	echo "Building I/Q Plugin..."
 	$(MAKE) build
 
+.PHONY: check-isabelle
+check-isabelle:
+	@command -v "$(ISABELLE_BIN)" > /dev/null 2>&1 || { \
+		echo "Error: Isabelle binary not found or not executable at $(ISABELLE_BIN)." >&2; \
+		echo "Set ISABELLE_HOME correctly, e.g. make ISABELLE_HOME=/path/to/Isabelle," >&2; \
+		echo "or ensure 'isabelle' is in your PATH." >&2; \
+		echo "Run 'make help' for more information." >&2; \
+		exit 1; \
+	}
+
 # Build target
 .PHONY: build
-build: $(JAR_FILE)
+build: check-isabelle $(JAR_FILE)
 	echo "Plugin built successfully!"
 	echo "JAR file: $(JAR_FILE)"
 
@@ -53,31 +66,31 @@ build: $(JAR_FILE)
 .PHONY: test
 test: build $(TEST_CLASSES_DIR)/.compiled
 	echo "Running I/Q line/offset tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQLineOffsetUtilsTest
 	echo "Running I/Q argument tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQArgumentUtilsTest
 	echo "Running I/Q security tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQSecurityTest
 	echo "Running I/Q normalization tests..."
-	$(ISABELLE) scala \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR)" \
 		IQNormalizationTest
 	echo "Running I/Q server auth/authorization tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQServerAuthTest
 	echo "Running I/Q path resolution tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQUtilsPathResolutionTest
 	echo "Running I/Q UI settings tests..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+	$(JAVA_ENV) $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
 		IQUISettingsTest
 	echo "Running I/Q bridge framing tests..."
@@ -92,13 +105,13 @@ check-docs:
 # Create JAR file
 $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
 	echo "Creating JAR file..."
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
+	cd $(CLASSES_DIR) && $(JAVA_ENV) $(JAR) cf $(JAR_FILE) .
 
 # Compile Scala sources
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling Scala sources..."
 	$(JAVA_ENV) $(SCALAC) \
-		$(SCALAC_FLAGS) \
+		$(ISABELLE_SCALAC_OPTIONS) $(SCALAC_FLAGS) \
 		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
@@ -120,8 +133,8 @@ $(TEST_CLASSES_DIR):
 $(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST_CLASSES_DIR)
 	echo "Compiling I/Q tests..."
 	if [ -z "$(strip $(TEST_SOURCES))" ]; then echo "No test sources found."; touch $@; exit 0; fi
-	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
-		$(SCALAC_FLAGS) \
+	$(JAVA_ENV) $(SCALAC) \
+		$(ISABELLE_SCALAC_OPTIONS) $(SCALAC_FLAGS) \
 		-classpath "$(CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
@@ -129,7 +142,7 @@ $(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST
 
 # Install target
 .PHONY: install
-install: $(JAR_FILE)
+install: check-isabelle $(JAR_FILE)
 	echo "Installing I/Q plugin to $(INSTALL_DIR)..."
 	mkdir -p $(INSTALL_DIR)
 	@set -eu; \
@@ -144,7 +157,7 @@ install: $(JAR_FILE)
 	echo "      Atomic install avoids partial writes, but a running classloader keeps old JAR state."
 	echo ""
 	echo "To use the plugin:"
-	echo "1. Start Isabelle/jEdit: $(ISABELLE_HOME)/bin/isabelle jedit"
+	echo "1. Start Isabelle/jEdit: $(ISABELLE_BIN) jedit"
 	echo "2. Go to Utilities -> Global Options -> Plugin Manager"
 	echo "3. The I/Q Plugin should be listed and active"
 	echo "4. Go to Utilities -> I/Q Server Log to open the dockable"
@@ -206,6 +219,9 @@ debug:
 	echo "  SCALAC        = $(SCALAC)"
 	echo "  SCALA         = $(SCALA)"
 	echo "  ISABELLE_JAR  = $(ISABELLE_JAR)"
+	echo "  SCALA_PARSER_JAR = $(SCALA_PARSER_JAR)"
+	echo "  XZ_JAR        = $(XZ_JAR)"
+	echo "  ZSTD_JAR      = $(ZSTD_JAR)"
 	echo "  JAVA          = $(JAVA)"
 	echo "  JAR           = $(JAR)"
 	echo "  BUILD_DIR     = $(BUILD_DIR)"
