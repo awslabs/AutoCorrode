@@ -1,0 +1,4 @@
+session orphan_marker = HOL +
+  theories
+    OM_A
+    OM_B

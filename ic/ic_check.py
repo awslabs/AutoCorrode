@@ -1298,6 +1298,19 @@ def classify_file_import(repl: ReplClient, inp: ClassifyInput
 
     # Non-heap theory with existing REPL
     if marker is not None and not inp.in_loaded_theories:
+        if isinstance(marker, SteppedMarker) and inp.repl_info is None:
+            # Should be unreachable: remove_stale_repls clears the
+            # paired marker whenever it removes the REPL. Warn loudly
+            # so any future leak is reported, then clear the orphan
+            # symtab entry and treat as if absent.
+            print(
+                f"I/C: orphan SteppedMarker for {qt.name} (no live "
+                f"REPL {qt.repl_name}). This is a bug — please "
+                f"report. Clearing the stale marker.",
+                file=sys.stderr, flush=True)
+            ml_expect(repl.send(
+                f'ic_symtab_delete "{ml_escape(qt.name)}"'))
+            return NoRepl(qt), None
         return classify_repl_file(repl, inp), None
 
     # Non-heap, no REPL
@@ -2377,6 +2390,14 @@ def remove_stale_repls(ctx: CheckContext,
     remove_repls(ctx.repl, ordered)
     for name in ordered:
         del ctx.active_repls[name]
+        # Drop the paired SteppedMarker so a future check() does not see
+        # an orphan marker pointing at a destroyed REPL. The invariant
+        # "SteppedMarker exists ⇔ matching ic.* REPL exists" must hold.
+        key = theory_name_from_repl(name).name
+        if isinstance(ctx.markers.get(key), SteppedMarker):
+            ml_expect(ctx.repl.send(
+                f'ic_symtab_delete "{ml_escape(key)}"'))
+            del ctx.markers[key]
 
 
 def execute_plans(ctx: CheckContext,
