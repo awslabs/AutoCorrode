@@ -1,0 +1,4 @@
+session stepwise_keywords = HOL +
+  theories
+    SKW_Def
+    SKW_User

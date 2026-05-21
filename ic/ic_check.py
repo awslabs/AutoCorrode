@@ -2251,6 +2251,12 @@ def execute_check_plan(ctx: CheckContext, ri: ResolvedImport,
                         entry: FileEntry, plan: CheckPlan,
                         parents: list[str]) -> PlanResult:
     """Execute a CheckPlan: full check from scratch."""
+    if entry.header.has_keywords:
+        return PlanDepFailed(DepInfo(
+            ri_name(ri), "repl", status="error",
+            error=f"Theory '{plan.qt.name}' declares custom keywords "
+                  f"and cannot be checked via REPL; remove "
+                  f"--always-stepwise or ensure it is in the heap"))
     entry.status = FileStatus.PENDING
     repl_err = apply_init_strategy(
         ctx, ri, plan.qt, plan.init_strategy, parents)

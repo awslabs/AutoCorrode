@@ -448,6 +448,28 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "error")
         self.assertIn("42 + 1 = 2", resp["target"]["error"])
 
+    def test_always_stepwise_rejects_keywords_dep(self):
+        """--always-stepwise must error when a dep declares custom keywords.
+
+        Theories with custom keywords cannot be stepped via REPL (the
+        keyword parsing is unavailable). With always_stepwise, there is
+        no Ir.load_theory fallback, so the dep should fail with a clear
+        error about keywords and the target should be stale.
+        """
+        resp = check(
+            fixture_file("stepwise_keywords", "SKW_User"),
+            self.repl, always_stepwise=True)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        skw_def = find_dep(resp, "SKW_Def")
+        self.assertIsNotNone(skw_def)
+        self.assertEqual(skw_def["status"], "error")
+        self.assertEqual(
+            skw_def["error"],
+            "Theory 'stepwise_keywords.SKW_Def' declares custom keywords "
+            "and cannot be checked via REPL; remove --always-stepwise or "
+            "ensure it is in the heap")
+        self.assertEqual(resp["target"]["status"], "stale")
+
     def test_dep_chain_a_broken(self):
         """When DCA_A is broken, Ir.load_theory fails and DCA_B is stale."""
         resp = check(
