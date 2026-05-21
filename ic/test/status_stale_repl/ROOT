@@ -1,0 +1,5 @@
+session status_stale_repl = HOL +
+  theories
+    SSR_X
+    SSR_A
+    SSR_B
