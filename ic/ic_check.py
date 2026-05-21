@@ -2412,6 +2412,34 @@ def remove_stale_repls(ctx: CheckContext,
             del ctx.markers[key]
 
 
+def warn_no_record_sessions(
+        classifications: dict[ResolvedImport, FileClassification],
+        target: ResolvedImport) -> None:
+    """Warn if any non-target FileImport dep classified as
+    InHeap(NO_SEGMENTS): the heap was built without
+    record_theories=true, so I/C trusts the heap copy and silently
+    ignores edits to the dep's source on disk. Report by session
+    name (the actionable unit — rebuilding the heap fixes every
+    theory in it at once)."""
+    sessions = sorted({
+        c.qt.session_name
+        for ri, c in classifications.items()
+        if ri != target
+           and isinstance(ri, FileImport)
+           and isinstance(c, InHeap)
+           and c.freshness == HeapFreshness.NO_SEGMENTS
+    })
+    if not sessions:
+        return
+    sess_list = ", ".join(sessions)
+    print(
+        f"I/C: WARN: heap session(s) [{sess_list}] were built "
+        f"without record_theories=true; edits to dep source files "
+        f"in these sessions will be ignored. Rebuild heap with "
+        f"-o record_theories=true and restart I/R server to fix.",
+        file=sys.stderr, flush=True)
+
+
 def execute_plans(ctx: CheckContext,
                    deps_in_order: list[ResolvedImport]) -> CheckResponse:
     """Execute all plans in build order, including the target (last)."""
@@ -2422,6 +2450,7 @@ def execute_plans(ctx: CheckContext,
             target=DepInfo("", "repl", status="ok", steps_taken=0))
 
     classifications = classify_files(ctx, deps_in_order)
+    warn_no_record_sessions(classifications, target)
     plans = assign_methods(ctx, deps_in_order, classifications)
     ctx.theory_ref = compute_theory_refs(plans, deps_in_order)
 
