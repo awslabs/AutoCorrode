@@ -2469,8 +2469,9 @@ class TestHeapTheories(unittest.TestCase):
            B gets REPL built on gen-1 A.
         2. Edit X again (append more), check(C) — X gets ReplChanged →
            IncrementalPlan. A's dep_hash for X mismatches → NoRepl →
-           HeapStaleDep → CheckPlan → old REPL removed, new REPL (gen 2).
-           C gets REPL built on gen-2 A.
+           HeapStaleDep → CheckPlan(REBASE): A's REPL is kept alive
+           but its base is re-resolved and steps re-run, producing
+           gen-2 theory identity. C gets REPL built on gen-2 A.
         3. check(D) — B's dep_hash for A matches (A's file never changed),
            so B is classified ReplClean. But B's REPL has gen-1 A in its
            ancestry, C's REPL has gen-2 A. Same REPL name, different
@@ -2599,10 +2600,11 @@ class TestHeapTheories(unittest.TestCase):
         self.assertIn("Stale", out)
         self.assertIn("StatusStale.STS_B", out)
         self.assertIn("marker changed", out)
-        # B is also an orphan: its REPL got cascade-removed when A
-        # went CheckPlan(INIT), but B's marker was preserved as the
-        # staleness signal. Document the current behavior.
-        self.assertIn("Orphan markers", out)
+        # A is rebased instead of re-init'd, so A's REPL persists and
+        # B's pin@ic.A reference stays valid — no orphan expected.
+        self.assertNotIn("Orphan markers", out,
+                         msg="A's REPL should be rebased, keeping "
+                             f"B's pin@A alive:\n{out}")
 
     def test_status_shows_heap_verified(self):
         """Status shows heap verified markers at verbose>=1."""
