@@ -243,6 +243,49 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["name"], "Scan_B")
         self.assertEqual(resp["target"]["steps_taken"], 1)
 
+    def test_target_after_load_is_unchanged_from_file(self):
+        """Target that was loaded via Ir.load_theory in a prior check
+        must short-circuit to TargetUnchangedPlan(source=FromFile())
+        on the next check — not error out the way a NO_SEGMENTS heap
+        target does. Locks in that the FromFile/FromHeap split treats
+        load-theory targets as a real OK.
+
+        After editing Scan_A, the next check must detect the change
+        and not falsely report unchanged — the LoadedMarker hash no
+        longer matches disk, so classification falls out of FileLoaded.
+        """
+        scan_a = fixture_file("scan_simple", "Scan_A")
+        scan_b = fixture_file("scan_simple", "Scan_B")
+
+        # First: check Scan_B → Scan_A loaded via Ir.load_theory,
+        # LoadedMarker written for Scan_A.
+        resp = check(scan_b, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+
+        # Second: re-check Scan_A as target. classify_loaded_repl sees
+        # its LoadedMarker, content_hash and dep_hashes still match,
+        # so classification = FileLoaded → TargetUnchangedPlan(FromFile).
+        resp = check(scan_a, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"Expected ok, got: {resp}")
+        self.assertEqual(resp["target"]["status"], "ok")
+        self.assertEqual(resp["target"]["name"], "Scan_A")
+        self.assertEqual(resp["target"]["steps_taken"], 0)
+
+        # Third: edit Scan_A and re-check. The LoadedMarker hash no
+        # longer matches disk → classification leaves FileLoaded, the
+        # change must be picked up and re-stepped.
+        with open(scan_a, 'w') as f:
+            f.write('theory Scan_A\n  imports Main\nbegin\n\n'
+                    'definition a_val where "a_val = (43::nat)"\n\n'
+                    'end\n')
+        resp = check(scan_a, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"Expected ok after edit, got: {resp}")
+        self.assertEqual(resp["target"]["status"], "ok")
+        self.assertGreater(resp["target"]["steps_taken"], 0,
+                           msg=f"Edit must be re-stepped, got: {resp['target']}")
+
     def test_check_single(self):
         """Check a single file with no dependencies beyond heap."""
         resp = check(
@@ -2841,6 +2884,94 @@ class TestHeapTheories(unittest.TestCase):
         self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
 
 
+class TestHeapNoRecord(unittest.TestCase):
+    """Target lives in a heap built without record_theories=true.
+
+    Without recorded segments, I/C cannot diff the heap copy against
+    the source on disk, so it must surface an actionable error
+    instead of silently reporting OK and ignoring edits.
+    """
+
+    repl = None
+    repl_proc = None
+    isabelle_path = None  # set by main() from --isabelle / $ISABELLE
+
+    @classmethod
+    def setUpClass(cls):
+        install_templates()
+        isabelle = find_isabelle(cls.isabelle_path)
+        d = fixture_dir("heap_no_record")
+        # HeapNoRecord must be built (heap-only target). HeapNoRecordClient
+        # stays unbuilt so its theories are checked from source.
+        build_session(isabelle, d, "HeapNoRecord")
+
+        cls.repl_proc = ReplProcess(
+            session="HeapNoRecord", dirs=[d], no_bash_server=True,
+            isabelle=cls.isabelle_path)
+        cls.repl = cls.repl_proc.start()
+        clean(cls.repl)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.repl:
+            try:
+                clean(cls.repl)
+            except Exception:
+                pass
+        if cls.repl_proc:
+            cls.repl_proc.stop()
+        remove_templates()
+
+    def setUp(self):
+        install_templates()
+        clean(self.repl)
+
+    def test_target_in_heap_without_segments_errors(self):
+        """check() on a target in a no-record_theories heap must error
+        with an actionable message instead of silently reporting OK.
+
+        Also: editing the source must keep producing the same error,
+        not a stale OK from cached state.
+        """
+        path = os.path.join(fixture_dir("heap_no_record"), "heap", "HNR_A.thy")
+
+        def assert_freshness_error(resp):
+            self.assertEqual(resp["status"], "error",
+                             msg=f"Expected error, got: {resp}")
+            err = resp.get("error", "")
+            self.assertIn("Cannot determine freshness", err)
+            self.assertIn("HeapNoRecord.HNR_A", err)
+            self.assertIn("record_theories=true", err)
+
+        assert_freshness_error(check(path, self.repl))
+
+        # Edit the file: the same error must fire again — no cached OK,
+        # no silent acceptance of the edited body.
+        with open(path, 'w') as f:
+            f.write('theory HNR_A\n  imports Main\nbegin\n\n'
+                    'definition hnr_a where "hnr_a = (42::nat)"\n\n'
+                    'end\n')
+        assert_freshness_error(check(path, self.repl))
+
+    def test_dep_in_heap_without_segments_does_not_error(self):
+        """Only the target gates on NO_SEGMENTS. A non-heap target
+        whose *dep* lives in a no-record_theories heap must succeed,
+        with the dep reported as resolution=from_heap.
+        """
+        use_path = os.path.join(fixture_dir("heap_no_record"),
+                                "client", "HNR_Use.thy")
+        resp = check(use_path, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"Expected ok, got: {resp}")
+        self.assertEqual(resp["target"]["status"], "ok")
+        self.assertEqual(resp["target"]["name"], "HNR_Use")
+        a_dep = next((d for d in resp.get("dependencies", [])
+                      if d["name"] == "HNR_A"), None)
+        self.assertIsNotNone(a_dep, msg=f"HNR_A dep missing from {resp}")
+        self.assertEqual(a_dep["resolution"], "from_heap",
+                         msg=f"Expected HNR_A from_heap, got {a_dep}")
+
+
 def main():
     p = argparse.ArgumentParser(
         description="I/C Tests",
@@ -2858,6 +2989,7 @@ def main():
 
     TestICSIntegration.isabelle_path = args.isabelle
     TestHeapTheories.isabelle_path = args.isabelle
+    TestHeapNoRecord.isabelle_path = args.isabelle
 
     if args.unit_only:
         # Run unit tests from test_ic_core.py

@@ -62,3 +62,4 @@ stepwise_basic
 stepwise_recheck
 status_stale_repl
 orphan_marker
+heap_no_record
