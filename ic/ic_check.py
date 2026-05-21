@@ -1425,7 +1425,7 @@ def has_persistent_repl(ri: ResolvedImport,
         return False
     if isinstance(c, (ReplChanged, ReplCachedError)):
         return True
-    if isinstance(c, NoRepl):
+    if isinstance(c, (NoRepl, HeapStaleDep)):
         rn = ri.qualified.repl_name
         if rn not in active_repls:
             return False
