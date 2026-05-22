@@ -15,6 +15,11 @@ val ic_mgmt_tab : string Symtab.table Synchronized.var
 fun ic_symtab_set key value =
   Synchronized.change ic_mgmt_tab (Symtab.update (key, value));
 
+fun ic_symtab_get key =
+  case Symtab.lookup (Synchronized.value ic_mgmt_tab) key of
+    SOME v => writeln v
+  | NONE => ();
+
 fun ic_symtab_get_all () =
   Symtab.fold (fn (k, v) => fn () =>
     writeln (k ^ "\t" ^ v)) (Synchronized.value ic_mgmt_tab) ();

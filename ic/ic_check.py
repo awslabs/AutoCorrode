@@ -937,6 +937,49 @@ def read_all_markers(repl: ReplClient) -> dict[str, HashMarker]:
     return parse_symtab_output(raw)
 
 
+def read_marker_from_symtab(repl: ReplClient, key: str) -> HashMarker | None:
+    """Read a single marker from the ML-side symtab."""
+    result = repl.send(f'ic_symtab_get "{ml_escape(key)}"')
+    if isinstance(result, MlOk) and result.output.strip():
+        return parse_marker(strip_ml_noise(result.output).strip())
+    return None
+
+
+@dataclass
+class MarkerVerification:
+    """Result of verifying parent markers against the live symtab."""
+    ok: bool
+    changed_dep: str | None = None
+
+    @staticmethod
+    def passed() -> 'MarkerVerification':
+        return MarkerVerification(ok=True)
+
+    @staticmethod
+    def failed(dep_name: str) -> 'MarkerVerification':
+        return MarkerVerification(ok=False, changed_dep=dep_name)
+
+
+def verify_parent_markers(ctx: 'CheckContext',
+                           ri: ResolvedImport) -> MarkerVerification:
+    """Re-read parent dep markers from symtab and verify unchanged.
+
+    Detects concurrent modifications: if another client rebuilt a dep
+    between our classification and our Ir.init, the marker will differ.
+    """
+    for dep_ri in ctx.dep_graph.get(ri, []):
+        if not isinstance(dep_ri, FileImport):
+            continue
+        dep_name = dep_ri.qualified.name
+        expected = ctx.markers.get(dep_name)
+        if expected is None:
+            continue
+        actual = read_marker_from_symtab(ctx.repl, dep_name)
+        if actual is None or serialize_marker(actual) != serialize_marker(expected):
+            return MarkerVerification.failed(dep_name)
+    return MarkerVerification.passed()
+
+
 # --- REPL body text ---
 
 def read_repl_body_text(repl: ReplClient, repl_name: str) -> str:
@@ -2515,6 +2558,11 @@ def execute_check_plan(ctx: CheckContext, ri: ResolvedImport,
             error=f"Theory '{plan.qt.name}' declares custom keywords "
                   f"and cannot be checked via REPL; remove "
                   f"--always-stepwise or ensure it is in the heap"))
+    v = verify_parent_markers(ctx, ri)
+    if not v.ok:
+        return PlanAbort(
+            f"concurrent change detected: dep '{v.changed_dep}' "
+            f"was rebuilt by another client")
     entry.status = FileStatus.PENDING
     repl_err = apply_init_strategy(
         ctx, ri, plan.qt, plan.init_strategy, parents)
