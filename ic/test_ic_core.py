@@ -1099,7 +1099,7 @@ class TestHasPersistentRepl(unittest.TestCase):
         """NoRepl with existing non-segment REPL + matching imports -> True."""
         ri = fi("A")
         c = NoRepl(qt("A"))
-        active = {"ic.s.A": ReplInfo("ic.s.A", 5, 0, "Main", False)}
+        active = {"ic.s.A": ReplInfo("ic.s.A", 5, 0, "theory s.Main", False)}
         markers = {"s.A": SteppedMarker("abc", 5, None)}
         files = {qt("A"): mock_entry("A", "s", ["Main"], 1)}
         self.assertTrue(has_persistent_repl(ri, c, active, markers, files))
@@ -1108,7 +1108,7 @@ class TestHasPersistentRepl(unittest.TestCase):
         """NoRepl with existing REPL but imports changed -> False."""
         ri = fi("A")
         c = NoRepl(qt("A"))
-        active = {"ic.s.A": ReplInfo("ic.s.A", 5, 0, "Main", False)}
+        active = {"ic.s.A": ReplInfo("ic.s.A", 5, 0, "theory s.Main", False)}
         markers = {"s.A": SteppedMarker("abc", 5, None)}
         files = {qt("A"): mock_entry("A", "s", ["Main", "Extra"], 1)}
         self.assertFalse(has_persistent_repl(ri, c, active, markers, files))

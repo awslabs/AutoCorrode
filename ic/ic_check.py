@@ -1175,6 +1175,7 @@ def classify_loaded_repl(marker: LoadedMarker, disk_hash: str,
 def parse_origin_specs(origin: str) -> list[str] | None:
     """Split origin into Ir.init specs. None for segment origins."""
     clean = origin.removesuffix(", pinned [stale]").removesuffix(", pinned")
+    clean = clean.removeprefix("theory ")
     # Segment origins have format "Theory:idx" (colon without pin@ prefix)
     if ":" in clean and not clean.startswith("pin@"):
         return None
@@ -1190,6 +1191,20 @@ def spec_to_import(spec: str) -> str:
     if spec.startswith("pin@ic."):
         return spec.removeprefix("pin@ic.")
     return spec
+
+
+def current_import_spec(qt: QualifiedTheory,
+                        markers: dict[str, 'HashMarker'],
+                        active_repls: dict[str, 'ReplInfo']) -> str:
+    """What Ir.init spec would currently be used for this dep as a parent.
+
+    Same decision as SkipPlan.import_name(): pin@repl_name if the dep
+    has a stepped REPL, qualified theory name otherwise.
+    """
+    if (isinstance(markers.get(qt.name), SteppedMarker)
+            and qt.repl_name in active_repls):
+        return f"pin@{qt.repl_name}"
+    return qt.name
 
 
 def build_origin_imports(repl_info: ReplInfo | None,
@@ -1510,16 +1525,16 @@ def has_persistent_repl(ri: ResolvedImport,
         m = markers.get(ri.qualified.name)
         if not (isinstance(m, SteppedMarker) and m.segment_spec is None):
             return False
-        # Rebase only works if imports haven't changed
         entry = files.get(ri.qualified)
         if not entry:
             return False
-        origin_imps = build_origin_imports(active_repls[rn], entry.session_name)
-        if origin_imps is None:
+        specs = parse_origin_specs(active_repls[rn].origin)
+        if specs is None:
             return False
-        current_imps = [qualify_import(imp, entry.session_name).name
-                        for imp in entry.header.imports]
-        return origin_imps == current_imps
+        expected_specs = [current_import_spec(
+            qualify_import(imp, entry.session_name),
+            markers, active_repls) for imp in entry.header.imports]
+        return specs == expected_specs
     return False
 
 

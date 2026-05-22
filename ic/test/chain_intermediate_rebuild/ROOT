@@ -1,0 +1,5 @@
+session chain_intermediate_rebuild = HOL +
+  theories
+    CIR_A
+    CIR_B
+    CIR_C

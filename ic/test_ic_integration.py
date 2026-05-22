@@ -673,6 +673,57 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "ok",
                          msg=f"B should succeed (A is fine): {resp['target']}")
 
+    def test_chain_rebuild_intermediate_then_check_downstream(self):
+        """Rebuilding intermediate dep via check must not crash downstream.
+
+        A → B → C chain. check(C) loads A and B via Ir.load_theory,
+        C gets REPL. Then change A and check(B) — B is rebuilt as
+        target (new REPL). Now check(C): C's SteppedMarker dep_hash
+        for B has changed → NoRepl → CheckPlan(REBASE or INIT).
+
+        Bug: Ir.rebase/Ir.init for C references B's old theory
+        identity (from Ir.load_theory in step 1), but that entry was
+        destroyed when Ir.load_theory rebuilt B in step 3. The REBASE
+        crashes with "undefined entry for theory".
+
+        Sequence:
+        1. check(C) — A, B loaded from file; C stepped in REPL.
+        2. Change A (cir_a = 1 → 99).
+        3. check(B) — A reloaded, B checked OK as target (REPL).
+        4. check(C) — must not crash; C's proof should fail
+           (cir_b = 99+1 = 100, not 2).
+        """
+        dep_dir = fixture_dir("chain_intermediate_rebuild")
+        a_path = os.path.join(dep_dir, "CIR_A.thy")
+        b_path = os.path.join(dep_dir, "CIR_B.thy")
+        c_path = os.path.join(dep_dir, "CIR_C.thy")
+
+        # Step 1: check C
+        resp = check(c_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=resp["target"].get("error"))
+
+        # Step 2: change A
+        with open(a_path, 'w') as f:
+            f.write('theory CIR_A\n  imports Main\nbegin\n\n'
+                    'definition cir_a where "cir_a = (99::nat)"\n\n'
+                    'end\n')
+
+        # Step 3: check B (as target, not C)
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=resp["target"].get("error"))
+
+        # Step 4: check C — must not crash
+        resp = check(c_path, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"check(C) crashed: {resp.get('error')}")
+        self.assertEqual(resp["target"]["status"], "error",
+                         msg=f"Expected proof failure (cir_b=100≠2): "
+                             f"{resp.get('target')}")
+
     def test_dep_reload_transitive_change(self):
         """Changing a transitive dependency invalidates the target on re-check.
 
@@ -915,6 +966,52 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
         self.assertEqual(resp["target"]["status"], "error",
                          msg=f"Expected proof failure, got: {resp['target']}")
+
+    def test_loaded_dep_checked_with_new_content(self):
+        """Dep loaded via Ir.load_theory, then checked with different content.
+
+        After check(B) loads A and creates B's REPL, editing A and
+        checking A directly creates a REPL for A with new content.
+        Re-checking B must see the NEW A content (lrs_a=42), not the
+        stale loaded version (lrs_a=1).
+
+        Bug: B's REPL is re-created with the Ir.load_theory name as
+        parent instead of the REPL. The loaded theory still has
+        lrs_a=1, so B's proof "lrs_b = 2" silently passes when it
+        should fail (42+1≠2).
+
+        Sequence:
+        1. check(B) — A loaded via Ir.load_theory (lrs_a=1), B OK.
+        2. Edit A (lrs_a = 1 → 42).
+        3. check(A) — creates REPL for A with lrs_a=42.
+        4. check(B) — must see lrs_a=42; proof "lrs_b = 2" must fail.
+        """
+        dep_dir = fixture_dir("loaded_to_repl_stale")
+        a_path = os.path.join(dep_dir, "LRS_A.thy")
+        b_path = os.path.join(dep_dir, "LRS_B.thy")
+
+        # Step 1: check B — A loaded from file, B checked OK
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        # Step 2: edit A
+        with open(a_path, 'w') as f:
+            f.write('theory LRS_A\n  imports Main\nbegin\n\n'
+                    'definition lrs_a where "lrs_a = (42::nat)"\n\n'
+                    'end\n')
+
+        # Step 3: check A directly — creates REPL with lrs_a=42
+        resp = check(a_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        # Step 4: check B — must detect A's new content
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "error",
+                         msg=f"B should fail (lrs_a=42, 42+1≠2): "
+                             f"{resp.get('target')}")
 
     def test_same_name_theories(self):
         """Two sessions with theories named Common, disambiguated by session prefix.

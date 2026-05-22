@@ -1,0 +1,4 @@
+session loaded_to_repl_stale = HOL +
+  theories
+    LRS_A
+    LRS_B
