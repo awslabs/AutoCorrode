@@ -64,3 +64,5 @@ stepwise_keywords
 status_stale_repl
 orphan_marker
 heap_no_record
+chain_intermediate_rebuild
+loaded_to_repl_stale
