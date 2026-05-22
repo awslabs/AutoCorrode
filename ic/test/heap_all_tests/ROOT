@@ -23,5 +23,6 @@ session AllHeapTests = HOL +
     StatusSorted
     StatusAligned
     PinTransHeap
+    HeapdiffTest
   theories
     All

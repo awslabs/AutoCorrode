@@ -17,7 +17,7 @@ import sys
 
 from ic_repl import ReplClient
 from ic_core import DiamondStrategy
-from ic_check import check, clean
+from ic_check import check, clean, print_heapdiff
 from ic_status import status
 
 
@@ -132,6 +132,10 @@ def main():
                     parents=[verbose_parent])
     sub.add_parser("status", help="Show I/C state (read-only)",
                     parents=[verbose_parent])
+    heapdiff_p = sub.add_parser("heapdiff",
+                    help="Show heap-vs-disk segment comparison",
+                    parents=[verbose_parent])
+    heapdiff_p.add_argument("path", help="Path to .thy file")
 
     args = p.parse_args()
 
@@ -181,6 +185,10 @@ def main():
             response = clean(repl)
         elif args.command == "status":
             status(repl, verbose=args.verbose)
+            sys.exit(0)
+        elif args.command == "heapdiff":
+            print_heapdiff(repl, os.path.realpath(args.path),
+                           verbose=args.verbose)
             sys.exit(0)
         else:
             p.print_help()

@@ -66,6 +66,7 @@ theory All
     PinTransHeap.PTH_C
     PinTransHeap.PTH_D
     PinTransHeap.PTH_Z
+    HeapdiffTest.HD_File
 begin
 
 end
