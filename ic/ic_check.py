@@ -2543,12 +2543,6 @@ def check(path: str, repl: ReplClient,
               'show_theory_in_source=show_theory_in_source, '
               'auto_replay=auto_replay})'))
 
-    if always_stepwise and diamond_strategy != DiamondStrategy.REPL:
-        if verbose >= 1:
-            print("  --always-stepwise forces diamond strategy to REPL",
-                  file=sys.stderr)
-        diamond_strategy = DiamondStrategy.REPL
-
     markers = read_all_markers(repl)
     if not markers and interactive:
         print("I/C: no cached state, comparing heap to files on disk "

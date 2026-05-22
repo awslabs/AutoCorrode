@@ -120,7 +120,7 @@ def main():
     diamond_group.add_argument("--resolve-deps-via-lines-heuristic", dest="diamond_strategy",
                                action="store_const", const="heuristic",
                                help="Diamond deps: choose based on line count (default)")
-    check_p.set_defaults(diamond_strategy="heuristic")
+    check_p.set_defaults(diamond_strategy=None)
     check_p.add_argument("-j", "--jobs", type=int, default=1,
                          help="Number of parallel jobs (default: 1)")
     check_p.add_argument("--timeout", type=int, default=0,
@@ -156,16 +156,26 @@ def main():
 
     try:
         if args.command == "check":
+            always_stepwise = (args.always_stepwise
+                               or bool(os.environ.get("ISABELLE_REMOTE")))
+            if args.diamond_strategy is None:
+                diamond_strategy = (DiamondStrategy.REPL if always_stepwise
+                                    else DiamondStrategy.HEURISTIC)
+            else:
+                diamond_strategy = DiamondStrategy(args.diamond_strategy)
+                if always_stepwise and diamond_strategy != DiamondStrategy.REPL:
+                    print("  --always-stepwise forces diamond strategy "
+                          "to REPL", file=sys.stderr)
+                    diamond_strategy = DiamondStrategy.REPL
             response = check(
                 os.path.realpath(args.path),
                 repl,
-                DiamondStrategy(args.diamond_strategy),
+                diamond_strategy,
                 verbose=args.verbose,
                 pool_size=args.jobs,
                 timeout=args.timeout,
                 interactive=True,
-                always_stepwise=args.always_stepwise
-                    or bool(os.environ.get("ISABELLE_REMOTE")),
+                always_stepwise=always_stepwise,
             )
         elif args.command == "clean":
             response = clean(repl)
