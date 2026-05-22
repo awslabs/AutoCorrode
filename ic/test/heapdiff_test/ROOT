@@ -1,0 +1,4 @@
+session HeapdiffTest = HOL +
+  options [record_theories = true]
+  theories
+    HD_File

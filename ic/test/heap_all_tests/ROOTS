@@ -21,3 +21,4 @@
 ../status_sorted
 ../status_aligned
 ../pin_transitive_heap
+../heapdiff_test

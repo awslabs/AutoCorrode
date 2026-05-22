@@ -48,6 +48,7 @@ flows are:
 | `check <path>` | Discover sessions via ROOT/ROOTS, check file + deps, incremental rebuild on change |
 | `status` | Show I/C state (REPLs, markers, staleness) — read-only |
 | `clean` | Remove all ic.* REPLs |
+| `heapdiff <path>` | Show heap-vs-disk segment comparison for diagnosing unexpected segment inits |
 
 ### check options
 

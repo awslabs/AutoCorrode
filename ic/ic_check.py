@@ -1982,6 +1982,243 @@ def compare_heap_segments(repl: ReplClient, inp: ClassifyInput
                        entry.content_hash, line_info)
 
 
+@dataclass
+class SegmentComparison:
+    """One heap segment paired with its disk counterpart."""
+    seg_idx: int
+    heap_text: str
+    file_lines: list[str]
+    file_line_start: int
+    normalized_heap: str
+    normalized_disk: str
+
+    @property
+    def matches(self) -> bool:
+        return self.normalized_heap == self.normalized_disk
+
+    @property
+    def first_diff_char(self) -> int | None:
+        if self.matches:
+            return None
+        for k in range(min(len(self.normalized_heap), len(self.normalized_disk))):
+            if self.normalized_heap[k] != self.normalized_disk[k]:
+                return k
+        return min(len(self.normalized_heap), len(self.normalized_disk))
+
+
+def bootstrap_context(repl: ReplClient, path: str) -> 'CheckContext | dict':
+    """Bootstrap a CheckContext for a given path.
+
+    Returns a ready CheckContext or an error dict.
+    """
+    path = os.path.realpath(path)
+    if not os.path.isfile(path):
+        return {"status": "error", "error": f"File not found: {path}"}
+
+    ensure_snippets_loaded(repl)
+    ml_expect(repl.send('Ir.config (fn {color, show_ignored, full_spans, '
+              'show_theory_in_source, auto_replay} => {color=color, '
+              'show_ignored=show_ignored, full_spans=true, '
+              'show_theory_in_source=show_theory_in_source, '
+              'auto_replay=auto_replay})'))
+
+    loaded_theories, active_repls, busy_repls = bootstrap(repl)
+    ctx = CheckContext(
+        repl=repl,
+        loaded_theories=loaded_theories,
+        active_repls=active_repls,
+        busy_repls=busy_repls,
+        markers=read_all_markers(repl),
+        isabelle_symbols=load_isabelle_symbols(repl),
+    )
+    dirs = fetch_dirs(repl)
+    scan_err = ensure_sessions_scanned(ctx, dirs, path)
+    if scan_err:
+        return scan_err
+    return ctx
+
+
+def fetch_heap_segment_texts(repl: ReplClient, qt: QualifiedTheory
+                             ) -> tuple[list[str], list[SegmentInfo],
+                                        tuple[int, int]] | None:
+    """Query source_map and Ir.source for a heap theory's body segments.
+
+    Returns (heap_texts, segments, body_range) or None if unavailable.
+    """
+    segments = query_source_map(repl, qt.name)
+    if segments is None:
+        return None
+    body_range = body_segment_range(segments)
+    if not body_range:
+        return None
+    body_start, body_end = body_range
+    first_seg = segments[body_start].seg_idx
+    last_seg = segments[body_end].seg_idx
+    raw = ml_expect(repl.send(
+        f'Ir.source "{ml_escape(qt.name)}" {first_seg} {last_seg}',
+        timeout=30))
+    heap_texts = parse_source_output(raw)
+    body_seg_count = body_end - body_start + 1
+    if len(heap_texts) != body_seg_count:
+        return None
+    return heap_texts, segments, body_range
+
+
+def fetch_disk_commands(repl: ReplClient, qt: QualifiedTheory,
+                        header: TheoryHeader,
+                        active_repls: dict[str, ReplInfo]
+                        ) -> list[tuple[int, BodyCommand]]:
+    """Parse body commands from disk, filtering comment-only entries.
+
+    Creates and removes a temp REPL if needed for parse_spans.
+    """
+    repl_name = qt.repl_name
+    created_temp = False
+    if repl_name not in active_repls:
+        result = repl.send(f'Ir.init "{ml_escape(repl_name)}" ["{qt.name}"]')
+        if isinstance(result, MlError) or "Created REPL" not in result.output:
+            return []
+        created_temp = True
+    commands = parse_body_commands(repl, repl_name, header)
+    if created_temp:
+        ml_expect(repl.send(f'Ir.remove "{ml_escape(repl_name)}"'))
+    return [(i, cmd) for i, cmd in enumerate(commands)
+            if not is_comment_only(cmd.text)]
+
+
+def build_comparisons(heap_texts: list[str],
+                      real_commands: list[tuple[int, BodyCommand]],
+                      file_lines: list[str],
+                      symbols: dict[str, str]) -> list[SegmentComparison]:
+    """Pair each heap segment with its disk command and normalize both."""
+    def norm(t: str) -> str:
+        return _WS_PAT.sub(' ', symbols_to_unicode(t.strip(), symbols))
+
+    comparisons = []
+    for j in range(min(len(heap_texts), len(real_commands))):
+        cmd_idx, cmd = real_commands[j]
+        start_line = cmd.file_line
+        if j + 1 < len(real_commands):
+            end_line = real_commands[j + 1][1].file_line - 1
+        else:
+            end_line = len(file_lines)
+        raw_lines = file_lines[start_line - 1:end_line]
+        comparisons.append(SegmentComparison(
+            seg_idx=j,
+            heap_text=heap_texts[j],
+            file_lines=raw_lines,
+            file_line_start=start_line,
+            normalized_heap=norm(heap_texts[j]),
+            normalized_disk=norm(cmd.text),
+        ))
+    return comparisons
+
+
+def print_heapdiff_report(name: str, comparisons: list[SegmentComparison],
+                          extra_on_disk: int, verbose: int) -> None:
+    """Format and print the heapdiff report."""
+    first_diff_idx = next(
+        (i for i, c in enumerate(comparisons) if not c.matches), None)
+
+    if first_diff_idx is None and extra_on_disk <= 0:
+        print(f"{name}: heap matches file ({len(comparisons)} segments)")
+        return
+
+    first_line = comparisons[0].file_line_start if comparisons else 0
+    print(f"{name}: {len(comparisons)} body segments, "
+          f"starting at line {first_line}")
+    print()
+
+    if first_diff_idx is not None:
+        show_from = 0 if verbose >= 1 else max(0, first_diff_idx - 3)
+        show_to = first_diff_idx
+    else:
+        show_from = 0
+        show_to = len(comparisons) - 1
+
+    if show_from > 0:
+        print(f"  ({show_from} matching segments skipped)")
+        print()
+
+    for idx in range(show_from, show_to + 1):
+        cmp = comparisons[idx]
+        end_line = cmp.file_line_start + len(cmp.file_lines) - 1
+        line_range = (f"line {cmp.file_line_start}"
+                      if cmp.file_line_start == end_line
+                      else f"lines {cmp.file_line_start}-{end_line}")
+        if cmp.matches:
+            print(f"  segment {cmp.seg_idx} ({line_range}): MATCH")
+            if verbose >= 1:
+                print(f"    heap: {cmp.heap_text}")
+                for rl in cmp.file_lines:
+                    print(f"    file: {rl}")
+                print()
+        else:
+            print(f"  segment {cmp.seg_idx} ({line_range}): "
+                  f"DIFF at char {cmp.first_diff_char}")
+            print(f"    heap: {cmp.heap_text}")
+            for rl in cmp.file_lines:
+                print(f"    file: {rl}")
+            print(f"    normalized heap: {cmp.normalized_heap}")
+            print(f"    normalized disk: {cmp.normalized_disk}")
+            print()
+
+    remaining = len(comparisons) - show_to - 1
+    if remaining > 0 and first_diff_idx is not None:
+        print(f"  ({remaining} segments after first diff skipped)")
+        print()
+
+    if first_diff_idx is not None:
+        cmp = comparisons[first_diff_idx]
+        tail_count = len(comparisons) - first_diff_idx + extra_on_disk
+        print(f"First diff at segment {first_diff_idx} (file line "
+              f"{cmp.file_line_start}). "
+              f"{tail_count} commands would be re-stepped.")
+    elif extra_on_disk > 0:
+        last_cmp = comparisons[-1]
+        last_end = last_cmp.file_line_start + len(last_cmp.file_lines)
+        print(f"{extra_on_disk} extra commands on disk beyond heap segments "
+              f"(from line {last_end}). "
+              f"{extra_on_disk} commands would be re-stepped.")
+
+
+def print_heapdiff(repl: ReplClient, path: str, verbose: int = 0) -> None:
+    """Print a diagnostic comparison of heap segments vs disk file."""
+    path = os.path.realpath(path)
+    ctx = bootstrap_context(repl, path)
+    if isinstance(ctx, dict):
+        print(f"Error: {ctx.get('error', 'unknown')}", file=sys.stderr)
+        return
+
+    qt = ctx.path_index.get(path)
+    if not qt:
+        print(f"Error: File not in any session: {path}", file=sys.stderr)
+        return
+    entry = ctx.files[qt]
+
+    if qt.name not in ctx.loaded_theories:
+        print(f"Error: {qt.name} is not in the heap", file=sys.stderr)
+        return
+
+    heap_result = fetch_heap_segment_texts(ctx.repl, qt)
+    if heap_result is None:
+        print(f"{qt.name}: no recorded segments "
+              f"(heap built without record_theories=true?)")
+        return
+    heap_texts, segments, body_range = heap_result
+
+    real_commands = fetch_disk_commands(ctx.repl, qt, entry.header,
+                                       ctx.active_repls)
+    with open(entry.path) as f:
+        file_lines = f.read().splitlines()
+
+    comparisons = build_comparisons(heap_texts, real_commands, file_lines,
+                                    ctx.isabelle_symbols)
+    body_seg_count = body_range[1] - body_range[0] + 1
+    extra_on_disk = len(real_commands) - body_seg_count
+    print_heapdiff_report(qt.name, comparisons, extra_on_disk, verbose)
+
+
 def step_after_segment_init(ctx: CheckContext, qt: QualifiedTheory,
                               entry: FileEntry,
                               content_hash: str,

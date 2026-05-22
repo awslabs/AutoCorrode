@@ -35,7 +35,7 @@ import io
 
 from ic_repl import ReplClient
 from ic_core import DiamondStrategy
-from ic_check import check, clean
+from ic_check import check, clean, print_heapdiff
 from ic_client import print_response
 from ic_status import status
 
@@ -2904,6 +2904,34 @@ class TestHeapTheories(unittest.TestCase):
                     'end\n')
         resp = check(os.path.join(dep_dir, "PTH_D.thy"), self.repl)
         self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+
+    def test_heapdiff_reports_match_and_diff(self):
+        """heapdiff reports match on unchanged file, diff after modification."""
+        hd_file = fixture_file("heapdiff_test", "HD_File")
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_heapdiff(self.repl, hd_file)
+        out = buf.getvalue()
+        self.assertIn("HD_File", out)
+        self.assertIn("heap matches file", out)
+        self.assertNotIn("DIFF", out)
+
+        with open(hd_file) as f:
+            original = f.read()
+        modified = original.replace(
+            'definition hd_b where "hd_b = (2::nat)"',
+            'definition hd_b where "hd_b = (22::nat)"')
+        with open(hd_file, 'w') as f:
+            f.write(modified)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            print_heapdiff(self.repl, hd_file)
+        out = buf.getvalue()
+        self.assertIn("DIFF", out)
+        self.assertIn("(2::nat)", out)
+        self.assertIn("(22::nat)", out)
+        self.assertIn("2 commands would be re-stepped", out)
 
 
 class TestHeapNoRecord(unittest.TestCase):
