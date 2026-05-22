@@ -94,11 +94,13 @@ def status(repl: ReplClient, verbose: int = 0) -> None:
     for name, marker in sorted(markers.items()):
         if not isinstance(marker, (SteppedMarker, LoadedMarker)):
             continue
+        stale_deps = []
         for dep_name, dep_hash in marker.dep_hashes.items():
             dep_marker = markers.get(dep_name)
-            if dep_marker is not None:
-                if marker_hash(dep_marker) != dep_hash:
-                    stale.append((name, f"dep {dep_name} marker changed"))
+            if dep_marker is not None and marker_hash(dep_marker) != dep_hash:
+                stale_deps.append(dep_name)
+        if stale_deps:
+            stale.append((name, f"marker changed for deps: {', '.join(stale_deps)}"))
 
     # Categorize non-stepped markers
     for name, marker in sorted(markers.items()):
