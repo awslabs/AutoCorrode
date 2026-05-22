@@ -1,0 +1,4 @@
+session SegShrink = HOL +
+  options [record_theories = true]
+  theories
+    SS_File

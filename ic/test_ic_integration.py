@@ -3148,6 +3148,47 @@ class TestHeapTheories(unittest.TestCase):
         self.assertIn("2 commands would be re-stepped", out)
 
 
+    def test_segment_shrink_below_heap_size(self):
+        """Shrinking a segment-init REPL's file below heap command count.
+
+        SS_File has 5 definitions in the heap. After a segment-init
+        edit (changing ss_c), the REPL has segment_spec pointing at
+        the heap. Then shrinking the file to 3 definitions (fewer than
+        the heap's 5) should not crash.
+        """
+        seg_file = fixture_file("segment_shrink", "SS_File")
+        with open(seg_file) as f:
+            original = f.read()
+
+        # Step 1: edit ss_c → segment init
+        modified = original.replace(
+            'definition ss_c where "ss_c = (3::nat)"',
+            'definition ss_c where "ss_c = (33::nat)"')
+        with open(seg_file, 'w') as f:
+            f.write(modified)
+
+        resp = check(seg_file, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=resp["target"].get("error"))
+        self.assertGreater(resp["target"]["steps_taken"], 0)
+
+        # Step 2: shrink file (remove ss_d and ss_e)
+        with open(seg_file, 'w') as f:
+            f.write('(*<*)\ntheory SS_File\n  imports Main\nbegin\n(*>*)\n\n'
+                    'definition ss_a where "ss_a = (1::nat)"\n'
+                    'definition ss_b where "ss_b = (2::nat)"\n'
+                    'definition ss_c where "ss_c = (33::nat)"\n\n'
+                    'end\n')
+
+        resp = check(seg_file, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"Shrink below heap size crashed: "
+                             f"{resp.get('error')}")
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=resp["target"].get("error"))
+
+
 class TestHeapNoRecord(unittest.TestCase):
     """Target lives in a heap built without record_theories=true.
 
