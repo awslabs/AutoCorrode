@@ -1,0 +1,5 @@
+session rebase_chain_conflict = HOL +
+  theories
+    RCC_A
+    RCC_B
+    RCC_C

@@ -282,11 +282,15 @@ class CheckPlan(DepPlan):
     - INIT: remove old REPL + Ir.init fresh from parent theories
     - REBASE: Ir.rebase existing REPL (updates base to new parent pins)
               + Ir.truncate all + step from scratch
+    - None: undecided; assigned by assign_init_strategies after diamond
+            resolution.
     """
-    init_strategy: InitStrategy = InitStrategy.INIT
+    init_strategy: InitStrategy | None = None  # assigned by assign_init_strategies
 
     @property
     def removes_repl(self) -> bool:
+        assert self.init_strategy is not None, \
+            "removes_repl called before assign_init_strategies"
         return self.init_strategy == InitStrategy.INIT
 
 

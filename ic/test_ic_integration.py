@@ -1085,6 +1085,50 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "ok",
                          msg=resp["target"].get("error"))
 
+    def test_rebase_chain_leaf_check(self):
+        """A→B→C chain, all REPLs. Change A, check C: must not crash.
+
+        After all three theories are checked individually (creating
+        REPLs with pin chains C→B→A), editing A and checking C should
+        propagate the staleness through B to C and rebuild both.
+
+        Bug: build_plans assigns LoadFilePlan to B (NoRepl dep without
+        always_stepwise) even though B is rebase-compatible. C gets
+        CheckPlan(REBASE) (target path uses rebase_set). B's LoadFilePlan
+        requires removing B's REPL. expand_with_pin_dependents then
+        marks C for removal too (C pins B). But C is in to_keep
+        (REBASE). Assertion: REBASE/INIT conflict.
+
+        Expected: B should be rebuilt via REPL (CheckPlan REBASE or
+        INIT), not LoadFilePlan. The check should succeed and detect
+        the value change (rcc_b = 42+1 = 43, not 2).
+        """
+        dep_dir = fixture_dir("rebase_chain_conflict")
+        a_path = os.path.join(dep_dir, "RCC_A.thy")
+        b_path = os.path.join(dep_dir, "RCC_B.thy")
+        c_path = os.path.join(dep_dir, "RCC_C.thy")
+
+        # Step 1: check A, B, C — creates REPL chain
+        for path in (a_path, b_path, c_path):
+            resp = check(path, self.repl)
+            self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+            self.assertEqual(resp["target"]["status"], "ok",
+                             msg=resp["target"].get("error"))
+
+        # Step 2: change A
+        with open(a_path, 'w') as f:
+            f.write('theory RCC_A\n  imports Main\nbegin\n\n'
+                    'definition rcc_a where "rcc_a = (42::nat)"\n\n'
+                    'end\n')
+
+        # Step 3: check C — must not crash; should detect change
+        resp = check(c_path, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"check(C) crashed: {resp.get('error')}")
+        self.assertEqual(resp["target"]["status"], "error",
+                         msg=f"Expected proof failure (rcc_b=43≠2): "
+                             f"{resp.get('target')}")
+
     def test_unlisted_cross_session_import(self):
         """Cross-session import of a theory not listed in the source session's ROOT."""
         # Check the unlisted file directly
