@@ -1,0 +1,4 @@
+session stale_loaded_marker = HOL +
+  theories
+    SLM_A
+    SLM_B
