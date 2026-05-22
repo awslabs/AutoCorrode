@@ -1611,20 +1611,16 @@ def propagate_staleness(classes: dict[ResolvedImport, FileClassification],
 
 def build_plans(classes: dict[ResolvedImport, FileClassification],
                  deps_in_order: list[ResolvedImport],
-                 rebase_rebuilding: set[ResolvedImport],
                  always_stepwise: bool = False,
                  ) -> dict[ResolvedImport, DepPlan]:
     """Assign a DepPlan to each dep based on its classification.
 
     The target (last in deps_in_order) always gets a REPL-stepping
-    plan — never LoadFilePlan or SkipPlan.
+    plan — never LoadFilePlan or SkipPlan. CheckPlan init_strategy is
+    left as None — filled in by assign_init_strategies after diamond
+    resolution.
     """
-    rebase_set = rebase_rebuilding
     plans: dict[ResolvedImport, DepPlan] = {}
-
-    def build_check_plan(ri: ResolvedImport, qt: QualifiedTheory) -> CheckPlan:
-        strategy = InitStrategy.REBASE if ri in rebase_set else InitStrategy.INIT
-        return CheckPlan(qt, strategy)
 
     # Dependencies: classification-based mapping
     for ri in deps_in_order[:-1]:
@@ -1644,16 +1640,16 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
                                           c.step_range, c.segment_spec)
         elif isinstance(c, NoRepl):
             if always_stepwise and isinstance(ri, FileImport):
-                plans[ri] = build_check_plan(ri, c.qt)
+                plans[ri] = CheckPlan(c.qt)
             else:
                 plans[ri] = LoadFilePlan(c.qt)
         elif isinstance(c, HeapStale):
             plans[ri] = SegmentInitPlan(c.qt, c.diff)
         elif isinstance(c, HeapStaleDep):
-            plans[ri] = build_check_plan(ri, c.qt)
+            plans[ri] = CheckPlan(c.qt)
         elif isinstance(c, FileNotLoaded):
             if always_stepwise and isinstance(ri, FileImport):
-                plans[ri] = build_check_plan(ri, c.qt)
+                plans[ri] = CheckPlan(c.qt)
             else:
                 plans[ri] = LoadFilePlan(c.qt)
         else:
@@ -1679,7 +1675,7 @@ def build_plans(classes: dict[ResolvedImport, FileClassification],
         elif isinstance(c, HeapStale):
             plans[target] = SegmentInitPlan(c.qt, c.diff)
         else:
-            plans[target] = build_check_plan(target, c.qt)
+            plans[target] = CheckPlan(c.qt)
 
     return plans
 
@@ -1732,15 +1728,12 @@ def resolve_diamonds(plans: dict[ResolvedImport, DepPlan],
                      group: set[str]) -> None:
         assert affected <= all_pending
         for ri in affected:
-            c = classes[ri]
-            plans[ri] = LoadFilePlan(c.qt)
+            plans[ri] = LoadFilePlan(classes[ri].qt)
         for rn in group:
             rn_qt = theory_name_from_repl(rn)
             rn_ri = qt_to_ri.get(rn_qt)
-            if rn_ri and rn_ri in classes and isinstance(
-                    classes[rn_ri], (ReplClean, InHeap, FileLoaded)):
-                c = classes[rn_ri]
-                plans[rn_ri] = LoadFilePlan(c.qt)
+            if rn_ri and rn_ri in plans:
+                plans[rn_ri] = LoadFilePlan(classes[rn_ri].qt)
 
     def apply_repl(affected: set[ResolvedImport]) -> None:
         assert affected <= all_pending
@@ -1784,15 +1777,42 @@ def assign_methods(ctx: CheckContext,
     1. Staleness propagation (before diamonds — affects cost)
     2. Classification-based plan assignment
     3. Diamond conflict overrides
+    4. Init strategy assignment (REBASE vs INIT for CheckPlans)
     """
     classes = dict(classifications)
     rebase_rebuilding = propagate_staleness(
         classes, deps_in_order, ctx.files,
         markers=ctx.markers, active_repls=ctx.active_repls)
-    plans = build_plans(classes, deps_in_order, rebase_rebuilding,
+    plans = build_plans(classes, deps_in_order,
                         always_stepwise=ctx.always_stepwise)
     resolve_diamonds(plans, classes, deps_in_order, ctx)
+    assign_init_strategies(plans, rebase_rebuilding, ctx.dep_graph, deps_in_order)
     return plans
+
+
+def assign_init_strategies(plans: dict[ResolvedImport, DepPlan],
+                           rebase_rebuilding: set[ResolvedImport],
+                           dep_graph: DepGraph,
+                           deps_in_order: list[ResolvedImport]) -> None:
+    """Fill in CheckPlan init strategies based on the final plan set.
+
+    Walks in build order so parents are resolved before children.
+    REBASE if the dep is in rebase_rebuilding and no parent's plan
+    removes its REPL. INIT otherwise.
+    """
+    for ri in deps_in_order:
+        plan = plans.get(ri)
+        if not isinstance(plan, CheckPlan):
+            continue
+        if ri not in rebase_rebuilding:
+            plan.init_strategy = InitStrategy.INIT
+            continue
+        parents_ok = all(
+            not plans[dep_ri].removes_repl
+            for dep_ri in dep_graph.get(ri, [])
+            if dep_ri in plans)
+        plan.init_strategy = (InitStrategy.REBASE if parents_ok
+                              else InitStrategy.INIT)
 
 
 # --- Segment-based init (record_theories) ---
