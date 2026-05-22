@@ -22,3 +22,4 @@
 ../status_aligned
 ../pin_transitive_heap
 ../heapdiff_test
+../segment_shrink

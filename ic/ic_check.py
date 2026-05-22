@@ -2030,9 +2030,6 @@ def compare_heap_segments(repl: ReplClient, inp: ClassifyInput
     real_commands = [(i, cmd) for i, cmd in enumerate(commands)
                      if not is_comment_only(cmd.text)]
 
-    if len(real_commands) < body_seg_count:
-        return None
-
     # Get heap version text via Ir.source
     first_seg = segments[body_start].seg_idx
     last_seg = segments[body_end].seg_idx
@@ -2040,17 +2037,18 @@ def compare_heap_segments(repl: ReplClient, inp: ClassifyInput
         f'Ir.source "{ml_escape(qt.name)}" {first_seg} {last_seg}',
         timeout=30))
     heap_texts = parse_source_output(raw)
-
-    if len(heap_texts) != body_seg_count:
-        return None
+    assert len(heap_texts) == body_seg_count, (
+        f"Ir.source for {qt.name} returned {len(heap_texts)} entries "
+        f"but body_segment_range expects {body_seg_count}")
 
     # Compare disk commands against heap segments
     def norm(text: str) -> str:
         return _WS_PAT.sub(' ', symbols_to_unicode(
             text.strip(), inp.isabelle_symbols))
 
+    compare_count = min(body_seg_count, len(real_commands))
     first_diff_idx = None
-    for j in range(body_seg_count):
+    for j in range(compare_count):
         cmd_idx, cmd = real_commands[j]
         if norm(cmd.text) != norm(heap_texts[j]):
             first_diff_idx = j
@@ -2070,6 +2068,9 @@ def compare_heap_segments(repl: ReplClient, inp: ClassifyInput
         seg = segments[body_end]
         first_new_cmd = real_commands[body_seg_count][0]
         tail = commands[first_new_cmd:]
+    elif len(real_commands) < body_seg_count:
+        seg = segments[body_start + len(real_commands) - 1]
+        tail = []
     else:
         seg = segments[body_end]
         tail = []
@@ -2158,8 +2159,9 @@ def fetch_heap_segment_texts(repl: ReplClient, qt: QualifiedTheory
         timeout=30))
     heap_texts = parse_source_output(raw)
     body_seg_count = body_end - body_start + 1
-    if len(heap_texts) != body_seg_count:
-        return None
+    assert len(heap_texts) == body_seg_count, (
+        f"Ir.source for {qt.name} returned {len(heap_texts)} entries "
+        f"but body_segment_range expects {body_seg_count}")
     return heap_texts, segments, body_range
 
 
