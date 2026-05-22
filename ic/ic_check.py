@@ -2502,6 +2502,10 @@ def execute_load_file_plan(ctx: CheckContext, ri: ResolvedImport,
                 LoadedMarker(entry.content_hash, compute_dep_hashes(ctx, ri)))
         return PlanOk(DepInfo(name, "from_file", status="ok"))
     else:
+        if plan.qt.name in ctx.markers:
+            ml_expect(ctx.repl.send(
+                f'ic_symtab_delete "{ml_escape(plan.qt.name)}"'))
+            del ctx.markers[plan.qt.name]
         return PlanDepFailed(DepInfo(
             name, "from_file", status="error",
             error="failed to load theory",

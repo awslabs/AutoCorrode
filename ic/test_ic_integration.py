@@ -639,6 +639,57 @@ class TestICSIntegration(unittest.TestCase):
         self.assertNotEqual(resp["target"]["status"], "ok",
                             msg="Target should not be ok when dep is broken")
 
+    def test_dep_fix_after_load_failure(self):
+        """Fixing a dep after it failed to load must let target recover.
+
+        LoadedMarker persists after Ir.load_theory fails and removes
+        the theory from Isabelle's theory database. On the next check,
+        classify_loaded_repl sees matching hashes → FileLoaded →
+        SkipPlan, but the theory is actually gone. Ir.init then fails
+        with "undefined entry for theory".
+
+        Sequence:
+        1. check(B) — A loaded via Ir.load_theory, B checked OK.
+        2. Break A (proof error).
+        3. check(B) — A fails to load (theory removed from database),
+           B reported stale.
+        4. Fix A (restore original content).
+        5. check(B) — must not crash; should reload A and check B OK.
+        """
+        dep_dir = fixture_dir("stale_loaded_marker")
+        a_path = os.path.join(dep_dir, "SLM_A.thy")
+        b_path = os.path.join(dep_dir, "SLM_B.thy")
+
+        # Step 1: check B — A loaded, B OK
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok", msg=resp.get("error"))
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        # Step 2: break A
+        with open(a_path, 'w') as f:
+            f.write('theory SLM_A\n  imports Main\nbegin\n\n'
+                    'lemma "False" by simp\n\n'
+                    'definition slm_a where "slm_a = (1::nat)"\n\n'
+                    'end\n')
+
+        # Step 3: check B — A fails, B stale
+        resp = check(b_path, self.repl)
+        self.assertNotEqual(resp["target"]["status"], "ok")
+
+        # Step 4: fix A (restore)
+        with open(a_path, 'w') as f:
+            f.write('theory SLM_A\n  imports Main\nbegin\n\n'
+                    'definition slm_a where "slm_a = (1::nat)"\n\n'
+                    'end\n')
+
+        # Step 5: check B — must not crash, must succeed
+        resp = check(b_path, self.repl)
+        self.assertEqual(resp["status"], "ok",
+                         msg=f"Expected ok after fixing dep, got: "
+                             f"{resp.get('error')}")
+        self.assertEqual(resp["target"]["status"], "ok",
+                         msg=f"Expected target ok: {resp.get('target')}")
+
     def test_load_theory_leak(self):
         """Ir.load_theory error from one theory should not leak into another.
 
