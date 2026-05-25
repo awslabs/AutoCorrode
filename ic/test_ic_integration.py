@@ -1129,6 +1129,50 @@ class TestICSIntegration(unittest.TestCase):
                          msg=f"Expected proof failure (rcc_b=43≠2): "
                              f"{resp.get('target')}")
 
+    def test_interleaved_check_stale_dep(self):
+        """Dep change must propagate to ALL targets sharing that dep.
+
+        T1 and T2 both import Dep. After checking both (Dep gets a
+        LoadedMarker), modifying Dep, and checking T1 (which reloads
+        Dep), T2 must ALSO detect the change on its next check.
+
+        BUG: After T1's check reloads Dep, T2's REPL still holds the
+        old theory identity. has_persistent_repl sees the bare theory
+        name in T2's origin matches current_import_spec (Dep has no
+        stepped REPL, just a LoadedMarker) → rebase-compatible. But
+        Ir.rebase doesn't re-resolve bare names, so T2 keeps the stale
+        context.
+        """
+        dep_dir = fixture_dir("interleaved_dep_stale")
+        dep_path = os.path.join(dep_dir, "IDS_Dep.thy")
+        t1_path = os.path.join(dep_dir, "IDS_T1.thy")
+        t2_path = os.path.join(dep_dir, "IDS_T2.thy")
+
+        # Step 1: check both targets (Dep loaded for each)
+        resp = check(t1_path, self.repl)
+        self.assertEqual(resp["target"]["status"], "ok")
+        resp = check(t2_path, self.repl)
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        # Step 2: modify Dep
+        with open(dep_path, 'w') as f:
+            f.write('theory IDS_Dep\n  imports Main\nbegin\n\n'
+                    'definition ids_val where "ids_val = (99::nat)"\n\n'
+                    'end\n')
+
+        # Step 3: check T1 — should detect change and fail
+        resp = check(t1_path, self.repl)
+        self.assertEqual(resp["target"]["status"], "error",
+                         msg="T1 should fail (ids_val=99≠1)")
+
+        # Step 4: check T2 — MUST also detect change and fail
+        resp = check(t2_path, self.repl)
+        self.assertNotEqual(
+            resp["target"]["status"], "ok",
+            msg="T2 must detect dep change after T1's check reloaded "
+                "it. T2's REPL was built against ids_val=1, but Dep "
+                f"now has ids_val=99. Got: {resp['target']}")
+
     def test_unlisted_cross_session_import(self):
         """Cross-session import of a theory not listed in the source session's ROOT."""
         # Check the unlisted file directly

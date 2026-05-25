@@ -1508,6 +1508,35 @@ def classify_files(ctx: CheckContext,
         return classifications
 
 
+def rebase_detects_all_changes(
+        ri: FileImport,
+        imp_ris: list[ResolvedImport],
+        active_repls: dict[str, 'ReplInfo'],
+        markers: dict[str, 'HashMarker']) -> bool:
+    """Whether Ir.rebase can detect all parent changes for this REPL.
+
+    Ir.rebase detects changes via pin@ version tracking. For deps
+    referenced by bare name (no stepped REPL), rebase can't see
+    reloads. Returns False if any such dep's marker changed since the
+    REPL was built.
+    """
+    m = markers.get(ri.qualified.name)
+    if not isinstance(m, SteppedMarker):
+        return False
+    for dep_ri in imp_ris:
+        if not isinstance(dep_ri, FileImport):
+            continue
+        dep_qt = dep_ri.qualified
+        if dep_qt.repl_name in active_repls:
+            continue
+        dep_marker = markers.get(dep_qt.name)
+        current_hash = marker_hash(dep_marker) if dep_marker else None
+        recorded_hash = m.dep_hashes.get(dep_qt.name)
+        if current_hash != recorded_hash:
+            return False
+    return True
+
+
 def has_persistent_repl(ri: ResolvedImport,
                         c: FileClassification,
                         active_repls: dict[str, 'ReplInfo'],
@@ -1567,7 +1596,9 @@ def propagate_staleness(classes: dict[ResolvedImport, FileClassification],
             return True
         if not has_persistent_repl(ri, classes[ri], active_repls, markers, files):
             return False
-        return all(d in rebase_rebuilding for d in imp_ris if d in rebuilding)
+        if not all(d in rebase_rebuilding for d in imp_ris if d in rebuilding):
+            return False
+        return rebase_detects_all_changes(ri, imp_ris, active_repls, markers)
 
     for ri in deps_in_order:
         if not isinstance(ri, FileImport):

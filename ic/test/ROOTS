@@ -68,3 +68,4 @@ chain_intermediate_rebuild
 loaded_to_repl_stale
 stale_loaded_marker
 rebase_chain_conflict
+interleaved_dep_stale

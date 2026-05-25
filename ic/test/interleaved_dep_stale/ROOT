@@ -1,0 +1,5 @@
+session interleaved_dep_stale = HOL +
+  theories
+    IDS_Dep
+    IDS_T1
+    IDS_T2
