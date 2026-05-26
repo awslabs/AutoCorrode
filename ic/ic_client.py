@@ -100,13 +100,18 @@ def main():
     p.add_argument("--repl-token",
                    default=os.environ.get("IR_AUTH_TOKEN"),
                    help="I/R REPL auth token (default: $IR_AUTH_TOKEN)")
-    p.add_argument("-v", "--verbose", action="count", default=0,
-                   help="Show progress (-vv for more detail)")
+    p.add_argument("-q", "--quiet", action="store_true",
+                   help="Suppress progress output")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="Show extra detail")
 
     verbose_parent = argparse.ArgumentParser(add_help=False)
-    verbose_parent.add_argument("-v", "--verbose", action="count",
+    verbose_parent.add_argument("-q", "--quiet", action="store_true",
                                 default=argparse.SUPPRESS,
-                                help="Show progress (-vv for more detail)")
+                                help="Suppress progress output")
+    verbose_parent.add_argument("-v", "--verbose", action="store_true",
+                                default=argparse.SUPPRESS,
+                                help="Show extra detail")
 
     sub = p.add_subparsers(dest="command")
 
@@ -148,6 +153,13 @@ def main():
         p.print_help()
         sys.exit(1)
 
+    if getattr(args, 'quiet', False):
+        verbose = 0
+    elif getattr(args, 'verbose', False):
+        verbose = 2
+    else:
+        verbose = 1
+
     repl = ReplClient(host=args.repl_host, port=args.repl_port,
                       token=args.repl_token)
     try:
@@ -180,7 +192,7 @@ def main():
                 os.path.realpath(args.path),
                 repl,
                 diamond_strategy,
-                verbose=args.verbose,
+                verbose=verbose,
                 pool_size=args.jobs,
                 timeout=args.timeout,
                 interactive=True,
@@ -190,11 +202,11 @@ def main():
         elif args.command == "clean":
             response = clean(repl)
         elif args.command == "status":
-            status(repl, verbose=args.verbose)
+            status(repl, verbose=verbose)
             sys.exit(0)
         elif args.command == "heapdiff":
             print_heapdiff(repl, os.path.realpath(args.path),
-                           verbose=args.verbose)
+                           verbose=verbose)
             sys.exit(0)
         else:
             p.print_help()

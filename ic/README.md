@@ -56,7 +56,8 @@ flows are:
 |------|-------------|
 | `-j N` / `--jobs N` | Number of parallel jobs (default: 1) |
 | `--timeout N` | Per-step timeout in seconds (default: 0 = use I/R default) |
-| `-v` / `-vv` | Show progress (`-vv` for more detail) |
+| `-q` | Suppress progress output (quiet) |
+| `-v` | Show extra detail |
 | `--always-stepwise` | Never use Ir.load_theory for file deps (auto-enabled when `$ISABELLE_REMOTE` is set) |
 | `--dry-run` | Print classification/plan table without executing |
 | `--resolve-deps-via-reload` | Diamond deps: reload REPL'd theories from source |
