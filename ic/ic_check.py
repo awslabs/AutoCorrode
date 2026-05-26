@@ -58,6 +58,112 @@ from ic_core import (
 )
 
 
+# --- Step descriptions (shared by verbose logs and dry-run) ---
+
+@dataclass
+class StepLoaded:
+    """Plan loads theory from file via Ir.load_theory."""
+    pass
+
+
+@dataclass
+class StepSkip:
+    """Plan reuses existing state."""
+    reason: str
+
+
+@dataclass
+class StepCommands:
+    """Plan steps commands over a line range."""
+    action: str
+    first_line: int
+    last_line: int
+    cmd_count: int | None = None
+    suffix: str = ""
+
+
+StepDescription = StepLoaded | StepSkip | StepCommands
+
+
+def describe_plan(plan: 'DepPlan', ctx: 'CheckContext',
+                  ri: 'ResolvedImport') -> StepDescription:
+    """Describe what a plan would do, without executing it."""
+    if isinstance(plan, SkipPlan):
+        marker = ctx.read_marker(plan.qt)
+        if isinstance(marker, HeapVerifiedMarker):
+            return StepSkip("from_heap (cached)")
+        elif isinstance(marker, LoadedMarker):
+            return StepSkip("loaded (up to date)")
+        elif isinstance(marker, SteppedMarker):
+            return StepSkip("cache matches file")
+        elif plan.heap_freshness == HeapFreshness.NO_SEGMENTS:
+            return StepSkip("from_heap (no segments)")
+        else:
+            return StepSkip("from_heap")
+    elif isinstance(plan, TargetUnchangedPlan):
+        return StepSkip("unchanged (in heap)")
+    elif isinstance(plan, LoadFilePlan):
+        return StepLoaded()
+    elif isinstance(plan, CheckPlan):
+        entry = ctx.files.get(plan.qt) if isinstance(ri, FileImport) else None
+        if entry:
+            return StepCommands("stepwise check",
+                                entry.header.body_start_line,
+                                entry.total_lines)
+        return StepCommands("stepwise check", 0, 0)
+    elif isinstance(plan, IncrementalPlan):
+        li = plan.change_info.line_info
+        n = len(plan.change_info.new_commands) - plan.change_info.first_diff
+        return StepCommands("continuing", li.first_changed_line,
+                            li.total_lines, n, "(file changed)")
+    elif isinstance(plan, RecoverErrorPlan):
+        li = plan.line_info
+        n = len(plan.commands) - plan.body_steps
+        return StepCommands("continuing", li.first_changed_line,
+                            li.total_lines, n)
+    elif isinstance(plan, SegmentInitPlan):
+        li = plan.diff.line_info
+        if plan.diff.tail:
+            return StepCommands("segment init from heap",
+                                li.first_changed_line, li.total_lines,
+                                len(plan.diff.tail))
+        else:
+            return StepSkip(f"segment init from heap at "
+                            f"L{li.first_changed_line} - heap matches file")
+    raise TypeError(f"Unknown plan type: {type(plan)}")
+
+
+def format_step_description(desc: StepDescription) -> str:
+    """Format for verbose log output."""
+    if isinstance(desc, StepLoaded):
+        return "loading from file..."
+    elif isinstance(desc, StepSkip):
+        return desc.reason
+    elif isinstance(desc, StepCommands):
+        if desc.cmd_count is not None:
+            s = (f"{desc.action} - stepping {desc.cmd_count} commands "
+                 f"to L{desc.last_line}")
+        else:
+            s = f"{desc.action} - stepping to L{desc.last_line}"
+        if desc.suffix:
+            s += f" {desc.suffix}"
+        return s
+    raise TypeError(f"Unknown step description type: {type(desc)}")
+
+
+def format_step_short(desc: StepDescription) -> str:
+    """Format for dry-run table column."""
+    if isinstance(desc, StepLoaded):
+        return "load from file"
+    elif isinstance(desc, StepSkip):
+        return "-"
+    elif isinstance(desc, StepCommands):
+        if desc.cmd_count is None:
+            return f"L{desc.first_line}–L{desc.last_line} (full)"
+        return f"L{desc.first_line}–L{desc.last_line} ({desc.cmd_count} cmds)"
+    raise TypeError(f"Unknown step description type: {type(desc)}")
+
+
 # --- State recovery: Ir.repls() parsing ---
 
 @dataclass
@@ -1799,26 +1905,6 @@ def compute_theory_refs(plans: dict[ResolvedImport, DepPlan],
     return {ri: plans[ri].import_name() for ri in deps_in_order}
 
 
-def assign_methods(ctx: CheckContext,
-                    deps_in_order: list[ResolvedImport],
-                    classifications: dict[ResolvedImport, FileClassification]
-                    ) -> dict[ResolvedImport, DepPlan]:
-    """Assign a DepPlan to each dep based on classifications + global analysis.
-
-    1. Staleness propagation (before diamonds — affects cost)
-    2. Classification-based plan assignment
-    3. Diamond conflict overrides
-    4. Init strategy assignment (REBASE vs INIT for CheckPlans)
-    """
-    classes = dict(classifications)
-    rebase_rebuilding = propagate_staleness(
-        classes, deps_in_order, ctx.files,
-        markers=ctx.markers, active_repls=ctx.active_repls)
-    plans = build_plans(classes, deps_in_order,
-                        always_stepwise=ctx.always_stepwise)
-    resolve_diamonds(plans, classes, deps_in_order, ctx)
-    assign_init_strategies(plans, rebase_rebuilding, ctx.dep_graph, deps_in_order)
-    return plans
 
 
 def assign_init_strategies(plans: dict[ResolvedImport, DepPlan],
@@ -2246,6 +2332,59 @@ def build_comparisons(heap_texts: list[str],
     return comparisons
 
 
+def print_dry_run(deps_in_order: list[ResolvedImport],
+                  initial_classes: dict[ResolvedImport, FileClassification],
+                  propagated_classes: dict[ResolvedImport, FileClassification],
+                  initial_plans: dict[ResolvedImport, DepPlan],
+                  final_plans: dict[ResolvedImport, DepPlan],
+                  ctx: 'CheckContext') -> None:
+    """Print a compact table of classifications and plans."""
+    has_diamond_changes = any(
+        type(initial_plans.get(ri)) != type(final_plans.get(ri))
+        or (isinstance(initial_plans.get(ri), CheckPlan)
+            and isinstance(final_plans.get(ri), CheckPlan)
+            and initial_plans[ri].init_strategy != final_plans[ri].init_strategy)
+        for ri in deps_in_order if ri in initial_plans)
+
+    rows = []
+    for ri in deps_in_order:
+        name = ri.sort_key
+        ri_type = type(ri).__name__
+
+        ic = initial_classes.get(ri)
+        pc = propagated_classes.get(ri)
+        class_col = ic.display_name() if ic else "?"
+        stale_col = pc.display_name() if pc and type(pc) != type(ic) else "-"
+
+        ip = initial_plans.get(ri)
+        fp = final_plans.get(ri)
+        plan_col = ip.display_name() if ip else "?"
+        diamond_col = fp.display_name() if (has_diamond_changes and fp) else None
+        step_col = (format_step_short(describe_plan(fp, ctx, ri))
+                    if fp else "-")
+
+        rows.append((name, ri_type, class_col, stale_col, plan_col, diamond_col, step_col))
+
+    headers = ["theory", "resolved as", "classification", "with staleness", "plan"]
+    if has_diamond_changes:
+        headers.append("after diamond")
+    headers.append("to-step")
+
+    cols = list(zip(*rows)) if rows else [[] for _ in headers]
+    widths = [max(len(h), max((len(str(v or "")) for v in col), default=0))
+              for h, col in zip(headers, cols + [[] for _ in range(len(headers) - len(cols))])]
+
+    header_line = "  ".join(h.ljust(w) for h, w in zip(headers, widths))
+    print(header_line)
+    print("  ".join("-" * w for w in widths))
+    for row in rows:
+        parts = list(row[:5])
+        if has_diamond_changes:
+            parts.append(row[5] or "-")
+        parts.append(row[6])
+        print("  ".join(str(p).ljust(w) for p, w in zip(parts, widths)))
+
+
 def print_heapdiff_report(name: str, comparisons: list[SegmentComparison],
                           extra_on_disk: int, verbose: int) -> None:
     """Format and print the heapdiff report."""
@@ -2470,8 +2609,9 @@ def incremental_check_file(ctx: CheckContext, qt: QualifiedTheory,
 
     tail = new_commands[first_diff:]
     li = change.line_info
-    log(ctx, f"  {qt.name}: continuing from L{li.first_changed_line} - "
-             f"stepping {len(tail)} commands to L{li.total_lines} (file changed)")
+    desc = StepCommands("continuing", li.first_changed_line,
+                        li.total_lines, len(tail), "(file changed)")
+    log(ctx, f"  {qt.name}: {format_step_description(desc)}")
     return step_tail(ctx, qt, tail, first_diff, len(new_commands))
 
 
@@ -2479,9 +2619,8 @@ def execute_recover_error_plan(ctx: CheckContext, ri: ResolvedImport,
                                 plan: RecoverErrorPlan) -> PlanResult:
     """Re-execute from the failing command for an unchanged broken file."""
     tail = plan.commands[plan.body_steps:]
-    li = plan.line_info
-    log(ctx, f"  {ri_log_name(ri)}: continuing from L{li.first_changed_line} - "
-             f"stepping {len(tail)} commands to L{li.total_lines}")
+    desc = describe_plan(plan, ctx, ri)
+    log(ctx, f"  {ri_log_name(ri)}: {format_step_description(desc)}")
     result = step_tail(ctx, plan.qt, tail, plan.body_steps,
                        len(plan.commands))
     if result.status == "ok":
@@ -2509,28 +2648,23 @@ def execute_skip_plan(ctx: CheckContext, ri: ResolvedImport,
     """Execute a SkipPlan: reuse existing state."""
     name = ri_name(ri)
     marker = ctx.read_marker(plan.qt)
-    if marker is not None:
-        if isinstance(marker, HeapVerifiedMarker):
-            log2(ctx, f"  {ri_log_name(ri)}: {_DIM}from_heap (cached){_RST}")
-            return PlanOk(DepInfo(name, "from_heap"))
-        elif isinstance(marker, LoadedMarker):
-            log(ctx, f"  {ri_log_name(ri)}: {_DIM}loaded (up to date){_RST}")
-            return PlanOk(DepInfo(name, "from_file", status="ok"))
-        elif isinstance(marker, SteppedMarker):
-            pin_repl(ctx, plan.qt.repl_name)
-            log(ctx, f"  {ri_log_name(ri)}: {_DIM}cache matches file{_RST}")
-            return PlanOk(DepInfo(name, "repl", status="ok",
-                                 steps_taken=0))
-        else:
-            raise TypeError(
-                f"Unknown marker type for {ri}: {type(marker)}")
+    if isinstance(marker, SteppedMarker):
+        pin_repl(ctx, plan.qt.repl_name)
+    desc = describe_plan(plan, ctx, ri)
+    msg = f"  {ri_log_name(ri)}: {_DIM}{format_step_description(desc)}{_RST}"
+    if isinstance(marker, HeapVerifiedMarker) or (
+            marker is None and plan.heap_freshness != HeapFreshness.NO_SEGMENTS):
+        log2(ctx, msg)
     else:
-        if plan.heap_freshness == HeapFreshness.NO_SEGMENTS:
-            log(ctx, f"  {ri_log_name(ri)}: {_DIM}from_heap "
-                       f"(no segments, freshness unknown){_RST}")
-        else:
-            log2(ctx, f"  {ri_log_name(ri)}: {_DIM}from_heap{_RST}")
+        log(ctx, msg)
+    if isinstance(marker, SteppedMarker):
+        return PlanOk(DepInfo(name, "repl", status="ok", steps_taken=0))
+    elif isinstance(marker, LoadedMarker):
+        return PlanOk(DepInfo(name, "from_file", status="ok"))
+    elif isinstance(marker, HeapVerifiedMarker) or marker is None:
         return PlanOk(DepInfo(name, "from_heap"))
+    else:
+        raise TypeError(f"Unknown marker type for {ri}: {type(marker)}")
 
 
 def execute_load_file_plan(ctx: CheckContext, ri: ResolvedImport,
@@ -2539,7 +2673,8 @@ def execute_load_file_plan(ctx: CheckContext, ri: ResolvedImport,
     """Execute a LoadFilePlan: load theory via Ir.load_theory."""
     name = ri_name(ri)
     load_name = ri.name if isinstance(ri, ExternalImport) else plan.qt.name
-    log(ctx, f"  {ri_log_name(ri)}: loading from file...")
+    desc = describe_plan(plan, ctx, ri)
+    log(ctx, f"  {ri_log_name(ri)}: {format_step_description(desc)}")
     success, rebuilt = load_theory(ctx, load_name)
     if success:
         # External imports' dep graphs are opaque to I/C: a sibling
@@ -2645,8 +2780,9 @@ def execute_check_plan(ctx: CheckContext, ri: ResolvedImport,
     write_marker(ctx, plan.qt.name,
         SteppedMarker(entry.content_hash, len(commands),
                       dep_hashes=compute_dep_hashes(ctx, ri)))
-    log(ctx, f"  {ri_log_name(ri)}: stepwise check - "
-             f"stepping {len(commands)} commands to L{entry.total_lines}")
+    desc = StepCommands("stepwise check", entry.header.body_start_line,
+                        entry.total_lines, len(commands))
+    log(ctx, f"  {ri_log_name(ri)}: {format_step_description(desc)}")
     file_result = check_file(ctx, plan.qt, commands)
     if file_result.status == "ok":
         pin_repl(ctx, plan.qt.repl_name)
@@ -2664,7 +2800,8 @@ def execute_target_unchanged_plan(ctx: CheckContext, ri: ResolvedImport,
             f"restart the I/R server using a --session without "
             f"{plan.qt.name}, or rebuild the heap with "
             f"-o record_theories=true, and then restart the I/R server.")
-    log(ctx, f"  {ri_log_name(ri)}: {_DIM}unchanged (in heap){_RST}")
+    desc = describe_plan(plan, ctx, ri)
+    log(ctx, f"  {ri_log_name(ri)}: {_DIM}{format_step_description(desc)}{_RST}")
     return PlanOk(DepInfo(ri_name(ri), "repl", status="ok",
                           steps_taken=0))
 
@@ -2674,14 +2811,8 @@ def execute_segment_init_plan(ctx: CheckContext, ri: ResolvedImport,
                                plan: SegmentInitPlan) -> PlanResult:
     """Execute a SegmentInitPlan: init from heap segment, step tail."""
     diff = plan.diff
-    li = diff.line_info
-    if diff.tail:
-        log(ctx, f"  {ri_log_name(ri)}: segment init from heap at "
-                 f"L{li.first_changed_line} - stepping {len(diff.tail)} "
-                 f"commands to L{li.total_lines}")
-    else:
-        log(ctx, f"  {ri_log_name(ri)}: segment init from heap at "
-                 f"L{li.first_changed_line} - heap matches file")
+    desc = describe_plan(plan, ctx, ri)
+    log(ctx, f"  {ri_log_name(ri)}: {format_step_description(desc)}")
     repl_err = ensure_repl(
         ctx, [], plan.qt.repl_name,
         segment_spec=diff.segment_spec)
@@ -2825,18 +2956,14 @@ def warn_no_record_sessions(
 
 
 def execute_plans(ctx: CheckContext,
-                   deps_in_order: list[ResolvedImport]) -> CheckResponse:
-    """Execute all plans in build order, including the target (last)."""
+                   deps_in_order: list[ResolvedImport],
+                   plans: dict[ResolvedImport, DepPlan]) -> CheckResponse:
+    """Execute pre-computed plans in build order."""
     target = deps_in_order[-1] if deps_in_order else None
     if not target:
         return CheckResponse(
             status="ok",
             target=DepInfo("", "repl", status="ok", steps_taken=0))
-
-    classifications = classify_files(ctx, deps_in_order)
-    warn_no_record_sessions(classifications, target)
-    plans = assign_methods(ctx, deps_in_order, classifications)
-    ctx.theory_ref = compute_theory_refs(plans, deps_in_order)
 
     remove_stale_repls(ctx, plans)
 
@@ -2902,6 +3029,7 @@ def check(path: str, repl: ReplClient,
           timeout: int = 0,
           interactive: bool = False,
           always_stepwise: bool = False,
+          dry_run: bool = False,
           ) -> dict:
     """Check a .thy file. Stateless: all state recovered from I/R + disk."""
     path = os.path.realpath(path)
@@ -2989,8 +3117,35 @@ def check(path: str, repl: ReplClient,
                          f"(being modified by another client)",
             })
 
-    # Phases 4-5: classify, assign, execute
-    return with_parse_errors(execute_plans(ctx, deps_in_order).to_dict())
+    # Phase 4: Classify
+    initial_classes = classify_files(ctx, deps_in_order)
+    warn_no_record_sessions(initial_classes, deps_in_order[-1])
+
+    # Phase 5: Staleness propagation
+    propagated_classes = dict(initial_classes)
+    rebase_rebuilding = propagate_staleness(
+        propagated_classes, deps_in_order, ctx.files,
+        markers=ctx.markers, active_repls=ctx.active_repls)
+
+    # Phase 6: Build plans
+    initial_plans = build_plans(propagated_classes, deps_in_order,
+                                always_stepwise=ctx.always_stepwise)
+
+    # Phase 7: Diamond resolution + init strategies
+    final_plans = dict(initial_plans)
+    resolve_diamonds(final_plans, propagated_classes, deps_in_order, ctx)
+    assign_init_strategies(final_plans, rebase_rebuilding,
+                           ctx.dep_graph, deps_in_order)
+    ctx.theory_ref = compute_theory_refs(final_plans, deps_in_order)
+
+    if dry_run:
+        print_dry_run(deps_in_order, initial_classes, propagated_classes,
+                      initial_plans, final_plans, ctx)
+        return with_parse_errors({"status": "ok", "dry_run": True})
+
+    # Phase 8: Execute
+    return with_parse_errors(
+        execute_plans(ctx, deps_in_order, final_plans).to_dict())
 
 
 def clean(repl: ReplClient) -> dict:

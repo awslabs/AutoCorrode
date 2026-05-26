@@ -448,6 +448,45 @@ class TestICSIntegration(unittest.TestCase):
         self.assertEqual(resp["target"]["status"], "error")
         self.assertIn("42 + 1 = 2", resp["target"]["error"])
 
+    def test_dry_run_prints_plans_without_executing(self):
+        """--dry-run prints the plan table without modifying I/R state."""
+        dep_dir = fixture_dir("stepwise_recheck")
+        a_path = os.path.join(dep_dir, "SWR_A.thy")
+        c_path = os.path.join(dep_dir, "SWR_C.thy")
+
+        resp = check(c_path, self.repl)
+        self.assertEqual(resp["target"]["status"], "ok")
+
+        with open(a_path, 'w') as f:
+            f.write('theory SWR_A\n  imports Main\nbegin\n\n'
+                    'definition swr_val where "swr_val = (42::nat)"\n\n'
+                    'end\n')
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            resp = check(c_path, self.repl, dry_run=True)
+        output = buf.getvalue()
+
+        self.assertIn("theory", output)
+        self.assertIn("SWR_A", output)
+        self.assertIn("SWR_C", output)
+        self.assertIn("CheckPlan", output)
+        self.assertEqual(resp["status"], "ok")
+        self.assertTrue(resp.get("dry_run"))
+
+        from ic_check import read_all_markers, serialize_marker
+        markers_before = read_all_markers(self.repl)
+        # Re-run dry_run and verify markers didn't change
+        buf2 = io.StringIO()
+        with contextlib.redirect_stdout(buf2):
+            check(c_path, self.repl, dry_run=True)
+        markers_after = read_all_markers(self.repl)
+        for key in markers_before:
+            self.assertEqual(
+                serialize_marker(markers_before[key]),
+                serialize_marker(markers_after[key]),
+                msg=f"dry-run modified marker for {key}")
+
     def test_always_stepwise_rejects_keywords_dep(self):
         """--always-stepwise must error when a dep declares custom keywords.
 

@@ -33,6 +33,9 @@ def print_response(response: dict | None) -> bool:
         print(f"Error: {response.get('error', 'unknown')}", file=sys.stderr)
         has_errors = True
 
+    if response.get("dry_run"):
+        return False
+
     if "target" in response:
         target = response["target"]
         deps = response.get("dependencies", [])
@@ -127,6 +130,8 @@ def main():
                          help="Per-step timeout in seconds (default: 0 = use I/R default)")
     check_p.add_argument("--always-stepwise", action="store_true",
                          help="Never use Ir.load_theory for file deps (for remote I/R)")
+    check_p.add_argument("--dry-run", action="store_true",
+                         help="Print plan table without executing")
 
     sub.add_parser("clean", help="Remove all ic.* REPLs",
                     parents=[verbose_parent])
@@ -180,6 +185,7 @@ def main():
                 timeout=args.timeout,
                 interactive=True,
                 always_stepwise=always_stepwise,
+                dry_run=args.dry_run,
             )
         elif args.command == "clean":
             response = clean(repl)
