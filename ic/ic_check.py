@@ -1056,14 +1056,18 @@ class MarkerVerification:
     """Result of verifying parent markers against the live symtab."""
     ok: bool
     changed_dep: str | None = None
+    expected: str | None = None
+    actual: str | None = None
 
     @staticmethod
     def passed() -> 'MarkerVerification':
         return MarkerVerification(ok=True)
 
     @staticmethod
-    def failed(dep_name: str) -> 'MarkerVerification':
-        return MarkerVerification(ok=False, changed_dep=dep_name)
+    def failed(dep_name: str, expected: str | None,
+               actual: str | None) -> 'MarkerVerification':
+        return MarkerVerification(ok=False, changed_dep=dep_name,
+                                  expected=expected, actual=actual)
 
 
 def verify_parent_markers(ctx: 'CheckContext',
@@ -1081,8 +1085,10 @@ def verify_parent_markers(ctx: 'CheckContext',
         if expected is None:
             continue
         actual = read_marker_from_symtab(ctx.repl, dep_name)
-        if actual is None or serialize_marker(actual) != serialize_marker(expected):
-            return MarkerVerification.failed(dep_name)
+        expected_str = serialize_marker(expected)
+        actual_str = serialize_marker(actual) if actual else None
+        if actual_str != expected_str:
+            return MarkerVerification.failed(dep_name, expected_str, actual_str)
     return MarkerVerification.passed()
 
 
@@ -2768,8 +2774,11 @@ def execute_check_plan(ctx: CheckContext, ri: ResolvedImport,
     v = verify_parent_markers(ctx, ri)
     if not v.ok:
         return PlanAbort(
-            f"concurrent change detected: dep '{v.changed_dep}' "
-            f"was rebuilt by another client")
+            f"concurrent change detected while checking "
+            f"'{ri_log_name(ri)}': dep '{v.changed_dep}' "
+            f"was rebuilt by another client?\n"
+            f"  expected: {v.expected}\n"
+            f"  actual:   {v.actual}")
     entry.status = FileStatus.PENDING
     repl_err = apply_init_strategy(
         ctx, ri, plan.qt, plan.init_strategy, parents)
