@@ -438,8 +438,8 @@ from ic_core import (
 )
 from ic_check import (
     CheckContext, theory_name_from_repl,
-    assign_methods,
     propagate_staleness, resolve_diamonds, build_plans,
+    assign_init_strategies,
 )
 
 
@@ -451,6 +451,19 @@ def qt(name, session="s"):
 def fi(name, session="s"):
     """Shorthand for FileImport in tests."""
     return FileImport(QualifiedTheory(f"{session}.{name}"))
+
+
+def assign_plans(ctx, deps_in_order, classifications):
+    """Test helper: classify → propagate → build → diamonds → init strategies."""
+    classes = dict(classifications)
+    rebase_rebuilding = propagate_staleness(
+        classes, deps_in_order, ctx.files,
+        markers=ctx.markers, active_repls=ctx.active_repls)
+    plans = build_plans(classes, deps_in_order,
+                        always_stepwise=ctx.always_stepwise)
+    resolve_diamonds(plans, classes, deps_in_order, ctx)
+    assign_init_strategies(plans, rebase_rebuilding, ctx.dep_graph, deps_in_order)
+    return plans
 
 
 def mock_entry(name, session, imports, n_lines):
@@ -523,7 +536,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("B"), fi("C"), fi("D")])
-        plans = assign_methods(ctx, [fi("A"), fi("B"), fi("C"), fi("D")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("B"), fi("C"), fi("D")], c)
         self.assertIsInstance(plans[fi("B")], LoadFilePlan)
         self.assertIsInstance(plans[fi("C")], LoadFilePlan)
         # A's REPL downgraded to LOAD_FILE (RELOAD resolves the conflict)
@@ -541,7 +554,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("B"), fi("C"), fi("D")])
-        plans = assign_methods(ctx, [fi("A"), fi("B"), fi("C"), fi("D")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("B"), fi("C"), fi("D")], c)
         self.assertIsInstance(plans[fi("B")], CheckPlan)
         self.assertIsInstance(plans[fi("C")], CheckPlan)
         # A keeps its REPL (REPL strategy)
@@ -563,7 +576,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("X"), fi("B"), fi("Y"), fi("T")])
-        plans = assign_methods(ctx, [fi("A"), fi("X"), fi("B"), fi("Y"), fi("T")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("X"), fi("B"), fi("Y"), fi("T")], c)
         self.assertIsInstance(plans[fi("B")], LoadFilePlan)   # A small → RELOAD
         self.assertIsInstance(plans[fi("Y")], CheckPlan)   # X large → REPL
 
@@ -582,7 +595,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("B"), fi("C"), fi("T")])
-        plans = assign_methods(ctx, [fi("A"), fi("B"), fi("C"), fi("T")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("B"), fi("C"), fi("T")], c)
         # RELOAD=3+3=6, REPL=1. REPL wins.
         self.assertIsInstance(plans[fi("C")], CheckPlan)
 
@@ -601,7 +614,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("B"), fi("C"), fi("T")])
-        plans = assign_methods(ctx, [fi("A"), fi("B"), fi("C"), fi("T")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("B"), fi("C"), fi("T")], c)
         # RELOAD=2+2=4, REPL=10. RELOAD wins.
         self.assertIsInstance(plans[fi("C")], LoadFilePlan)
 
@@ -621,7 +634,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("B"), fi("C"), fi("D"), fi("T")])
-        plans = assign_methods(ctx, [fi("A"), fi("B"), fi("C"), fi("D"), fi("T")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("B"), fi("C"), fi("D"), fi("T")], c)
         # RELOAD=1+1=2, REPL=1+1=2. Tie -> RELOAD.
         self.assertIsInstance(plans[fi("C")], LoadFilePlan)
         self.assertIsInstance(plans[fi("D")], LoadFilePlan)
@@ -636,7 +649,7 @@ class TestGlobalDiamondResolution(unittest.TestCase):
         ctx = mock_ctx(files, active)
 
         c = mock_classifications(files, active, [fi("A"), fi("T")])
-        plans = assign_methods(ctx, [fi("A"), fi("T")], c)
+        plans = assign_plans(ctx, [fi("A"), fi("T")], c)
         self.assertIsInstance(plans[fi("A")], SkipPlan)
 
 

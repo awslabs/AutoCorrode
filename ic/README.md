@@ -58,6 +58,7 @@ flows are:
 | `--timeout N` | Per-step timeout in seconds (default: 0 = use I/R default) |
 | `-v` / `-vv` | Show progress (`-vv` for more detail) |
 | `--always-stepwise` | Never use Ir.load_theory for file deps (auto-enabled when `$ISABELLE_REMOTE` is set) |
+| `--dry-run` | Print classification/plan table without executing |
 | `--resolve-deps-via-reload` | Diamond deps: reload REPL'd theories from source |
 | `--resolve-deps-via-repl` | Diamond deps: step importing theories via REPL |
 | `--resolve-deps-via-lines-heuristic` | Diamond deps: choose based on line count (default) |

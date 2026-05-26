@@ -120,6 +120,9 @@ class FileClassBase:
         """Whether this classification means the dep is being rebuilt."""
         return False
 
+    def display_name(self) -> str:
+        return type(self).__name__
+
 
 class HeapFreshness(enum.Enum):
     VERIFIED = "verified"       # segments compared, source matches heap
@@ -147,6 +150,9 @@ UnchangedSource = FromFile | FromHeap
 class InHeap(FileClassBase):
     """Theory in heap, not changed (or unknown)."""
     freshness: HeapFreshness = HeapFreshness.VERIFIED
+
+    def display_name(self) -> str:
+        return f"InHeap({self.freshness.value})"
 
 
 @dataclass
@@ -245,6 +251,9 @@ class DepPlan:
         """Whether this plan destroys the existing REPL."""
         return False
 
+    def display_name(self) -> str:
+        return type(self).__name__
+
     def import_name(self) -> str:
         """Theory name to use when referencing this dep as a parent.
         Default: pinned REPL (plans that create/use a REPL)."""
@@ -292,6 +301,11 @@ class CheckPlan(DepPlan):
         assert self.init_strategy is not None, \
             "removes_repl called before assign_init_strategies"
         return self.init_strategy == InitStrategy.INIT
+
+    def display_name(self) -> str:
+        if self.init_strategy:
+            return f"CheckPlan({self.init_strategy.value.upper()})"
+        return "CheckPlan(?)"
 
 
 @dataclass
