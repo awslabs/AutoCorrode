@@ -3018,17 +3018,28 @@ def execute_plans(ctx: CheckContext,
 
 # --- Entry points ---
 
-def fetch_dirs(repl: ReplClient) -> list[str]:
-    """Fetch session directories from I/R server via /info."""
+def fetch_info(repl: ReplClient) -> dict[str, str]:
+    """Parse /info output of the I/R server into a key->value dict."""
     info = ml_expect(repl.send_raw("/info"))
+    result: dict[str, str] = {}
     for line in info.splitlines():
         line = line.strip()
-        if line.startswith("dir"):
-            _, _, val = line.partition("=")
-            val = val.strip()
-            if val and val != "(none)":
-                return [val]
-    return []
+        if "=" in line:
+            key, _, val = line.partition("=")
+            result[key.strip()] = val.strip()
+    return result
+
+
+def fetch_dirs(repl: ReplClient) -> list[str]:
+    """Fetch session directories from I/R server via /info."""
+    val = fetch_info(repl).get("dir", "")
+    return [val] if val and val != "(none)" else []
+
+
+def remote_prover(repl: ReplClient) -> str | None:
+    """Hostname I/R is talking to via I/P, or None if local."""
+    val = fetch_info(repl).get("remote", "")
+    return val if val and val != "(local)" else None
 
 
 def check(path: str, repl: ReplClient,

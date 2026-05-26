@@ -17,7 +17,7 @@ import sys
 
 from ic_repl import ReplClient
 from ic_core import DiamondStrategy
-from ic_check import check, clean, print_heapdiff
+from ic_check import check, clean, print_heapdiff, remote_prover
 from ic_status import status
 
 
@@ -177,8 +177,16 @@ def main():
 
     try:
         if args.command == "check":
-            always_stepwise = (args.always_stepwise
-                               or bool(os.environ.get("ISABELLE_REMOTE")))
+            remote = remote_prover(repl)
+            if remote and verbose >= 1:
+                print(f"Connected to I/R running via I/P on remote: {remote}",
+                      file=sys.stderr)
+            elif remote is None and os.environ.get("ISABELLE_REMOTE"):
+                print("Warning: $ISABELLE_REMOTE is set in this shell but "
+                      "the I/R server reports it is running locally. The "
+                      "env var has no effect on I/C — it only matters in "
+                      "the shell that started I/R.", file=sys.stderr)
+            always_stepwise = args.always_stepwise or remote is not None
             if args.diamond_strategy is None:
                 diamond_strategy = (DiamondStrategy.REPL if always_stepwise
                                     else DiamondStrategy.HEURISTIC)
