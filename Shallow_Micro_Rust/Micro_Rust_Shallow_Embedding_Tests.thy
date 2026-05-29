@@ -1166,9 +1166,9 @@ term\<open>\<lbrakk>
   };
 \<rbrakk>\<close>
 
-subsubsection\<open>Numeric Match (match_switch)\<close>
+subsubsection\<open>Numeric Match (\<^verbatim>\<open>match_switch\<close>)\<close>
 
-text\<open>See Section 21 (Rust Path Expressions) for match_switch examples\<close>
+text\<open>See Section 21 (Rust Path Expressions) for \<^verbatim>\<open>match_switch\<close> examples\<close>
 
 subsection\<open>Control Flow - Loops\<close>
 
@@ -1835,6 +1835,8 @@ subsubsection\<open>Error Macros\<close>
 
 context
   fixes msg :: \<open>String.literal\<close>
+  and idx :: \<open>32 word\<close>
+  and r :: \<open>('a, 'b, 'v) ref\<close>
 begin
 term \<open>\<lbrakk> panic!(msg) \<rbrakk>\<close>
 term \<open>\<lbrakk> fatal!(msg) \<rbrakk>\<close>
@@ -1851,6 +1853,16 @@ term \<open>\<lbrakk> panic!("first", msg) \<rbrakk>\<close>
 term \<open>\<lbrakk> unimplemented!("first", msg) \<rbrakk>\<close>
 term \<open>\<lbrakk> todo!("first", msg) \<rbrakk>\<close>
 term \<open>\<lbrakk> fatal!("first", msg) \<rbrakk>\<close>
+term \<open>\<lbrakk> unreachable!() \<rbrakk>\<close>
+term \<open>\<lbrakk> unreachable!("should not reach here") \<rbrakk>\<close>
+term \<open>\<lbrakk> unreachable!("bad state: {}", msg) \<rbrakk>\<close>
+term \<open>\<lbrakk> panic!("Invalid index: {}", idx) \<rbrakk>\<close>
+term \<open>\<lbrakk> unimplemented!("not done: {} {}", idx, idx) \<rbrakk>\<close>
+term \<open>\<lbrakk> todo!("implement: {}", idx) \<rbrakk>\<close>
+term \<open>\<lbrakk> addr_of!(r) \<rbrakk>\<close>
+term \<open>\<lbrakk> addr_of_mut!(r) \<rbrakk>\<close>
+term \<open>\<lbrakk> & raw const r \<rbrakk>\<close>
+term \<open>\<lbrakk> & raw mut r \<rbrakk>\<close>
 end
 
 subsubsection\<open>Logging\<close>
@@ -1895,6 +1907,27 @@ term\<open>\<lbrakk>
   };
   assert!(s == \<llangle>9 :: 32 word\<rrangle>)
 \<rbrakk>\<close>
+
+subsubsection\<open>Vec Macro\<close>
+
+term \<open>\<lbrakk> vec![\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>, \<llangle>3 :: 32 word\<rrangle>] \<rbrakk>\<close>
+term \<open>\<lbrakk> vec![] \<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let xs = vec![\<llangle>10 :: 32 word\<rrangle>, \<llangle>20 :: 32 word\<rrangle>];
+  assert!(xs[0] == \<llangle>10 :: 32 word\<rrangle>)
+\<rbrakk>\<close>
+
+subsubsection\<open>Matches Macro\<close>
+
+context
+  fixes x :: \<open>nat option\<close>
+  and y :: \<open>bool option\<close>
+begin
+term \<open>\<lbrakk> matches!(x, Some(_)) \<rbrakk>\<close>
+term \<open>\<lbrakk> matches!(x, None) \<rbrakk>\<close>
+term \<open>\<lbrakk> matches!(y, Some(true) | None) \<rbrakk>\<close>
+end
 
 subsubsection\<open>Indexing\<close>
 
@@ -2130,6 +2163,18 @@ term\<open>\<lbrakk>
     (Some(x), Some(y)) | (None, Some(y)) \<Rightarrow> y,
     _ \<Rightarrow> \<llangle>0 :: nat\<rrangle>
   }
+\<rbrakk>\<close>
+
+subsubsection\<open>Mutable Pattern Destructuring\<close>
+
+term\<open>\<lbrakk>
+  let mut (x, y) = (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>);
+  x + y
+\<rbrakk>\<close>
+
+term\<open>\<lbrakk>
+  let mut (a, b, c) = (\<llangle>1 :: nat\<rrangle>, \<llangle>2 :: nat\<rrangle>, \<llangle>3 :: nat\<rrangle>);
+  a
 \<rbrakk>\<close>
 
 end
