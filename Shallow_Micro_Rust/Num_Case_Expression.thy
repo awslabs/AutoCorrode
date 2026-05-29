@@ -21,7 +21,7 @@ term\<open>case (4 :: 64 word) of
 \<close>.
 
 Besides being more readable than nesting if/else statements, this will also be helpful when
-shallowly embedding \<mu>Rust in Isabelle, since Rust \<^emph>\<open>does\<close> support these kinds of matches.
+shallowly embedding \<^verbatim>\<open>\<mu>Rust\<close> in Isabelle, since Rust \<^emph>\<open>does\<close> support these kinds of matches.
 
 This file constructs an \<^verbatim>\<open>ncase\<close> match statement, that does allow you to write the above\<close>
 
@@ -33,7 +33,7 @@ syntax
   \<comment>\<open>Numeral case expressions\<close>
   "_case_num_syntax" :: "['a, case_num_branches] \<Rightarrow> 'b"  ("(ncase _ of/ _)" [20, 20]20)
   \<comment> \<open>We also add a 'functional' version of this, which turns out to be useful when parsing
-      \<mu>Rust. This is because we have to first evaluate the argument before pattern matching,
+      \<^verbatim>\<open>\<mu>Rust\<close>. This is because we have to first evaluate the argument before pattern matching,
       which will be parsed as a \<^verbatim>\<open>bind arg (pattern_match_function)\<close>. By having notation for
       the function, we don't need to introduce an anonymous lambda (which comes with its own problems)\<close>
   "_case_num_fun_syntax" :: "[case_num_branches] \<Rightarrow> 'b"  ("(ncase'_fun of/ _)" [20]20)

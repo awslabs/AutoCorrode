@@ -331,6 +331,25 @@ no_adhoc_overloading store_update_const \<rightleftharpoons>
 
 (*<*)
 end
+(*>*)
 
+subsection\<open>Reference kind casts\<close>
+
+definition ref_cast_to_ro :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow>
+  ('s, ('a, 'b, 'v) ro_ref, 'abort, 'i, 'o) function_body\<close> where
+  \<open>ref_cast_to_ro r \<equiv> fun_literal (ro_ref_from_ref r)\<close>
+
+\<comment>\<open>SAFETY: This is the equivalent of an unsafe cast from \<^verbatim>\<open>&T\<close> to \<^verbatim>\<open>&mut T\<close>. Sound only when the
+    caller has exclusive access to the underlying resource (i.e. holds full permission in the
+    separation logic sense). Downstream proofs must discharge the corresponding points-to
+    obligation with unshared permission.\<close>
+definition ref_cast_to_mut :: \<open>('a, 'b, 'v) ro_ref \<Rightarrow>
+  ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i, 'o) function_body\<close> where
+  \<open>ref_cast_to_mut r \<equiv> fun_literal (unsafe_ref_from_ro_ref r)\<close>
+
+notation_nano_rust_function ref_cast_to_ro ("as_ro_ref")
+notation_nano_rust_function ref_cast_to_mut ("as_mut_ref")
+
+(*<*)
 end
 (*>*)

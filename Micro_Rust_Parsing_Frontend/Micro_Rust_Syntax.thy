@@ -234,6 +234,10 @@ syntax
     ("_'!/ '(')" [1000]999)
   "_urust_macro_with_args" :: "urust_identifier \<Rightarrow> urust_args \<Rightarrow> urust"
     ("_'!/ '(_')" [1000,0]999)
+  "_urust_macro_no_args" :: "urust_identifier \<Rightarrow> urust"
+    ("_'!/ '[]" [1000]999)
+  "_urust_macro_with_args" :: "urust_identifier \<Rightarrow> urust_args \<Rightarrow> urust"
+    ("_'!/ '[_']" [1000,0]999)
   "_urust_funcall_with_args" :: "urust_callable \<Rightarrow> urust_args \<Rightarrow> urust"
     ("_/ '(_')"[1000,0]999)
   "_urust_funcall_no_args" :: "urust_callable \<Rightarrow> urust"
@@ -325,6 +329,12 @@ syntax
   \<comment>\<open>Add mutable binding\<close>
   "_urust_bind_mutable" :: "urust_identifier \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
     ("let/ mut/ _/ =/ _;// _" [1000,20,10]10)
+  \<comment>\<open>Mutable binding with tuple pattern: \<^verbatim>\<open>let mut (x, y) = expr\<close>.
+      Rust's local-variable mutability is not modelled by the shallow embedding, so this desugars
+      to an immutable tuple destructure. The \<^verbatim>\<open>mut\<close> annotation is accepted for syntactic
+      correspondence with Rust source code.\<close>
+  "_urust_bind_mutable_pattern" :: "urust_let_pattern_args \<Rightarrow> urust \<Rightarrow> urust \<Rightarrow> urust"
+    ("let/ mut/ '(_')/ =/ _;// _" [1000,20,10]10)
   \<comment>\<open>Boolean literals as expressions\<close>
   "_urust_true" :: \<open>urust\<close>
     ("true" 1000)
@@ -521,6 +531,11 @@ syntax
   "_urust_match_pattern_range_eq" :: \<open>urust_pattern \<Rightarrow> urust_pattern \<Rightarrow> urust_pattern\<close>
     (infix \<open>..=\<close> 41)
 
+  \<comment>\<open>The \<^verbatim>\<open>matches!\<close> macro: \<^verbatim>\<open>matches!(expr, pattern)\<close>. The second argument is parsed in
+      \<^verbatim>\<open>urust_pattern\<close> position so that constructor patterns and disjunctions are handled correctly.\<close>
+  "_urust_matches_macro" :: \<open>urust \<Rightarrow> urust_pattern \<Rightarrow> urust\<close>
+    ("matches'!/ '(_, _')" [0, 100] 999)
+
   \<comment> \<open>See the rust documentation for a list of expression precedences and fixities:
        https://doc.rust-lang.org/reference/expressions.html\<close>
 
@@ -535,6 +550,10 @@ syntax
     ("&_" [200]100)
   "_urust_borrow_mut" :: \<open>urust \<Rightarrow> urust\<close>
     ("& mut _" [200]100)
+  "_urust_raw_ptr_const" :: \<open>urust \<Rightarrow> urust\<close>
+    ("& raw const _" [200]100)
+  "_urust_raw_ptr_mut" :: \<open>urust \<Rightarrow> urust\<close>
+    ("& raw mut _" [200]100)
   "_urust_deref" :: \<open>urust \<Rightarrow> urust\<close>
     ("*_" [200]100)
   "_urust_double_deref" :: \<open>urust \<Rightarrow> urust\<close>

@@ -533,6 +533,10 @@ translations
 
   "_shallow (_urust_bind_mutable (_urust_identifier_hol_id var) exp cont)"
     \<rightharpoonup> "CONST bind (Ref::new \<langle>(_shallow exp)\<rangle>) (\<lambda>var. (_shallow cont))"
+  \<comment>\<open>Mutable binding with tuple pattern: \<^verbatim>\<open>let mut (x, y) = expr\<close>. The \<^verbatim>\<open>mut\<close> annotation is
+      dropped since Rust's local-variable mutability is not modelled in the shallow embedding.\<close>
+  "_shallow (_urust_bind_mutable_pattern args exp cont)"
+    \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp) (_abs (_shallow_let_pattern_args args) (_shallow cont))"
   "_shallow (_urust_sequence seqA seqB)"
     \<rightharpoonup> "CONST sequence (_shallow seqA) (_shallow seqB)"
   "_shallow (_urust_sequence_mono seqA)"
@@ -562,6 +566,10 @@ translations
     \<rightharpoonup> "CONST bindlift1 (CONST ro_ref_from_ref) (_shallow exp)"
   "_shallow (_urust_borrow_mut exp)"
     \<rightharpoonup> "CONST bindlift1 (CONST mut_ref_from_ref) (_shallow exp)"
+  "_shallow (_urust_raw_ptr_const exp)"
+    \<rightharpoonup> "CONST bindlift1 (CONST ref_address) (_shallow exp)"
+  "_shallow (_urust_raw_ptr_mut exp)"
+    \<rightharpoonup> "CONST bindlift1 (CONST ref_address) (_shallow exp)"
   "_shallow (_urust_deref exp)"
     \<rightharpoonup> "_urust_shallow_store_dereference (_shallow exp)"
 
@@ -706,6 +714,38 @@ translations
   "_shallow (_urust_macro_with_args
        (URUST_CONST fatal) (_urust_args_single (_urust_string_token str)))"
     \<rightharpoonup> "CONST fatal (_string_token_to_hol str)"
+
+  "_shallow (_urust_macro_no_args (URUST_CONST unreachable))"
+    \<rightharpoonup> "CONST panic (CONST String.implode [])"
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST unreachable) (_urust_args_app first rest))"
+    \<rightharpoonup> "_shallow (_urust_macro_with_args
+       (URUST_CONST unreachable) (_urust_args_single first))"
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST unreachable) (_urust_args_single (_urust_identifier a)))"
+    \<rightharpoonup> "CONST panic (_shallow_identifier_as_literal a)"
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST unreachable) (_urust_args_single (_urust_literal x)))"
+    \<rightharpoonup> "CONST panic (CONST String.implode x)"
+  "_shallow (_urust_macro_with_args
+       (URUST_CONST unreachable) (_urust_args_single (_urust_string_token str)))"
+    \<rightharpoonup> "CONST panic (_string_token_to_hol str)"
+
+  "_shallow (_urust_macro_with_args (URUST_CONST vec) args)"
+    \<rightharpoonup> "_shallow (_urust_array_expr args)"
+  "_shallow (_urust_macro_no_args (URUST_CONST vec))"
+    \<rightharpoonup> "_shallow (_urust_array_expr_empty)"
+
+  "_shallow (_urust_macro_with_args (URUST_CONST addr_of) (_urust_args_single exp))"
+    \<rightharpoonup> "CONST bindlift1 (CONST ref_address) (_shallow exp)"
+  "_shallow (_urust_macro_with_args (URUST_CONST addr_of_mut) (_urust_args_single exp))"
+    \<rightharpoonup> "CONST bindlift1 (CONST ref_address) (_shallow exp)"
+
+  "_shallow (_urust_matches_macro expr pat)"
+    \<rightharpoonup> "_urust_shallow_match (_shallow expr)
+         (_urust_shallow_match2
+           (_urust_shallow_match1 (_shallow_match_pattern pat) (CONST literal (CONST True)))
+           (_urust_shallow_match1 _urust_shallow_match_pattern_other (CONST literal (CONST False))))"
 
  "_shallow (_urust_index exp idx)"
     \<rightharpoonup> "_urust_shallow_index (_shallow exp) (_shallow idx)"
