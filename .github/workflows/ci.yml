@@ -138,6 +138,14 @@ jobs:
         $ISABELLE components -u $AFP_COMPONENT_BASE/Word_Lib
         $ISABELLE build -b HOL
 
+    - name: Cache Isabelle tarballs
+      uses: actions/cache@v4
+      with:
+        path: |
+          /tmp/Isabelle2025-2_linux.tar.gz
+          /tmp/Isabelle2025-2_linux_arm.tar.gz
+        key: isabelle-tarball-2025-2
+
     - name: Configure I/P remote (localhost, fresh install + push heaps)
       run: |
         ip/configure-remote.py setup root@localhost \

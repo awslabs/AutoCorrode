@@ -37,11 +37,12 @@ sudo apt-get update -qq && sudo apt-get install -y -qq fontconfig
 if [ -d "$INSTALL_DIR" ]; then
   echo "Already installed: ~/$INSTALL_DIR"
 else
-  echo "Downloading $URL ..."
-  curl -fSL -o "/tmp/$TARBALL" "$URL"
+  if [ ! -f "/tmp/$TARBALL" ]; then
+    echo "Downloading $URL ..."
+    curl -fSL --retry 5 --retry-all-errors --retry-delay 5 -o "/tmp/$TARBALL" "$URL"
+  fi
   echo "Unpacking ..."
   tar xzf "/tmp/$TARBALL" -C /tmp
-  rm "/tmp/$TARBALL"
   mkdir -p "$(dirname "$INSTALL_DIR")"
   mv "/tmp/Isabelle2025-2" "$INSTALL_DIR"
   # Disable SystemOnTPTP
