@@ -22,12 +22,19 @@ awk '
   | sed -nE 's/.*"name"[[:space:]]*->[[:space:]]*"([^"]+)".*/\1/p' \
   | sort -u > "$tmp_server_tools"
 
+# Capture the README's MCP Tools section up to (but excluding) the I/R REPL
+# subsection. The server registry compared below likewise excludes REPL tools
+# (those live in a separate replToolDefinitions val), so the two must match on
+# the non-REPL tools only. Tool entries are matched regardless of whether they
+# are numbered ("1. **name**:") or bulleted ("- **name**:") so the doc style is
+# free to vary without breaking the check.
 awk '
   /^## MCP Tools$/ { in_tools = 1; next }
+  /^### I\/R REPL tools/ && in_tools { in_tools = 0 }
   /^## / && in_tools { in_tools = 0 }
   in_tools { print }
 ' "$IQ_README" \
-  | sed -nE 's/^[[:space:]]*[0-9]+\.[[:space:]]+\*\*([^*]+)\*\*:.*/\1/p' \
+  | sed -nE 's/^[[:space:]]*([0-9]+\.|-)[[:space:]]+\*\*([^*]+)\*\*:.*/\2/p' \
   | sort -u > "$tmp_readme_tools"
 
 if ! diff -u "$tmp_server_tools" "$tmp_readme_tools" >/dev/null; then
