@@ -3632,7 +3632,14 @@ class IQServer(
     val writer = new java.io.FileWriter(file)
     try {
       if (content.nonEmpty) {
-        writer.write(content)
+        // Re-encode Isabelle symbols to named form (\<sym>) before writing.
+        // Incoming text params are Symbol.decode'd on ingest, so without this
+        // the file would contain raw Unicode glyphs. PIDE/jEdit Symbol-decodes
+        // on read and so tolerates either form, but Isabelle's batch loader
+        // (isabelle build) is symbol-strict and only accepts named tokens on
+        // disk. Encoding here keeps this direct-write path symmetric with the
+        // jEdit buffer.save path (which encodes via UTF-8-Isabelle).
+        writer.write(Symbol.encode(content))
       } else if (filePath.endsWith(".thy")) {
         val theoryName = file.getName.stripSuffix(".thy")
         val template = s"""theory $theoryName
