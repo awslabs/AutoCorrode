@@ -114,6 +114,10 @@ object IQServerAuthTest {
       payload.contains("\"name\":\"get_diagnostics\""),
       s"tools/list should expose get_diagnostics: $payload"
     )
+    assertThat(
+      payload.contains("\"name\":\"set_auto_save\""),
+      s"tools/list should expose set_auto_save: $payload"
+    )
   }
 
   private def testResolveCommandTargetRejectsInvalidSelection(): Unit = {

@@ -679,6 +679,9 @@ class IQServer(
         ),
         IQToolName.SaveFile -> (params =>
           handleSaveFile(params.toMap).map(IQToolResult.fromMap)
+        ),
+        IQToolName.SetAutoSave -> (params =>
+          handleSetAutoSave(params.toMap).map(IQToolResult.fromMap)
         )
       )
       base ++ replToolHandlers
@@ -1931,6 +1934,22 @@ class IQServer(
             "path" -> Map(
               "type" -> "string",
               "description" -> "Optional path to a specific file to save. If omitted, saves all modified dirty buffers that pass mutation-root policy."
+            )
+          ),
+          "additionalProperties" -> false
+        )
+      ),
+      Map(
+        "name" -> "set_auto_save",
+        "description" -> ("Toggle or query I/Q auto-save. When enabled (the default), every write_file edit is " +
+          "persisted to disk immediately, keeping the jEdit buffer and the file-system contents in sync. " +
+          "Omit 'enabled' to query the current state without changing it. Returns the resulting state."),
+        "inputSchema" -> Map(
+          "type" -> "object",
+          "properties" -> Map(
+            "enabled" -> Map(
+              "type" -> "boolean",
+              "description" -> "True to enable auto-save, false to disable. If omitted, the current state is returned unchanged."
             )
           ),
           "additionalProperties" -> false
@@ -3471,6 +3490,18 @@ class IQServer(
 
     // Wait until the edit has been processed (stable snapshot = no pending edits)
     val _ = IQUtils.blockOnStableSnapshot(buffer_model)
+
+    // Auto-save the buffer to disk so the file-system state never diverges from
+    // the jEdit buffer. Mutation path was already authorized above.
+    if (IQAutoSave.enabled) {
+      GUI_Thread.now {
+        val buffer = buffer_model.buffer
+        if (buffer.isDirty()) {
+          buffer.save(null, null)
+          Output.writeln(s"I/Q Server: Auto-saved file after edit: $filePath")
+        }
+      }
+    }
 
     Output.writeln(s"I/Q Server: Auto-calling get_command for modified range in $filePath")
 
@@ -5447,6 +5478,31 @@ end"""
         Output.writeln(s"I/Q Server: Save file error: ${ex.getMessage}")
         ex.printStackTrace()
         Left(s"Save file error: ${ex.getMessage}")
+    }
+  }
+
+  /**
+   * Handles the set_auto_save tool request.
+   *
+   * Toggles or queries the shared auto-save state. When enabled, write_file
+   * edits are persisted to disk immediately. Omitting the `enabled` parameter
+   * queries the current state without changing it.
+   *
+   * @param params The tool parameters
+   * @return Either error message or result data
+   */
+  private def handleSetAutoSave(params: Map[String, Any]): Either[String, Map[String, Any]] = {
+    params.get("enabled") match {
+      case None =>
+        // Query only
+        Right(Map("enabled" -> IQAutoSave.enabled, "changed" -> false))
+      case Some(value: Boolean) =>
+        val previous = IQAutoSave.enabled
+        IQAutoSave.setEnabled(value)
+        Output.writeln(s"I/Q Server: Auto-save set to $value (was $previous)")
+        Right(Map("enabled" -> value, "changed" -> (value != previous)))
+      case Some(other) =>
+        Left(s"enabled parameter must be a boolean, got: $other")
     }
   }
 }
