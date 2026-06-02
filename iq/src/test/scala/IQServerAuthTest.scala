@@ -8,6 +8,21 @@ object IQServerAuthTest {
     if (!condition) throw new RuntimeException(message)
   }
 
+  /** Assert a tool-handler validation failure: a successful JSON-RPC response
+    * carrying an MCP tool result flagged with isError:true (NOT a JSON-RPC
+    * protocol-level "error"). Tool handlers forward their Left(msg) this way so
+    * the message is surfaced to the LLM rather than swallowed by the client. */
+  private def assertToolError(payload: String, context: String): Unit = {
+    assertThat(
+      payload.contains("\"isError\":true"),
+      s"$context: expected tool error result (isError:true): $payload"
+    )
+    assertThat(
+      !payload.contains("\"error\""),
+      s"$context: handler validation should not be a JSON-RPC error: $payload"
+    )
+  }
+
   private val TestToken = "test-token"
 
   private def mkServer(
@@ -126,9 +141,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-resolve-invalid","method":"tools/call","params":{"name":"resolve_command_target","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "invalid selection should return JSON-RPC error")
+    assertThat(response.nonEmpty, "invalid selection should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "resolve_command_target invalid selection")
     assertThat(payload.contains("Invalid target"), s"expected invalid target message: $payload")
   }
 
@@ -138,9 +153,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-resolve-missing","method":"tools/call","params":{"name":"resolve_command_target","arguments":{"command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "missing file_offset parameters should return JSON-RPC error")
+    assertThat(response.nonEmpty, "missing file_offset parameters should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "resolve_command_target file_offset params")
     assertThat(
       payload.contains("file_offset target requires path and offset parameters"),
       s"expected file_offset parameter validation message: $payload"
@@ -153,9 +168,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-context-invalid","method":"tools/call","params":{"name":"get_context_info","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "invalid selection should return JSON-RPC error")
+    assertThat(response.nonEmpty, "invalid selection should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_context_info invalid selection")
     assertThat(payload.contains("Invalid target"), s"expected invalid target message: $payload")
   }
 
@@ -165,9 +180,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-context-missing","method":"tools/call","params":{"name":"get_context_info","arguments":{"command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "missing file_offset parameters should return JSON-RPC error")
+    assertThat(response.nonEmpty, "missing file_offset parameters should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_context_info file_offset params")
     assertThat(
       payload.contains("file_offset target requires path and offset parameters"),
       s"expected file_offset parameter validation message: $payload"
@@ -180,9 +195,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-entities-missing","method":"tools/call","params":{"name":"get_entities","arguments":{}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "missing path should return JSON-RPC error")
+    assertThat(response.nonEmpty, "missing path should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_entities missing path")
     assertThat(
       payload.contains("Missing required parameter: path"),
       s"expected missing path validation message: $payload"
@@ -195,9 +210,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-type-invalid","method":"tools/call","params":{"name":"get_type_at_selection","arguments":{"command_selection":"bogus"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "invalid selection should return JSON-RPC error")
+    assertThat(response.nonEmpty, "invalid selection should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_type_at_selection invalid selection")
     assertThat(payload.contains("Invalid target"), s"expected invalid target message: $payload")
   }
 
@@ -207,9 +222,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-proof-blocks-selection-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{"scope":"selection","command_selection":"file_offset"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "missing file_offset parameters should return JSON-RPC error")
+    assertThat(response.nonEmpty, "missing file_offset parameters should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_proof_blocks selection file_offset params")
     assertThat(
       payload.contains("file_offset target requires path and offset parameters"),
       s"expected file_offset parameter validation message: $payload"
@@ -222,9 +237,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-proof-blocks-missing","method":"tools/call","params":{"name":"get_proof_blocks","arguments":{"scope":"file"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "missing path should return JSON-RPC error")
+    assertThat(response.nonEmpty, "missing path should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_proof_blocks missing path")
     assertThat(
       payload.contains("scope='file' requires parameter: path"),
       s"expected missing path validation message: $payload"
@@ -237,9 +252,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-defs-missing","method":"tools/call","params":{"name":"get_definitions","arguments":{"command_selection":"current"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "missing names should return JSON-RPC error")
+    assertThat(response.nonEmpty, "missing names should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_definitions missing names")
     assertThat(
       payload.contains("Missing required parameter: names"),
       s"expected missing names validation message: $payload"
@@ -252,9 +267,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-diag-bad-severity","method":"tools/call","params":{"name":"get_diagnostics","arguments":{"severity":"info"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "invalid severity should return JSON-RPC error")
+    assertThat(response.nonEmpty, "invalid severity should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_diagnostics invalid severity")
     assertThat(
       payload.contains("Parameter 'severity' must be either 'error' or 'warning'"),
       s"expected severity validation message: $payload"
@@ -267,9 +282,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-diag-missing-path","method":"tools/call","params":{"name":"get_diagnostics","arguments":{"severity":"error","scope":"file"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "file scope without path should return JSON-RPC error")
+    assertThat(response.nonEmpty, "file scope without path should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "get_diagnostics file scope missing path")
     assertThat(
       payload.contains("scope='file' requires parameter: path"),
       s"expected missing path validation message: $payload"
@@ -328,9 +343,9 @@ object IQServerAuthTest {
     val request =
       """{"jsonrpc":"2.0","id":"req-open-bool","method":"tools/call","params":{"name":"open_file","arguments":{"path":"demo.thy","create_if_missing":"maybe"}}}"""
     val response = server.processRequestForTest(request)
-    assertThat(response.nonEmpty, "invalid boolean parameter should return JSON-RPC error")
+    assertThat(response.nonEmpty, "invalid boolean parameter should return a response")
     val payload = response.get
-    assertThat(payload.contains("\"error\""), s"expected error payload: $payload")
+    assertToolError(payload, "open_file invalid boolean param")
     assertThat(
       payload.contains("Invalid parameter 'create_if_missing': expected boolean"),
       s"expected boolean validation message: $payload"
