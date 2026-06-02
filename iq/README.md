@@ -166,6 +166,7 @@ The following methods are also always available without authentication: `initial
     - `query='sledgehammer'`: Run sledgehammer (optional `arguments` for prover list)
     - `query='find_theorems'`: Search for theorems (requires `arguments` with the search query, optional `max_results`)
 19. **save_file**: Save one file or all modified open files
+20. **set_auto_save**: Toggle or query auto-save. When enabled (the default), every `write_file` edit is persisted to disk immediately, keeping the jEdit buffer and the file-system contents in sync. Omit `enabled` to query the current state. The setting is shared with the "Auto-save edits" checkbox in the I/Q dockable.
 
 ### I/R REPL tools
 

@@ -190,6 +190,33 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   truncateMessagesCheckbox.setMnemonic('T')
   truncateMessagesCheckbox.getAccessibleContext.setAccessibleName("Truncate long messages")
 
+  // Auto-save checkbox: bidirectionally bound to the shared IQAutoSave state so
+  // it stays in sync whether toggled here or via the set_auto_save MCP tool.
+  private val autoSaveCheckbox = new JCheckBox("Auto-save edits", IQAutoSave.enabled)
+  autoSaveCheckbox.setMnemonic('A')
+  autoSaveCheckbox.setToolTipText(
+    "When enabled, every write_file edit is saved to disk immediately, keeping " +
+      "the jEdit buffer and the file system in sync."
+  )
+  autoSaveCheckbox.getAccessibleContext.setAccessibleName("Auto-save edits")
+
+  // UI -> state: user toggling the checkbox updates the shared state.
+  autoSaveCheckbox.addActionListener(new ActionListener {
+    def actionPerformed(e: ActionEvent): Unit = {
+      IQAutoSave.setEnabled(autoSaveCheckbox.isSelected)
+    }
+  })
+
+  // state -> UI: the set_auto_save tool (or any other mutator) updates the
+  // checkbox. setEnabled is a no-op when unchanged, so the UI-driven path above
+  // does not recurse. Marshal onto the EDT since listeners may fire off-thread.
+  private val autoSaveListener: Boolean => Unit = value =>
+    javax.swing.SwingUtilities.invokeLater(new Runnable {
+      def run(): Unit =
+        if (autoSaveCheckbox.isSelected != value) autoSaveCheckbox.setSelected(value)
+    })
+  IQAutoSave.addListener(autoSaveListener)
+
   clearLogButton.addActionListener(new ActionListener {
     def actionPerformed(e: ActionEvent): Unit = {
       outputTextArea.setText("I/Q Server Log:\n" + "=" * 50 + "\n")
@@ -201,6 +228,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   buttonPanel.add(clearLogButton)
   buttonPanel.add(logCommunicationCheckbox)
   buttonPanel.add(truncateMessagesCheckbox)
+  buttonPanel.add(autoSaveCheckbox)
 
   // --- Layout: info header + buttons at top, log text area in center ---
 
@@ -316,6 +344,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   def exit(): Unit = {
     infoRefreshTimer.stop()
+    IQAutoSave.removeListener(autoSaveListener)
     IQCommunicationLogger.clearDockable(this)
   }
 }
