@@ -8,7 +8,7 @@
 ######################################################################
 
 .DEFAULT_GOAL: jedit
-.PHONY: register-afp-components build jedit
+.PHONY: register-afp-components build jedit tutorial
 
 # Set this to the directory containing the Isabelle2025-2 binary
 ISABELLE_HOME?=/Applications/Isabelle2025-2.app/bin
@@ -47,3 +47,8 @@ register-afp-components:
 
 build: register-afp-components
 	$(ISABELLE_HOME)/isabelle build $(ISABELLE_FLAGS) -d . AutoCorrode
+
+# Build the slide-deck tutorial in tutorial/. Inherits the AutoCorrode
+# parent heap, so run `make build` first if it isn't built yet.
+tutorial: register-afp-components
+	$(MAKE) -C tutorial ISABELLE_HOME=$(ISABELLE_HOME) build

@@ -1,0 +1,19 @@
+session AutoCorrodeTutorial = AutoCorrode +
+  options [document = pdf, document_output = "output"]
+  theories
+    Slides
+    Tutorial_Preamble
+    Tutorial_Context
+    Tutorial_Agenda
+    Tutorial_Glossary
+    Tutorial_Monads
+    Tutorial_HoareSetup
+    Tutorial_HoareWorked
+    Tutorial_UrustPeek_WP
+    Tutorial_UrustPeek_Eval
+    Tutorial_SepalgIntro
+    Tutorial_UrustPeek_Triple
+    Tutorial_UrustPeek_Call
+    Tutorial_SLWorked
+  document_files
+    "root.tex"

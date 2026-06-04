@@ -42,6 +42,42 @@ jobs:
             -d $AFP_COMPONENT_BASE/Word_Lib \
             AutoCorrode
 
+  tutorial-build:
+    runs-on: ubuntu-latest
+    container:
+      # _X11_Latex variant ships TeX Live, which is needed because the
+      # tutorial session builds a Beamer PDF.
+      image: makarius/isabelle:Isabelle2025-2_X11_Latex
+      options: --user root
+
+    steps:
+      - name: Checkout AutoCorrode
+        uses: actions/checkout@v3
+
+      - name: Setup Isabelle
+        uses: ./.github/actions/setup-isabelle-action
+
+      - name: Install make and lualatex
+        run: |
+          apt-get update -qq
+          # texlive-luatex provides lualatex, used by Isabelle's document
+          # builder for Beamer documents.
+          apt-get install -y -qq --no-install-recommends make texlive-luatex > /dev/null
+
+      # `make build` builds the AutoCorrode parent heap (which the tutorial
+      # session inherits); `make tutorial` then builds the slide-deck PDF.
+      # The Makefile expects ISABELLE_HOME to point at the bin directory.
+      - name: Build AutoCorrode and tutorial
+        run: |
+          make ISABELLE_HOME=$ISABELLE_HOME/bin AFP_COMPONENT_BASE=$AFP_COMPONENT_BASE build tutorial
+
+      - name: Upload tutorial PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: autocorrode-tutorial
+          path: tutorial/autocorrode_tutorial.pdf
+          if-no-files-found: error
+
   iq-build:
     runs-on: ubuntu-latest
     container:

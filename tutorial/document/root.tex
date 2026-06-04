@@ -1,0 +1,167 @@
+\documentclass[9pt,aspectratio=169]{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{isabelle,isabellesym}
+\usepackage{amssymb,amsmath}
+\usepackage[only,bigsqcap,bigparallel,fatsemi,interleave,sslash,llbracket,rrbracket,llparenthesis,rrparenthesis,binampersand,bindnasrepma]{stmaryrd}
+\usepackage{wasysym}
+\usepackage{eurosym}
+\usepackage{textcomp}
+\usepackage{bussproofs}
+\usepackage{tikz}
+\usepackage{alltt}
+\usetikzlibrary{positioning,arrows.meta,fit,shapes.geometric}
+
+% Isabelle's pdfsetup.sty loads hyperref a second time and clashes with
+% beamer's own hyperref setup, so we skip it.
+
+\isabellestyle{tt}
+
+% Syntax highlighting, loosely matching jEdit's default theme (after the
+% Neon NTT paper).
+\usepackage{xcolor}
+\definecolor{kw}{HTML}{6F00E5}     % keywords (proof, qed, by) — violet
+\definecolor{cmd}{HTML}{0000B0}    % outer-syntax commands — blue
+\definecolor{ty}{HTML}{006400}     % type/class names — dark green
+\definecolor{varc}{HTML}{8B4513}   % free variables — brown
+\definecolor{lit}{HTML}{B8860B}    % numeric literals — goldenrod
+\definecolor{cmt}{HTML}{C75300}    % comments — orange
+\renewcommand{\isakeywordONE}[1]{\textcolor{cmd}{\textbf{#1}}}     % theorem/lemma/definition
+\renewcommand{\isakeywordTWO}[1]{\textcolor{kw}{\textbf{#1}}}      % proof/qed/by
+\renewcommand{\isakeywordTHREE}[1]{\textcolor{ty}{\textbf{#1}}}    % where/assumes/shows
+\renewcommand{\isakeyword}[1]{\textcolor{kw}{\textbf{#1}}}         % if/then/else/let/in
+\renewcommand{\isadigit}[1]{\textcolor{lit}{#1}}
+\renewcommand{\isamarkupcmt}[1]{\textcolor{cmt}{\textit{#1}}}
+
+% AutoCorrode uses \<Zsurj> heavily; isabellesym renders it as \mathrel{\rightsquigarrow},
+% which clashes with the \itshape applied inside [fragile] beamer frames.
+% Provide a safe text-mode rendering.
+\providecommand{\isasymZsurj}{\ensuremath{\rightsquigarrow}}
+\renewcommand{\isasymZsurj}{\ensuremath{\rightsquigarrow}}
+
+% Interlude frame dressing: full-height orange bars hugging the left and
+% right page edges, plus a large 5-point star badge with "INTERLUDE"
+% inside, pinned to the upper-right corner. \begin{frame}/\end{frame} are
+% emitted literally by Slides.thy's `interlude`/`end_interlude` outer
+% syntax (beamer's [fragile] scanner requires the close to be a literal
+% token); \interludetop just paints the overlay.
+\newcommand{\interludetop}{%
+  \begin{tikzpicture}[remember picture, overlay]
+    % Full-height vertical bars on each page edge.
+    \fill[cmt] ([xshift=0mm]current page.north west)
+      rectangle ([xshift=1.25mm]current page.south west);
+    \fill[cmt] ([xshift=-1.25mm]current page.north east)
+      rectangle ([xshift=0mm]current page.south east);
+    % Subtle multi-point star: rounder overall, gentle starriness.
+    \node[star, star points=10, star point ratio=1.18,
+          fill=cmt, draw=cmt, line width=0.3mm,
+          text=white, font=\tiny\bfseries\sffamily,
+          minimum size=14mm, inner sep=0pt,
+          xshift=-9mm, yshift=-9mm]
+      at (current page.north east) {INTERLUDE};
+  \end{tikzpicture}%
+  % An [overlay] tikzpicture should take zero vertical space, but
+  % Isabelle's text_raw context emits paragraph glue afterwards. Pull
+  % the first body line back up so it sits flush with the frametitle.
+  \vskip-\baselineskip\vskip-1mm%
+}
+\newcommand{\interludebottom}{}
+
+% Drop theory/imports/begin/end boilerplate from the slides.
+\isadroptag{theory}
+
+% Drop proof bodies entirely — no <proof> placeholder, no vertical space,
+% no trailing newline. Same trick as for %internal blocks below.
+\isadroptag{proof}
+
+% Drop helper material tagged %internal.
+\isadroptag{internal}
+
+% Opt-in: a single step tagged %visible overrides the default %proof drop
+% for that one command, so its body is shown in the slide.
+\isakeeptag{visible}
+
+% After \isadroptag{...}, the comment package leaves \isadelim<tag> /
+% \endisadelim<tag> tokens around each dropped block. These are no-ops by
+% default but cause the slide to keep the surrounding \isanewline tokens,
+% leaving a blank line where the dropped block was. Override the delim
+% macros to swallow following newlines so the elision is invisible.
+\makeatletter
+\def\isabelle@swallow@nl{%
+  \@ifnextchar\isanewline
+    {\expandafter\isabelle@swallow@nl\@gobble}
+    {}}
+\@namedef{isadelimproof}{\isabelle@swallow@nl}
+\@namedef{endisadelimproof}{\isabelle@swallow@nl}
+\@namedef{isadeliminternal}{\isabelle@swallow@nl}
+\@namedef{endisadeliminternal}{\isabelle@swallow@nl}
+\makeatother
+
+% Allow long Isabelle identifiers to break at underscores inside frames.
+\def\BreakableUnderscore{\discretionary{\textunderscore}{}{\textunderscore}}
+\renewcommand{\isacharunderscore}{\BreakableUnderscore}
+\renewcommand{\isacharunderscorekeyword}{\BreakableUnderscore}
+
+% Slide framing is driven entirely from .thy files via the outer-syntax
+% commands defined in Slides.thy:
+%   start_slides   ─ emits a sacrificial \begin{frame} (suppressed via <0>)
+%   slide ‹Title›  ─ emits \end{frame}\begin{frame}[fragile]{Title}
+%   end_slides     ─ emits the closing \end{frame}
+%
+% \section/\chapter are illegal inside beamer frames, so we strip Isabelle's
+% heading commands.  Use beamer's own \section{...} in this root.tex (between
+% \input lines) if you want a navigation-bar entry.
+\renewcommand{\isamarkupchapter}[1]{}
+\renewcommand{\isamarkupsection}[1]{}
+\renewcommand{\isamarkupsubsection}[1]{}
+\renewcommand{\isamarkupsubsubsection}[1]{}
+
+% Beamer theme
+\usetheme{metropolis}
+
+% Default metropolis sets the gap between frametitle and body very tight;
+% give the body a little room to breathe.
+\addtobeamertemplate{frametitle}{}{\vspace{2mm}}
+% Fall back to a built-in theme if metropolis isn't installed:
+% \usetheme{Madrid}
+
+% metropolis: emit a section divider page automatically when \section{...}
+% is used between slides.
+\AtBeginSection[]{
+  \begin{frame}[plain,noframenumbering]
+    \sectionpage
+  \end{frame}
+}
+
+\title{AutoCorrode}
+\subtitle{Tutorial and Experimentation Ground}
+\author{Hanno Becker}
+\institute{Amazon Web Services}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+\input{Tutorial_Preamble.tex}
+
+\input{Tutorial_Context.tex}
+
+\input{Tutorial_Agenda.tex}
+
+\section{HOL-Light \texorpdfstring{$\leftrightarrow$}{<->} Isabelle cheat-sheet}
+\input{Tutorial_Glossary.tex}
+
+\section{Monads}
+\input{Tutorial_Monads.tex}
+
+\section{Hoare logic and weakest preconditions}
+\input{Tutorial_HoareSetup.tex}
+
+\input{Tutorial_HoareWorked.tex}
+
+\section{Separation logic}
+\input{Tutorial_SLWorked.tex}
+
+\end{document}
