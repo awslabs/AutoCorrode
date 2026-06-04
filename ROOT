@@ -8,6 +8,7 @@ session AutoCorrode = HOL +
     "Byte_Level_Encoding"
     "Crush"
     "Data_Structures"
+    "Enum_Theory"
     "iq"
     "Micro_Rust_Examples"
     "Micro_Rust_Interfaces"

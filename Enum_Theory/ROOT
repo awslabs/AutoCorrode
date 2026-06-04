@@ -1,0 +1,4 @@
+session Enum_Theory = HOL +
+  options [document = pdf, document_output = "output"]
+  theories
+    Enum_Theory
