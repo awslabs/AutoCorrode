@@ -118,6 +118,43 @@ object DiagnosticsScope {
     }
 }
 
+/**
+ * write_file's check_context_scope parameter. Controls how widely the
+ * wait/recheck window extends around the inserted text. The 'commands'
+ * array stays scoped to the inserted text in every case; the scope only
+ * widens what we wait on and what gets reflected in file_summary timing.
+ *
+ * - Command: just the inserted text.
+ * - Block:   the innermost enclosing 'proof ... qed' (the current proof
+ *            layer). If the edit isn't inside any 'proof' keyword (e.g. a
+ *            bare 'lemma … by …', or a lemma statement before its proof
+ *            block), falls back to the surrounding lemma/theorem block and
+ *            is reported as Proof.
+ * - Proof:   the OUTERMOST enclosing 'proof ... qed' (the entire proof of
+ *            the enclosing lemma). For an edit inside a non-nested proof,
+ *            Block and Proof coincide; inside a nested proof, Proof is
+ *            strictly wider than Block. For edits outside any 'proof' it is
+ *            the surrounding lemma/theorem block (same fallback as Block).
+ * - File:    the whole theory.
+ */
+enum CheckContextScope(val wire: String) {
+  case Command extends CheckContextScope("command")
+  case Block   extends CheckContextScope("block")
+  case Proof   extends CheckContextScope("proof")
+  case File    extends CheckContextScope("file")
+}
+
+object CheckContextScope {
+  private val byWire: Map[String, CheckContextScope] =
+    CheckContextScope.values.map(value => value.wire -> value).toMap
+
+  def fromWire(raw: String): Either[String, CheckContextScope] =
+    byWire.get(raw.trim.toLowerCase(java.util.Locale.ROOT)) match {
+      case Some(value) => Right(value)
+      case None => Left(raw)
+    }
+}
+
 object IQProtocol {
   final case class JsonRpcRequest(
     method: String,
