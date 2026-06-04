@@ -9,6 +9,7 @@ theory AutoCorrode
     "Crush.Crush"
     "Data_Structures.Data_Structures"
     "iq.iq"
+    "Enum_Theory.Enum_Theory"
     "Micro_Rust_Examples.Micro_Rust_Examples"
     "Micro_Rust_Interfaces.Micro_Rust_Interfaces"
     "Micro_Rust_Interfaces_Core.Micro_Rust_Interfaces_Core"
