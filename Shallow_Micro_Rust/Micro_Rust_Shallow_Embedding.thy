@@ -100,7 +100,7 @@ fun replace_string (pattern: string) (replacement: string) (original: string)  =
     let
         val original_size = String.size original
         val pattern_size = String.size pattern
-        
+
         fun loop start acc =
             if start > original_size - pattern_size
             then String.concat (List.rev (String.extract(original, start, NONE) :: acc))
@@ -144,7 +144,7 @@ ML\<open>
      end)
 
      val remove_colons = String.translate (fn #":" => "" | c => String.str c)
-     val is_path_notation = remove_colons #> Symbol_Pos.is_identifier 
+     val is_path_notation = remove_colons #> Symbol_Pos.is_identifier
 
      (* Path notation *)
      fun custom_path_notation_nano_rust hol_identifier nano_rust_name thy: local_theory =
@@ -441,7 +441,7 @@ translations
   "_shallow (_urust_struct_expr id fields)"
     \<rightharpoonup> "_shallow (_urust_funcall_with_args (_urust_callable_id id) (_urust_struct_expr_to_args fields))"
   "_shallow (_urust_array_expr_empty)"
-    \<rightharpoonup> "CONST literal ([])" 
+    \<rightharpoonup> "CONST literal ([])"
   "_shallow (_urust_array_expr args)"
     \<rightharpoonup> "_urust_array_expr_to_shallow args"
   "_urust_array_expr_to_shallow (_urust_args_single a)"
@@ -566,10 +566,6 @@ translations
     \<rightharpoonup> "CONST bindlift1 (CONST ro_ref_from_ref) (_shallow exp)"
   "_shallow (_urust_borrow_mut exp)"
     \<rightharpoonup> "CONST bindlift1 (CONST mut_ref_from_ref) (_shallow exp)"
-  "_shallow (_urust_raw_ptr_const exp)"
-    \<rightharpoonup> "CONST bindlift1 (CONST ref_address) (_shallow exp)"
-  "_shallow (_urust_raw_ptr_mut exp)"
-    \<rightharpoonup> "CONST bindlift1 (CONST ref_address) (_shallow exp)"
   "_shallow (_urust_deref exp)"
     \<rightharpoonup> "_urust_shallow_store_dereference (_shallow exp)"
 
