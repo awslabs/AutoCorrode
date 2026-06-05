@@ -189,10 +189,10 @@ syntax
   "_urust_numeral_ascription_usize" :: "num_const \<Rightarrow> urust"
     ("_'_usize")
   \<comment> \<open>Breakpoints\<close>
-  "_urust_pause" :: "urust" 
+  "_urust_pause" :: "urust"
     ("\<y>\<i>\<e>\<l>\<d>")
   \<comment> \<open>Logging\<close>
-  "_urust_log" :: "'value \<Rightarrow> 'value \<Rightarrow> urust" 
+  "_urust_log" :: "'value \<Rightarrow> 'value \<Rightarrow> urust"
     ("\<l>\<o>\<g> \<llangle>_\<rrangle> \<llangle>_\<rrangle>")
   \<comment> \<open>The special unit value\<close>
   "_urust_unit" :: "urust"
@@ -550,10 +550,6 @@ syntax
     ("&_" [200]100)
   "_urust_borrow_mut" :: \<open>urust \<Rightarrow> urust\<close>
     ("& mut _" [200]100)
-  "_urust_raw_ptr_const" :: \<open>urust \<Rightarrow> urust\<close>
-    ("& raw const _" [200]100)
-  "_urust_raw_ptr_mut" :: \<open>urust \<Rightarrow> urust\<close>
-    ("& raw mut _" [200]100)
   "_urust_deref" :: \<open>urust \<Rightarrow> urust\<close>
     ("*_" [200]100)
   "_urust_double_deref" :: \<open>urust \<Rightarrow> urust\<close>
@@ -1003,9 +999,9 @@ parse_ast_translation\<open>
       end;
 
     \<comment> \<open>Split the \<^verbatim>\<open>_path_builder\<close> syntax representation of \<^verbatim>\<open>foo::bar.zoo.far\<close> into \<^verbatim>\<open>("foo::bar", ["zoo", "far"])\<close>\<close>
-    fun split_path_n_field 
+    fun split_path_n_field
       (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_longid\<close>, Ast.Variable secondlast, last]) =
-        let 
+        let
           val (tailhead, tailtail) = split_longid last
         in
           (secondlast ^ "::" ^ tailhead, tailtail)
@@ -1101,7 +1097,7 @@ parse_ast_translation\<open>
                AST in a meaningful way, and keep it as is.
                The problem is now that this will give a very poor error message, so add some logging\<close>
             let
-              val _ = writeln "Error: detected match with mixed numeral and constructors" 
+              val _ = writeln "Error: detected match with mixed numeral and constructors"
             in
               \<^syntax_const>\<open>_urust_temporary_match\<close>
             end

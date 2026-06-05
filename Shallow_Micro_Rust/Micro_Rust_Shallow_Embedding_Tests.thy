@@ -1861,8 +1861,6 @@ term \<open>\<lbrakk> unimplemented!("not done: {} {}", idx, idx) \<rbrakk>\<clo
 term \<open>\<lbrakk> todo!("implement: {}", idx) \<rbrakk>\<close>
 term \<open>\<lbrakk> addr_of!(r) \<rbrakk>\<close>
 term \<open>\<lbrakk> addr_of_mut!(r) \<rbrakk>\<close>
-term \<open>\<lbrakk> & raw const r \<rbrakk>\<close>
-term \<open>\<lbrakk> & raw mut r \<rbrakk>\<close>
 end
 
 subsubsection\<open>Logging\<close>
