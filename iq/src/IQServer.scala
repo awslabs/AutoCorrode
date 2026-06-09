@@ -665,9 +665,6 @@ class IQServer(
         IQToolName.GetDiagnostics -> (params =>
           handleGetDiagnostics(params.toMap).map(IQToolResult.fromMap)
         ),
-        IQToolName.GetFileStats -> (params =>
-          handleGetFileStats(params.toMap).map(IQToolResult.fromMap)
-        ),
         IQToolName.GetProcessingStatus -> (params =>
           handleGetProcessingStatus(params.toMap).map(IQToolResult.fromMap)
         ),
@@ -1860,7 +1857,11 @@ class IQServer(
       ),
       Map(
         "name" -> "get_diagnostics",
-        "description" -> "Read-only diagnostics retrieval for errors or warnings in either a canonical command selection or an entire file.",
+        "description" -> ("Diagnostics retrieval for errors or warnings in either a canonical command selection or an entire file. " +
+          "Always returns a 'file_summary' block (theory-scoped totals: total_commands, commands_failed, commands_finished, " +
+          "commands_unprocessed, any_canceled, errors, warnings, fully_processed, consolidated) so the caller can detect when " +
+          "the returned diagnostics list is incomplete because parts of the file have not been processed yet. " +
+          "Set wait_until_processed=true to block until the theory is fully processed before collecting diagnostics."),
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
@@ -1891,6 +1892,18 @@ class IQServer(
             "pattern" -> Map(
               "type" -> "string",
               "description" -> ("When scope='selection' and command_selection='file_pattern': " + commandSelectionPatternDescription)
+            ),
+            "wait_until_processed" -> Map(
+              "type" -> "boolean",
+              "description" -> "If true, force the theory to be fully processed before collecting diagnostics. Default: false."
+            ),
+            "timeout" -> Map(
+              "type" -> "integer",
+              "description" -> "Overall wait timeout in milliseconds when wait_until_processed=true. Default: 30000."
+            ),
+            "timeout_per_command" -> Map(
+              "type" -> "integer",
+              "description" -> "Per-command running grace period in milliseconds when wait_until_processed=true. Default: 5000."
             )
           ),
           "required" -> List("severity"),
@@ -1971,21 +1984,6 @@ class IQServer(
               "description" -> "True to enable auto-save, false to disable. If omitted, the current state is returned unchanged."
             )
           ),
-          "additionalProperties" -> false
-        )
-      ),
-      Map(
-        "name" -> "get_file_stats",
-        "description" -> "Get processing statistics for a file: line count, entity count, processing status, error and warning counts.",
-        "inputSchema" -> Map(
-          "type" -> "object",
-          "properties" -> Map(
-            "path" -> Map(
-              "type" -> "string",
-              "description" -> "Path to the target theory file."
-            )
-          ),
-          "required" -> List("path"),
           "additionalProperties" -> false
         )
       ),
@@ -4835,6 +4833,23 @@ end"""
         return Left("Parameter 'scope' must be either 'selection' or 'file'")
     }
 
+    val waitUntilProcessed = params.get("wait_until_processed") match {
+      case Some(value: Boolean) => value
+      case _ => false
+    }
+
+    val timeoutMs: Option[Int] = IQArgumentUtils.optionalIntParam(params, "timeout") match {
+      case Right(Some(v)) => Some(v)
+      case Right(None) => Some(30000) // Default overall timeout of 30s
+      case Left(err) => return Left(err)
+    }
+
+    val timeoutPerCommandMs: Option[Int] = IQArgumentUtils.optionalIntParam(params, "timeout_per_command") match {
+      case Right(Some(v)) => Some(v)
+      case Right(None) => Some(5000) // Default per-command timeout of 5s
+      case Left(err) => return Left(err)
+    }
+
     if (parsedScope == DiagnosticsScope.File) {
       val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
         case Some(path) =>
@@ -4850,31 +4865,45 @@ end"""
           return Left("scope='file' requires parameter: path")
       }
 
+      // Resolve the model up-front so we can drive processing before snapshotting.
+      val modelOpt = GUI_Thread.now { getFileContentAndModel(filePath)._2 }
+      val model = modelOpt match {
+        case Some(m) => m
+        case None =>
+          return Left(
+            s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting diagnostics."
+          )
+      }
+
+      if (waitUntilProcessed) {
+        val _ = waitForTheoryCompletion(model, timeoutMs, timeoutPerCommandMs)
+      }
+
       GUI_Thread.now {
-        getFileContentAndModel(filePath) match {
-          case (Some(content), Some(model)) =>
-            val snapshot = Document_Model.snapshot(model)
-            val diagnostics = collectDiagnosticsInRange(
-              snapshot,
-              Text.Range(0, content.length),
-              parsedSeverity,
-              Some(Line.Document(content))
-            )
-            Right(
-              Map(
-                "scope" -> "file",
-                "severity" -> parsedSeverity.wire,
-                "path" -> filePath,
-                "node_name" -> model.node_name.toString,
-                "count" -> diagnostics.length,
-                "diagnostics" -> diagnostics
-              )
-            )
-          case _ =>
-            Left(
-              s"File $filePath is not tracked by Isabelle/jEdit. Open it first before requesting diagnostics."
-            )
+        // Re-read content post-wait; processing may have happened on the EDT.
+        val content = model match {
+          case bm: Buffer_Model => JEdit_Lib.buffer_text(bm.buffer)
+          case fm: File_Model => fm.content.text
         }
+        val snapshot = Document_Model.snapshot(model)
+        val diagnostics = collectDiagnosticsInRange(
+          snapshot,
+          Text.Range(0, content.length),
+          parsedSeverity,
+          Some(Line.Document(content))
+        )
+        val fileSummary = buildFileSummary(model, content)
+        Right(
+          Map(
+            "scope" -> "file",
+            "severity" -> parsedSeverity.wire,
+            "path" -> filePath,
+            "node_name" -> model.node_name.toString,
+            "count" -> diagnostics.length,
+            "diagnostics" -> diagnostics,
+            "file_summary" -> fileSummary
+          )
+        )
       }
     } else {
       val normalizedParams = withDefaultCurrentSelection(params)
@@ -4882,9 +4911,22 @@ end"""
         normalizedParams,
         "get_diagnostics"
       ).flatMap { selection =>
-        resolveTargetSelection(selection).map { resolved =>
+        resolveTargetSelection(selection).flatMap { resolved =>
+          val command = resolved.command
+          val nodePath = command.node_name.node
+
+          // For selection scope, file_summary still reflects the whole theory the
+          // command lives in. Optionally drive that theory to completion first.
+          val modelOpt = GUI_Thread.now { Document_Model.get_model(command.node_name) }
+          if (waitUntilProcessed) {
+            modelOpt match {
+              case Some(m) =>
+                val _ = waitForTheoryCompletion(m, timeoutMs, timeoutPerCommandMs)
+              case None =>
+            }
+          }
+
           GUI_Thread.now {
-            val command = resolved.command
             val snapshot = PIDE.session.snapshot()
             val node = snapshot.get_node(command.node_name)
             val diagnostics =
@@ -4895,10 +4937,19 @@ end"""
                     snapshot,
                     Text.Range(start, start + command.length),
                     parsedSeverity,
-                    getFileContent(command.node_name.node).map(Line.Document(_))
+                    getFileContent(nodePath).map(Line.Document(_))
                   )
               }
-            Map(
+            val fileSummary = modelOpt match {
+              case Some(m) =>
+                val content = m match {
+                  case bm: Buffer_Model => JEdit_Lib.buffer_text(bm.buffer)
+                  case fm: File_Model => fm.content.text
+                }
+                Some(buildFileSummary(m, content))
+              case None => None
+            }
+            val base = Map[String, Any](
               "scope" -> "selection",
               "severity" -> parsedSeverity.wire,
               "selection" -> targetSelectionToMap(resolved.selection),
@@ -4906,6 +4957,10 @@ end"""
               "count" -> diagnostics.length,
               "diagnostics" -> diagnostics
             )
+            Right(fileSummary match {
+              case Some(fs) => base + ("file_summary" -> fs)
+              case None => base
+            })
           }
         }
       }
@@ -5316,58 +5371,6 @@ end"""
           "results" -> "",
           "message" -> s"Failed to execute exploration due to linkage error: ${throwableMessage(err)}"
         )
-    }
-  }
-
-  /**
-   * Handles the get_file_stats tool request.
-   * Returns file metadata without reading full content.
-   */
-  private def handleGetFileStats(params: Map[String, Any]): Either[String, Map[String, Any]] = {
-    val filePath = params.get("path").map(_.toString.trim).filter(_.nonEmpty) match {
-      case Some(path) =>
-        IQUtils.autoCompleteFilePath(path) match {
-          case Right(fullPath) =>
-            authorizeReadPath("get_file_stats", fullPath) match {
-              case Right(authorizedPath) => authorizedPath
-              case Left(errorMsg) => return Left(errorMsg)
-            }
-          case Left(errorMsg) => return Left(errorMsg)
-        }
-      case None => return Left("Missing required parameter: path")
-    }
-
-    getFileContentAndModel(filePath) match {
-      case (Some(content), Some(model)) =>
-        val lines = IQLineOffsetUtils.splitLines(content)
-        val lineCount = lines.length
-        
-        {
-          // Entity count from PIDE commands
-          val snapshot = PIDE.session.snapshot(node_name = model.node_name)
-          val node = snapshot.get_node(model.node_name)
-          val entityCount = if (node != null) {
-            node.command_iterator().count { case (cmd, _) =>
-              EntityKeywords.contains(cmd.span.name)
-            }
-          } else 0
-
-          // Processing status and diagnostics
-          val nodeStatus = Document_Status.Node_Status.make(
-            Date.now(), snapshot.state, snapshot.version, model.node_name
-          )
-
-          Right(Map(
-            "path" -> filePath,
-            "line_count" -> lineCount,
-            "entity_count" -> entityCount,
-            "fully_processed" -> (nodeStatus.terminated && nodeStatus.unprocessed == 0 && nodeStatus.running == 0),
-            "has_errors" -> (nodeStatus.failed > 0),
-            "error_count" -> nodeStatus.failed,
-            "warning_count" -> nodeStatus.warned
-          ))
-        }
-      case _ => Left(s"File not tracked: $filePath")
     }
   }
 
