@@ -13,6 +13,7 @@ theory Micro_Rust_Examples
     Linked_List_Executable_Physical_Memory
     Reference_Examples
     Showcase
+    Tutorial
     Micro_Rust_Runtime.Hybrid_References
 begin
 end
