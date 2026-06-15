@@ -77,11 +77,12 @@ definition clamp_contract where
 ucincl_auto clamp_contract
 
 text\<open>TODO: Replace \<^verbatim>\<open>oops\<close> with a proof.
-Hint: \<^verbatim>\<open>crush_boot f:function_def contract: contract_def\<close> sets up the goal
-      \<^verbatim>\<open>crush_base\<close> discharges it.\<close>
+Hint: \<^verbatim>\<open>apply (crush_boot f:clamp_def contract: clamp_contract_def)\<close> sets up the goal
+      \<^verbatim>\<open>apply (crush_base)\<close> discharges it.)\<close>
 lemma clamp_spec:
   shows \<open>\<Gamma>; clamp lo hi x \<Turnstile>\<^sub>F clamp_contract lo hi x\<close>
   oops
+
 
 section\<open>Exercise 2: Write the Contract\<close>
 
