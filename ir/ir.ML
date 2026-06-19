@@ -20,6 +20,7 @@ sig
   val get_cfg : unit -> config
 
   val init : string -> string list -> unit
+  val init_with_header : string -> string list -> {clauses: string} -> unit
   val init_from_document : string -> string -> int -> unit
   val fork : string -> string -> int -> unit
   val step : string -> string -> unit
@@ -389,17 +390,53 @@ fun has_pin_dep tab target_id =
 
 (* Create a new REPL.  Theory specs must already be loaded — either present
    in the initial heap or previously loaded via Ir.load_theory.
-   Pin specs ("pin@NAME") reference a pinned REPL's theory snapshot. *)
-fun init id specs =
+   Pin specs ("pin@NAME") reference a pinned REPL's theory snapshot.
+
+   `clauses` is the literal text that would appear between `imports ...`
+   and `begin` in a .thy file (typically a `keywords ...` clause,
+   optionally `abbrevs ...`).  Empty = no header clauses.  Parsed by
+   synthesizing a fake header and reading it via Thy_Header.read.
+   Disallowed for segment-rooted inits: recorded segments already
+   carry the keywords from their original .thy header. *)
+fun init_with_header id specs {clauses} =
   let val _ = if null specs then error "init requires at least one spec" else ()
+      val parsed = map parse_spec specs
+      val has_segment = exists (fn (_, opt) => is_some opt) parsed
+      val _ =
+        if clauses <> "" andalso has_segment then
+          error "init_with_header: clauses cannot be combined with segment \
+                \specs (\"Thy:idx\"); recorded segments already carry their \
+                \theory's keywords"
+        else ()
+      (* Parse the user's clauses by synthesizing a complete theory
+         header and feeding it to Thy_Header.read.  The grammar accepts
+         keywords and abbrevs clauses (see Thy_Header.args at
+         Pure/Thy/thy_header.ML:168-173) but the resulting `header`
+         record carries only `name`, `imports`, `keywords` (lines 44-47).
+         abbrevs is parsed and discarded — it's editor-tooling only,
+         consumed by Isabelle/Scala for jEdit autocomplete and has no
+         effect on ML-level theory state.  So extracting #keywords here
+         is exhaustive: it captures everything Isabelle itself would
+         apply to the theory at begin_theory time.
+
+         The synthetic name `IrInitHeader` and the `imports Pure` clause
+         are placeholders — Thy_Header.read needs them to satisfy its
+         grammar but we discard #name and #imports. *)
+      fun parse_keywords text =
+        if text = "" then []
+        else
+          let val synth = "theory IrInitHeader imports Pure " ^ text ^ " begin"
+              val {keywords, ...} = Thy_Header.read Position.none synth
+          in keywords end
+      val kws = parse_keywords clauses
       fun from_specs specs =
             let val tab = Synchronized.value repl_tab
                 val resolved = map (resolve_spec tab o string_to_spec) specs
                 val thys = map #1 resolved
                 val spec_list = map #2 resolved
                 val thy = Theory.begin_theory (id, Position.none) thys
+                            |> Thy_Header.add_keywords kws
             in (From_Theory spec_list, Toplevel.make_state (SOME thy)) end
-      val parsed = map parse_spec specs
       val (origin, st) =
         case parsed of
           [(thy_name, SOME idx)] =>
@@ -410,7 +447,7 @@ fun init id specs =
             in (From_Segment (thy_name, idx),
                 #state (seg : Document_Output.segment)) end
         | _ =>
-            let val _ = if exists (fn (_, opt) => is_some opt) parsed
+            let val _ = if has_segment
                         then error "Cannot mix theory and segment specs in multi-theory init"
                         else ()
             in from_specs (map #1 parsed) end
@@ -422,6 +459,8 @@ fun init id specs =
        else ((), Symtab.update (id, Repl r) tab));
      out ("Created REPL " ^ quote id)
   end;
+
+fun init id specs = init_with_header id specs {clauses = ""};
 
 fun init_from_document id node_name command_id =
   let
@@ -814,6 +853,9 @@ fun help () = out
   \\n\
   \  init id [specs]         create REPL from [\"Theory\"], [\"Theory:idx\"],\n\
   \                          [\"pin@A\"], or [\"T1\",\"T2\",...] (merges)\n\
+  \  init_with_header id [specs] {clauses=\"...\"}\n\
+  \                          like init, but parses .thy header clauses\n\
+  \                          (typically `keywords \"foo\" :: thy_decl`)\n\
   \  fork id new_id state_idx  fork sub-REPL from id at state (~1=latest)\n\
   \  step id \"isar text\"    append step to REPL\n\
   \  show id                describe REPL (origin, steps, staleness)\n\
