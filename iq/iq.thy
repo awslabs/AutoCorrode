@@ -2,6 +2,6 @@
    SPDX-License-Identifier: MIT *)
 
 theory iq
-  imports Isar_Explore
+  imports Isar_Explore ir
 begin
 end

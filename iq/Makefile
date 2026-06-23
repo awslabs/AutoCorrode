@@ -68,6 +68,10 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	$(ISABELLE) scala \
 		-classpath "$(CLASSES_DIR):$(TEST_CLASSES_DIR)" \
 		IQNormalizationTest
+	echo "Running generic MCP server tests..."
+	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
+		-classpath "$(TEST_RUN_CLASSPATH)" \
+		McpServerTest
 	echo "Running I/Q server auth/authorization tests..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALA) \
 		-classpath "$(TEST_RUN_CLASSPATH)" \
@@ -98,12 +102,14 @@ $(JAR_FILE): $(CLASSES_DIR)/.compiled $(CLASSES_DIR)/.resources
 	echo "Creating JAR file..."
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" cd $(CLASSES_DIR) && $(JAR) cf $(JAR_FILE) .
 
-# Compile Scala sources
+# Compile Scala sources. scala-parser-combinators is needed because
+# Resources.check_thy's reader type (Scan.char_reader -> CharSequenceReader)
+# surfaces from that library — see IRLauncher.ensureLoaded.
 $(CLASSES_DIR)/.compiled: $(SCALA_SOURCES) | $(CLASSES_DIR)
 	echo "Compiling Scala sources..."
 	$(JAVA_ENV) $(SCALAC) \
 		$(SCALAC_FLAGS) \
-		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-classpath "$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_PARSER_JAR)" \
 		-d $(CLASSES_DIR) \
 		$(SCALA_SOURCES)
 	touch $@
@@ -126,7 +132,7 @@ $(TEST_CLASSES_DIR)/.compiled: $(TEST_SOURCES) $(CLASSES_DIR)/.compiled | $(TEST
 	if [ -z "$(strip $(TEST_SOURCES))" ]; then echo "No test sources found."; touch $@; exit 0; fi
 	JAVA_HOME="$(JAVA_HOME)" PATH="$(JAVA_HOME)/bin:$$PATH" $(SCALAC) \
 		$(SCALAC_FLAGS) \
-		-classpath "$(CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)" \
+		-classpath "$(CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR):$(SCALA_PARSER_JAR)" \
 		-d $(TEST_CLASSES_DIR) \
 		$(TEST_SOURCES)
 	touch $@

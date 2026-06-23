@@ -89,103 +89,25 @@ object IQExploreDockable {
         return
     }
     connectedIRDir = Some(irDir)
-    val replPy = new java.io.File(irDir, "repl.py").getPath
 
-    // Register protocol handler to receive ML_Repl port (if not already present)
-    if (PIDE.session.get_protocol_handler(classOf[IQPlugin.IR_Repl_Handler]).isEmpty)
-      PIDE.session.init_protocol_handler(new IQPlugin.IR_Repl_Handler)
-    // Start ML_Repl (port 0 = pick any free port)
-    PIDE.session.protocol_command("IR_Repl.start")
-    onStatus("Sent IR_Repl.start")
-    // Wait for ML_Repl to report its port (max 30s — protocol messages
-    // are delivered asynchronously and can be delayed by message channel
-    // backlog when the ML side is busy with theory processing)
-    val mlPort = {
-      var attempts = 0
-      while (IQPlugin.mlReplPort.isEmpty && attempts < 60) {
-        Thread.sleep(500)
-        attempts += 1
-        if (attempts % 4 == 0)
-          onStatus("Waiting for ML_Repl port... (" + (attempts / 2) + "s)")
-      }
-      IQPlugin.mlReplPort match {
-        case Some(p) =>
-          onStatus("ML_Repl reported port " + p)
-          p
-        case None =>
-          val msg = "ML_Repl did not report port within 30s — cannot start repl.py"
+    // The full handshake (register IR_Repl.port handler, send IR_Repl.start,
+    // wait for the ML_Repl port, spawn repl.py, connect IRClient) is the
+    // session-generic IRLauncher, driven here with the live PIDE session. Run it
+    // on a background thread so ensureStarted() returns immediately and
+    // awaitClient() polls for the result, as before.
+    val launcher = new IRLauncher(PIDE.session, onStatus)
+    new Thread(() => {
+      launcher.launch(irDir) match {
+        case Right(res) =>
+          daemonProcess = Some(res.process)
+          IQPlugin.irReplPort = Some(res.replPort)
+          IQPlugin.irReplToken = res.replToken
+          IQPlugin.activateWidget("ir-repl-status")
+          ir = Some(res.client)
+        case Left(msg) =>
           onStatus(msg)
           startupError = Some(msg)
           started = false
-          return
-      }
-    }
-    // Launch repl.py --daemon with current Isabelle home
-    val isabellePath = Isabelle_System.getenv("ISABELLE_HOME")
-    val pb = new ProcessBuilder("python3", replPy, "--daemon", "--expect-ml",
-      "--poly-ml-port", mlPort.toString,
-      "--isabelle", isabellePath,
-      "--no-heap-db")
-    IQPlugin.mlReplMaxConn.foreach { mc =>
-      pb.command().addAll(java.util.List.of("--pool-size", mc.toString))
-    }
-    IQPlugin.mlReplToken.foreach { tok =>
-      pb.environment().put("IR_REPL_AUTH_TOKEN", tok)
-    }
-    pb.redirectErrorStream(true)
-    val cmdLine = pb.command().toArray.mkString(" ")
-    daemonProcess = Some(pb.start())
-    onStatus("Executing: " + cmdLine)
-    // Read repl.py stdout to learn its TCP port, then connect IRClient
-    new Thread(() => {
-      def stripAnsi(s: String): String = s.replaceAll("\u001b\\[[0-9;]*m", "")
-
-      val proc = daemonProcess.get
-      val reader = new java.io.BufferedReader(
-        new java.io.InputStreamReader(proc.getInputStream))
-      val portPattern = """Waiting for connections on \S+:(\d+)""".r
-      val tokenPattern = """IR_Repl\.token: (\S+)""".r
-      var replPort: Option[Int] = None
-      var replToken: String = ""
-      var line: String = null
-      var eof = false
-      var extraLines = 0
-      // Wait for both port and token.  Once the port is found, read
-      // up to 5 more lines so the token is captured even if it comes
-      // after the port line.
-      while ((replPort.isEmpty || (replToken.isEmpty && extraLines < 5)) && !eof) {
-        line = reader.readLine()
-        if (line == null) {
-          eof = true
-          onStatus("repl.py: EOF on stdout")
-        } else {
-          val clean = stripAnsi(line)
-          onStatus("repl.py: " + clean)
-          portPattern.findFirstMatchIn(clean).foreach(m =>
-            replPort = Some(m.group(1).toInt))
-          tokenPattern.findFirstMatchIn(clean).foreach(m =>
-            replToken = m.group(1))
-          if (replPort.isDefined && replToken.isEmpty)
-            extraLines += 1
-        }
-      }
-      replPort match {
-        case Some(port) =>
-          onStatus("repl.py listening on port " + port)
-          IQPlugin.irReplPort = Some(port)
-          IQPlugin.irReplToken = if (replToken.nonEmpty) Some(replToken) else None
-          IQPlugin.activateWidget("ir-repl-status")
-          try {
-            val client = new IRClient(port = port, token = replToken)
-            client.connect()
-            ir = Some(client)
-            onStatus("IRClient connected on port " + port)
-          } catch {
-            case e: Exception =>
-              onStatus("IRClient failed to connect: " + e.getMessage)
-          }
-        case None =>
-          onStatus("repl.py did not report port")
       }
     }, "IRClient-connect").start()
   }

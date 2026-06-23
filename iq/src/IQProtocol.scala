@@ -1,8 +1,6 @@
 /* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT */
 
-import isabelle.JSON
-
 enum CommandSelectionTarget(val wire: String) {
   case Current extends CommandSelectionTarget("current")
   case FileOffset extends CommandSelectionTarget("file_offset")
@@ -155,102 +153,5 @@ object CheckContextScope {
     }
 }
 
-object IQProtocol {
-  final case class JsonRpcRequest(
-    method: String,
-    id: Option[Any],
-    params: Map[String, JSON.T],
-    raw: Map[String, JSON.T]
-  )
-
-  final case class ToolCall(
-    toolName: IQToolName,
-    arguments: Map[String, JSON.T]
-  )
-
-  private def validRequestId(value: JSON.T): Boolean = {
-    value match {
-      case _: String => true
-      case _: Int => true
-      case _: Long => true
-      case _: Double => true
-      case _: Float => true
-      case _: BigInt => true
-      case _: BigDecimal => true
-      case _: java.lang.Integer => true
-      case _: java.lang.Long => true
-      case _: java.lang.Double => true
-      case _: java.lang.Float => true
-      case null => true
-      case _ => false
-    }
-  }
-
-  def decodeJsonRpcRequest(json: JSON.T): Either[String, JsonRpcRequest] = {
-    json match {
-      case JSON.Object(obj) =>
-        val method = obj.get("method") match {
-          case Some(name: String) if name.trim.nonEmpty => name.trim
-          case Some(_: String) => return Left("Invalid request: 'method' must be non-empty")
-          case Some(_) => return Left("Invalid request: 'method' must be a string")
-          case None => return Left("Invalid request: missing 'method'")
-        }
-
-        val id = obj.get("id") match {
-          case Some(value) if validRequestId(value) => Some(value)
-          case Some(_) => return Left("Invalid request: 'id' must be string, number, or null")
-          case None => None
-        }
-
-        val params = obj.get("params") match {
-          case Some(JSON.Object(p)) => p
-          case Some(_) => return Left("Invalid request: 'params' must be an object")
-          case None => Map.empty[String, JSON.T]
-        }
-
-        Right(JsonRpcRequest(method = method, id = id, params = params, raw = obj))
-
-      case _ =>
-        Left("Invalid request: payload must be a JSON object")
-    }
-  }
-
-  private def extractTokenValue(value: JSON.T): Option[String] =
-    value match {
-      case token: String => Option(token.trim).filter(_.nonEmpty)
-      case _ => None
-    }
-
-  def extractAuthToken(request: JsonRpcRequest): Option[String] = {
-    request.raw
-      .get("auth_token")
-      .flatMap(extractTokenValue)
-      .orElse(request.params.get("auth_token").flatMap(extractTokenValue))
-  }
-
-  def decodeToolCall(request: JsonRpcRequest): Either[String, ToolCall] = {
-    val toolNameRaw = request.params.get("name") match {
-      case Some(name: String) if name.trim.nonEmpty => name.trim
-      case Some(_: String) =>
-        return Left("Invalid params: tool 'name' must be non-empty")
-      case Some(_) =>
-        return Left("Invalid params: tool 'name' must be a string")
-      case None =>
-        return Left("Invalid params: missing required field 'name'")
-    }
-
-    val toolName = IQToolName.fromWire(toolNameRaw) match {
-      case Right(value) => value
-      case Left(raw) => return Left(s"Unknown tool: $raw")
-    }
-
-    val arguments = request.params.get("arguments") match {
-      case Some(JSON.Object(args)) => args
-      case Some(_) =>
-        return Left("Invalid params: tool 'arguments' must be an object")
-      case None => Map.empty[String, JSON.T]
-    }
-
-    Right(ToolCall(toolName = toolName, arguments = arguments))
-  }
-}
+/* The IQ-specific selection/scope enums above are consumed by the IQ tool
+   handlers. JSON-RPC request/tool-call decoding lives in McpProtocol. */

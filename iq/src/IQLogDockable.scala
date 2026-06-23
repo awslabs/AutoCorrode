@@ -11,6 +11,8 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import scala.annotation.unused
 
+import isabelle.jedit.PIDE
+
 import org.gjt.sp.jedit.View
 import org.gjt.sp.jedit.GUIUtilities
 import org.gjt.sp.jedit.gui.DefaultFocusComponent
@@ -118,6 +120,58 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   private val irCopyLabel = makeCopyLabel(() => IQPlugin.irReplToken)
 
+  private val mlReplStatusLabel = new JLabel("Not loaded")
+  mlReplStatusLabel.setForeground(Color.GRAY)
+  mlReplStatusLabel.getAccessibleContext.setAccessibleName("I/R ML_Repl status")
+
+  /* ---- I/R ML_Repl heartbeat ----
+   *
+   * A dedicated low-priority daemon thread pings the side-effect-free
+   * IR_Repl.status protocol command every 5s and reads the registered
+   * Status_Handler. It publishes a @volatile snapshot the EDT refresh timer
+   * paints — the EDT never sends a command or blocks. Runs at MIN_PRIORITY so
+   * it never competes with real proof work; the probe is side-effect-free so a
+   * steady 5s cadence is harmless. A 2-miss debounce avoids flickering to
+   * "Not loaded" when a busy prover merely delays the reply. */
+  @volatile private var mlReplSnapshot: String = "init"   // init|notLoaded|loadedIdle|running:<port>
+  @volatile private var heartbeatRunning: Boolean = true
+  private var heartbeatMisses: Int = 0
+
+  private val heartbeatThread: Thread = {
+    val t = new Thread(() => {
+      while (heartbeatRunning) {
+        try {
+          val session = PIDE.session
+          val handler =
+            if (session.get_protocol_handler(classOf[IRLauncher.Status_Handler]).isEmpty) {
+              session.init_protocol_handler(new IRLauncher.Status_Handler)
+              session.get_protocol_handler(classOf[IRLauncher.Status_Handler])
+            } else session.get_protocol_handler(classOf[IRLauncher.Status_Handler])
+          handler.foreach { h =>
+            h.reset()
+            session.protocol_command("IR_Repl.status")
+            // brief wait for the async reply (well under the 5s cadence)
+            var w = 0
+            while (!h.replied && w < 4) { Thread.sleep(250); w += 1 }
+            if (h.replied) {
+              heartbeatMisses = 0
+              mlReplSnapshot =
+                if (h.running) "running:" + h.port.getOrElse(0) else "loadedIdle"
+            } else {
+              heartbeatMisses += 1
+              if (heartbeatMisses >= 2) mlReplSnapshot = "notLoaded"
+            }
+          }
+        } catch { case _: Throwable => /* session not ready yet; try again next tick */ }
+        try { Thread.sleep(5000) } catch { case _: InterruptedException => }
+      }
+    }, "iq-ir-heartbeat")
+    t.setDaemon(true)
+    t.setPriority(Thread.MIN_PRIORITY)
+    t
+  }
+  heartbeatThread.start()
+
   private def createInfoPanel(): JPanel = {
     val panel = new JPanel()
     panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS))
@@ -134,6 +188,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
     panel.add(makeRow("I/Q MCP Server:", serverStatusLabel, clientInfoLabel))
     panel.add(makeRow("I/Q Auth Token:", tokenValueLabel, copyLabel))
+    panel.add(makeRow("I/R ML_Repl:", mlReplStatusLabel))
     panel.add(makeRow("I/R REPL:", irStatusLabel))
     panel.add(makeRow("I/R Auth Token:", irTokenValueLabel, irCopyLabel))
     panel.add(new JSeparator(SwingConstants.HORIZONTAL))
@@ -276,6 +331,22 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
         clientInfoLabel.setText("")
     }
 
+    // I/R ML_Repl (prover-side listener), painted from the heartbeat snapshot.
+    mlReplSnapshot match {
+      case s if s.startsWith("running:") =>
+        mlReplStatusLabel.setText(s"Running on port ${s.stripPrefix("running:")}")
+        mlReplStatusLabel.setForeground(new Color(0, 128, 0))
+      case "loadedIdle" =>
+        mlReplStatusLabel.setText("Loaded, not running")
+        mlReplStatusLabel.setForeground(new Color(180, 120, 0))
+      case "notLoaded" =>
+        mlReplStatusLabel.setText("Not loaded")
+        mlReplStatusLabel.setForeground(Color.GRAY)
+      case _ =>
+        mlReplStatusLabel.setText("Not loaded")
+        mlReplStatusLabel.setForeground(Color.GRAY)
+    }
+
     // I/R REPL
     IQPlugin.irReplPort match {
       case Some(p) =>
@@ -344,6 +415,8 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   def exit(): Unit = {
     infoRefreshTimer.stop()
+    heartbeatRunning = false
+    heartbeatThread.interrupt()
     IQAutoSave.removeListener(autoSaveListener)
     IQCommunicationLogger.clearDockable(this)
   }
