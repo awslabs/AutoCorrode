@@ -29,13 +29,13 @@ object IQServerAuthTest {
       root: java.nio.file.Path,
       token: String = TestToken
   ): IQServer = {
-    mkServerWithBackend(root, token, None)
+    mkServerWithRegistry(root, token, None)
   }
 
-  private def mkServerWithBackend(
+  private def mkServerWithRegistry(
       root: java.nio.file.Path,
       token: String = TestToken,
-      capabilityBackend: Option[IQCapabilityBackend]
+      registry: Option[McpToolRegistry]
   ): IQServer = {
     val config = IQServerSecurityConfig(
       authToken = token,
@@ -46,22 +46,20 @@ object IQServerAuthTest {
     new IQServer(
       port = 0,
       securityConfig = config,
-      capabilityBackendOverride = capabilityBackend
+      registryOverride = registry
     )
   }
 
   private def testInternalToolFailurePreservesRequestId(): Unit = {
     val root = Files.createTempDirectory("iq-server-internal-id-root").toRealPath()
-    val crashingBackend = new IQCapabilityBackend {
-      override val toolNames: Set[IQToolName] = Set(IQToolName.Explore)
-      override def invoke(
-          toolName: IQToolName,
-          params: IQToolParams
-      ): Either[IQCapabilityInvocationError, IQToolResult] = {
-        throw new RuntimeException("forced-test-failure")
-      }
-    }
-    val server = mkServerWithBackend(root, capabilityBackend = Some(crashingBackend))
+    // Register a throwing 'explore' tool. McpToolRegistry.invoke does not catch
+    // handler exceptions, so the throw propagates to McpServer.handleToolCall's
+    // try/catch and surfaces as INTERNAL_ERROR with the id preserved.
+    val crashingRegistry = new McpToolRegistry()
+    val _ = crashingRegistry.register(McpTool(
+      "explore", "crash for test", Map("type" -> "object"),
+      _ => throw new RuntimeException("forced-test-failure")))
+    val server = mkServerWithRegistry(root, registry = Some(crashingRegistry))
     val request =
       """{"jsonrpc":"2.0","id":"req-internal-1","method":"tools/call","params":{"name":"explore","arguments":{"query":"sledgehammer","command_selection":"current"}}}"""
     val response = server.processRequestForTest(request)
@@ -398,11 +396,64 @@ object IQServerAuthTest {
       s"tools/list should include authenticate tool: $payload")
   }
 
+  /** Guards tools/list ELEMENT ORDER after the registry extraction: a
+    * sortBy(name) or unordered map would reorder the array on the wire. The
+    * existing contains-only checks cannot catch this. authenticate must be
+    * first; the IQ tools then follow in source order, then the repl_* tools. */
+  private def testToolsListPreservesOrder(): Unit = {
+    val root = Files.createTempDirectory("iq-server-tools-order-root").toRealPath()
+    val server = mkServer(root)
+    val request = """{"jsonrpc":"2.0","id":"req-order","method":"tools/list"}"""
+    val payload = server.processRequestForTest(request).get
+    // Indices of each name's first occurrence must be strictly increasing.
+    val expected = List(
+      "authenticate", "list_files", "get_command_info", "get_document_info",
+      "open_file", "read_file", "write_file", "resolve_command_target",
+      "get_context_info", "get_entities", "get_type_at_selection",
+      "get_proof_blocks", "get_proof_context", "get_definitions",
+      "get_diagnostics", "explore", "save_file", "set_auto_save",
+      "get_processing_status", "get_sorry_positions",
+      "repl_connect", "repl_init", "repl_init_from_source", "repl_fork",
+      "repl_step", "repl_show", "repl_state", "repl_text", "repl_edit",
+      "repl_replay", "repl_truncate", "repl_back", "repl_merge", "repl_remove",
+      "repl_list", "repl_sledgehammer", "repl_find_theorems", "repl_timeout",
+      "repl_raw")
+    val positions = expected.map(n => n -> payload.indexOf("\"name\":\"" + n + "\""))
+    positions.foreach { case (n, i) =>
+      assertThat(i >= 0, s"tools/list missing tool $n: $payload")
+    }
+    positions.sliding(2).foreach {
+      case List((a, ia), (b, ib)) =>
+        assertThat(ia < ib, s"tools/list order wrong: $a (@$ia) must precede $b (@$ib)")
+      case _ =>
+    }
+  }
+
+  /** Guards that the I/R tools' required-parameter validation survived the move
+    * to IRTools (a silent-default extractor would dispatch step(repl,"") instead
+    * of returning a validation error). */
+  private def testReplStepRequiresIsarText(): Unit = {
+    val root = Files.createTempDirectory("iq-server-repl-step-missing-root").toRealPath()
+    val server = mkServer(root)
+    val request =
+      """{"jsonrpc":"2.0","id":"req-repl-step-missing","method":"tools/call","params":{"name":"repl_step","arguments":{"repl":"R"}}}"""
+    val response = server.processRequestForTest(request)
+    assertThat(response.nonEmpty, "missing isar_text should return a response")
+    val payload = response.get
+    assertToolError(payload, "repl_step missing isar_text")
+    assertThat(
+      payload.contains("Missing required parameter: isar_text"),
+      s"expected missing isar_text validation message: $payload"
+    )
+  }
+
   def main(args: Array[String]): Unit = {
     testAuthenticateToolAcceptsCorrectToken()
     testAuthenticateToolRejectsWrongToken()
     testAuthenticateToolRejectsMissingToken()
     testToolsListIncludesAuthenticate()
+    testToolsListPreservesOrder()
+    testReplStepRequiresIsarText()
     testInternalToolFailurePreservesRequestId()
     testToolsListIncludesResolveCommandTarget()
     testResolveCommandTargetRejectsInvalidSelection()

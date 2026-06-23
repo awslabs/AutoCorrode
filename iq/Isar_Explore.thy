@@ -263,10 +263,4 @@ val _ = register {name = "isar_explore", pri = Task_Queue.urgent_pri}
          | _ => raise (ERROR "Invalid number of arguments for isar_explore")))
 \<close>
 
-declare [[ML_write_global = true]]
-ML_file\<open>ir.ML\<close>
-ML_file\<open>tcp_handler.ML\<close>
-ML_file\<open>ml_repl.ML\<close>
-declare [[ML_write_global = false]]
-
 end

@@ -323,3 +323,28 @@ val _ =
     (fn _ =>
       (ML_Repl.stop ();
        Output.writeln "IR_Repl: stopped"));
+
+(* Side-effect-free readiness probe. The mere fact that this command runs and
+   replies tells the Scala side that ir.ML/ml_repl.ML are loaded (an undefined
+   protocol command is silently dropped by the prover, so no reply == not
+   loaded). The "running" property additionally reports whether the ML_Repl TCP
+   listener is already up, and if so its port/token, so a client can decide
+   between (re)starting it and reusing the existing endpoint. *)
+val _ =
+  Protocol_Command.define "IR_Repl.status"
+    (fn _ =>
+      let
+        val running = Tcp_Handler.is_running ()
+        val base = [Markup.function "IR_Repl.status", ("running", Value.print_bool running)]
+        val extra =
+          if running then
+            (case (Tcp_Handler.get_port (), Tcp_Handler.token ()) of
+              (SOME p, SOME t) =>
+                [("port", Value.print_int p), ("token", t),
+                 ("max_connections", Value.print_int (Synchronized.value Tcp_Handler.max_connections))]
+            | (SOME p, NONE) =>
+                [("port", Value.print_int p),
+                 ("max_connections", Value.print_int (Synchronized.value Tcp_Handler.max_connections))]
+            | _ => [])
+          else []
+      in Output.protocol_message (base @ extra) [] end);

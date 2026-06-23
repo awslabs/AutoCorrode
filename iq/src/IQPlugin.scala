@@ -18,15 +18,6 @@ object IQPlugin {
 
   @volatile private var instance: Option[IQPlugin] = None
 
-  /** Port reported by ML_Repl via PIDE protocol message. */
-  @volatile var mlReplPort: Option[Int] = None
-
-  /** Token reported by ML_Repl via PIDE protocol message. */
-  @volatile var mlReplToken: Option[String] = None
-
-  /** Max connections reported by ML_Repl via PIDE protocol message. */
-  @volatile var mlReplMaxConn: Option[Int] = None
-
   /** Port of the I/R REPL (repl.py), set by IQExploreDockable on connect. */
   @volatile var irReplPort: Option[Int] = None
 
@@ -73,34 +64,8 @@ object IQPlugin {
     }
   }
 
-  /** PIDE protocol handler: receives IR_Repl.port messages from ML. */
-  class IR_Repl_Handler extends Session.Protocol_Handler {
-    private def handle_port(msg: Prover.Protocol_Output): Boolean = {
-      msg.properties match {
-        case List(_, ("port", isabelle.Value.Int(port)), ("token", tok),
-                  ("max_connections", isabelle.Value.Int(mc))) =>
-          mlReplPort = Some(port)
-          mlReplToken = Some(tok)
-          mlReplMaxConn = Some(mc)
-          Output.writeln("IQPlugin: ML_Repl port = " + port +
-            ", max_connections = " + mc)
-          true
-        case List(_, ("port", isabelle.Value.Int(port)), ("token", tok)) =>
-          mlReplPort = Some(port)
-          mlReplToken = Some(tok)
-          Output.writeln("IQPlugin: ML_Repl port = " + port)
-          true
-        case List(_, ("port", isabelle.Value.Int(port))) =>
-          mlReplPort = Some(port)
-          Output.writeln("IQPlugin: ML_Repl port = " + port)
-          true
-        case _ => false
-      }
-    }
-
-    override val functions: Session.Protocol_Functions =
-      List("IR_Repl.port" -> handle_port)
-  }
+  // The IR_Repl.port protocol handler lives in IRLauncher (session-generic),
+  // alongside the rest of the I/R bring-up handshake.
 }
 
 class IQPlugin extends EBPlugin {

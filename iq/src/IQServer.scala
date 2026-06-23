@@ -5,16 +5,10 @@ import isabelle._
 import isabelle.jedit._
 
 import java.nio.file.Files
-import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, OutputStreamWriter}
-import java.net.{InetAddress, ServerSocket, Socket}
 import java.util.Locale
-import java.util.concurrent.{CountDownLatch, ExecutorService, Executors, TimeUnit}
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.{CountDownLatch, TimeUnit}
 import scala.util.Try
-import scala.annotation.unused
 import scala.util.Using
-import java.time.LocalTime
-import java.time.format.DateTimeFormatter
 
 import org.gjt.sp.jedit.{View, jEdit, Buffer}
 
@@ -303,23 +297,8 @@ object IQArgumentUtils {
     }
   }
 
-  private def convertJsonValue(value: JSON.T): Any = value match {
-    case JSON.Object(obj) =>
-      obj.map { case (k, v) => k -> convertJsonValue(v) }
-    case list: List[?] =>
-      list.map {
-        case nested: JSON.T @unchecked => convertJsonValue(nested)
-      }
-    case s: String => s
-    case b: Boolean => b
-    case n: Number => n
-    case null => null
-    case other => other
-  }
-
-  def extractArguments(jsonMap: Map[String, JSON.T]): Map[String, Any] = {
-    jsonMap.map { case (key, value) => key -> convertJsonValue(value) }
-  }
+  def extractArguments(jsonMap: Map[String, JSON.T]): Map[String, Any] =
+    McpProtocol.extractArguments(jsonMap)
 }
 
 /**
@@ -334,7 +313,7 @@ object IQArgumentUtils {
 class IQServer(
   port: Int = 8765,
   securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment(),
-  capabilityBackendOverride: Option[IQCapabilityBackend] = None
+  registryOverride: Option[McpToolRegistry] = None
 ) {
   private lazy val reflectiveOutputWriteln: Option[String => Unit] = {
     try {
@@ -531,49 +510,62 @@ class IQServer(
     BigDecimal(value).setScale(1, BigDecimal.RoundingMode.HALF_UP).toDouble
   }
 
-  /** The server socket that listens for client connections */
-  private var serverSocket: Option[ServerSocket] = None
-  private var acceptThread: Option[Thread] = None
 
-  /** Flag indicating whether the server is running */
-  @volatile private var isRunning = false
-
-  /** Thread pool for handling client connections.
-   *  Threads run at MIN_PRIORITY so the OS scheduler prefers the EDT
-   *  (and other jEdit threads) when CPU is contended. */
-  private val workerCounter = new AtomicInteger(0)
-  private val executor: ExecutorService =
-    Executors.newFixedThreadPool(
-      securityConfig.maxClientThreads,
-      (r: Runnable) => {
-        val t = new Thread(r, s"iq-worker-${workerCounter.incrementAndGet()}")
-        t.setDaemon(true)
-        t.setPriority(Thread.MIN_PRIORITY)
-        t
-      }
-    )
-
-  // Timestamp formatter for socket logging
-  private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
-  private val clientAddressTL = new ThreadLocal[String]()
-  private val activeClientCount = new AtomicInteger(0)
-  private val authenticatedClientCount = new AtomicInteger(0)
-
-  def getActiveClientCount: Int = activeClientCount.get()
-  def getAuthenticatedClientCount: Int = authenticatedClientCount.get()
-
-  /**
-   * Gets the current timestamp formatted as HH:mm:ss.SSS
+  /* ---- generic MCP server (transport) + tool registration ----
    *
-   * @return The formatted timestamp string
-   */
-  private def getTimestamp(): String = {
-    LocalTime.now().format(timeFormatter)
+   * IQServer consumes the framework-neutral McpServer: it builds the server,
+   * registers its document/proof/file tools and the standalone I/R tools, and
+   * delegates lifecycle + the test hook. The wire protocol is served entirely
+   * by McpServer. */
+
+  private val mcpConfig = McpServerConfig(
+    port = port,
+    authToken = securityConfig.authToken,
+    maxClientThreads = securityConfig.maxClientThreads,
+    logName = "I/Q Server",
+    threadPrefix = "iq",
+    authToolDescription =
+      "Authenticate with the I/Q MCP server. Must be called before any other tool. " +
+      "If the token is not provided to you, use the IQ_AUTH_TOKEN environment variable if set.",
+    redact = IQSecurity.redactAuthToken
+  )
+
+  private val mcpJson: McpJsonCodec = new McpJsonCodec {
+    def parse(line: String): JSON.T = JSON.parse(line)
+    def format(value: Any): String = JSON.Format(value)
   }
 
-  private def currentClientAddress(): String = {
-    Option(clientAddressTL.get()).getOrElse("unknown")
+  private val mcpLogger: McpLogger = new McpLogger {
+    def info(message: String): Unit = safeOutput(message)
+    def security(message: String): Unit = safeOutput(s"I/Q Server [SECURITY]: $message")
   }
+
+  private val mcpComm: McpCommLogger = new McpCommLogger {
+    def isLoggingEnabled: Boolean = IQCommunicationLogger.isLoggingEnabled
+    def logCommunication(message: String): Unit = IQCommunicationLogger.logCommunication(message)
+    def updateClientStatus(connected: Boolean, count: Int, address: String): Unit =
+      IQCommunicationLogger.updateClientStatus(connected, count, address)
+  }
+
+  private val mcpServer: McpServer = new McpServer(
+    config = mcpConfig,
+    json = mcpJson,
+    registry = registryOverride.getOrElse(new McpToolRegistry()),
+    logger = mcpLogger,
+    comm = mcpComm,
+    paramTransform = decodeIsabelleTextParams
+  )
+
+  def start(): Unit = mcpServer.start()
+  def stop(): Unit = mcpServer.stop()
+  def getActiveClientCount: Int = mcpServer.getActiveClientCount
+  def getAuthenticatedClientCount: Int = mcpServer.getAuthenticatedClientCount
+
+  // The per-connection client address lives in McpServer (a thread-local set on
+  // the worker thread). IQ's tool handlers run on that same worker thread, so
+  // the audit logs below resolve the real remote address through this delegate;
+  // it is "unknown" only off a worker thread (e.g. processRequestForTest).
+  private def currentClientAddress(): String = mcpServer.currentClientAddress()
 
   private def logSecurityEvent(message: String): Unit = {
     safeOutput(s"I/Q Server [SECURITY]: $message")
@@ -617,651 +609,13 @@ class IQServer(
   def authorizeReadPathForTest(operation: String, rawPath: String): Either[String, String] =
     authorizeReadPath(operation, rawPath)
 
-  private lazy val capabilityBackend: IQCapabilityBackend =
-    capabilityBackendOverride.getOrElse(createDefaultCapabilityBackend())
 
-  private def createDefaultCapabilityBackend(): IQCapabilityBackend =
-    IQCapabilityBackend.fromHandlers({
-      val base: Map[IQToolName, IQCapabilityBackend.RawToolHandler] = Map(
-        IQToolName.ListFiles -> (params =>
-          handleListFiles(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetCommandInfo -> (params =>
-          handleGetCommand(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetDocumentInfo -> (params =>
-          handleGetDocumentInfo(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.OpenFile -> (params =>
-          handleOpenFile(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.ReadFile -> (params =>
-          handleReadTheoryFile(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.WriteFile -> (params =>
-          handleWriteTheoryFile(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.ResolveCommandTarget -> (params =>
-          handleResolveCommandTarget(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetContextInfo -> (params =>
-          handleGetContextInfo(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetEntities -> (params =>
-          handleGetEntities(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetTypeAtSelection -> (params =>
-          handleGetTypeAtSelection(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetProofBlocks -> (params =>
-          handleGetProofBlocks(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetProofContext -> (params =>
-          handleGetProofContext(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetDefinitions -> (params =>
-          handleGetDefinitions(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetDiagnostics -> (params =>
-          handleGetDiagnostics(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetProcessingStatus -> (params =>
-          handleGetProcessingStatus(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.GetSorryPositions -> (params =>
-          handleGetSorryPositions(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.Explore -> (params =>
-          handleExplore(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.SaveFile -> (params =>
-          handleSaveFile(params.toMap).map(IQToolResult.fromMap)
-        ),
-        IQToolName.SetAutoSave -> (params =>
-          handleSetAutoSave(params.toMap).map(IQToolResult.fromMap)
-        )
-      )
-      base ++ replToolHandlers
-    })
-
-  // -- I/R REPL tool handlers (delegate to IRClient via TCP) --
-
-  private def withIR(f: IRClient => String): Either[String, Map[String, Any]] = {
-    IQExploreDockable.ir match {
-      case Some(c) if c.isConnected =>
-        try Right(Map("text" -> f(c)))
-        catch { case ex: Exception => Left(s"I/R error: ${ex.getMessage}") }
-      case _ =>
-        Left("I/R REPL not connected. Call repl_connect first.")
-    }
-  }
-
-  private def strParam(params: Map[String, Any], key: String): Either[String, String] =
-    params.get(key) match {
-      case Some(s: String) if s.nonEmpty => Right(s)
-      case _ => Left(s"Missing required parameter: $key")
-    }
-
-  private def intParam(params: Map[String, Any], key: String): Either[String, Int] =
-    params.get(key) match {
-      case Some(n: Long) => Right(n.toInt)
-      case Some(n: Int) => Right(n)
-      case Some(n: Double) => Right(n.toInt)
-      case _ => Left(s"Missing required integer parameter: $key")
-    }
-
-  private def optIntParam(params: Map[String, Any], key: String): Option[Int] =
-    params.get(key) match {
-      case Some(n: Long) => Some(n.toInt)
-      case Some(n: Int) => Some(n)
-      case Some(n: Double) => Some(n.toInt)
-      case _ => None
-    }
-
-  private lazy val replToolHandlers: Map[IQToolName, IQCapabilityBackend.RawToolHandler] = Map(
-    IQToolName.ReplConnect -> (params => {
-      val p = params.toMap
-      p.get("ir_home").collect { case s: String if s.nonEmpty => s }
-        .foreach(h => IQExploreDockable.irHome = Some(h))
-      IQExploreDockable.awaitClient() match {
-        case Some(c) if c.isConnected =>
-          val dir = IQExploreDockable.connectedIRDir.getOrElse("unknown")
-          Right(IQToolResult.fromMap(Map("text" -> s"I/R REPL connected (ir_home=$dir).")))
-        case _ =>
-          val reason = IQExploreDockable.startupError.getOrElse("startup failed or timed out")
-          Left(s"I/R REPL connection failed — $reason")
-      }
-    }),
-    IQToolName.ReplInit -> (params => {
-      val p = params.toMap
-      for {
-        repl <- strParam(p, "repl")
-        theories = p.get("theories") match {
-          case Some(l: List[_]) => l.collect { case s: String => s }
-          case _ => Nil
-        }
-        r <- withIR(_.init(repl, theories))
-      } yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplInitFromSource -> (params => {
-      val p = params.toMap
-      for {
-        repl <- strParam(p, "repl")
-        file <- strParam(p, "file")
-        r <- {
-          val offset = optIntParam(p, "offset")
-          val pattern = p.get("pattern").collect { case s: String if s.nonEmpty => s }
-          withIR(_.initFromSourceLocation(repl, file, offset, pattern))
-        }
-      } yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplFork -> (params => {
-      val p = params.toMap
-      for {
-        repl <- strParam(p, "repl")
-        newRepl <- strParam(p, "new_repl")
-        idx <- intParam(p, "state_idx")
-        r <- withIR(_.fork(repl, newRepl, idx))
-      } yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplStep -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); t <- strParam(p, "isar_text"); r <- withIR(_.step(repl, t)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplShow -> (params =>
-      strParam(params.toMap, "repl").flatMap(r => withIR(_.show(r))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplState -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); i <- intParam(p, "state_idx"); r <- withIR(_.state(repl, i)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplText -> (params =>
-      strParam(params.toMap, "repl").flatMap(r => withIR(_.text(r))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplEdit -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); idx <- intParam(p, "idx"); t <- strParam(p, "isar_text"); r <- withIR(_.edit(repl, idx, t)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplReplay -> (params =>
-      strParam(params.toMap, "repl").flatMap(r => withIR(_.replay(r))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplTruncate -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); i <- intParam(p, "idx"); r <- withIR(_.truncate(repl, i)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplBack -> (params =>
-      strParam(params.toMap, "repl").flatMap(r => withIR(_.back(r))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplMerge -> (params =>
-      strParam(params.toMap, "repl").flatMap(r => withIR(_.merge(r))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplRemove -> (params =>
-      strParam(params.toMap, "repl").flatMap(r => withIR(_.remove(r))).map(IQToolResult.fromMap)
-    ),
-    IQToolName.ReplList -> (_ => withIR(_.repls()).map(IQToolResult.fromMap)),
-    IQToolName.ReplSledgehammer -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); s <- intParam(p, "timeout_secs"); r <- withIR(_.sledgehammer(repl, s)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplFindTheorems -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); q <- strParam(p, "query"); r <- withIR(_.findTheorems(repl, p.get("max_results").collect { case n: Long => n.toInt }.getOrElse(40), q)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplTimeout -> (params => {
-      val p = params.toMap
-      for { repl <- strParam(p, "repl"); s <- intParam(p, "secs"); r <- withIR(_.timeout(repl, s)) }
-      yield IQToolResult.fromMap(r)
-    }),
-    IQToolName.ReplRaw -> (params =>
-      strParam(params.toMap, "ml_code").flatMap(c => withIR(_.send(c))).map(IQToolResult.fromMap)
-    )
-  )
-
-  /**
-   * Starts the MCP server.
-   *
-   * Creates a server socket on the specified port and begins listening for client connections.
-   * Each client connection is handled in a separate thread from the executor thread pool.
-   */
-  def start(): Unit = {
-    try {
-      val bindAddress = InetAddress.getByName("127.0.0.1")
-
-      serverSocket = Some(new ServerSocket(port, 50, bindAddress))
-      isRunning = true
-
-      val mutationRoots = securityConfig.allowedMutationRoots.map(_.toString).mkString(", ")
-      val readRoots = securityConfig.allowedReadRoots.map(_.toString).mkString(", ")
-      Output.writeln(
-        s"I/Q Server starting on 127.0.0.1:$port " +
-        s"(max_client_threads=${securityConfig.maxClientThreads})"
-      )
-      logSecurityEvent(s"Allowed mutation roots: $mutationRoots")
-      logSecurityEvent(s"Allowed read roots: $readRoots")
-
-      val thread = new Thread(
-        () =>
-          serverSocket.foreach { socket =>
-            while (isRunning) {
-              try {
-                val clientSocket = socket.accept()
-                Output.writeln(s"MCP Client connected: ${clientSocket.getRemoteSocketAddress}")
-
-                val _ = executor.submit(new Runnable {
-                  def run(): Unit = handleClient(clientSocket)
-                })
-              } catch {
-                case _: java.net.SocketException if !isRunning =>
-                  // Server was stopped, ignore
-                case ex: Exception =>
-                  Output.writeln(s"Error accepting client connection: ${ex.getMessage}")
-              }
-            }
-          },
-        "iq-mcp-accept-loop"
-      )
-      thread.setDaemon(true)
-      thread.start()
-      acceptThread = Some(thread)
-
-    } catch {
-      case ex: Exception =>
-        Output.writeln(s"Failed to start MCP server: ${ex.getMessage}")
-        throw ex
-    }
-  }
-
-  /**
-   * Stops the MCP server.
-   *
-   * Closes the server socket and shuts down the executor thread pool.
-   */
-  def stop(): Unit = {
-    isRunning = false
-    serverSocket.foreach(_.close())
-    serverSocket = None
-    acceptThread.foreach { thread =>
-      thread.interrupt()
-      try {
-        thread.join(1000)
-      } catch {
-        case _: InterruptedException =>
-          Thread.currentThread().interrupt()
-      }
-    }
-    acceptThread = None
-    executor.shutdown()
-    Output.writeln("I/Q Server stopped")
-  }
-
-  /**
-   * Handles a client connection.
-   *
-   * Sets up input/output streams, processes client requests, and sends responses.
-   * The connection is kept open until the client disconnects or an error occurs.
-   *
-   * @param clientSocket The client socket to handle
-  */
-  private def handleClient(clientSocket: Socket): Unit = {
-    var registeredClient = false
-    var registeredAuthenticated = false
-    try {
-      clientAddressTL.set(Option(clientSocket.getRemoteSocketAddress).map(_.toString).getOrElse("unknown"))
-
-      // Configure socket for large responses
-      clientSocket.setSendBufferSize(65536)  // 64KB send buffer
-      clientSocket.setTcpNoDelay(true)       // Disable Nagle's algorithm for immediate sending
-
-      Output.writeln(s"MCP Client connected with buffer size: ${clientSocket.getSendBufferSize} (no timeout)")
-
-      val clientCount = activeClientCount.incrementAndGet()
-      registeredClient = true
-      val clientAddr = Option(clientSocket.getRemoteSocketAddress).map(_.toString).getOrElse("unknown")
-      IQCommunicationLogger.updateClientStatus(clientCount > 0, clientCount, clientAddr)
-
-      val reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream))
-      // Use a larger buffer for the PrintWriter to handle large responses
-      val writer = new PrintWriter(new BufferedWriter(new OutputStreamWriter(clientSocket.getOutputStream), 65536), true)
-      var clientAuthenticated = false
-
-      def sendResponse(response: String): Unit = {
-        if (IQCommunicationLogger.isLoggingEnabled)
-          IQCommunicationLogger.logCommunication(
-            s"${getTimestamp()} [SEND] ${IQSecurity.redactAuthToken(response)}")
-        writer.println(response)
-        writer.flush()
-      }
-
-      Iterator
-        .continually(reader.readLine())
-        .takeWhile(_ != null)
-        .foreach { line =>
-        try {
-          if (IQCommunicationLogger.isLoggingEnabled)
-            IQCommunicationLogger.logCommunication(
-              s"${getTimestamp()} [RECV] ${IQSecurity.redactAuthToken(line)}")
-
-          val requestOpt = try {
-            IQProtocol.decodeJsonRpcRequest(JSON.parse(line)).toOption
-          } catch { case _: Exception => None }
-
-          val method = requestOpt.map(_.method).getOrElse("")
-          val id = requestOpt.flatMap(_.id)
-          val isNotification = id.isEmpty
-
-          // A) Public methods: always allowed, regardless of auth state.
-          if (Set("initialize", "tools/list", "ping").contains(method)
-              || method.startsWith("notifications/")) {
-            processRequest(line).foreach(sendResponse)
-
-          // B) Not yet authenticated: only accept the authenticate tool call.
-          } else if (!clientAuthenticated) {
-            val authenticated = for {
-              req <- requestOpt
-              tc <- IQProtocol.decodeToolCall(req).toOption
-              if tc.toolName == IQToolName.Authenticate
-              token <- tc.arguments.collectFirst { case ("token", v: String) => v }
-              if java.security.MessageDigest.isEqual(
-                   token.getBytes("UTF-8"),
-                   securityConfig.authToken.getBytes("UTF-8"))
-            } yield true
-
-            authenticated match {
-              case Some(true) =>
-                clientAuthenticated = true
-                registeredAuthenticated = true
-                authenticatedClientCount.incrementAndGet()
-                logSecurityEvent(s"ALLOW authenticate client=${currentClientAddress()}")
-                id.foreach { requestId =>
-                  sendResponse(formatSuccessResponse(requestId, Map[String, Any](
-                    "content" -> List(Map("type" -> "text",
-                      "text" -> "Authenticated successfully")))))
-                }
-              case _ =>
-                logSecurityEvent(
-                  s"DENY unauthenticated request method='$method' client=${currentClientAddress()}")
-                if (!isNotification)
-                  sendResponse(formatErrorResponse(id, ErrorCodes.INVALID_REQUEST,
-                    "Not authenticated \u2014 call the 'authenticate' tool first"))
-            }
-
-          // C) Authenticated: handle normally.
-          } else {
-            processRequest(line).foreach(sendResponse)
-          }
-        } catch {
-          case ex: Exception =>
-            sendResponse(formatErrorResponse(None, ErrorCodes.INTERNAL_ERROR,
-              s"Internal error: ${throwableMessage(ex)}"))
-          case err: LinkageError =>
-            safeOutput(s"I/Q Server: Linkage error: ${throwableMessage(err)}")
-            err.printStackTrace()
-            sendResponse(formatErrorResponse(None, ErrorCodes.INTERNAL_ERROR,
-              s"Internal linkage error: ${throwableMessage(err)}"))
-        }
-      }
-    } catch {
-      case ex: Exception =>
-        Output.writeln(s"Error handling MCP client: ${ex.getMessage}")
-      case err: LinkageError =>
-        safeOutput(s"I/Q Server: Linkage error handling MCP client: ${throwableMessage(err)}")
-        err.printStackTrace()
-    } finally {
-      try {
-        clientSocket.close()
-        Output.writeln("MCP Client disconnected")
-
-        if (registeredAuthenticated) {
-          val r = authenticatedClientCount.decrementAndGet()
-          if (r < 0) authenticatedClientCount.set(0)
-        }
-        if (registeredClient) {
-          val remaining = activeClientCount.decrementAndGet()
-          val clampedRemaining = if (remaining < 0) {
-            activeClientCount.set(0)
-            0
-          } else remaining
-          IQCommunicationLogger.updateClientStatus(clampedRemaining > 0, clampedRemaining, "")
-        }
-      } catch {
-        case _: Exception => // Ignore close errors
-      } finally {
-        clientAddressTL.remove()
-      }
-    }
-  }
-
-  /**
-   * Processes a JSON-RPC request and generates an optional response.
-   *
-   * Parses the request, extracts the method and ID, and dispatches to the appropriate handler.
-   * Returns None for notifications (no response needed), Some(response) for requests.
-   *
-   * @param requestLine The JSON-RPC request string
-   * @return Some(response) for requests, None for notifications
-   */
-  private def processRequest(requestLine: String): Option[String] = {
-    var requestIdForError: Option[Any] = None
-    try {
-      safeOutput(s"I/Q Server: Processing request: ${IQSecurity.redactAuthToken(requestLine)}")
-
-      val json = try {
-        JSON.parse(requestLine)
-      } catch {
-        case ex: Exception =>
-          safeOutput(s"I/Q Server: Failed to parse JSON-RPC payload: ${throwableMessage(ex)}")
-          return Some(
-            formatErrorResponse(
-              None,
-              ErrorCodes.PARSE_ERROR,
-              s"Parse error: ${throwableMessage(ex)}"
-            )
-          )
-        case err: LinkageError =>
-          safeOutput(s"I/Q Server: Linkage error while parsing JSON-RPC payload: ${throwableMessage(err)}")
-          return Some(
-            formatErrorResponse(
-              None,
-              ErrorCodes.INTERNAL_ERROR,
-              s"Internal linkage error: ${throwableMessage(err)}"
-            )
-          )
-      }
-      val request = IQProtocol.decodeJsonRpcRequest(json) match {
-        case Right(decoded) => decoded
-        case Left(errorMessage) =>
-          return Some(
-            formatErrorResponse(
-              None,
-              ErrorCodes.INVALID_REQUEST,
-              errorMessage
-            )
-          )
-      }
-      val method = request.method
-      val id = request.id
-      requestIdForError = id
-
-      safeOutput(s"I/Q Server: Parsed method='$method', id=$id")
-
-      id match {
-        case Some(requestId) =>
-          val result: Either[(Int, String), Map[String, Any]] = method match {
-            case "initialize" =>
-              createInitializeResult().left.map(msg => (ErrorCodes.METHOD_NOT_FOUND, msg))
-            case "tools/list" =>
-              createToolsListResult().left.map(msg => (ErrorCodes.METHOD_NOT_FOUND, msg))
-            case "tools/call" =>
-              handleToolCall(request)
-            case "ping" =>
-              // Lightweight health check - no Isabelle state touched
-              Right(Map("status" -> "ok", "timestamp" -> System.currentTimeMillis()))
-            case _ =>
-              safeOutput(s"I/Q Server: Unknown method '$method'")
-              Left((ErrorCodes.METHOD_NOT_FOUND, s"Method not found: $method"))
-          }
-
-          result match {
-            case Right(data) => Some(formatSuccessResponse(requestId, data))
-            case Left((code, error)) => Some(formatErrorResponse(Some(requestId), code, error))
-          }
-        /* From https://www.jsonrpc.org/specification:
-         *  "A Notification is a Request object without an "id" member.
-         * A Request object that is a Notification signifies the Client's lack
-         * of interest in the corresponding Response object, and as such no
-         * Response object needs to be returned to the client.
-         * The Server MUST NOT reply to a Notification, including those that
-         * are within a batch request."
-         */
-        case None =>
-          method match {
-            case m if m.startsWith("notifications/") =>
-              safeOutput(s"I/Q Server: Handling notification '$method'")
-              handleNotification(method, json)
-              None // No response for notifications
-            case _ =>
-              safeOutput(s"I/Q Server: Ignoring unknown notification '$method'")
-              None // No response for notifications
-          }
-      }
-    } catch {
-      case ex: Exception =>
-        safeOutput(s"I/Q Server: Error processing request: ${ex.getMessage}")
-        ex.printStackTrace()
-        Some(
-          formatErrorResponse(
-            requestIdForError,
-            ErrorCodes.INTERNAL_ERROR,
-            s"Internal error: ${throwableMessage(ex)}"
-          )
-        )
-      case err: LinkageError =>
-        safeOutput(s"I/Q Server: Linkage error processing request: ${throwableMessage(err)}")
-        err.printStackTrace()
-        Some(
-          formatErrorResponse(
-            requestIdForError,
-            ErrorCodes.INTERNAL_ERROR,
-            s"Internal linkage error: ${throwableMessage(err)}"
-          )
-        )
-    }
-  }
 
   // Testing hook: exposes request routing/auth behavior without opening sockets.
   def processRequestForTest(requestLine: String): Option[String] =
-    processRequest(requestLine)
+    mcpServer.processRequestForTest(requestLine)
 
-  /**
-   * Handles JSON-RPC notifications (messages without id that don't expect responses).
-   *
-   * @param method The notification method name
-   * @param json The parsed JSON notification
-   */
-  private def handleNotification(method: String, @unused json: JSON.T): Unit = {
-    method match {
-      case "notifications/initialized" =>
-        Output.writeln("I/Q Server: Client initialization complete")
-      case _ =>
-        Output.writeln(s"I/Q Server: Unknown notification method: $method")
-    }
-  }
 
-  /**
-   * Wraps tool call results for JSON-RPC response.
-   *
-   * @param result The result data from a tool handler
-   * @return Wrapped result data
-   */
-  private def wrapToolCallResult(result: Map[String, Any], isError: Boolean = false): Map[String, Any] = {
-    val serializedJson = JSON.Format(result)
-    val base = Map("content" -> List(Map("type" -> "text", "text" -> serializedJson)))
-    if (isError) base + ("isError" -> true) else base
-  }
-
-  /**
-   * Handles a tools/call request.
-   *
-   * Extracts the tool name and parameters from the request and dispatches to the appropriate handler.
-   *
-   * @param request The decoded JSON-RPC request
-   * @return Either error message or result data
-   */
-  private def handleToolCall(
-      request: IQProtocol.JsonRpcRequest
-  ): Either[(Int, String), Map[String, Any]] = {
-    try {
-      val toolCall = IQProtocol.decodeToolCall(request).left.map { err =>
-        if (err.startsWith("Unknown tool:")) {
-          (ErrorCodes.METHOD_NOT_FOUND, err)
-        } else {
-          (ErrorCodes.INVALID_PARAMS, err)
-        }
-      } match {
-        case Right(value) => value
-        case Left(error) => return Left(error)
-      }
-      // Authenticate is handled at the connection level in handleClient;
-      // this branch handles it when reached via processRequestForTest or
-      // when a client that is already authenticated calls it again.
-      if (toolCall.toolName == IQToolName.Authenticate) {
-        val token = toolCall.arguments.collectFirst { case ("token", v: String) => v }
-        return token match {
-          case Some(t) if java.security.MessageDigest.isEqual(
-            t.getBytes("UTF-8"), securityConfig.authToken.getBytes("UTF-8")) =>
-            Right(wrapToolCallResult(Map(
-              "content" -> List(Map("type" -> "text", "text" -> "Authenticated successfully")))))
-          case _ =>
-            Left((ErrorCodes.INVALID_REQUEST, "Invalid authentication token"))
-        }
-      }
-
-      val params = IQToolParams.fromMap(decodeIsabelleTextParams(extractArguments(toolCall.arguments)))
-      safeOutput(
-        s"I/Q Server: Extracted tool='${toolCall.toolName.wire}', params=${params.toMap}"
-      )
-
-      capabilityBackend.invoke(toolCall.toolName, params) match {
-        case Right(res) =>
-          Right(wrapToolCallResult(res.toMap))
-        case Left(IQCapabilityInvocationError.UnknownTool(name)) =>
-          safeOutput(s"I/Q Server: Unknown tool name: '$name'")
-          Left((ErrorCodes.METHOD_NOT_FOUND, s"Unknown tool: $name"))
-        case Left(err) =>
-          Right(wrapToolCallResult(Map("text" -> err.message), isError = true))
-      }
-    } catch {
-      case ex: Exception =>
-        safeOutput(s"I/Q Server: Tool execution error: ${ex.getMessage}")
-        ex.printStackTrace()
-        Left((ErrorCodes.INTERNAL_ERROR, s"Tool execution error: ${ex.getMessage}"))
-      case err: LinkageError =>
-        safeOutput(s"I/Q Server: Tool linkage error: ${throwableMessage(err)}")
-        err.printStackTrace()
-        Left(
-          (
-            ErrorCodes.INTERNAL_ERROR,
-            s"Tool execution linkage error: ${throwableMessage(err)}"
-          )
-        )
-    }
-  }
-
-  /**
-   * Extracts arguments from a JSON object while preserving JSON value kinds.
-   *
-   * @param jsonMap The JSON object containing arguments
-   * @return A map of argument names to values
-   */
-  def extractArguments(jsonMap: Map[String, JSON.T]): Map[String, Any] = {
-    IQArgumentUtils.extractArguments(jsonMap)
-  }
 
   /** Parameters that contain Isabelle text and should be Symbol.decode'd on input. */
   private val isabelleTextParamNames: Set[String] =
@@ -1278,69 +632,11 @@ class IQServer(
       case other => other
     }
 
-  /**
-   * Formats a successful JSON-RPC response.
-   *
-   * @param id The request ID
-   * @param result The result data
-   * @return A JSON-RPC response string
-   */
-  private def formatSuccessResponse(id: Any, result: Map[String, Any]): String = {
-    val responseData = Map(
-      "jsonrpc" -> "2.0",
-      "id" -> id,
-      "result" -> result
-    )
-    JSON.Format(responseData)
-  }
 
-  /**
-   * Formats an error JSON-RPC response.
-   *
-   * @param id The request ID (can be None for parse errors)
-   * @param code The error code
-   * @param message The error message
-   * @return A JSON-RPC response string
-   */
-  private def formatErrorResponse(id: Option[Any], code: Int, message: String): String = {
-    val responseData = Map(
-      "jsonrpc" -> "2.0",
-      "id" -> id.orNull,
-      "error" -> Map(
-        "code" -> code,
-        "message" -> message
-      )
-    )
-    JSON.Format(responseData)
-  }
-
-  /**
-   * Creates result data for the initialize method.
-   *
-   * @return Either error message or result data
-   */
-  private def createInitializeResult(): Either[String, Map[String, Any]] = {
-    val timestamp = java.time.Instant.now().toString
-    val result = Map(
-      "protocolVersion" -> "2024-11-05",
-      "capabilities" -> Map(
-        "tools" -> Map.empty[String, Any],
-        "resources" -> Map.empty[String, Any]
-      ),
-      "serverInfo" -> Map(
-        "name" -> "isabelle-mcp-server",
-        "version" -> s"1.0.0-restored-$timestamp"
-      )
-    )
-    Right(result)
-  }
-
-  /**
-   * Creates result data for the tools/list method.
-   *
-   * @return Either error message or result data
-   */
-  private def createToolsListResult(): Either[String, Map[String, Any]] = {
+  /** Schema definitions for IQ's own document/proof/file tools, in wire order.
+   *  The `authenticate` entry is a built-in of McpServer, not listed here.
+   *  Zipped by name with iqToolHandlers to build the registered McpTools. */
+  private val iqToolSchemas: List[Map[String, Any]] = {
     val commandSelectionDescription =
       "How to select the command context. " +
         "'current': use the command at the active caret in the active jEdit view. " +
@@ -1365,21 +661,7 @@ class IQServer(
         "'current': anchor is command at active caret. " +
         "'file_offset': requires 'path' and 'offset'. " +
         "'file_pattern': requires 'path' and 'pattern'."
-    val tools = List(
-      Map(
-        "name" -> "authenticate",
-        "description" -> "Authenticate with the I/Q MCP server. Must be called before any other tool. If the token is not provided to you, use the IQ_AUTH_TOKEN environment variable if set.",
-        "inputSchema" -> Map(
-          "type" -> "object",
-          "properties" -> Map(
-            "token" -> Map(
-              "type" -> "string",
-              "description" -> "The authentication token for the I/Q server. Unless it is provided to you, use the IQ_AUTH_TOKEN environment variable if set."
-            )
-          ),
-          "required" -> List("token")
-        )
-      ),
+    List(
       Map(
         "name" -> "list_files",
         "description" -> "List all files tracked by Isabelle, both open and non-open, with detailed information",
@@ -2017,102 +1299,42 @@ class IQServer(
           "additionalProperties" -> false
         )
       )
-    ) ++ replToolDefinitions
-
-    val result = Map("tools" -> tools)
-    Right(result)
+    )
   }
 
-  private val replToolDefinitions: List[Map[String, Any]] = {
-    def schema(props: Map[String, Any], required: List[String] = Nil): Map[String, Any] =
-      Map("type" -> "object", "properties" -> props, "additionalProperties" -> false) ++
-        (if (required.nonEmpty) Map("required" -> required) else Map.empty)
-    def str(desc: String): Map[String, Any] = Map("type" -> "string", "description" -> desc)
-    def int(desc: String): Map[String, Any] = Map("type" -> "integer", "description" -> desc)
-    val replPrefix = "I/R REPL: "
-    val replParam = "repl" -> str("REPL session identifier")
-    List(
-      Map("name" -> "repl_connect",
-        "description" -> (replPrefix + "Connect to the I/R REPL backend. MUST be called before any other repl_* tool. " +
-          "Starts ML_Repl and repl.py if not already running. " +
-          "Pass ir_home if the I/R directory cannot be auto-detected."),
-        "inputSchema" -> schema(Map(
-          "ir_home" -> str("Path to the I/R directory containing repl.py (optional; auto-detected from ISABELLE_IR_HOME or document model)")),
-          List.empty[String])),
-      Map("name" -> "repl_init",
-        "description" -> (replPrefix + "Create a new REPL session importing theories."),
-        "inputSchema" -> schema(Map(replParam,
-          "theories" -> Map("type" -> "array", "items" -> Map("type" -> "string"),
-            "description" -> "Theory names to import, e.g. [\"Main\"]")),
-          List("repl", "theories"))),
-      Map("name" -> "repl_init_from_source",
-        "description" -> (replPrefix + "Create a REPL from a source location in an open file. Specify file + offset or file + pattern."),
-        "inputSchema" -> schema(Map(replParam,
-          "file" -> str("Theory file path (auto-completed against open files)"),
-          "offset" -> int("Character offset in the file (alternative to pattern)"),
-          "pattern" -> str("Unique text pattern in the file (alternative to offset)")),
-          List("repl", "file"))),
-      Map("name" -> "repl_fork",
-        "description" -> (replPrefix + "Fork a sub-REPL from an existing REPL at a given state index (0=base, -1=latest)."),
-        "inputSchema" -> schema(Map(replParam,
-          "new_repl" -> str("New REPL identifier"),
-          "state_idx" -> int("State index to fork from (0=base, -1=latest)")),
-          List("repl", "new_repl", "state_idx"))),
-      Map("name" -> "repl_step",
-        "description" -> (replPrefix + "Execute Isar text as the next step. IMPORTANT: If a step FAILS, the REPL state is UNCHANGED — do NOT call repl_back to undo a failed step."),
-        "inputSchema" -> schema(Map(replParam, "isar_text" -> str("Isar command text")), List("repl", "isar_text"))),
-      Map("name" -> "repl_show",
-        "description" -> (replPrefix + "Show REPL: origin, steps, staleness."),
-        "inputSchema" -> schema(Map(replParam), List("repl"))),
-      Map("name" -> "repl_state",
-        "description" -> (replPrefix + "Show proof state at a step index (0=base, -1=latest)."),
-        "inputSchema" -> schema(Map(replParam, "state_idx" -> int("State index")), List("repl", "state_idx"))),
-      Map("name" -> "repl_text",
-        "description" -> (replPrefix + "Print concatenated Isar text of all steps."),
-        "inputSchema" -> schema(Map(replParam), List("repl"))),
-      Map("name" -> "repl_edit",
-        "description" -> (replPrefix + "Replace step at index with new Isar text."),
-        "inputSchema" -> schema(Map(replParam,
-          "idx" -> int("Step index to replace"),
-          "isar_text" -> str("New Isar text")),
-          List("repl", "idx", "isar_text"))),
-      Map("name" -> "repl_replay",
-        "description" -> (replPrefix + "Re-execute all stale steps."),
-        "inputSchema" -> schema(Map(replParam), List("repl"))),
-      Map("name" -> "repl_truncate",
-        "description" -> (replPrefix + "Keep steps 0..idx, discard the rest. Use -1 to revert last step."),
-        "inputSchema" -> schema(Map(replParam, "idx" -> int("Keep steps up to this index")), List("repl", "idx"))),
-      Map("name" -> "repl_back",
-        "description" -> (replPrefix + "Revert the last SUCCESSFUL step. Failed steps don't change the REPL state."),
-        "inputSchema" -> schema(Map(replParam), List("repl"))),
-      Map("name" -> "repl_merge",
-        "description" -> (replPrefix + "Inline sub-REPL back into its parent."),
-        "inputSchema" -> schema(Map(replParam), List("repl"))),
-      Map("name" -> "repl_remove",
-        "description" -> (replPrefix + "Delete a REPL and all its sub-REPLs."),
-        "inputSchema" -> schema(Map(replParam), List("repl"))),
-      Map("name" -> "repl_list",
-        "description" -> (replPrefix + "List all REPL sessions."),
-        "inputSchema" -> schema(Map.empty)),
-      Map("name" -> "repl_sledgehammer",
-        "description" -> (replPrefix + "Run sledgehammer on the proof goal."),
-        "inputSchema" -> schema(Map(replParam, "timeout_secs" -> int("Timeout in seconds")), List("repl", "timeout_secs"))),
-      Map("name" -> "repl_find_theorems",
-        "description" -> (replPrefix + "Search for theorems."),
-        "inputSchema" -> schema(Map(replParam,
-          "query" -> str("Search query"),
-          "max_results" -> int("Maximum results (default 40)")),
-          List("repl", "query"))),
-      Map("name" -> "repl_timeout",
-        "description" -> (replPrefix + "Set step timeout in seconds for a specific REPL (0=unlimited, default 10s). NOTE: DO NOT set this to values >10s unless you have " +
-          "a specific reason to. Calls like `metis`, `auto`, `blast`, `force`, should NOT take longer than 5s. Even if they do, and the call " +
-          "ultimately succeeds, it points at a proof that ought to be broken down further. ONLY use a large timeout if you work with very large " +
-          "scripts or in special circumstances where, exceptionally, a large timeout is expected / tolerated."),
-        "inputSchema" -> schema(Map(replParam, "secs" -> int("Timeout in seconds")), List("repl", "secs"))),
-      Map("name" -> "repl_raw",
-        "description" -> (replPrefix + "Send a raw ML expression to the REPL."),
-        "inputSchema" -> schema(Map("ml_code" -> str("ML expression")), List("ml_code")))
-    )
+  /** Handlers for IQ's own tools, keyed by wire name, in the same order as
+   *  iqToolSchemas. */
+  private val iqToolHandlers: List[(String, McpToolParams => Either[String, McpToolResult])] = List(
+    "list_files" -> (params => handleListFiles(params.toMap).map(McpToolResult.fromMap)),
+    "get_command_info" -> (params => handleGetCommand(params.toMap).map(McpToolResult.fromMap)),
+    "get_document_info" -> (params => handleGetDocumentInfo(params.toMap).map(McpToolResult.fromMap)),
+    "open_file" -> (params => handleOpenFile(params.toMap).map(McpToolResult.fromMap)),
+    "read_file" -> (params => handleReadTheoryFile(params.toMap).map(McpToolResult.fromMap)),
+    "write_file" -> (params => handleWriteTheoryFile(params.toMap).map(McpToolResult.fromMap)),
+    "resolve_command_target" -> (params => handleResolveCommandTarget(params.toMap).map(McpToolResult.fromMap)),
+    "get_context_info" -> (params => handleGetContextInfo(params.toMap).map(McpToolResult.fromMap)),
+    "get_entities" -> (params => handleGetEntities(params.toMap).map(McpToolResult.fromMap)),
+    "get_type_at_selection" -> (params => handleGetTypeAtSelection(params.toMap).map(McpToolResult.fromMap)),
+    "get_proof_blocks" -> (params => handleGetProofBlocks(params.toMap).map(McpToolResult.fromMap)),
+    "get_proof_context" -> (params => handleGetProofContext(params.toMap).map(McpToolResult.fromMap)),
+    "get_definitions" -> (params => handleGetDefinitions(params.toMap).map(McpToolResult.fromMap)),
+    "get_diagnostics" -> (params => handleGetDiagnostics(params.toMap).map(McpToolResult.fromMap)),
+    "get_processing_status" -> (params => handleGetProcessingStatus(params.toMap).map(McpToolResult.fromMap)),
+    "get_sorry_positions" -> (params => handleGetSorryPositions(params.toMap).map(McpToolResult.fromMap)),
+    "explore" -> (params => handleExplore(params.toMap).map(McpToolResult.fromMap)),
+    "save_file" -> (params => handleSaveFile(params.toMap).map(McpToolResult.fromMap)),
+    "set_auto_save" -> (params => handleSetAutoSave(params.toMap).map(McpToolResult.fromMap))
+  )
+
+  /** IQ's tools as McpTool values: zip each schema with its handler by name. */
+  private def iqTools: List[McpTool] = {
+    val handlers = iqToolHandlers.toMap
+    iqToolSchemas.map { sc =>
+      val name = sc("name").asInstanceOf[String]
+      val description = sc("description").asInstanceOf[String]
+      val inputSchema = sc("inputSchema").asInstanceOf[Map[String, Any]]
+      McpTool(name, description, inputSchema, handlers(name))
+    }
   }
 
   /**
@@ -5709,4 +4931,37 @@ end"""
         Left(s"enabled parameter must be a boolean, got: $other")
     }
   }
+
+  /* Register IQ's own document/proof/file tools, then the standalone I/R tools.
+   * Placed at the end of the class body so the tool val definitions
+   * (iqToolSchemas / iqToolHandlers / iqTools) are initialized first.
+   *
+   * registerAll stops at the first failure, so a duplicate/reserved name would
+   * otherwise silently truncate tools/list — surface it loudly instead. */
+  locally {
+    def warnOnFailure(what: String)(result: Either[String, Unit]): Unit =
+      result.left.foreach(msg => safeOutput(s"I/Q Server: failed to register $what tools: $msg"))
+    warnOnFailure("I/Q")(mcpServer.registerAll(iqTools))
+    warnOnFailure("I/R")(new IRTools(mcpServer, new JEditIRConnection).register())
+  }
+}
+
+
+/** Production IRConnection adapter for the jEdit host: drives the I/R lifecycle
+  * through IQExploreDockable. Lives here (not in IRTools.scala) so the I/R tool
+  * provider stays free of the jEdit-bound IQExploreDockable and remains
+  * headless-reusable. Preserves the exact connect success/failure strings. */
+final class JEditIRConnection extends IRConnection {
+  def connect(irHome: Option[String]): Either[String, String] = {
+    irHome.foreach(h => IQExploreDockable.irHome = Some(h))
+    IQExploreDockable.awaitClient() match {
+      case Some(c) if c.isConnected =>
+        Right(IQExploreDockable.connectedIRDir.getOrElse("unknown"))
+      case _ =>
+        val reason = IQExploreDockable.startupError.getOrElse("startup failed or timed out")
+        Left(s"I/R REPL connection failed — $reason")
+    }
+  }
+
+  def client: Option[IRClient] = IQExploreDockable.ir
 }
