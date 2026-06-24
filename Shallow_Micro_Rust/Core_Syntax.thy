@@ -762,18 +762,24 @@ let
     end;
 
   fun binding_name_of ctxt id =
-    (case id of
+    (case Term_Position.strip_positions id of
       Free (name, _) => name
     | Const (name, _) => Long_Name.base_name name
     | _ => case_error ("invalid alias pattern binder: " ^ Syntax.string_of_term ctxt id));
 
-  fun mk_alias_rhs ctxt id rhs =
+  fun mk_alias_rhs _ id rhs =
     let
-      val alias = binding_name_of ctxt id;
+      \<comment> \<open>Route closure through \<open>Syntax_Trans.abs_tr\<close> so that a position-tagged
+          binder \<open>_constrain $ Free name $ Free <pos>\<close> becomes a \<open>_constrainAbs\<close>
+          wrapper, preserving the binder report.\<close>
+      val binder =
+        (case Term_Position.strip_positions id of
+          Const (name, _) => Free (Long_Name.base_name name, dummyT)
+        | _ => id)
     in
       Syntax.const \<^const_syntax>\<open>bind\<close> $
         (Syntax.const \<^const_syntax>\<open>literal\<close> $ mk_anon_raw_value ()) $
-        Abs (alias, dummyT, rhs)
+        Syntax_Trans.abs_tr [binder, rhs]
     end;
 
   \<comment>\<open>Expand disjunctive patterns into a list of patterns.

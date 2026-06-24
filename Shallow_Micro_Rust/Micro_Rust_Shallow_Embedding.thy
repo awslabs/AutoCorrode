@@ -6,15 +6,13 @@ theory Micro_Rust_Shallow_Embedding
   imports
     Micro_Rust_Parsing_Frontend.Micro_Rust_Syntax
     Core_Syntax
+    Micro_Rust_Notations
     Prompts_And_Responses
     "HOL-Library.Datatype_Records"
     Autogen.Autogen
     Lenses_And_Other_Optics.Lenses_And_Other_Optics
     Tuple
   keywords
-    "notation_nano_rust"
-    "notation_nano_rust_field"
-    "notation_nano_rust_function"
     "micro_rust_record" :: thy_decl
 begin
 (*>*)
@@ -27,9 +25,12 @@ to the category of HOL terms.\<close>
 subsection\<open>Custom identifiers and identifier remapping\<close>
 
 text\<open>The in-built syntax category \<^verbatim>\<open>id\<close> of HOL identifiers does not encompass qualified
-Rust names such as \<^verbatim>\<open>Foo::Bar\<close>. To still be able to use those in Micro Rust, the abstract syntax
-parser for uRust outputs these as \<^verbatim>\<open>urust_path_string_identifier\<close> entries. We just have
-to add a way to parse these as HOL terms.
+Rust names such as \<^verbatim>\<open>Foo::Bar\<close>. The path-flattening AST translation in
+\<^file>\<open>../Micro_Rust_Parsing_Frontend/Micro_Rust_Syntax.thy\<close> turns such paths into
+\<^verbatim>\<open>_urust_identifier_id\<close> nodes whose payload is a plain \<^verbatim>\<open>Ast.Variable\<close> carrying
+the joined name (e.g. \<^verbatim>\<open>"Foo::Bar"\<close>); downstream consumers therefore see no
+structural difference between path and plain identifiers --- only the name
+string contains \<^verbatim>\<open>::\<close>.
 
 For general \<^verbatim>\<open>id\<close>s, we introduce an intermediate \<^verbatim>\<open>_urust_identifier_id_const\<close>. This allows us
 to register Micro-Rust-to-HOL name changes for those identifiers which \<^emph>\<open>do\<close> fall
@@ -47,151 +48,12 @@ in
 end
 \<close>
 
-text\<open>Entries marked \<^verbatim>\<open>_shallow_unparsed_path_string\<close> are waiting to be resolved by a parse
-translation to a proper HOL term, by looking up the string token in a map.\<close>
-syntax
-  "_shallow_unparsed_path_string" :: \<open>string_token \<Rightarrow> logic\<close>
-    ("URUST'_SHALLOW'_UNPARSED'_PATH'_STRING _")
-
-text\<open>Define the map in which Rust path literals (\<^verbatim>\<open>Foo::Bar\<close>) will be looked up in.\<close>
-ML\<open>
-  structure RustPathResolution = Generic_Data
-  (
-    type T = string Symtab.table;
-    val empty = Symtab.empty;
-    val merge = Symtab.merge (op =);
-  );
-
-  fun add_rust_path_resolution key value =
-    Symtab.insert (op =) (key, value) |>
-    RustPathResolution.map;
-
-  fun get_rust_path_resolution key =
-    RustPathResolution.get #> (fn tab => Symtab.lookup tab key)
-\<close>
-
-text\<open>Add the parse translation which will perform the lookup.\<close>
-parse_translation\<open>
-  let
-    fun internal_path_translator ctx [Term.Const (rust_name, the_typ)] =
-      let
-        val rust_resolution = ctx |> Context.Proof |> get_rust_path_resolution rust_name
-      in
-        case rust_resolution of
-            SOME term_name =>
-            \<comment> \<open>Note that we cannot have a term map, at least not a naive one, since at this point
-                generics still need to be unified.\<close>
-            Term.Const (term_name, the_typ)
-          | NONE =>
-            \<comment> \<open>In the \<^verbatim>\<open>NONE\<close> case, this will output a somewhat nice error message of the form
-              \<^verbatim>\<open>Foo::Bar constant not found\<close>\<close>
-              Term.Const (rust_name, the_typ)
-      end
-      | internal_path_translator _ args =
-          Term.list_comb (Syntax.const \<^syntax_const>\<open>_shallow_unparsed_path_string\<close>, args);
-  in [
-    (\<^syntax_const>\<open>_shallow_unparsed_path_string\<close>, internal_path_translator)
-  ] end
-\<close>
-
-ML\<open>
-\<comment> \<open>Replace \<^verbatim>\<open>pattern\<close> by \<^verbatim>\<open>replacement\<close> in \<^verbatim>\<open>original\<close>.\<close>
-fun replace_string (pattern: string) (replacement: string) (original: string)  =
-    let
-        val original_size = String.size original
-        val pattern_size = String.size pattern
-
-        fun loop start acc =
-            if start > original_size - pattern_size
-            then String.concat (List.rev (String.extract(original, start, NONE) :: acc))
-            else if String.substring(original, start, pattern_size) = pattern
-            then loop (start + pattern_size) (replacement :: acc)
-            else loop (start + 1)
-                 (String.str(String.sub(original, start)) :: acc)
-    in
-        if pattern_size = 0 orelse original_size = 0
-        then original
-        else loop 0 []
-    end;
-
-replace_string "Hello" "Hi" "Hello, world! Hello, universe!" ;
-
-replace_string "::" "_" "a::b::c";
-
-replace_string  "one" "1" "one two one two";
-\<close>
-
-text\<open>Core helper that registers \<^verbatim>\<open>nano_rust_name\<close> as notation for \<^verbatim>\<open>hol_name\<close> in uRust. There are
-three cases:
-1. \<^verbatim>\<open>nano_rust_name\<close> falls in the \<^verbatim>\<open>id\<close> syntax category. We only add a simple \<^verbatim>\<open>translations\<close> macro.
-2. \<^verbatim>\<open>nano_rust_name\<close> is a path identifier (\<^verbatim>\<open>Foo::Bar\<close>). We just have to register them as a  \<^verbatim>\<open>RustPathResolution\<close>
-3. \<^verbatim>\<open>nano_rust_name\<close> contains other special characters (e.g. \<^verbatim>\<open>fatal!\<close>). We need to add a syntax entry and a \<^verbatim>\<open>translations\<close> step.
-\<close>
-ML\<open>
-   fun notation_nano_rust ty (hol_name, nano_rust_name) = let
-     (* If the Nano Rust name is an identifier, we only need to register a translation
-        rule which converts it into the respective HOL identifier.
-
-        If the Nano Rust name is not an identifier, for example `Foo::Bar`, then we
-        insert it into the `RustPathResolution` map. *)
-
-     (* Ordinary identifier *)
-     fun simple_hol_notation_nano_rust ty hol_name nano_rust_name thy: local_theory = (
-        let val translation_in = "_shallow_identifier_as_" ^ ty ^ "(URUST_CONST " ^ " " ^ nano_rust_name ^ ")"
-            val translation_out = "CONST " ^ hol_name
-            val translation = Syntax.Parse_Rule (("logic",translation_in), ("logic",translation_out)) in
-        thy |> Local_Theory.translations_cmd true [translation]
-     end)
-
-     val remove_colons = String.translate (fn #":" => "" | c => String.str c)
-     val is_path_notation = remove_colons #> Symbol_Pos.is_identifier
-
-     (* Path notation *)
-     fun custom_path_notation_nano_rust hol_identifier nano_rust_name thy: local_theory =
-        let
-          \<comment> \<open>TODO: the calls to \<^verbatim>\<open>replace_string\<close> are for backwards compatibility. Remove them?\<close>
-          val actual_name = nano_rust_name |> replace_string "'_" "_" |> replace_string "':" ":"
-        in
-          thy |> Local_Theory.declaration {pervasive=false, syntax=false, pos=Position.none}
-          (K (add_rust_path_resolution actual_name hol_identifier))
-        end
-
-     fun remove_dots long_identifier =
-           (long_identifier |> String.explode |> filter (fn c : char => (c <> #".")) |> String.implode)
-
-     (* Complex identifier which needs to be treated as a custom keyword *)
-     fun custom_hol_notation_nano_rust ty hol_identifier nano_rust_name thy: local_theory = (
-        let val mode = Syntax.mode_default
-            val syntax_constant = "_urust_identifier_" ^ (remove_dots hol_identifier)
-            val translation_in = "_shallow_identifier_as_" ^ ty ^ " " ^ syntax_constant
-            val translation_out = "CONST " ^ hol_identifier
-            val translation = Syntax.Parse_Rule (("logic",translation_in), ("logic",translation_out)) in
-        thy |> Local_Theory.syntax_cmd true mode [(syntax_constant, "urust_identifier", Mixfix.mixfix nano_rust_name)]
-            |> Local_Theory.translations_cmd true [translation]
-     end)
-  in
-    if Symbol_Pos.is_identifier nano_rust_name then
-      simple_hol_notation_nano_rust ty hol_name nano_rust_name
-    else if is_path_notation nano_rust_name then
-      custom_path_notation_nano_rust hol_name nano_rust_name
-    else
-      custom_hol_notation_nano_rust ty hol_name nano_rust_name
-  end
-\<close>
-
-ML\<open>
-   \<comment>\<open>TODO: We should actually be able to do the right thing automatically here, by looking at the type
-of the HOL constant that's being registered: Fields are lenses, and functions are \<^text>\<open>function_body\<close>'s.\<close>
-   Outer_Syntax.local_theory @{command_keyword "notation_nano_rust"}
-      "Add a named HOL literal to Micro Rust"
-      (((Parse.long_ident || Parse.short_ident) -- (Parse.$$$ "(" |-- Parse.string --| Parse.$$$ ")")) >> (notation_nano_rust "literal"));
-   Outer_Syntax.local_theory @{command_keyword "notation_nano_rust_field"}
-      "Add a named Micro Rust field to Micro Rust"
-      (((Parse.long_ident || Parse.short_ident) -- (Parse.$$$ "(" |-- Parse.string --| Parse.$$$ ")")) >> notation_nano_rust "field");
-   Outer_Syntax.local_theory @{command_keyword "notation_nano_rust_function"}
-      "Add a named Micro Rust function to Micro Rust"
-      (((Parse.long_ident || Parse.short_ident) -- (Parse.$$$ "(" |-- Parse.string --| Parse.$$$ ")")) >> notation_nano_rust "function")
-\<close>
+\<comment>\<open>Path-style uRust names (\<^verbatim>\<open>Foo::Bar\<close>) and plain identifiers both reach
+  \<open>lookup_id_tr\<close> (the \<open>parse_translation\<close> on \<open>_shallow_identifier_as_*\<close>)
+  as the same \<^verbatim>\<open>Free name\<close> shape; resolution proceeds via the
+  \<^ML_structure>\<open>Micro_Rust_Names\<close> table, populated by the
+  \<^theory_text>\<open>micro_rust_notation\<close> command in
+  \<^theory>\<open>Shallow_Micro_Rust.Micro_Rust_Notations\<close>.\<close>
 
 named_theorems micro_rust_record_simps
 named_theorems micro_rust_record_intros
@@ -226,30 +88,112 @@ ML\<open>
 \<close>
 
 ML\<open>
-   fun register_lens_with_micro_rust rec_name field lthy =
+   \<comment>\<open>Register an auto-generated field lens as \<^verbatim>\<open>micro_rust_notation (field)\<close>
+     under its uRust name, via the command's \<open>do_register\<close>. By default the
+     uRust name is the bare (record-prefixed) HOL field name; the optional
+     \<^verbatim>\<open>(hol_field = "urust_name", \<dots>)\<close> mapping passed to \<^verbatim>\<open>micro_rust_record\<close>
+     overrides this per field — useful because HOL field names are usually
+     disambiguated with a record-name prefix that one does not want to repeat
+     at every uRust use site. The uRust name is a plain identifier
+     (grammatical, so no bespoke grammar production is emitted) and the lens
+     has type \<open>_ lens\<close> (so the forced \<open>field\<close> kind validates against the
+     term's type).\<close>
+   fun register_lens_with_micro_rust rec_name overrides field lthy =
       let val name = lens_name rec_name field
           val full_name = Local_Theory.full_name lthy (Binding.name name)
-      in notation_nano_rust "field" (full_name, field) lthy end
-   fun register_lenses_with_micro_rust rec_name thy =
-      let val fields = get_fields rec_name thy in fold (register_lens_with_micro_rust rec_name) fields thy end
+          val (rust_name, rust_pos) =
+            case AList.lookup (op =) overrides field of
+              SOME name_and_pos => name_and_pos
+            | NONE              => (field, Position.thread_data ())
+      in
+        Micro_Rust_Notation_Cmd.do_register (SOME Micro_Rust_Names.NField)
+          (full_name, (rust_name, rust_pos)) lthy
+      end
 
-   fun make_lenses (with_fields, rec_name) _ =
-       lens_autogen_defs                                                                          rec_name
-    #> lens_autogen_defining_equations     @{attributes [micro_rust_record_simps, focus_simps]}   rec_name
-    #> lens_autogen_prove_lens_validity    @{attributes [micro_rust_record_intros, focus_intros,
-                                                         micro_rust_record_simps, focus_simps]}   rec_name
-    #> lens_autogen_prove_update_equations @{attributes [micro_rust_record_simps, focus_simps]}
-                                           @{attributes [micro_rust_record_intros, focus_intros]} rec_name
-    #> focus_autogen_make_field_foci @{attributes [focus_components]} rec_name
-    #> (if with_fields then
-          register_lenses_with_micro_rust rec_name
-        else
-          I)
-    #> instantiate_localizable_class rec_name
+   \<comment>\<open>Reject a uRust-name mapping whose left-hand sides are not all fields of
+     the record: an unmatched entry is silently dropped otherwise, masking a
+     typo in the field name.\<close>
+   fun check_override_fields rec_name fields overrides =
+      let val unknown = filter_out (member (op =) fields) (map fst overrides) in
+        if null unknown then ()
+        else error ("micro_rust_record: unknown field(s) in uRust-name mapping: "
+                    ^ commas_quote unknown ^ "\nRecord " ^ quote rec_name
+                    ^ " has fields: " ^ commas_quote fields)
+      end
+
+   fun register_lenses_with_micro_rust rec_name overrides thy =
+      let val fields = get_fields rec_name thy in
+        fold (register_lens_with_micro_rust rec_name overrides) fields thy
+      end
+
+   \<comment>\<open>Pretty-print, as a bullet list, the definitions and theorems
+     \<^verbatim>\<open>micro_rust_record\<close> emits for a record (one bullet per artifact), so the
+     (otherwise opaque) autogen output is replaced by the concrete names a user
+     can reference. The trailing bullets record the uRust field-access names
+     (\<open>urust_name \<mapsto> hol_field\<close>, collapsing to the bare field where no override
+     applies) and the localizable class instance.\<close>
+   fun summarise_micro_rust_record rec_name fields overrides with_fields =
+      let fun urust_of f =
+            case AList.lookup (op =) overrides f of
+              SOME (rust_name, _) => rust_name
+            | NONE                => f
+          fun field_facts f =
+            let val base = rec_name ^ "_" ^ f in
+              [base ^ "_lens", base ^ "_lens_view_update_modify", base ^ "_lens_valid",
+               base ^ "_focus", base ^ "_focus_view_update_modify", base ^ "_focus_code",
+               base ^ "_update_explicit", base ^ "_update_localI"]
+            end
+          fun render_field_map f =
+            let val rust_name = urust_of f in
+              if rust_name = f then f else rust_name ^ " \<mapsto> " ^ f
+            end
+          val urust_facts =
+            if with_fields then map (fn f => "uRust field access: " ^ render_field_map f) fields
+            else []
+          val bullets =
+            maps field_facts fields @ urust_facts @ [rec_name ^ " :: localizable"]
+      in
+        Pretty.writeln (Pretty.chunks (map (fn s => Pretty.str ("• " ^ s)) bullets))
+      end
+
+   fun make_lenses ((with_fields, rec_name), overrides) _ lthy =
+      let val _ =
+            if with_fields orelse null overrides then ()
+            else error "micro_rust_record: a uRust-name mapping cannot be combined \
+                       \with [no_fields], which suppresses field registration"
+          val fields = get_fields rec_name lthy
+          val _ = check_override_fields rec_name fields overrides
+          val _ = summarise_micro_rust_record rec_name fields overrides with_fields
+      in
+        lthy
+     |> lens_autogen_defs                                                                          rec_name
+     |> lens_autogen_defining_equations     @{attributes [micro_rust_record_simps, focus_simps]}   rec_name
+     |> lens_autogen_prove_lens_validity    @{attributes [micro_rust_record_intros, focus_intros,
+                                                          micro_rust_record_simps, focus_simps]}   rec_name
+     |> lens_autogen_prove_update_equations @{attributes [micro_rust_record_simps, focus_simps]}
+                                            @{attributes [micro_rust_record_intros, focus_intros]} rec_name
+     |> focus_autogen_make_field_foci @{attributes [focus_components]} rec_name
+     |> (if with_fields then
+           register_lenses_with_micro_rust rec_name overrides
+         else
+           I)
+     |> instantiate_localizable_class rec_name
+      end
+
+   \<comment>\<open>Parse an optional \<^verbatim>\<open>(hol_field = "urust_name", \<dots>)\<close> mapping after the
+     record name. Each \<^verbatim>\<open>"urust_name"\<close> is position-tracked so its use-site
+     markup points back at the literal in the command.\<close>
+   val parse_field_overrides =
+      Scan.optional
+        (Parse.$$$ "(" |--
+           Parse.enum1 "," (Parse.short_ident -- (Parse.$$$ "=" |-- Parse.position Parse.string))
+         --| Parse.$$$ ")")
+        []
 
    val _ =
       Outer_Syntax.local_theory' \<^command_keyword>\<open>micro_rust_record\<close> "make lenses for datatype record"
-       (((Scan.optional ((Args.bracks (Args.$$$ "no_fields")) >> K false) true) -- Parse.short_ident) >> make_lenses)
+       ((((Scan.optional ((Args.bracks (Args.$$$ "no_fields")) >> K false) true) -- Parse.short_ident)
+            -- parse_field_overrides) >> make_lenses)
 \<close>
 
 subsection\<open>The embedding\<close>
@@ -268,6 +212,14 @@ syntax
   "_shallow_identifier_as_literal" :: \<open>urust_identifier \<Rightarrow> logic\<close>
   "_shallow_identifier_as_function" :: \<open>urust_identifier \<Rightarrow> logic\<close>
   "_shallow_identifier_as_field" :: \<open>urust_identifier \<Rightarrow> logic\<close>
+
+  \<comment> \<open>Lower a uRust identifier in BINDER-INTRODUCTION position (let-pattern
+     leaf, for-loop binder, etc.) to a plain \<^verbatim>\<open>Free\<close> suitable as the binder
+     slot of \<open>_abs\<close>. Distinct from \<open>_shallow_identifier_as_literal\<close>: pure
+     binders never consult the dispatch table --- their identifier IS the
+     binder, and any registered uRust notation of the same name is shadowed
+     by the let.\<close>
+  "_shallow_pattern_id" :: \<open>urust_identifier \<Rightarrow> logic\<close>
 
   "_shallow_match_branches" :: \<open>urust_match_branches \<Rightarrow> urust_shallow_match_branches\<close>
   "_shallow_match_branch" :: \<open>urust_match_branch  \<Rightarrow> urust_shallow_match_branch \<close>
@@ -291,10 +243,12 @@ term\<open>let (x, _ :: int) = (5,6) in x+12\<close>
 end
 
 
-translations
-  "_shallow_identifier_as_function (_urust_path_string_identifier s)" \<rightharpoonup> "_shallow_unparsed_path_string s"
-  "_shallow_identifier_as_literal (_urust_path_string_identifier s)" \<rightharpoonup> "_shallow_unparsed_path_string s"
-  "_shallow_identifier_as_field (_urust_path_string_identifier s)" \<rightharpoonup> "_shallow_unparsed_path_string s"
+\<comment>\<open>Path-style names like \<^verbatim>\<open>Foo::Bar\<close> are resolved by the
+  \<^verbatim>\<open>parse_translation\<close> for \<^verbatim>\<open>_shallow_identifier_as_*\<close> (see
+  \<open>lookup_id_tr\<close> below): it looks the name up in the
+  \<^ML_structure>\<open>Micro_Rust_Names\<close> table and falls back to the bare
+  identifier on miss, so paths participate in the same multi-backend,
+  type-driven dispatch as plain identifiers.\<close>
 
 translations
   \<comment>\<open>The shallow embedding of a HOL term is the corresponding literal\<close>
@@ -478,8 +432,11 @@ translations
     \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp) (_abs (_shallow_let_pattern pattern) (_shallow cont))"
   "_shallow (_urust_bind_immutable' pattern exp cont)"
     \<rightharpoonup> "CONST Core_Expression.bind (_shallow exp) (_abs (_shallow_let_pattern pattern) (_shallow cont))"
+  \<comment>\<open>Let-pattern leaves use the binder-position resolver --- their
+    identifier IS the binder, so we must not emit a \<^verbatim>\<open>urust_dispatch\<close>
+    marker here (it would crash \<^ML>\<open>Syntax_Trans.abs_tr\<close>).\<close>
   "_shallow_let_pattern (_urust_match_pattern_constr_no_args id)"
-    \<rightharpoonup> "_shallow_identifier_as_literal id"
+    \<rightharpoonup> "_shallow_pattern_id id"
   "_shallow_let_pattern _urust_match_pattern_other"
     \<rightharpoonup> "_idtdummy"
   "_shallow_let_pattern (_urust_match_pattern_grouped pat)"
@@ -597,10 +554,21 @@ translations
   "_shallow (_urust_closure_with_args args exp)"
     \<rightharpoonup> "CONST literal (_shallow_abstract_args args exp)"
 
-  "_shallow_abstract_args (_urust_formal_single (_urust_identifier_hol_id arg)) exp"
-    \<rightharpoonup> "\<lambda>arg. CONST FunctionBody (_shallow exp)"
-  "_shallow_abstract_args (_urust_formal_app (_urust_identifier_hol_id arg) args) exp"
-    \<rightharpoonup> "\<lambda>arg. _shallow_abstract_args args exp"
+  \<comment>\<open>Closure-formal lowering routes the binder through \<^verbatim>\<open>_abs\<close> (and
+    hence \<^ML>\<open>Syntax_Trans.abs_tr\<close>) so the source position carried by
+    the formal's \<open>id_position\<close> survives into a \<open>_constrainAbs\<close>
+    wrapper. The decoder then emits \<open>Markup.bound\<close> at the binder's
+    source range, paired with each in-scope use site --- which is what
+    makes ctrl-click on a closure-body identifier jump back to the
+    \<^verbatim>\<open>|x|\<close> binder.
+
+    The previous form \<open>\<lambda>arg. _\<close> using a translations meta-variable
+    discarded the \<open>_constrain\<close> wrapper at substitution time and so
+    produced binder-markup-less closures.\<close>
+  "_shallow_abstract_args (_urust_formal_single id) exp"
+    \<rightharpoonup> "_abs id (CONST FunctionBody (_shallow exp))"
+  "_shallow_abstract_args (_urust_formal_app id args) exp"
+    \<rightharpoonup> "_abs id (_shallow_abstract_args args exp)"
 
   "_shallow_apply_params f (_urust_param_app p params)"
     \<rightharpoonup> "_shallow_apply_params (f p) params"
@@ -827,6 +795,12 @@ translations
     \<rightharpoonup> "_urust_shallow_match_pattern_zero"
   "_shallow_match_pattern (_urust_match_pattern_one)"
     \<rightharpoonup> "_urust_shallow_match_pattern_one"
+  \<comment>\<open>Match-arm constructor heads continue to route through the
+    value-position \<^verbatim>\<open>_shallow_identifier_as_literal\<close>: \<open>case_tr\<close>
+    downstream tolerates a \<^verbatim>\<open>urust_dispatch\<close> marker as the head and
+    the term_check phase resolves it after type inference (which is
+    necessary for value-position match arms like \<open>match x { number::three => \<dots> }\<close>
+    where the registration target is a non-constructor constant).\<close>
   "_shallow_match_pattern (_urust_match_pattern_constr_no_args id)"
     \<rightharpoonup> "_urust_shallow_match_pattern_constr_no_args (_shallow_identifier_as_literal id)"
   "_shallow_match_pattern (_urust_match_pattern_constr_with_args id args)"
@@ -875,29 +849,112 @@ translations
   "_shallow (_urust_while_let (_urust_antiquotation fuel) ptrn expr body)"
     \<rightharpoonup> "_urust_shallow_while_let fuel (_shallow_match_pattern ptrn) (_shallow expr) (_shallow body)"
 
-
-abbreviation urust_constructor_some :: \<open>'a \<Rightarrow> ('s, 'a option, 'abort, 'i, 'o) function_body\<close> where
-   \<open>urust_constructor_some \<equiv> lift_fun1 Some\<close>
-abbreviation urust_constructor_ok :: \<open>'a \<Rightarrow> ('s, ('a, 'e) result, 'abort, 'i, 'o) function_body\<close> where
-   \<open>urust_constructor_ok \<equiv> lift_fun1 Ok\<close>
-abbreviation urust_constructor_err :: \<open>'e \<Rightarrow> ('s, ('a, 'e) result, 'abort, 'i, 'o) function_body\<close> where
-   \<open>urust_constructor_err \<equiv> lift_fun1 Err\<close>
-
-notation_nano_rust_function urust_constructor_some ("Some")
-notation_nano_rust_function urust_constructor_ok   ("Ok")
-notation_nano_rust_function urust_constructor_err  ("Err")
+micro_rust_notation \<open>lift_fun1 Some\<close> ("Some")
+micro_rust_notation \<open>lift_fun1 Ok\<close>   ("Ok")
+micro_rust_notation \<open>lift_fun1 Err\<close>  ("Err")
 
 text\<open>By default, we map all identifiers to HOL through the identity function on their names.
-We have to register this as a parse translation rather than a rule to give precedence to namings
-registers via \<^text>\<open>notation_nano_rust\<close>, which use translation rules.\<close>
+We register this as a parse translation rather than a rule so that names registered via
+\<^theory_text>\<open>micro_rust_notation\<close> (which the translation looks up in
+\<^ML_structure>\<open>Micro_Rust_Names\<close>) take precedence.\<close>
 
-\<comment>\<open>NB: We could save some manual invocations of \<^text>\<open>notation_nano_rust\<close> if we changed the
+\<comment>\<open>NB: We could save some manual invocations of \<^theory_text>\<open>micro_rust_notation\<close> if we changed the
 default renaming convention here, and e.g. prepend all field names with \<^verbatim>\<open>field_lens_\<close>,
 for example.\<close>
-parse_translation\<open>[(\<^syntax_const>\<open>_urust_identifier_id\<close>, K hd),
-                   (\<^syntax_const>\<open>_shallow_identifier_as_literal\<close>, K hd),
-                   (\<^syntax_const>\<open>_shallow_identifier_as_function\<close>, K hd),
-                   (\<^syntax_const>\<open>_shallow_identifier_as_field\<close>, K hd)]\<close>
+parse_translation\<open>
+let
+  \<comment>\<open>Lower a uRust identifier in \<open>kind\<close>-position to HOL: if \<open>name\<close> has any
+    backends registered in \<^ML_structure>\<open>Micro_Rust_Names\<close>, emit a typed
+    \<^const>\<open>urust_dispatch\<close> marker that the term_check phase resolves
+    against the occurrence's inferred type. Otherwise fall back to the
+    bare identifier (the historical \<open>K hd\<close> behaviour: a fresh free
+    variable named \<open>name\<close> --- which is what unregistered uRust
+    identifiers should still produce).
+
+    The arg arrives as a position-tagged identifier
+    \<open>_constrain $ Free name $ Free <pos>\<close> after the \<open>id_position\<close>
+    grammar; strip positions only for the lookup, not for the fallback
+    return value (so unregistered names retain their source markup).\<close>
+  \<comment>\<open>Extract the source position(s) of a position-tagged identifier
+    \<open>_constrain $ Free name $ Free <encoded-pos>\<close>. Returns \<open>[]\<close> for
+    untagged identifiers; the use-site markup is then emitted at
+    \<open>Position.none\<close> and silently dropped.\<close>
+  fun source_positions_of (Const (\<^syntax_const>\<open>_constrain\<close>, _) $ _ $ enc) =
+        (case Term_Position.decode_position1 enc of
+          SOME {pos, ...} => [pos]
+        | NONE => [])
+    | source_positions_of _ = [];
+
+  \<comment>\<open>Pick the leftmost decoded source position (if any) to fold into
+    the marker; \<open>Position.none\<close> when nothing is attached.\<close>
+  fun pick_pos source_positions =
+    (case source_positions of p :: _ => p | [] => Position.none);
+
+  \<comment>\<open>Lower a uRust identifier in \<open>kind\<close>-position to HOL. After AST
+     flattening of paths into \<^verbatim>\<open>_urust_identifier_id\<close>, plain identifiers
+     and path identifiers (\<open>foo::bar\<close>) arrive uniformly as
+     \<^verbatim>\<open>Free name\<close> (possibly \<open>_constrain\<close>-wrapped with a source position).
+     For paths the name simply contains \<open>::\<close> separators; downstream
+     consumers only look at the name string, so no shape match is needed.
+
+     We ALWAYS emit a \<^verbatim>\<open>urust_dispatch\<close> marker carrying the original
+     \<open>arg\<close> as a witness. HOL elaboration resolves the witness through
+     normal binding, and the term_check phase uses witness precedence:
+     a \<^verbatim>\<open>Bound\<close> witness (a \<lambda>-binder of the same name) wins over any
+     table registration; a \<^verbatim>\<open>Free\<close> or \<^verbatim>\<open>Const\<close> witness defers to the
+     table, falling back to itself on miss. This is what stops a
+     registered \<open>("mask")\<close> from hijacking a \<open>\<lambda>mask. \<dots> mask \<dots>\<close> use site.
+
+     Path identifiers (\<open>Foo::Bar\<close>) cannot be HOL binders, so the witness
+     elaborates to a \<^verbatim>\<open>Free\<close> with a \<open>::\<close>-containing name; the table
+     lookup proceeds exactly as for plain ids.\<close>
+  fun lookup_id_tr kind ctxt [arg] =
+        (case Term_Position.strip_positions arg of
+          Free (name, _) =>
+            \<comment>\<open>Only emit a marker when the table actually has a registration
+              for this \<open>(kind, name)\<close>. If there is none, return the bare
+              \<open>arg\<close> --- otherwise we'd disrupt downstream constructions
+              like \<open>_abs\<close> binders that expect the binder slot to be a
+              recognisable \<open>Free\<close>/\<open>_constrain\<close>-wrapped shape, not a
+              \<open>urust_dispatch\<close> application.\<close>
+            (case Micro_Rust_Names.lookups ctxt kind name of
+               [] => arg
+             | _ =>
+                 \<comment>\<open>Markup emission is deferred to \<open>Micro_Rust_Dispatch.resolve\<close>:
+                   we emit the use-site markup ONLY when a marker is
+                   actually replaced by a registered backend, never
+                   when the witness ends up winning (\<lambda>-binder shadow).\<close>
+                 Micro_Rust_Dispatch.mk_marker kind name
+                   (pick_pos (source_positions_of arg)) arg)
+        | _ => arg)
+    | lookup_id_tr _ _ ts = hd ts;
+in
+  [(\<^syntax_const>\<open>_urust_identifier_id\<close>, K hd),
+   (\<^syntax_const>\<open>_shallow_identifier_as_literal\<close>,
+      lookup_id_tr Micro_Rust_Names.NLiteral),
+   (\<^syntax_const>\<open>_shallow_identifier_as_function\<close>,
+      lookup_id_tr Micro_Rust_Names.NFunction),
+   (\<^syntax_const>\<open>_shallow_identifier_as_field\<close>,
+      lookup_id_tr Micro_Rust_Names.NField)]
+end
+\<close>
+
+\<comment>\<open>Binder-introduction resolver: a let-pattern leaf or other binder slot.
+  Pure identity --- the identifier IS the binder, so the dispatch table
+  is never consulted. A registered uRust notation of the same name is
+  silently shadowed by the let, mirroring Rust's lexical scoping. Runs
+  at parse-translation time so \<^ML>\<open>Syntax_Trans.abs_tr\<close> sees the bare
+  \<^verbatim>\<open>Free\<close>/\<open>_constrain\<close> shape it expects.
+
+  Match-arm constructor heads do NOT use this resolver --- they keep
+  routing through the value-position \<open>_shallow_identifier_as_literal\<close>
+  so the term_check phase can resolve registered names AFTER type
+  inference (necessary for value-position match arms like
+  \<open>match x { number::three => \<dots> }\<close> where the registration target is a
+  non-constructor constant).\<close>
+parse_translation\<open>
+  [(\<^syntax_const>\<open>_shallow_pattern_id\<close>, fn _ => hd)]
+\<close>
 
 ML\<open>
   fun known_constructor_name ctxt name =
@@ -910,15 +967,31 @@ ML\<open>
       else NONE
     end;
 
-  fun resolve_constructor_id _ (id as Const _) = SOME id
-    | resolve_constructor_id ctxt (Free (name, _)) =
-        Option.map Syntax.const (known_constructor_name ctxt name)
-    | resolve_constructor_id _ _ = NONE;
+  \<comment>\<open>Resolve a constructor identifier \<open>id\<close> to its fully-qualified
+    \<^verbatim>\<open>Const\<close>. We must preserve the original \<^verbatim>\<open>_constrain $ _ $ <pos\<close>
+    wrapper so the decoder's namespace markup ends up at the user's
+    source token --- otherwise pattern heads like \<open>Some\<close> in
+    \<open>match x { Some(y) => \<dots> }\<close> or \<open>if let Some(y) = \<dots>\<close> have no
+    clickable entity ref attached.\<close>
+  fun preserve_position id new_inner =
+    (case id of
+      Const (\<^syntax_const>\<open>_constrain\<close>, T) $ _ $ pos_enc =>
+        Const (\<^syntax_const>\<open>_constrain\<close>, T) $ new_inner $ pos_enc
+    | _ => new_inner);
 
-  fun dest_ident_name ctxt (Free (name, _)) = name
-    | dest_ident_name ctxt (Const (name, _)) = name
-    | dest_ident_name ctxt t =
-        error ("invalid identifier term: " ^ Syntax.string_of_term ctxt t);
+  fun resolve_constructor_id ctxt id =
+    (case Term_Position.strip_positions id of
+      t as Const _ => SOME (preserve_position id t)
+    | Free (name, _) =>
+        Option.map (fn n => preserve_position id (Syntax.const n))
+                   (known_constructor_name ctxt name)
+    | _ => NONE);
+
+  fun dest_ident_name ctxt t =
+    (case Term_Position.strip_positions t of
+      Free (name, _) => name
+    | Const (name, _) => name
+    | _ => error ("invalid identifier term: " ^ Syntax.string_of_term ctxt t));
 
   fun canonical_name s = Long_Name.base_name s;
 

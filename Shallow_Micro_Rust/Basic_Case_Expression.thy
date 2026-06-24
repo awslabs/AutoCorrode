@@ -121,8 +121,15 @@ ML\<open>
 fun case_error s = error ("Error in bcase expression:\n" ^ s);
 fun case_tr err ctxt [t, u] =
       let
+        \<comment> \<open>\<open>p\<close> is the binder \<^emph>\<open>term\<close>, e.g. \<open>Free (x, _)\<close> or
+            \<open>_constrain $ Free (x, _) $ Free (<pos>, _)\<close> when the pattern's
+            identifier carries source-position markup. Routing closure through
+            \<open>Syntax_Trans.abs_tr\<close> preserves that markup as a \<open>_constrainAbs\<close>
+            wrapper, which downstream phases turn into a binder report so that
+            jump-to-definition on a use of \<open>x\<close> in the branch RHS can find the
+            pattern occurrence.\<close>
         fun abs p t =
-          Syntax.const \<^const_syntax>\<open>case_abs\<close> $ Term.absfree (p, dummyT) t;
+          Syntax.const \<^const_syntax>\<open>case_abs\<close> $ Syntax_Trans.abs_tr [p, t];
 
         fun pattern_args_destruct (Const( \<^syntax_const>\<open>_case_basic_pattern_args_single\<close>,_) $ t) = [t]
           | pattern_args_destruct (Const( \<^syntax_const>\<open>_case_basic_pattern_args_app\<close>,_) $ t $ rem) = t :: (pattern_args_destruct rem)
@@ -135,8 +142,13 @@ fun case_tr err ctxt [t, u] =
         fun pattern_build_term constructor args  =  
                fold (fn a => fn b => (b $ a)) args constructor
 
+        \<comment> \<open>Identifier-shaped terms now arrive as \<open>_constrain $ Free name $ Free <pos>\<close>
+            because of the \<open>id_position\<close> grammar. The helpers below only \<^emph>\<open>read\<close> the
+            identifier name, so we strip positions up front.\<close>
+        val strip_id_pos = Term_Position.strip_positions
+
         fun dest_id_name id =
-              (fst (Term.dest_Free id))
+              (fst (Term.dest_Free (strip_id_pos id)))
                 handle TERM _ => case_error ("invalid pattern identifier: " ^ (print_term id))
 
         fun known_constructor_name ctxt name =
@@ -149,21 +161,34 @@ fun case_tr err ctxt [t, u] =
                 else NONE
               end
 
-        fun resolve_constructor_id _ (id as Const _) = id
-          | resolve_constructor_id ctxt (Free (name, _)) =
-              (case known_constructor_name ctxt name of
-                SOME full => Syntax.const full
-              | NONE => Free (name, dummyT))
-          | resolve_constructor_id ctxt t = t
+        \<comment> \<open>Re-wrap a resolved constructor \<^verbatim>\<open>Const\<close> in the original
+            \<open>_constrain $ _ $ <pos>\<close> envelope so the decoder's namespace
+            markup lands on the user's source token --- otherwise pattern
+            heads like \<open>Some\<close> in \<open>if let Some(x) = \<dots>\<close> /
+            \<open>match x { Some(y) => \<dots> }\<close> have no clickable entity ref.\<close>
+        fun preserve_position id new_inner =
+              (case id of
+                Const (\<^syntax_const>\<open>_constrain\<close>, T) $ _ $ pos_enc =>
+                  Const (\<^syntax_const>\<open>_constrain\<close>, T) $ new_inner $ pos_enc
+              | _ => new_inner)
+
+        fun resolve_constructor_id ctxt id =
+              (case strip_id_pos id of
+                t as Const _ => preserve_position id t
+              | Free (name, _) =>
+                  (case known_constructor_name ctxt name of
+                    SOME full => preserve_position id (Syntax.const full)
+                  | NONE => Free (name, dummyT))
+              | t => t)
 
         fun is_constructor_id ctxt id =
-              (case id of
+              (case strip_id_pos id of
                 Const _ => true
               | Free (name, _) => Option.isSome (known_constructor_name ctxt name)
               | _ => false)
 
         fun is_binding_id ctxt id =
-              (case id of
+              (case strip_id_pos id of
                 Free _ => not (is_constructor_id ctxt id)
               | _ => false)
 
@@ -222,22 +247,30 @@ fun case_tr err ctxt [t, u] =
                     handle ERROR _ =>
                       case_error ("collect_ids -- invalid pattern arg: " ^ (print_term t))))
 
+        \<comment> \<open>Binder bookkeeping returns binder \<^emph>\<open>terms\<close> (not just name strings) so
+            that source positions on user-supplied identifiers survive into the
+            \<open>case_abs\<close>/\<open>Syntax_Trans.abs_tr\<close> call site, where they become
+            \<open>_constrainAbs\<close> wrappers and thus binder reports.\<close>
+        fun fresh_binder used =
+              let val (x, used') = Name.variant "x" used
+              in (Free (x, dummyT), used') end
+
         fun pattern_arg_to_term arg used =
               (case strip_convert_arg arg of
                 Const ( \<^syntax_const>\<open>_case_basic_pattern_arg_dummy\<close>, _) =>
-                  let val (x, used') = Name.variant "x" used
-                  in (Free (x, dummyT), [x], used') end
+                  let val (b, used') = fresh_binder used
+                  in (b, [b], used') end
               | (Const (\<^syntax_const>\<open>_case_basic_pattern_arg_id\<close>,_)) $ id =>
-                  (id, [dest_id_name id], used)
+                  (id, [id], used)
               | (Const (\<^syntax_const>\<open>_case_basic_pattern_arg_pattern\<close>,_)) $ pat =>
                   pattern_term_of_pattern pat used
               | (Const ("_urust_shallow_match_pattern_arg_id",_)) $ id =>
-                  (id, [dest_id_name id], used)
+                  (id, [id], used)
               | (Const ("_urust_shallow_match_pattern_arg_pattern",_)) $ pat =>
                   pattern_term_of_pattern pat used
               | Const ("_urust_shallow_match_pattern_arg_dummy", _) =>
-                  let val (x, used') = Name.variant "x" used
-                  in (Free (x, dummyT), [x], used') end
+                  let val (b, used') = fresh_binder used
+                  in (b, [b], used') end
               | t =>
                   (pattern_term_of_pattern t used
                     handle ERROR _ =>
@@ -257,39 +290,39 @@ fun case_tr err ctxt [t, u] =
                   in (pattern_build_term (resolve_constructor_id ctxt c) arg_terms, binders, used') end
               | Const (\<^syntax_const>\<open>_case_basic_pattern_constr_no_args\<close>,_) $ c =>
                   if is_binding_id ctxt c
-                  then (c, [dest_id_name c], used)
+                  then (c, [c], used)
                   else (resolve_constructor_id ctxt c, [], used)
               | Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _) =>
-                  let val (x, used') = Name.variant "x" used
-                  in (Free (x, dummyT), [x], used') end
+                  let val (b, used') = fresh_binder used
+                  in (b, [b], used') end
               | Const ("_urust_shallow_match_pattern_constr_with_args", _) $ c $ args =>
                   let val args' = shallow_args_destruct args
                       val (arg_terms, binders, used') = pattern_args_to_terms args' used
                   in (pattern_build_term (resolve_constructor_id ctxt c) arg_terms, binders, used') end
               | Const ("_urust_shallow_match_pattern_constr_no_args", _) $ c =>
                   if is_binding_id ctxt c
-                  then (c, [dest_id_name c], used)
+                  then (c, [c], used)
                   else (resolve_constructor_id ctxt c, [], used)
               | Const ("_urust_shallow_match_pattern_other", _) =>
-                  let val (x, used') = Name.variant "x" used
-                  in (Free (x, dummyT), [x], used') end
+                  let val (b, used') = fresh_binder used
+                  in (b, [b], used') end
               | Const ("_urust_match_pattern_constr_with_args", _) $ c $ args =>
                   let val args' = urust_args_destruct args
                       val (arg_terms, binders, used') = pattern_args_to_terms args' used
                   in (pattern_build_term (resolve_constructor_id ctxt c) arg_terms, binders, used') end
               | Const ("_urust_match_pattern_constr_no_args", _) $ c =>
                   if is_binding_id ctxt c
-                  then (c, [dest_id_name c], used)
+                  then (c, [c], used)
                   else (resolve_constructor_id ctxt c, [], used)
               | Const ("_urust_match_pattern_other", _) =>
-                  let val (x, used') = Name.variant "x" used
-                  in (Free (x, dummyT), [x], used') end
+                  let val (b, used') = fresh_binder used
+                  in (b, [b], used') end
               | t => case_error ("invalid pattern: " ^ (print_term t)))
 
-        fun handle_pattern (Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _)) exp = 
+        fun handle_pattern (Const (\<^syntax_const>\<open>_case_basic_pattern_other\<close>, _)) exp =
             let val (constr_str, _) = Name.variant "C" (Term.declare_free_names t Name.context)
                 val constr = Free (constr_str, dummyT) in
-                abs constr_str (Syntax.const \<^const_syntax>\<open>case_elem\<close> $ constr $ exp) end
+                abs constr (Syntax.const \<^const_syntax>\<open>case_elem\<close> $ constr $ exp) end
           | handle_pattern pattern exp =
             let val used0 = Term.declare_free_names exp Name.context
                 val used = fold Name.declare (collect_ids_from_pattern pattern) used0

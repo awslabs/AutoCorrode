@@ -59,8 +59,9 @@ definition urust_func_result_is_err :: \<open>('v,'e) result \<Rightarrow> ('s, 
        Err(_) \<Rightarrow> True
      }
   \<rbrakk>\<close>
+micro_rust_notation (call) urust_func_result_is_err ("is_err")
 
-definition result_is_err_contract :: 
+definition result_is_err_contract ::
   \<open>('a, 'e) result \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>result_is_err_contract res \<equiv>
     let pre = UNIV; post = \<lambda>r. \<langle>r = result_is_err res\<rangle>
@@ -80,8 +81,9 @@ definition urust_func_result_is_ok :: \<open>('v,'e) result \<Rightarrow> ('s, b
        Err(_) \<Rightarrow> False
      }
   \<rbrakk>\<close>
+micro_rust_notation (call) urust_func_result_is_ok ("is_ok")
 
-definition result_is_ok_contract :: 
+definition result_is_ok_contract ::
   \<open>('a, 'e) result \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>result_is_ok_contract res \<equiv>
     let pre = UNIV; post = \<lambda>r. \<langle>r = result_is_ok res\<rangle>
@@ -100,7 +102,7 @@ definition result_or :: \<open>('a, 'f) result \<Rightarrow> ('a, 'e) result \<R
         Err(_) \<Rightarrow> e
      } 
   \<rbrakk>\<close>
-notation_nano_rust_function result_or ("or")
+micro_rust_notation (call) result_or ("or")
 
 definition result_or_pure :: \<open>('a, 'f) result \<Rightarrow> ('a, 'e) result \<Rightarrow> ('a, 'e) result\<close> where
   \<open>result_or_pure v e \<equiv> case v of Ok(v) \<Rightarrow> Ok(v) | Err(_) \<Rightarrow> e\<close>

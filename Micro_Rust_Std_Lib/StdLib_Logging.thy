@@ -22,35 +22,35 @@ abbreviation fatal :: \<open>log_data \<Rightarrow> ('s, unit, 'abort, 'i prompt
   \<open>fatal m \<equiv> FunctionBody \<lbrakk>
      \<l>\<o>\<g> \<llangle>Fatal\<rrangle> \<llangle>m\<rrangle>
    \<rbrakk>\<close>
-notation_nano_rust_function fatal ("fatal!")
+micro_rust_notation (call) fatal ("fatal!")
 
 text\<open>The \<^verbatim>\<open>info\<close> logger:\<close>
 abbreviation info :: \<open>log_data \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>info m \<equiv> FunctionBody \<lbrakk>
      \<l>\<o>\<g> \<llangle>Info\<rrangle> \<llangle>m\<rrangle>
    \<rbrakk>\<close>
-notation_nano_rust_function info ("info!")
+micro_rust_notation (call) info ("info!")
 
 text\<open>The \<^verbatim>\<open>error\<close> logger:\<close>
 abbreviation error :: \<open>log_data \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>error m \<equiv> FunctionBody \<lbrakk>
      \<l>\<o>\<g> \<llangle>Error\<rrangle> \<llangle>m\<rrangle>
    \<rbrakk>\<close>
-notation_nano_rust_function error ("error!")
+micro_rust_notation (call) error ("error!")
 
 text\<open>The \<^verbatim>\<open>debug\<close> logger:\<close>
 abbreviation debug :: \<open>log_data \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>debug m \<equiv> FunctionBody \<lbrakk>
      \<l>\<o>\<g> \<llangle>Debug\<rrangle> \<llangle>m\<rrangle>
    \<rbrakk>\<close>
-notation_nano_rust_function debug ("debug!")
+micro_rust_notation (call) debug ("debug!")
 
 text\<open>The \<^verbatim>\<open>trace\<close> logger:\<close>
 abbreviation trace :: \<open>log_data \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>trace m \<equiv> FunctionBody \<lbrakk>
      \<l>\<o>\<g> \<llangle>Trace\<rrangle> \<llangle>m\<rrangle>
    \<rbrakk>\<close>
-notation_nano_rust_function trace ("trace!")
+micro_rust_notation (call) trace ("trace!")
 
 \<comment>\<open>A bit of syntax sugar to reduce the pain of writing logging expressions:
    Write \<^verbatim>\<open>trace! ([["string0", data0, "string1", data1, ...]])\<close>\<close>

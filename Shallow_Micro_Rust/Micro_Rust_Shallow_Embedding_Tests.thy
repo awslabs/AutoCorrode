@@ -995,12 +995,12 @@ record struct_pattern_rec =
 definition foo_struct_expr_lift where
   "foo_struct_expr_lift \<equiv> lift_fun2 Foo"
 
-notation_nano_rust_function foo_struct_expr_lift ("Foo")
+micro_rust_notation (call) foo_struct_expr_lift ("Foo")
 
 definition struct_pattern_dr_struct_expr_lift where
   "struct_pattern_dr_struct_expr_lift \<equiv> lift_fun2 make_struct_pattern_dr"
 
-notation_nano_rust_function struct_pattern_dr_struct_expr_lift ("struct_pattern_dr")
+micro_rust_notation (call) struct_pattern_dr_struct_expr_lift ("struct_pattern_dr")
 
 term\<open>\<lbrakk>
   match (\<llangle>1 :: 32 word\<rrangle>, \<llangle>2 :: 32 word\<rrangle>) {
@@ -1806,6 +1806,141 @@ term \<open>\<lbrakk> s.field3_lens.field2_lens \<rbrakk>\<close>
 no_adhoc_overloading store_dereference_const \<rightleftharpoons> dummy_dereference_field
 end
 
+subsubsection\<open>Custom uRust Field Names\<close>
+
+text\<open>By default \<^verbatim>\<open>micro_rust_record\<close> registers each field's lens under the
+bare HOL field name. Since HOL field names are usually disambiguated with a
+record-name prefix (e.g. \<open>bounds_rec_lo\<close>), this forces that prefix to be
+repeated at every uRust use site. The optional \<^verbatim>\<open>(hol_field = "urust_name", \<dots>)\<close>
+mapping overrides the uRust name per field, so one can write the un-prefixed
+\<open>m.lo\<close> in uRust while the HOL field stays \<open>bounds_rec_lo\<close>.\<close>
+
+datatype_record bounds_rec =
+  bounds_rec_lo :: \<open>64 word\<close>
+  bounds_rec_hi :: \<open>64 word\<close>
+  bounds_rec_flag :: bool
+micro_rust_record bounds_rec
+  (bounds_rec_lo = "lo",
+   bounds_rec_hi = "end",
+   bounds_rec_flag = "flag")
+
+text\<open>Each custom name parses at a uRust use site and resolves to its own,
+correctly-typed field lens. Note \<open>end\<close> is an Isabelle keyword, yet is accepted
+as a field name in \<open>m.end\<close>.\<close>
+
+context
+  fixes m :: bounds_rec
+begin
+term \<open>\<lbrakk> m.lo \<rbrakk>\<close>
+term \<open>\<lbrakk> m.end \<rbrakk>\<close>
+term \<open>\<lbrakk> m.flag \<rbrakk>\<close>
+
+text\<open>The custom name is definitionally the same access as the underlying
+record-prefixed lens — i.e. the override only renames, it does not change the
+target.\<close>
+lemma \<open>\<lbrakk> m.lo \<rbrakk>   = \<lbrakk> m.bounds_rec_bounds_rec_lo_lens \<rbrakk>\<close>   by (rule refl)
+lemma \<open>\<lbrakk> m.end \<rbrakk>  = \<lbrakk> m.bounds_rec_bounds_rec_hi_lens \<rbrakk>\<close>   by (rule refl)
+lemma \<open>\<lbrakk> m.flag \<rbrakk> = \<lbrakk> m.bounds_rec_bounds_rec_flag_lens \<rbrakk>\<close> by (rule refl)
+end
+
+text\<open>Concrete evaluation confirms each custom name reads back the right field:
+\<open>lo\<close>, \<open>end\<close> and \<open>flag\<close> recover the first, second and third
+constructor arguments respectively — so the three names target three distinct
+fields and are not aliased to one.\<close>
+value [simp] \<open>\<lbrakk> \<llangle>make_bounds_rec 1 2 True\<rrangle>.lo \<rbrakk>\<close>   \<comment> \<open>\<open>Expression (Success 1)\<close>\<close>
+value [simp] \<open>\<lbrakk> \<llangle>make_bounds_rec 1 2 True\<rrangle>.end \<rbrakk>\<close>  \<comment> \<open>\<open>Expression (Success 2)\<close>\<close>
+value [simp] \<open>\<lbrakk> \<llangle>make_bounds_rec 1 2 True\<rrangle>.flag \<rbrakk>\<close> \<comment> \<open>\<open>Expression (Success True)\<close>\<close>
+
+text\<open>An override replaces the default name rather than adding to it: once
+\<open>bounds_rec_lo\<close> is mapped to \<open>lo\<close>, the field is reachable in uRust only as
+\<open>m.lo\<close>, not under the record-prefixed HOL name.\<close>
+
+subsubsection\<open>Partial uRust Field-Name Overrides\<close>
+
+text\<open>A mapping need not mention every field: fields omitted from the mapping
+keep their default (bare HOL) name, while listed fields are renamed.\<close>
+
+datatype_record partial_override_rec =
+  por_renamed :: \<open>32 word\<close>
+  por_kept    :: \<open>32 word\<close>
+micro_rust_record partial_override_rec
+  (por_renamed = "renamed")
+
+context
+  fixes p :: partial_override_rec
+begin
+term \<open>\<lbrakk> p.renamed \<rbrakk>\<close>   \<comment> \<open>renamed field uses the override\<close>
+term \<open>\<lbrakk> p.por_kept \<rbrakk>\<close>  \<comment> \<open>omitted field keeps its HOL name\<close>
+end
+
+value [simp] \<open>\<lbrakk> \<llangle>make_partial_override_rec 7 8\<rrangle>.renamed \<rbrakk>\<close>
+value [simp] \<open>\<lbrakk> \<llangle>make_partial_override_rec 7 8\<rrangle>.por_kept \<rbrakk>\<close>
+
+subsubsection\<open>Default Registration (no mapping) Still Works\<close>
+
+text\<open>Omitting the mapping entirely behaves exactly as before: fields are
+registered under their bare HOL names.\<close>
+
+datatype_record no_override_rec =
+  nor_a :: \<open>32 word\<close>
+  nor_b :: bool
+micro_rust_record no_override_rec
+
+context
+  fixes n :: no_override_rec
+begin
+term \<open>\<lbrakk> n.nor_a \<rbrakk>\<close>
+term \<open>\<lbrakk> n.nor_b \<rbrakk>\<close>
+end
+
+subsubsection\<open>Custom Names on Nested Records\<close>
+
+text\<open>Custom field names compose through nested field access just like the
+default names do.\<close>
+
+datatype_record inner_named =
+  inner_named_value :: \<open>32 word\<close>
+micro_rust_record inner_named (inner_named_value = "value")
+
+datatype_record outer_named =
+  outer_named_inner :: inner_named
+  outer_named_flag  :: bool
+micro_rust_record outer_named
+  (outer_named_inner = "inner",
+   outer_named_flag  = "flag")
+
+context
+  fixes o :: outer_named
+begin
+term \<open>\<lbrakk> o.inner \<rbrakk>\<close>
+term \<open>\<lbrakk> o.flag \<rbrakk>\<close>
+value \<open>\<lbrakk> o.inner.value \<rbrakk>\<close>
+end
+
+value [simp] \<open>\<lbrakk> \<llangle>make_outer_named (make_inner_named 99) False\<rrangle>.inner.value \<rbrakk>\<close>
+
+subsubsection\<open>Custom Names in a Locale\<close>
+
+text\<open>The mapping is honoured for \<^verbatim>\<open>micro_rust_record\<close>s declared inside a
+locale, mirroring the default-name locale test above.\<close>
+
+locale micro_rust_record_override_locale_test =
+  fixes answer :: \<open>64 word\<close>
+  assumes \<open>answer = 42\<close>
+begin
+
+datatype_record loc_named =
+  loc_named_lo :: \<open>64 word\<close>
+  loc_named_hi :: \<open>64 word\<close>
+micro_rust_record loc_named
+  (loc_named_lo = "lo",
+   loc_named_hi = "hi")
+
+term \<open>\<lambda> x :: loc_named. \<lbrakk> x.lo + x.hi \<rbrakk>\<close>
+term \<open>\<lambda> x :: ('addr, 'fv, loc_named) ref. \<lbrakk> *x.lo + *x.hi \<rbrakk>\<close>
+
+end
+
 subsection\<open>Macros\<close>
 
 subsubsection\<open>Assertion Macros\<close>
@@ -1973,13 +2108,13 @@ term\<open>3 :: 64 word\<close>
 
 definition number_42 :: nat where \<open>number_42 \<equiv> 42\<close>
 
-notation_nano_rust number_42 ("foo::bar::test1")
-notation_nano_rust number_42 ("foo::bar::test2")
-notation_nano_rust True ("foo::bar::test3")
+micro_rust_notation (literal) number_42 ("foo::bar::test1")
+micro_rust_notation (literal) number_42 ("foo::bar::test2")
+micro_rust_notation (literal) True ("foo::bar::test3")
 
 definition \<open>the_record \<equiv> make_testrec 1 False\<close>
 
-notation_nano_rust the_record ("the::record")
+micro_rust_notation (literal) the_record ("the::record")
 
 term\<open>\<lbrakk>the::record\<rbrakk>\<close>
 term\<open>\<lbrakk>(the::record).field1\<rbrakk>\<close>
@@ -1995,22 +2130,25 @@ datatype test =
     Test1
   | Test2
 
-notation_nano_rust test.Test1 ("test'::Test_1")
-notation_nano_rust test.Test2 ("test::Test'_2")
+micro_rust_notation (literal) test.Test1 ("test::Test_1")
+micro_rust_notation (literal) test.Test2 ("test::Test_2")
 
 definition plus_two :: \<open>'l::len word \<Rightarrow> 'l word\<close> where \<open>plus_two n \<equiv> n + 2\<close>
 definition \<open>plus_two_lift \<equiv> lift_fun1 plus_two\<close>
 
-notation_nano_rust plus_two_lift ("plus2::lifted")
+micro_rust_notation (call)    plus_two_lift ("plus2::lifted")
+micro_rust_notation (literal) plus_two_lift ("plus2::lifted")
+  \<comment>\<open>Registered under both function- and literal-kind: the test below
+     uses \<^verbatim>\<open>plus2::lifted(three)\<close> in function position and
+     \<^verbatim>\<open>let fun = plus2::lifted\<close> in literal position.\<close>
 
 definition three :: \<open>64 word\<close> where \<open>three = 3\<close>
-notation_nano_rust three ("number::three")
+micro_rust_notation (literal) three ("number::three")
 
 term\<open>\<lbrakk> test::Test_1 \<rbrakk>\<close>
 
 term\<open>\<lbrakk>plus2::lifted(three)\<rbrakk>\<close>
 term\<open>\<lbrakk>plus_two_lift(three)\<rbrakk>\<close>
-
 term\<open>\<lbrakk>
   let arg = test::Test_1;
   let fun = plus2::lifted;
@@ -2019,6 +2157,7 @@ term\<open>\<lbrakk>
     test::Test_2 \<Rightarrow> plus2::lifted(three)
   }
 \<rbrakk>\<close>
+
 
 term\<open>\<lbrakk>
   let x = 5;

@@ -4,7 +4,7 @@
 (*<*)
 theory Rust_Iterator
   imports "HOL-Library.Datatype_Records" Core_Expression
-    Misc.Array Misc.Vector
+    Misc.Array Misc.Vector Micro_Rust_Notations
 begin
 (*>*)
 
@@ -50,6 +50,9 @@ abbreviation compose_func :: \<open>('a \<Rightarrow> ('s, 'b, 'abort, 'i, 'o) f
 definition map :: \<open>('s, 'a, 'abort, 'i, 'o) iterator \<Rightarrow> ('a \<Rightarrow> ('s,'b, 'abort, 'i, 'o) function_body) \<Rightarrow>
     ('s, ('s, 'b, 'abort, 'i, 'o) iterator, 'abort, 'i, 'o) function_body\<close> where
   \<open>map iter f \<equiv> fun_literal (make_iterator (List.map (compose_func f) (iterator_thunks iter)))\<close>
+
+\<comment>\<open>uRust notation for the iterator \<^const>\<open>map\<close> combinator.\<close>
+micro_rust_notation (call) map ("map")
 
 subsection\<open>Looping over iterators\<close>
 

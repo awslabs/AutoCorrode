@@ -11,9 +11,9 @@ datatype ordering
   = Less
   | Equal
   | Greater
-notation_nano_rust ordering.Less ("Ordering::Less")
-notation_nano_rust ordering.Equal ("Ordering::Equal")
-notation_nano_rust ordering.Greater ("Ordering::Greater")
+micro_rust_notation (literal) ordering.Less ("Ordering::Less")
+micro_rust_notation (literal) ordering.Equal ("Ordering::Equal")
+micro_rust_notation (literal) ordering.Greater ("Ordering::Greater")
 
 definition cmp_pure :: \<open>'a::{order} \<Rightarrow> 'a \<Rightarrow> ordering\<close> where
   \<open>cmp_pure x y \<equiv>

@@ -59,6 +59,7 @@ subsection\<open>Slice-like behavior from lists\<close>
 
 definition len :: \<open>'a list \<Rightarrow> ('s, 64 word, 'abort, 'i, 'o) function_body\<close> where
   \<open>len xs \<equiv> FunctionBody (literal (of_nat (length xs)))\<close>
+micro_rust_notation (call) len ("len")
 
 definition list_index :: \<open>'a list \<Rightarrow> 'w::len word \<Rightarrow> ('s, 'a, 'abort, 'i, 'o) function_body\<close> where
   \<open>list_index xs idx \<equiv> FunctionBody (
