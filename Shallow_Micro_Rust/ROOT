@@ -19,7 +19,9 @@ session Shallow_Micro_Rust = HOL +
     Num_Case_Expression
     Numeric_Types Numeric_Types_Lemmas
     Global_Store
+    Micro_Rust_Notations
     Micro_Rust_Shallow_Embedding
+    Micro_Rust_Notations_Test
     Micro_Rust_Shallow_Embedding_Tests
     Micro_Rust
     Prompts_And_Responses

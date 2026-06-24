@@ -38,7 +38,7 @@ identifiers. We intentionally avoid a wildcard identifier to keep pattern parsin
 
 text\<open>HOL identifiers can be used as Micro Rust identifiers:\<close>
 syntax
-  "_urust_identifier_id" :: \<open>id \<Rightarrow> urust_identifier\<close>
+  "_urust_identifier_id" :: \<open>id_position \<Rightarrow> urust_identifier\<close>
     ("_" [0]1000)
 
 text\<open>The following are intermediate syntax categories required for the definition of \<^text>\<open>urust\<close>.\<close>
@@ -363,10 +363,11 @@ syntax
     ("_._" [99,1000]100)
   "_urust_index" :: \<open>urust \<Rightarrow> urust \<Rightarrow> urust\<close>
     ("_/ '[_']" [100,0]100)
-  \<comment> \<open>Path identifiers (e.g. \<^verbatim>\<open>Foo::Bar\<close>), with the \<^verbatim>\<open>string_token\<close> containing the full path.
-      We will add parse AST transformations to construct these below.\<close>
-  "_urust_path_string_identifier" :: \<open>string_token \<Rightarrow> urust_identifier\<close>
-    ("URUST'_PATH'_STRING'_IDENTIFIER _")
+  \<comment> \<open>Path identifiers (e.g. \<^verbatim>\<open>Foo::Bar\<close>) used to have a dedicated
+      \<^verbatim>\<open>_urust_path_string_identifier\<close> syntax slot. After AST flattening
+      they are now indistinguishable from plain identifiers (the joined
+      name --- including the \<^verbatim>\<open>::\<close> separators --- lands in
+      \<^verbatim>\<open>_urust_identifier_id\<close>), so the dedicated slot has been retired.\<close>
 
   \<comment>\<open>Other control flow constructs\<close>
   "_urust_for_loop"
@@ -699,7 +700,7 @@ nonterminal urust_temporary_long_identifier
 syntax
   \<comment>\<open>Mark those as temporary to indicate that semantics definitions need not deal with it.
 It is immediately removed after parsing.\<close>
-  "_urust_temporary_long_id" :: \<open>longid \<Rightarrow> urust_temporary_long_identifier\<close>
+  "_urust_temporary_long_id" :: \<open>longid_position \<Rightarrow> urust_temporary_long_identifier\<close>
     ("_" [0]1000)
 
   \<comment>\<open>Allow long ids in a few grammar productions normally taking ordinary identifiers\<close>
@@ -759,10 +760,54 @@ ML\<open>
      fst (splitter (Symbol.explode str))
    end
 
+  (* Extract the bare identifier name from an AST that is either a bare
+     Ast.Variable or an id_position/longid_position-wrapped
+     Ast.Appl [Ast.Constant "_constrain", Ast.Variable _, Ast.Variable _]. *)
+  fun ast_var_name (Ast.Variable s) = s
+    | ast_var_name (Ast.Appl [Ast.Constant "_constrain", Ast.Variable s, _]) = s
+    | ast_var_name ast = raise Ast.AST ("ast_var_name", [ast])
+
+  (* Split a (possibly position-tagged) longid AST at "." into a list of
+     id_position-shaped AST components. Each component carries its own
+     sub-position so that IDE markup highlights each part of foo.bar.boo
+     separately. Inputs without position info yield bare Ast.Variable parts. *)
+  fun split_longid_ast (Ast.Variable s) =
+        map Ast.Variable (split_at_dots s)
+    | split_longid_ast (Ast.Appl [Ast.Constant "_constrain",
+                                  Ast.Variable s,
+                                  Ast.Variable enc]) =
+        let
+          val parts = split_at_dots s
+          val ps = Term_Position.decode enc
+          val (use_syntax, pos0) =
+            case ps of
+              {syntax, pos} :: _ => (syntax, pos)
+            | [] => (false, Position.none)
+          val mk_tag =
+            if use_syntax then Term_Position.syntax else Term_Position.no_syntax
+          fun step part pos =
+            let
+              val pos_end = Position.symbol_explode part pos
+              val sub_pos = Position.range_position (pos, pos_end)
+              val pos_after_dot = Position.symbol_explode "." pos_end
+              val sub_enc = Term_Position.encode [mk_tag sub_pos]
+            in
+              (Ast.Appl [Ast.Constant "_constrain",
+                         Ast.Variable part,
+                         Ast.Variable sub_enc],
+               pos_after_dot)
+            end
+          fun loop [] _ = []
+            | loop (p :: ps') pos =
+                let val (a, pos') = step p pos in a :: loop ps' pos' end
+        in loop parts pos0 end
+    | split_longid_ast ast = raise Ast.AST ("split_longid_ast", [ast])
+
+  (* Legacy string-only splitter for callers that already have a string in hand. *)
   val split_long_identifier = Ast.pretty_ast #> Pretty.string_of #> split_at_dots
 
-  fun ast_urust_identifier_id str =
-     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [Ast.Variable str]
+  fun ast_urust_identifier_id ast =
+     Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [ast]
 \<close>
 
 text\<open>Lower slice patterns to nested list constructor patterns:
@@ -818,11 +863,12 @@ end
 
 parse_ast_translation\<open>
 let
-  \<comment>\<open>ML representations of the relevant Nano Rust grammar productions\<close>
-  \<comment>\<open>This does currently only work for long identifiers of the form \<^text>\<open>id.id\<close>.\<close>
+  \<comment>\<open>ML representations of the relevant Micro Rust grammar productions\<close>
+  \<comment>\<open>Splits a longid AST at \".\" while preserving sub-positions, so that each
+     component of \<^verbatim>\<open>foo.bar.boo\<close> carries its own markup.\<close>
   fun break_long_identifier [long_id] =
-     let val parts = long_id |> split_long_identifier
-         val parts_as_ids = map (ast_urust_identifier_id) parts
+     let val parts = split_longid_ast long_id
+         val parts_as_ids = map ast_urust_identifier_id parts
      in Ast.Appl parts_as_ids end
   | break_long_identifier args =
      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_temporary_long_id\<close>) args
@@ -935,20 +981,21 @@ nonterminal path_identifier \<comment> \<open>An identifier of the form \<^verba
 nonterminal path_identifier_long \<comment> \<open>An identifier of the form \<^verbatim>\<open>foo::bar.boo\<close>\<close>
 
 syntax
-  "_path_builder_two_id" :: \<open>id \<Rightarrow> id \<Rightarrow> path_identifier\<close>
+  "_path_builder_two_id" :: \<open>id_position \<Rightarrow> id_position \<Rightarrow> path_identifier\<close>
     ("_':': _"[0,0]1000)
-  "_path_builder_more" :: \<open>id \<Rightarrow> path_identifier \<Rightarrow> path_identifier\<close>
+  "_path_builder_more" :: \<open>id_position \<Rightarrow> path_identifier \<Rightarrow> path_identifier\<close>
     ("_':': _"[0,1000]1000)
-  \<comment> \<open>We will transform \<^verbatim>\<open>_urust_temporary_path_identifier\<close> into \<^verbatim>\<open>_urust_path_string_identifier\<close>,
-     where the string token contains the string representation of the \<^verbatim>\<open>path_identifier\<close> argument\<close>
+  \<comment> \<open>A parse AST translation flattens \<^verbatim>\<open>_urust_temporary_path_identifier\<close>
+     into an ordinary \<^verbatim>\<open>_urust_identifier_id\<close> whose name is the \<^verbatim>\<open>::\<close>-joined
+     path (see the translation below).\<close>
   "_urust_temporary_path_identifier" :: \<open>path_identifier \<Rightarrow> urust_identifier\<close>
     ("_")
 
   \<comment> \<open>Unfortunately, we need to do a bit more work to support \<^verbatim>\<open>foo::bar.boo\<close>. The \<^verbatim>\<open>bar.boo\<close> is
       a \<^verbatim>\<open>longid\<close> that is the last argument of the implicit list of type \<^verbatim>\<open>path_identifier_long\<close>.\<close>
-  "_path_builder_two_longid" :: \<open>id \<Rightarrow> longid \<Rightarrow> path_identifier_long\<close>
+  "_path_builder_two_longid" :: \<open>id_position \<Rightarrow> longid_position \<Rightarrow> path_identifier_long\<close>
     ("_':': _"[0,0]1000)
-  "_path_builder_more_longid" :: \<open>id \<Rightarrow> path_identifier_long \<Rightarrow> path_identifier_long\<close>
+  "_path_builder_more_longid" :: \<open>id_position \<Rightarrow> path_identifier_long \<Rightarrow> path_identifier_long\<close>
     ("_':': _"[0,1000]1000)
   \<comment> \<open>Such \<^emph>\<open>long\<close> paths are not \<^verbatim>\<open>urust_identifier\<close>s: they indicate method or field accesses
       of a path. In other words, \<^verbatim>\<open>foo::bar.boo\<close> must be parsed as \<^verbatim>\<open>(foo::bar).boo\<close>. We
@@ -960,28 +1007,105 @@ syntax
     ("_")
 
 text\<open>When the AST is initially built, we get a \<^verbatim>\<open>_urust_temporary_path_identifier\<close> with a
-\<^verbatim>\<open>path_identifier\<close> argument. We will convert that argument to a \<^verbatim>\<open>string_token\<close>, which makes it
-easier to parse that in a later stage to a term. That means we must turn the
-\<^verbatim>\<open>_urust_temporary_path_identifier\<close> into a \<^verbatim>\<open>_urust_path_string_identifier\<close>\<close>
+\<^verbatim>\<open>path_identifier\<close> argument. We join its segments with \<^verbatim>\<open>::\<close> and rewrite the whole node to an
+ordinary \<^verbatim>\<open>_urust_identifier_id\<close> carrying that joined name, so paths and plain identifiers
+flow through the same downstream pipeline.\<close>
 parse_ast_translation\<open>
   let
-    fun path_arg_to_rust_name
-        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_id\<close>, Ast.Variable secondlast, Ast.Variable last]) =
-            secondlast ^ "::" ^ last
-      | path_arg_to_rust_name
-        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_more\<close>, Ast.Variable head, tail]) =
-            head ^ "::" ^ path_arg_to_rust_name tail;
-    fun path_translator grammar_el ctx args =
+    \<comment>\<open>Extract \<open>(name, [position])\<close> from a single \<^verbatim>\<open>id_position\<close>-shaped AST
+       segment. Bare \<^verbatim>\<open>Ast.Variable\<close> entries (no source-position info) yield
+       \<open>[]\<close>. Position-tagged segments yield \<open>[{syntax, pos}]\<close> via
+       \<^ML>\<open>Term_Position.decode\<close>.\<close>
+    fun ast_var_name_pos (Ast.Variable s) = (s, [])
+      | ast_var_name_pos
+            (Ast.Appl [Ast.Constant "_constrain", Ast.Variable s, Ast.Variable enc]) =
+          (s, Term_Position.decode enc)
+      | ast_var_name_pos ast = raise Ast.AST ("ast_var_name_pos", [ast]);
+
+    \<comment>\<open>Walk the \<^verbatim>\<open>_path_builder_*\<close> tree, collecting per-segment
+       \<open>(name, [position])\<close> pairs in source order.\<close>
+    fun path_segments
+        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_id\<close>, sl, l]) =
+          [ast_var_name_pos sl, ast_var_name_pos l]
+      | path_segments
+        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_more\<close>, h, tail]) =
+          ast_var_name_pos h :: path_segments tail
+      | path_segments ast = raise Ast.AST ("path_segments", [ast]);
+
+    \<comment>\<open>Join the segments with \<^verbatim>\<open>::\<close> into the path's source string.\<close>
+    fun joined_name segs = String.concatWith "::" (map fst segs);
+
+    \<comment>\<open>Merged source position covering the whole path:
+       \<^verbatim>\<open>range_position (start_of_first, end_of_last)\<close>. Each segment carries
+       at most one \<^verbatim>\<open>Term_Position.T\<close>; compute the segment's end via
+       \<^verbatim>\<open>Position.symbol_explode\<close> over the segment's source name.
+
+       If neither end has a usable position, return \<^verbatim>\<open>NONE\<close>; markup is
+       silently skipped at the use site.\<close>
+    fun merged_position segs =
       let
-        val rust_name = path_arg_to_rust_name (hd args);
+        fun first_pos [] = NONE
+          | first_pos ((_, ps) :: rest) =
+              (case ps of {pos, ...} :: _ => SOME pos | [] => first_pos rest);
+        fun end_pos (name, ps) =
+          (case ps of
+             {pos, ...} :: _ => SOME (Position.symbol_explode name pos)
+           | [] => NONE);
+        fun last_end_pos [] = NONE
+          | last_end_pos [seg] = end_pos seg
+          | last_end_pos (seg :: rest) =
+              (case last_end_pos rest of
+                 SOME p => SOME p
+               | NONE => end_pos seg);
+        val syntax_flag =
+          (case List.find (not o null o snd) segs of
+             SOME (_, {syntax, ...} :: _) => syntax
+           | _ => false);
       in
-        Ast.mk_appl (Ast.Constant grammar_el) [Ast.Constant rust_name]
-      end
+        case (first_pos segs, last_end_pos segs) of
+          (SOME p0, SOME p1) =>
+            SOME (if syntax_flag then Term_Position.syntax (Position.range_position (p0, p1))
+                  else Term_Position.no_syntax (Position.range_position (p0, p1)))
+        | (SOME p0, NONE) =>
+            SOME (if syntax_flag then Term_Position.syntax p0 else Term_Position.no_syntax p0)
+        | _ => NONE
+      end;
+
+    \<comment>\<open>Wrap the joined-name \<^verbatim>\<open>Ast.Variable\<close> in a \<^verbatim>\<open>_constrain\<close> carrying
+       the merged source position, so downstream \<^verbatim>\<open>parse_translation\<close>s
+       (e.g. \<open>lookup_id_tr\<close>) can attach use-site markup at the path's
+       full source range.
+
+       Using \<^verbatim>\<open>Ast.Variable\<close> (not \<^verbatim>\<open>Ast.Constant\<close>) means the joined name
+       lowers to a plain \<^verbatim>\<open>Free\<close> term --- the same shape plain identifiers
+       use --- so downstream consumers can treat path and plain
+       identifiers uniformly without a shape-discrimination match.\<close>
+    fun wrap_with_position name segs =
+      (case merged_position segs of
+         SOME tp =>
+           Ast.Appl [Ast.Constant "_constrain",
+                     Ast.Variable name,
+                     Ast.Variable (Term_Position.encode [tp])]
+       | NONE => Ast.Variable name);
+
+    fun path_translator grammar_el ctx [arg] =
+          let
+            val segs = path_segments arg;
+            val rust_name = joined_name segs;
+            val payload = wrap_with_position rust_name segs;
+          in
+            Ast.mk_appl (Ast.Constant grammar_el) [payload]
+          end
       | path_translator grammar_el _ args =
           Ast.mk_appl (Ast.Constant grammar_el) args;
   in [
-    (\<^syntax_const>\<open>_urust_temporary_path_identifier\<close>, path_translator \<^syntax_const>\<open>_urust_path_string_identifier\<close>)
-  ]end
+    \<comment>\<open>Paths after AST flattening land in the same \<^verbatim>\<open>_urust_identifier_id\<close>
+       slot as plain identifiers; the joined-name carries a leading-marker
+       \<open>::\<close>-containing string. Downstream consumers (\<open>lookup_id_tr\<close>, the binder
+       resolver, etc.) only look at the name string, so the path/plain
+       distinction is invisible past this translation.\<close>
+    (\<^syntax_const>\<open>_urust_temporary_path_identifier\<close>, path_translator \<^syntax_const>\<open>_urust_identifier_id\<close>)
+  ] end
 \<close>
 
 text\<open>We take the same approach for \<^verbatim>\<open>_urust_temporary_path_identifier_long_{field,method}\<close>, but now
@@ -990,43 +1114,84 @@ translations possibly happening again and taking care of things, but need to man
 same steps done for splitting longid's.\<close>
 parse_ast_translation\<open>
   let
-    \<comment> \<open>Split \<^verbatim>\<open>foo.bar.zoo\<close> into \<^verbatim>\<open>("foo", ["bar", "zoo"])\<close>\<close>
+    \<comment> \<open>Split a (possibly position-tagged) longid AST \<^verbatim>\<open>foo.bar.zoo\<close> into a head
+        string \<^verbatim>\<open>"foo"\<close> and a list of position-preserving ASTs \<^verbatim>\<open>[bar, zoo]\<close>.\<close>
     fun split_longid longid_el =
       let
-        val parts = split_long_identifier longid_el
+        val parts = split_longid_ast longid_el
       in
-        (hd parts, tl parts)
+        case parts of
+          [] => raise Ast.AST ("split_longid: empty", [longid_el])
+        | (hd_ast :: tl_asts) => (ast_var_name hd_ast, tl_asts)
       end;
 
-    \<comment> \<open>Split the \<^verbatim>\<open>_path_builder\<close> syntax representation of \<^verbatim>\<open>foo::bar.zoo.far\<close> into \<^verbatim>\<open>("foo::bar", ["zoo", "far"])\<close>\<close>
+    \<comment> \<open>Decode the leading source position of a (possibly position-tagged)
+        path segment AST. A bare \<^verbatim>\<open>Ast.Variable\<close> carries none.\<close>
+    fun ast_var_position (Ast.Appl [Ast.Constant "_constrain", Ast.Variable _, Ast.Variable enc]) =
+          (case Term_Position.decode enc of
+             {syntax, pos} :: _ => SOME (syntax, pos)
+           | [] => NONE)
+      | ast_var_position _ = NONE;
+
+    \<comment> \<open>Split the \<^verbatim>\<open>_path_builder\<close> syntax representation of \<^verbatim>\<open>foo::bar.zoo.far\<close>
+        into \<^verbatim>\<open>("foo::bar", [zoo_ast, far_ast])\<close> where each field component is
+        a position-preserving AST. We also recover the \<^emph>\<open>head position\<close> ---
+        the leading position of the \<^verbatim>\<open>foo::bar\<close> path string --- so the joined
+        head can be re-tagged for use-site markup (see \<open>urust_path_string_to_identifier\<close>);
+        without it, dot-access heads (\<open>Foo::Bar.baz(0)\<close>) parse fine but
+        get no markup, unlike pure \<open>::\<close>-paths.\<close>
     fun split_path_n_field
-      (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_longid\<close>, Ast.Variable secondlast, last]) =
+      (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_two_longid\<close>, sl, last]) =
         let
           val (tailhead, tailtail) = split_longid last
         in
-          (secondlast ^ "::" ^ tailhead, tailtail)
+          (ast_var_name sl ^ "::" ^ tailhead, tailtail, ast_var_position sl)
         end
       | split_path_n_field
-        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_more_longid\<close>, Ast.Variable head, tail]) =
+        (Ast.Appl [Ast.Constant \<^syntax_const>\<open>_path_builder_more_longid\<close>, h, tail]) =
         let
-          val (path, field) = split_path_n_field tail
+          val (path, field, _) = split_path_n_field tail
         in
-          (head ^ "::" ^ path, field)
-        end;
+          (ast_var_name h ^ "::" ^ path, field, ast_var_position h)
+        end
+      | split_path_n_field ast = raise Ast.AST ("split_path_n_field", [ast]);
 
-    \<comment> \<open>Convert a string \<^verbatim>\<open>"foo::bar"\<close> into a uRust grammar entry\<close>
-    fun urust_path_string_to_identifier arg =
-      Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_path_string_identifier\<close>) [Ast.Constant arg];
+    \<comment> \<open>Convert a string \<^verbatim>\<open>"foo::bar"\<close> into a uRust grammar entry. Like the
+        short-path translator above, the joined name lands in
+        \<^verbatim>\<open>_urust_identifier_id\<close> as a plain \<^verbatim>\<open>Ast.Variable\<close>
+        (lowering to a \<^verbatim>\<open>Free\<close> term), so downstream consumers can treat
+        path and plain identifiers uniformly. When a head position is
+        available we wrap the joined name in a \<^verbatim>\<open>_constrain\<close> carrying it,
+        so \<open>lookup_id_tr\<close> can emit use-site markup at the path head ---
+        matching the plain-path translator's \<open>wrap_with_position\<close>. The
+        position spans the head's first segment (a best-effort anchor;
+        the joined name's later segments lose their individual ranges in
+        the string rejoin, but the head start is enough for the marker).\<close>
+    fun urust_path_string_to_identifier (arg, head_pos) =
+      let
+        val payload =
+          (case head_pos of
+             SOME (syntax, pos) =>
+               let val tp = if syntax then Term_Position.syntax pos
+                            else Term_Position.no_syntax pos
+               in Ast.Appl [Ast.Constant "_constrain",
+                            Ast.Variable arg,
+                            Ast.Variable (Term_Position.encode [tp])]
+               end
+           | NONE => Ast.Variable arg)
+      in
+        Ast.mk_appl (Ast.Constant \<^syntax_const>\<open>_urust_identifier_id\<close>) [payload]
+      end;
 
     \<comment> \<open>Convert the argument of syntax type \<^verbatim>\<open>_path_identifier_long\<close> into its path string and
         field/method accesses, then use the \<^verbatim>\<open>ast_joiner\<close> argument to turn it into a urust grammar
         entry. The 'syntax type' of \<^verbatim>\<open>ast_joiner\<close> is \<^verbatim>\<open>urust \<rightarrow> urust_identifier list \<rightarrow> urust\<close>.\<close>
     fun path_translator grammar_el (ast_joiner: Ast.ast -> Ast.ast list -> Ast.ast) ctx [arg] =
       let
-        val (path, field) = split_path_n_field arg
+        val (path, field, head_pos) = split_path_n_field arg
       in
         ast_joiner
-          (path |> urust_path_string_to_identifier |> ast_urust_identifier)
+          ((path, head_pos) |> urust_path_string_to_identifier |> ast_urust_identifier)
           (field |> map ast_urust_identifier_id)
       end
       | path_translator grammar_el _ _ args =

@@ -347,8 +347,8 @@ definition ref_cast_to_mut :: \<open>('a, 'b, 'v) ro_ref \<Rightarrow>
   ('s, ('a, 'b, 'v) Global_Store.ref, 'abort, 'i, 'o) function_body\<close> where
   \<open>ref_cast_to_mut r \<equiv> fun_literal (unsafe_ref_from_ro_ref r)\<close>
 
-notation_nano_rust_function ref_cast_to_ro ("as_ro_ref")
-notation_nano_rust_function ref_cast_to_mut ("as_mut_ref")
+micro_rust_notation (call) ref_cast_to_ro ("as_ro_ref")
+micro_rust_notation (call) ref_cast_to_mut ("as_mut_ref")
 
 (*<*)
 end

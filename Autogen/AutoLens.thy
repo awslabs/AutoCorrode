@@ -441,7 +441,6 @@ ML\<open>
     val code_eq_prop_str = "Rep_focus " ^ focus ^ " = make_focus_raw " ^
            "(\<lambda>s. Some (" ^ rec_name ^ "." ^ field ^ " s))" ^
            "(\<lambda>y. " ^ rec_name_full ^ ".update_" ^ field ^ "(\<lambda>_. y))"
-    val _ = code_eq_prop_str |> tracing
     val code_eq_prop = code_eq_prop_str |> Syntax.read_prop ctxt
     val prop_name = focus ^ "_code"
     fun after_qed name thms ctxt = ctxt

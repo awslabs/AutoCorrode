@@ -7,9 +7,6 @@ theory StdLib_Option
 begin
 (*>*)
 
-consts take_const :: \<open>'a\<close>
-notation_nano_rust_function take_const ("take")
-
 definition option_expect :: \<open>'v option \<Rightarrow> String.literal \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close> where
   \<open>option_expect self msg \<equiv> FunctionBody \<lbrakk>
       match self {
@@ -57,7 +54,7 @@ definition urust_func_option_is_none :: \<open>'v option \<Rightarrow> ('s, bool
        None \<Rightarrow> True
      }
   \<rbrakk>\<close>
-notation_nano_rust_function urust_func_option_is_none ("is_none")
+micro_rust_notation (call) urust_func_option_is_none ("is_none")
 
 definition option_is_none_contract :: 
   \<open>'a option \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
@@ -78,7 +75,7 @@ definition urust_func_option_is_some :: \<open>'v option \<Rightarrow> ('s, bool
        None \<Rightarrow> False
      }
   \<rbrakk>\<close>
-notation_nano_rust_function urust_func_option_is_some ("is_some")
+micro_rust_notation (call) urust_func_option_is_some ("is_some")
 
 definition option_is_some_contract :: 
   \<open>'a option \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
@@ -158,8 +155,7 @@ definition take_mut_ref_option :: \<open>('a, 'b, 'v option) Global_Store.ref \<
     ptr = None;
     val
   \<rbrakk>\<close> 
-adhoc_overloading take_const \<rightleftharpoons>
-  take_mut_ref_option
+micro_rust_notation (call) take_mut_ref_option ("take")
 
 definition take_mut_ref_option_contract :: \<open>('a, 'b, 'v option) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> 'v option \<Rightarrow>
     ('s::{sepalg}, 'v option, 'abort) function_contract\<close> where

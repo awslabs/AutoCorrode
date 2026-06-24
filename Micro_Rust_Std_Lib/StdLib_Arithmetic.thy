@@ -126,7 +126,7 @@ lift_definition (code_dt) nonzerou64_new_core :: \<open>64 word \<Rightarrow> no
 
 definition nonzerou64_new :: \<open>64 word \<Rightarrow> ('machine, nonzero_u64 option, 'abort, 'i, 'o) function_body\<close> where
   \<open>nonzerou64_new n \<equiv> FunctionBody (if n = 0 then literal None else literal (Some (nonzero_u64_inject n)))\<close>
-notation_nano_rust_function nonzerou64_new ("NonZeroU64::new")
+micro_rust_notation (call) nonzerou64_new ("NonZeroU64::new")
 
 definition nonzerou64_new_contract :: \<open>64 word \<Rightarrow>
       ('machine::{sepalg}, nonzero_u64 option, 'b) function_contract\<close> where
