@@ -214,12 +214,28 @@ type pin = {
   stale: bool
 };
 
+(* See `splice_step` for what segment_proof_splicer does and why.
+     initial: set once at init from the recorded post-proof-exit segment.
+     armed:   live state — SOME initial while a splice may still fire,
+              NONE after it has fired or been disarmed. *)
+type segment_proof_splicer = {
+  initial: Toplevel.state,
+  armed: Toplevel.state option
+};
+
+fun splicer_armed (NONE : segment_proof_splicer option) = NONE
+  | splicer_armed (SOME s) = #armed s;
+
+fun splicer_set_armed (NONE : segment_proof_splicer option) _ = NONE
+  | splicer_set_armed (SOME s) armed = SOME {initial = #initial s, armed = armed};
+
 type repl = {
   origin: origin,
   base_state: Toplevel.state,
   steps: repl_step list,
   timeout: int,
-  pin: pin option
+  pin: pin option,
+  splicer: segment_proof_splicer option
 };
 
 (* Concurrency guard: repl_tab stores repl_entry values.  A slow mutation
@@ -296,7 +312,8 @@ fun mark_pin_stale (r : repl) : repl =
   case #pin r of
     SOME p => {origin = #origin r, base_state = #base_state r, steps = #steps r,
                timeout = #timeout r,
-               pin = SOME {theory = #theory p, version = #version p, stale = true}}
+               pin = SOME {theory = #theory p, version = #version p, stale = true},
+               splicer = #splicer r}
   | NONE => r;
 
 fun release id r =
@@ -320,21 +337,65 @@ fun map_repl id (f : repl -> repl * 'a) : 'a =
 fun timeout id secs =
   (map_repl id (fn r =>
     ({origin = #origin r, base_state = #base_state r,
-      steps = #steps r, timeout = secs, pin = #pin r}, ()));
+      steps = #steps r, timeout = secs, pin = #pin r,
+      splicer = #splicer r}, ()));
    out ("Timeout for " ^ quote id ^ " set to " ^
         (if secs = 0 then "unlimited" else string_of_int secs ^ "s")));
 
-(* Execute Isar text against a state *)
-fun exec_text timeout_secs text st =
+(* When a theory is built with record_theories=true AND parallel proofs enabled,
+   Toplevel.element_result (Pure/Isar/toplevel.ML:752) forks each lemma body
+   via Proof.future_proof (Pure/Isar/proof.ML:1310), which rewrites the goal's
+   after_qed to a stub that does NOT call Local_Theory.notes_kind.  Every
+   segment recorded inside that future captures the stubbed Proof.state.
+   This is intentional from Isabelle's point of view (segments are for
+   document presentation, not for re-running a proof from the middle), but
+   it means initing a REPL at a mid-proof segment and stepping through qed
+   fails to register the theorem.
+
+   The splicer compensates: at init we stash the recorded state of the next
+   segment that exits the proof.  When the user's stepping crosses the
+   proof-exit boundary via a non-oops finisher — i.e., the proof was closed
+   successfully — we splice that recorded state in for the post-state.  oops
+   at the outermost proof level disarms the splicer without firing,
+   preserving "abandon proof, no theorem" semantics.
+
+   We detect oops via Keyword.is_qed_global on the transition's keyword name.
+   This is brittle: keyword classification is decoupled from semantic effect.
+     - A custom command not classified as qed_global can still wrap
+       Toplevel.forget_proof (semantically an oops); the splicer would fire
+       spuriously, registering the heap theorem despite the proof being
+       discarded.
+     - A custom command classified as qed_global can wrap a real
+       Isar_Cmd.qed; the splicer would disarm and trust the user's empty
+       post-state, losing the theorem.
+   Stock Pure/HOL ships only `oops` as qed_global, so for typical sessions
+   these limitations are deemed acceptable.  A more robust detection would
+   need to inspect the Toplevel.transition's primitive `trans` list, but
+   this is not exported / not inspectable. *)
+fun splice_step kws (tr : Toplevel.transition) pre post splicer =
+  case splicer of
+    NONE => (post, NONE)
+  | SOME splice_st =>
+      let val exited_proof = Toplevel.is_proof pre andalso not (Toplevel.is_proof post)
+          val is_oops = Keyword.is_qed_global kws (Toplevel.name_of tr)
+      in if exited_proof andalso not is_oops then (splice_st, NONE)
+         else if exited_proof then (post, NONE)
+         else (post, splicer)
+      end;
+
+(* Execute Isar text against a state, threading the splicer's `armed` state
+   through each transition. *)
+fun exec_text timeout_secs text st armed =
   let val thy = Toplevel.theory_of st
       val transitions = Outer_Syntax.parse_text thy (fn () => thy) Position.none text
-      fun run (tr, s) =
+      val kws = Thy_Header.get_keywords thy
+      fun run (tr, (s, sp)) =
         let val old = !Multithreading.parallel_proofs
             val _ = Multithreading.parallel_proofs := Int.min (2, old)
             val s' = Toplevel.command_exception false tr s
             val _ = Multithreading.parallel_proofs := old
-        in s' end
-      fun go () = List.foldl (fn (tr, s) => run (tr, s)) st transitions
+        in splice_step kws tr s s' sp end
+      fun go () = List.foldl run (st, armed) transitions
   in if timeout_secs > 0
      then Timeout.apply (Time.fromSeconds (Int.toLarge timeout_secs)) go ()
        handle Timeout.TIMEOUT _ =>
@@ -387,6 +448,22 @@ fun has_pin_dep tab target_id =
                                     | _ => false) specs
     | _ => false) tab;
 
+(* Build a splicer for a mid-proof recorded segment (state is_proof=true).
+   Walks forward to find the next segment whose state is no longer in proof
+   mode — that's the recorded post-qed state we'll splice in later. *)
+fun make_splicer thy_name segs idx : segment_proof_splicer =
+  let val len = length segs
+      fun go j =
+        if j >= len then
+          error ("Ir.init: mid-proof segment " ^ quote thy_name ^ ":" ^
+                 string_of_int idx ^ " has no following segment that exits the \
+                 \proof.  This indicates a malformed/truncated theory record.")
+        else
+          let val st = #state (nth segs j : Document_Output.segment)
+          in if not (Toplevel.is_proof st) then st else go (j + 1) end
+      val post = go (idx + 1)
+  in {initial = post, armed = SOME post} end;
+
 (* Create a new REPL.  Theory specs must already be loaded — either present
    in the initial heap or previously loaded via Ir.load_theory.
    Pin specs ("pin@NAME") reference a pinned REPL's theory snapshot. *)
@@ -398,24 +475,28 @@ fun init id specs =
                 val thys = map #1 resolved
                 val spec_list = map #2 resolved
                 val thy = Theory.begin_theory (id, Position.none) thys
-            in (From_Theory spec_list, Toplevel.make_state (SOME thy)) end
+            in (From_Theory spec_list, Toplevel.make_state (SOME thy), NONE) end
       val parsed = map parse_spec specs
-      val (origin, st) =
+      val (origin, st, splicer) =
         case parsed of
           [(thy_name, SOME idx)] =>
             let val segs = find_source thy_name
                 val seg = nth segs idx
                   handle General.Subscript =>
                     error ("Index " ^ string_of_int idx ^ " out of range")
-            in (From_Segment (thy_name, idx),
-                #state (seg : Document_Output.segment)) end
+                val st = #state (seg : Document_Output.segment)
+                val splicer = if Toplevel.is_proof st
+                             then SOME (make_splicer thy_name segs idx)
+                             else NONE
+            in (From_Segment (thy_name, idx), st, splicer) end
         | _ =>
             let val _ = if exists (fn (_, opt) => is_some opt) parsed
                         then error "Cannot mix theory and segment specs in multi-theory init"
                         else ()
             in from_specs (map #1 parsed) end
       val r : repl = {origin = origin, base_state = st, steps = [],
-                      timeout = default_timeout, pin = NONE}
+                      timeout = default_timeout, pin = NONE,
+                      splicer = splicer}
   in Synchronized.change_result repl_tab (fn tab =>
        if Symtab.defined tab id
        then error ("REPL " ^ quote id ^ " already exists")
@@ -443,7 +524,7 @@ fun init_from_document id node_name command_id =
     val toplevel_st = Command.eval_result_state eval
     val r : repl = {origin = From_Document (node_name, command_id),
                     base_state = toplevel_st, steps = [], timeout = default_timeout,
-                    pin = NONE}
+                    pin = NONE, splicer = NONE}
   in Synchronized.change_result repl_tab (fn tab =>
        if Symtab.defined tab id
        then error ("REPL " ^ quote id ^ " already exists")
@@ -466,17 +547,19 @@ fun fork parent_id new_id state_idx =
                  else error ("State " ^ string_of_int state_idx ^
                              " out of range (0.." ^ string_of_int n ^ ")")
         val r : repl = {origin = From_REPL (parent_id, i), base_state = st,
-                        steps = [], timeout = #timeout parent, pin = NONE}
+                        steps = [], timeout = #timeout parent, pin = NONE,
+                        splicer = #splicer parent}
     in Symtab.update (new_id, Repl r) tab end);
    out ("Forked REPL " ^ quote new_id ^ " from " ^ quote parent_id ^
         " at state " ^ string_of_int state_idx));
 
 fun step_repl timeout_secs text (r : repl) : repl =
   let val pre = last_state r
-      val post = exec_text timeout_secs text pre
+      val (post, armed') = exec_text timeout_secs text pre (splicer_armed (#splicer r))
       val s : repl_step = {text = text, pre_state = pre, post_state = post, stale = false}
   in {origin = #origin r, base_state = #base_state r,
-      steps = #steps r @ [s], timeout = #timeout r, pin = #pin r} end;
+      steps = #steps r @ [s], timeout = #timeout r, pin = #pin r,
+      splicer = splicer_set_armed (#splicer r) armed'} end;
 
 fun step id text =
   with_claim id Op_Step (fn r =>
@@ -517,7 +600,8 @@ fun pin id =
         val new_v = case #pin r of NONE => 1 | SOME p => #version p + 1
         val p : pin = {theory = thy, version = new_v, stale = false}
     in ({origin = #origin r, base_state = #base_state r, steps = #steps r,
-         timeout = #timeout r, pin = SOME p}, new_v) end)
+         timeout = #timeout r, pin = SOME p,
+         splicer = #splicer r}, new_v) end)
   in out ("Pinned " ^ quote id) end;
 
 fun unpin id =
@@ -528,7 +612,8 @@ fun unpin id =
         if has_pin_dep tab id
         then error ("Cannot unpin " ^ quote id ^ ": other REPLs depend on it")
         else ((), Symtab.update (id, Repl {origin = #origin r, base_state = #base_state r,
-               steps = #steps r, timeout = #timeout r, pin = NONE}) tab));
+               steps = #steps r, timeout = #timeout r, pin = NONE,
+               splicer = #splicer r}) tab));
    out ("Unpinned " ^ quote id));
 
 fun show id =
@@ -559,17 +644,35 @@ fun text id =
   in out (String.concatWith "\n" t) end;
 
 fun replay_repl (r : repl) : repl =
-  let fun go _ [] acc = rev acc
-        | go prev_post (s :: rest) acc =
+  let
+      (* Replay starts from base_state with the splicer freshly armed.  Stale
+         steps are re-executed via exec_text (which threads the splicer for us);
+         kept (non-stale) steps had their post_state computed previously, but
+         we still need to disarm the splicer if such a kept step crossed the
+         proof-exit boundary back then — otherwise a later stale step would
+         spuriously splice. *)
+      fun consume_boundary (s : repl_step) armed =
+        case armed of
+          NONE => NONE
+        | SOME _ =>
+            if Toplevel.is_proof (#pre_state s) andalso
+               not (Toplevel.is_proof (#post_state s))
+            then NONE else armed
+      fun go _ armed [] acc = (rev acc, armed)
+        | go prev_post armed (s :: rest) acc =
             if #stale (s : repl_step) then
-              let val post = exec_text (#timeout r) (#text s) prev_post
+              let val (post, armed') = exec_text (#timeout r) (#text s) prev_post armed
                   val s' : repl_step = {text = #text s, pre_state = prev_post,
                                          post_state = post, stale = false}
-              in go post rest (s' :: acc) end
-            else go (#post_state s) rest (s :: acc)
+              in go post armed' rest (s' :: acc) end
+            else
+              go (#post_state s) (consume_boundary s armed) rest (s :: acc)
+      val initial_armed = Option.map #initial (#splicer r)
+      val (steps', armed') = go (#base_state r) initial_armed (#steps r) []
   in {origin = #origin r, base_state = #base_state r,
-      steps = go (#base_state r) (#steps r) [],
-      timeout = #timeout r, pin = #pin r} end;
+      steps = steps',
+      timeout = #timeout r, pin = #pin r,
+      splicer = splicer_set_armed (#splicer r) armed'} end;
 
 fun replay id =
   with_claim id Op_Replay (fn r =>
@@ -600,12 +703,32 @@ fun rebase id =
                  val n = length (#steps r)
                  val r' = {origin = From_Theory new_specs, base_state = new_base,
                            steps = mark_all_stale (#steps r),
-                           timeout = #timeout r, pin = #pin r}
+                           timeout = #timeout r, pin = #pin r,
+                           splicer = NONE}
              in (r', out ("Rebased " ^ quote id ^ " (" ^
                           string_of_int n ^ " steps marked stale; use replay to re-execute)")) end
         end
     | orig => error ("REPL " ^ quote id ^ " (from " ^ origin_str orig ^
                      ") does not support rebase"));
+
+fun crossed_proof_exit (steps : repl_step list) =
+  exists (fn s => not (#stale s) andalso
+                  Toplevel.is_proof (#pre_state s) andalso
+                  not (Toplevel.is_proof (#post_state s))) steps;
+
+(* Recompute the splicer's armed state from the current step list: armed iff no
+   non-stale step has crossed the proof-exit boundary.  Used after structural
+   edits (truncate, edit without auto-replay) to put the splicer in a coherent
+   state for subsequent steps. *)
+fun rearm_splicer (r : repl) : repl =
+  case #splicer r of
+    NONE => r
+  | SOME s =>
+      let val armed' = if crossed_proof_exit (#steps r) then NONE
+                       else SOME (#initial s)
+      in {origin = #origin r, base_state = #base_state r, steps = #steps r,
+          timeout = #timeout r, pin = #pin r,
+          splicer = SOME {initial = #initial s, armed = armed'}} end;
 
 fun edit_repl idx new_text (r : repl) : repl =
   let val steps = #steps r
@@ -613,15 +736,26 @@ fun edit_repl idx new_text (r : repl) : repl =
               then error ("Step " ^ string_of_int idx ^ " out of range") else ()
       val pre = if idx = 0 then #base_state r
                 else #post_state (nth steps (idx - 1))
-      val post = exec_text (#timeout r) new_text pre
-      val edited : repl_step = {text = new_text, pre_state = pre, post_state = post, stale = false}
       val before_steps = List.take (steps, idx)
+      (* Splicer's armed state for the edited step: armed iff the splicer is
+         active and no kept before-step has already crossed the proof-exit
+         boundary.  exec_text threads it onward through the edited transitions. *)
+      val armed_at_idx =
+        case #splicer r of
+          NONE => NONE
+        | SOME s =>
+            if crossed_proof_exit before_steps
+            then NONE else SOME (#initial s)
+      val (post, _) = exec_text (#timeout r) new_text pre armed_at_idx
+      val edited : repl_step = {text = new_text, pre_state = pre, post_state = post, stale = false}
       val after_steps = List.drop (steps, idx + 1)
         |> map (fn s : repl_step => {text = #text s, pre_state = #pre_state s,
                                       post_state = #post_state s, stale = true})
-      val r' : repl = {origin = #origin r, base_state = #base_state r,
-                        steps = before_steps @ [edited] @ after_steps,
-                        timeout = #timeout r, pin = #pin r}
+      val r' : repl = rearm_splicer
+                        {origin = #origin r, base_state = #base_state r,
+                         steps = before_steps @ [edited] @ after_steps,
+                         timeout = #timeout r, pin = #pin r,
+                         splicer = #splicer r}
   in if #auto_replay (get_cfg ()) andalso not (null after_steps)
      then replay_repl r' else r' end;
 
@@ -654,9 +788,11 @@ fun truncate id raw_idx =
               error ("Cannot truncate: sub-REPL " ^ quote rid ^ " is busy")
           | _ => ()) all_orphans
         val tab' = fold (fn rid => Symtab.delete_safe rid) all_orphans tab
-        val r' : repl = mark_pin_stale {origin = #origin r, base_state = #base_state r,
+        val r' : repl = rearm_splicer (mark_pin_stale
+                         {origin = #origin r, base_state = #base_state r,
                           steps = if idx < 0 then [] else List.take (steps, idx + 1),
-                          timeout = #timeout r, pin = #pin r}
+                          timeout = #timeout r, pin = #pin r,
+                          splicer = #splicer r})
     in (out ("Truncated to step " ^ string_of_int idx ^ ", dropped " ^
              string_of_int dropped ^ " steps"),
         Symtab.update (id, Repl r') tab') end);
