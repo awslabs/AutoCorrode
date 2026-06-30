@@ -47,7 +47,7 @@ lemma fixed_width_prism_valid:
     shows \<open>is_valid_prism p\<close>
   using assms by (simp add: fixed_width_prism_def)
 
-subsection\<open>Leaf fields: the fixed-width word codecs\<close>
+subsection\<open>Leaf fields: the fixed-width word prisms\<close>
 
 text\<open>The little-endian word byte-list prisms are fixed-width (2/4/8/16 bytes), so
 they serve as the leaf fields of a record.  These are the facts a record
@@ -113,12 +113,12 @@ next
         list_fixlen_project_def bind_eq_Some_conv split: if_splits)
 qed
 
-subsection\<open>Leaf fields: single-byte codecs (\<^verbatim>\<open>bool\<close>, enums)\<close>
+subsection\<open>Leaf fields: single-byte prisms (\<^verbatim>\<open>bool\<close>, enums)\<close>
 
 text\<open>The boolean and enum encodings are single-\<^emph>\<open>byte\<close> prisms
 (\<^typ>\<open>(byte, 'a) prism\<close>), whereas a record field is a \<^emph>\<open>byte-list\<close> prism
 (\<^typ>\<open>(byte list, 'a) prism\<close>).  \<^verbatim>\<open>single_byte_prism\<close> lifts any single-byte
-codec to a one-element byte list, so a \<^verbatim>\<open>bool\<close> or enum can appear as a field.\<close>
+prism to a one-element byte list, so a \<^verbatim>\<open>bool\<close> or enum can appear as a field.\<close>
 
 definition single_byte_prism :: \<open>(byte, 'a) prism \<Rightarrow> (byte list, 'a) prism\<close> where
   \<open>single_byte_prism p \<equiv> make_prism
@@ -142,7 +142,7 @@ next
     by (auto simp add: single_byte_prism_def split: list.splits)
 qed
 
-text\<open>The boolean field codec, and its fixed width.\<close>
+text\<open>The boolean field prism, and its fixed width.\<close>
 
 definition bool_byte_list_prism :: \<open>(byte list, bool) prism\<close> where
   \<open>bool_byte_list_prism \<equiv> single_byte_prism bool_byte_prism\<close>
@@ -183,7 +183,7 @@ next
 qed
 
 text\<open>A word-array field \<^verbatim>\<open>[uW; N]\<close> is \<^const>\<open>array_byte_prism\<close> over a fixed-width
-element codec; the array is then fixed-width \<^verbatim>\<open>w * LENGTH('l)\<close>.\<close>
+element prism; the array is then fixed-width \<^verbatim>\<open>w * LENGTH('l)\<close>.\<close>
 
 lemma fixed_width_array:
   assumes \<open>fixed_width_prism w p\<close>
@@ -350,29 +350,29 @@ Given a name and a field assignment
 \<^verbatim>\<open>define_byte_record <T> = <f0>: <ty0> | <f1>: <ty1> | ...\<close>
 
 it defines the record type (via \<^verbatim>\<open>datatype_record\<close>), builds \<^verbatim>\<open><T>_byte_prism\<close>
-by nesting \<^const>\<open>prod_byte_prism\<close> over the per-field codecs and relabelling the
+by nesting \<^const>\<open>prod_byte_prism\<close> over the per-field prisms and relabelling the
 resulting tuple to the named record via \<^const>\<open>iso_prism\<close>, and proves the
-round-trip law \<^verbatim>\<open><T>_byte_prism_valid\<close> automatically.  This is the Isabelle
-analogue of the Verus \<^verbatim>\<open>define_payload!\<close> macro.  Currently supports word fields
-(\<^verbatim>\<open>u16\<close>/\<^verbatim>\<open>u32\<close>/\<^verbatim>\<open>u64\<close>/\<^verbatim>\<open>u128\<close>).\<close>
+round-trip law \<^verbatim>\<open><T>_byte_prism_valid\<close> automatically.  Field types may be
+\<^verbatim>\<open>u8\<close>/\<^verbatim>\<open>u16\<close>/\<^verbatim>\<open>u32\<close>/\<^verbatim>\<open>u64\<close>/\<^verbatim>\<open>u128\<close>, \<^verbatim>\<open>bool\<close>, a pad \<^verbatim>\<open>[u8; N]\<close>, a word array
+\<^verbatim>\<open>[uW; N]\<close>, an enum, or a nested record.\<close>
 
 ML_file \<open>byte_encoding_record_cmd.ML\<close>
 
-subsection\<open>Worked example\<close>
+subsection\<open>Worked examples\<close>
 
-text\<open>\<^verbatim>\<open>VsidToSidPayload\<close> is a two-field live-update record.  Defined in one line
-by the command, with the type, codec prism, and round-trip proof all generated.\<close>
+text\<open>A two-field record, defined in one line by the command, with the type, byte
+prism, and round-trip proof all generated.\<close>
 
-define_byte_record vsid_to_sid =
-    vts_vsid: u32 | vts_sid: u32
+define_byte_record pair_rec =
+    pair_x: u32 | pair_y: u32
 
 \<comment>\<open>The type, its fields, and the prism exist.\<close>
-term \<open>vts_vsid\<close> term \<open>vts_sid\<close>
-term \<open>vsid_to_sid_byte_prism :: (byte list, vsid_to_sid) prism\<close>
+term \<open>pair_x\<close> term \<open>pair_y\<close>
+term \<open>pair_rec_byte_prism :: (byte list, pair_rec) prism\<close>
 
 \<comment>\<open>The round-trip law was proven automatically.\<close>
-lemma \<open>is_valid_prism vsid_to_sid_byte_prism\<close>
-  by (rule vsid_to_sid_byte_prism_valid)
+lemma \<open>is_valid_prism pair_rec_byte_prism\<close>
+  by (rule pair_rec_byte_prism_valid)
 
 text\<open>A record mixing word and boolean fields.\<close>
 
@@ -392,43 +392,43 @@ lemma \<open>is_valid_prism padded_rec_byte_prism\<close>
   by (rule padded_rec_byte_prism_valid)
 
 text\<open>A record nested as a field of another record (naming convention: the field
-type \<^verbatim>\<open>vsid_to_sid\<close> resolves to \<^verbatim>\<open>vsid_to_sid_byte_prism\<close> and
-\<^verbatim>\<open>fixed_width_vsid_to_sid\<close>, both generated above).\<close>
+type \<^verbatim>\<open>pair_rec\<close> resolves to \<^verbatim>\<open>pair_rec_byte_prism\<close> and
+\<^verbatim>\<open>fixed_width_pair_rec\<close>, both generated above).\<close>
 
 define_byte_record outer_rec =
-    or_tag: u16 | or_inner: vsid_to_sid
+    or_tag: u16 | or_inner: pair_rec
 
 lemma \<open>is_valid_prism outer_rec_byte_prism\<close>
   by (rule outer_rec_byte_prism_valid)
 
 text\<open>A record with an enum field (naming convention: the field type
-\<^verbatim>\<open>serify_vcpu_action_type\<close> — defined by \<^verbatim>\<open>define_byte_enum\<close> — resolves to its
-single-byte prism, lifted to a one-byte list field).\<close>
+\<^verbatim>\<open>demo_enum\<close> — defined by \<^verbatim>\<open>define_byte_enum\<close> — resolves to its single-byte
+prism, lifted to a one-byte list field).\<close>
 
 define_byte_record action_rec =
-    ar_cpu: u16 | ar_action: serify_vcpu_action_type
+    ar_cpu: u16 | ar_action: demo_enum
 
 lemma \<open>is_valid_prism action_rec_byte_prism\<close>
   by (rule action_rec_byte_prism_valid)
 
 subsection\<open>Worked example: the command versus the same record by hand\<close>
 
-text\<open>This is the real live-update \<^verbatim>\<open>MmioRangePayload\<close>
-(\<^verbatim>\<open>{ start: u64, end: u64, prefetchable: bool, index: u8, pad0: [u8; 6] }\<close>),
-a 24-byte fixed-layout record mixing words, a boolean, a single byte, and a pad
-run.  It illustrates what the command saves: first the codec written \<^emph>\<open>by
-hand\<close> (record type, the nested field prism, and the round-trip proof), then the
-\<^emph>\<open>same\<close> record in one line via \<^verbatim>\<open>define_byte_record\<close>.\<close>
+text\<open>A 24-byte fixed-layout record
+\<^verbatim>\<open>{ a: u64, b: u64, c: bool, d: u8, pad: [u8; 6] }\<close> mixing words, a boolean, a
+single byte, and a pad run.  It illustrates what the command saves: first the
+prism written \<^emph>\<open>by hand\<close> (record type, the nested field prism, and the
+round-trip proof), then the \<^emph>\<open>same\<close> record in one line via
+\<^verbatim>\<open>define_byte_record\<close>.\<close>
 
-datatype_record mmio_range_manual =
-  mrm_start        :: \<open>64 word\<close>
-  mrm_end          :: \<open>64 word\<close>
-  mrm_prefetchable :: \<open>bool\<close>
-  mrm_index        :: \<open>byte\<close>
-  mrm_pad0         :: \<open>(byte, 6) array\<close>
+datatype_record demo_record_manual =
+  drm_a   :: \<open>64 word\<close>
+  drm_b   :: \<open>64 word\<close>
+  drm_c   :: \<open>bool\<close>
+  drm_d   :: \<open>byte\<close>
+  drm_pad :: \<open>(byte, 6) array\<close>
 
-definition mmio_range_manual_byte_prism :: \<open>(byte list, mmio_range_manual) prism\<close> where
-  \<open>mmio_range_manual_byte_prism \<equiv>
+definition demo_record_manual_byte_prism :: \<open>(byte list, demo_record_manual) prism\<close> where
+  \<open>demo_record_manual_byte_prism \<equiv>
      prism_compose
        (prod_byte_prism 8 word64_byte_list_prism_le
          (prod_byte_prism 8 word64_byte_list_prism_le
@@ -436,11 +436,11 @@ definition mmio_range_manual_byte_prism :: \<open>(byte list, mmio_range_manual)
              (prod_byte_prism 1 byte_byte_list_prism
                (list_fixlen_prism :: (byte list, (byte, 6) array) prism)))))
        (iso_prism
-          (\<lambda>(s, e, p, i, pad). make_mmio_range_manual s e p i pad)
-          (\<lambda>r. (mrm_start r, mrm_end r, mrm_prefetchable r, mrm_index r, mrm_pad0 r)))\<close>
+          (\<lambda>(a, b, c, d, pad). make_demo_record_manual a b c d pad)
+          (\<lambda>r. (drm_a r, drm_b r, drm_c r, drm_d r, drm_pad r)))\<close>
 
-lemma mmio_range_manual_byte_prism_valid: \<open>is_valid_prism mmio_range_manual_byte_prism\<close>
-  unfolding mmio_range_manual_byte_prism_def
+lemma demo_record_manual_byte_prism_valid: \<open>is_valid_prism demo_record_manual_byte_prism\<close>
+  unfolding demo_record_manual_byte_prism_def
   apply (rule prism_compose_valid)
    apply (rule prod_byte_prism_valid)
     apply (rule fixed_width_word64_le)
@@ -457,12 +457,12 @@ lemma mmio_range_manual_byte_prism_valid: \<open>is_valid_prism mmio_range_manua
 
 text\<open>The same record, in one line.\<close>
 
-define_byte_record mmio_range_auto =
-    mra_start: u64 | mra_end: u64 | mra_prefetchable: bool
-  | mra_index: u8 | mra_pad0: \<open>[u8; 6]\<close>
+define_byte_record demo_record_auto =
+    dra_a: u64 | dra_b: u64 | dra_c: bool
+  | dra_d: u8 | dra_pad: \<open>[u8; 6]\<close>
 
-lemma \<open>is_valid_prism mmio_range_auto_byte_prism\<close>
-  by (rule mmio_range_auto_byte_prism_valid)
+lemma \<open>is_valid_prism demo_record_auto_byte_prism\<close>
+  by (rule demo_record_auto_byte_prism_valid)
 
 
 (*<*)

@@ -4,12 +4,11 @@
 (* The `define_byte_enum` command.  Given a name and a list of (constructor,
    discriminant byte) pairs, it
      (1) defines the enumeration type via the existing `enum` command,
-     (2) generates the discriminant codec `<T>_to_byte` / `<T>_from_byte`,
+     (2) generates the discriminant encoding `<T>_to_byte` / `<T>_from_byte`,
      (3) defines `<T>_byte_prism` as an instance of `enum_byte_prism`, and
      (4) proves `<T>_byte_prism_valid` (the round-trip law) automatically.
-   This is the Isabelle analogue of the Verus `define_enum!` macro: the type
-   and its byte serialization, with the round-trip proof discharged
-   automatically. *)
+   The type and its byte serialization from one declaration, with the
+   round-trip proof discharged automatically. *)
 
 signature BYTE_ENCODING_ENUM_CMD =
 sig

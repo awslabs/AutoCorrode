@@ -5,12 +5,11 @@
    field-type) pairs, it
      (1) defines the record type via `datatype_record`,
      (2) builds the field byte-prism by nesting `prod_byte_prism` over the
-         per-field codecs and relabelling the resulting tuple to the named
+         per-field prisms and relabelling the resulting tuple to the named
          record via `iso_prism`, and
      (3) proves `<T>_byte_prism_valid` (the round-trip law) automatically.
-   This is the Isabelle analogue of the Verus `define_payload!` macro.
-
-   Currently supports word fields (u16/u32/u64/u128). *)
+   Field types: u8/u16/u32/u64/u128, bool, pad [u8; N], word array [uW; N],
+   enum, and nested record. *)
 
 signature BYTE_ENCODING_RECORD_CMD =
 sig
@@ -34,8 +33,11 @@ fun inst_len ctxt n prems thm =
   let
     val thm' = case prems of [] => thm | _ => thm OF prems
     val inst = Rule_Insts.where_rule ctxt [((("'l", 0), Position.none), string_of_int n)] [] thm'
+    (* Delete One_nat_def so the width is left as the numeral 1, not Suc 0
+       (otherwise downstream numeral/Suc unification in the validity proof fails). *)
+    val ctxt' = ctxt delsimps @{thms One_nat_def}
   in
-    Simplifier.simplify ctxt inst
+    Simplifier.simplify ctxt' inst
   end
 
 (* The word codec name and width for an integer width W (in bits). *)
@@ -68,6 +70,8 @@ fun field_info _ "u16"  = { hol_ty = "16 word",  codec = "word16_byte_list_prism
                             fw_thm = @{thm fixed_width_word16_le} }
   | field_info _ "u32"  = { hol_ty = "32 word",  codec = "word32_byte_list_prism_le",
                             fw_thm = @{thm fixed_width_word32_le} }
+  | field_info _ "i32"  = { hol_ty = "32 word",  codec = "word32_byte_list_prism_le",
+                            fw_thm = @{thm fixed_width_word32_le} }  (* i32: same 4 bytes as u32 *)
   | field_info _ "u64"  = { hol_ty = "64 word",  codec = "word64_byte_list_prism_le",
                             fw_thm = @{thm fixed_width_word64_le} }
   | field_info _ "u128" = { hol_ty = "128 word", codec = "word128_byte_list_prism_le",
@@ -103,16 +107,22 @@ fun field_info _ "u16"  = { hol_ty = "16 word",  codec = "word16_byte_list_prism
                   fw_thm = @{thm fixed_width_single_byte}
                              OF [Proof_Context.get_thm ctxt (ty ^ "_byte_prism_valid")] }))
 
+(* A nat literal may appear as a numeral, as 0, or as Suc (...) (e.g. simp leaves
+   `Suc 0` for length 1).  Extract its value robustly. *)
+fun dest_nat \<^Const_>\<open>Groups.zero _\<close> = 0
+  | dest_nat \<^Const_>\<open>Suc for m\<close> = dest_nat m + 1
+  | dest_nat t = snd (HOLogic.dest_number t)
+
 (* Read the width <n> out of a `fixed_width_prism <n> <codec>` theorem. *)
 fun width_of_fw_thm thm =
   case HOLogic.dest_Trueprop (Thm.concl_of thm) of
-    \<^Const_>\<open>fixed_width_prism _\<close> $ n $ _ => snd (HOLogic.dest_number n)
+    \<^Const_>\<open>fixed_width_prism _\<close> $ n $ _ => dest_nat n
   | _ => error "define_byte_record: malformed fixed_width theorem"
 
 fun define_byte_record typ_binding (fields : (binding * string) list) lthy =
   let
-    val _ = if length fields < 2
-            then error "define_byte_record: need at least two fields" else ()
+    val _ = if null fields
+            then error "define_byte_record: need at least one field" else ()
     val typ_name = Binding.name_of typ_binding
     val field_binds = map fst fields
     val field_tys = map snd fields
@@ -147,10 +157,16 @@ fun define_byte_record typ_binding (fields : (binding * string) list) lthy =
     val field_name_strs = map Binding.name_of field_binds
     val n = length fields
     val xs = map (fn i => "x" ^ string_of_int i) (0 upto n - 1)
+    (* For a single field the tuple degenerates to a bare value: the iso is
+       (\<lambda>x0. make_T x0) / (\<lambda>r. f0 r); otherwise it pairs the fields. *)
     val forward_str =
-      "\<lambda>(" ^ space_implode ", " xs ^ "). make_" ^ typ_name ^ " " ^ space_implode " " xs
+      if n = 1
+      then "\<lambda>x0. make_" ^ typ_name ^ " x0"
+      else "\<lambda>(" ^ space_implode ", " xs ^ "). make_" ^ typ_name ^ " " ^ space_implode " " xs
     val backward_str =
-      "\<lambda>r. (" ^ space_implode ", " (map (fn f => f ^ " r") field_name_strs) ^ ")"
+      if n = 1
+      then "\<lambda>r. " ^ hd field_name_strs ^ " r"
+      else "\<lambda>r. (" ^ space_implode ", " (map (fn f => f ^ " r") field_name_strs) ^ ")"
 
     val prism_str =
       "prism_compose (" ^ tuple_prism_str ^ ") (iso_prism (" ^ forward_str ^ ") (" ^ backward_str ^ "))"

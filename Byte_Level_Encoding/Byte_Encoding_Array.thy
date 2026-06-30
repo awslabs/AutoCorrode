@@ -193,7 +193,7 @@ lemma array_byte_prism_project_len:
   using assms by (auto simp add: array_byte_prism_def array_byte_project_def split: if_splits)
 
 text\<open>A concrete array encoding is obtained by instantiating the element prism
-with a fixed-width element codec — for example \<^verbatim>\<open>array_byte_prism 8
+with a fixed-width element prism — for example \<^verbatim>\<open>array_byte_prism 8
 word64_byte_list_prism_le\<close> for a \<^verbatim>\<open>[u64; N]\<close> field — whose validity follows
 from \<^verbatim>\<open>array_byte_prism_valid\<close> and the element's embedding-length fact.\<close>
 
