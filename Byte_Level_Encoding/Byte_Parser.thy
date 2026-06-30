@@ -3,8 +3,8 @@
 
 (*<*)
 theory Byte_Parser
-  imports Lenses_And_Other_Optics.Lenses_And_Other_Optics Byte_Encoding_Word_Nat Focus_Parser
-    "Word_Lib.Hex_Words" "HOL-Library.Datatype_Records"
+  imports Lenses_And_Other_Optics.Lenses_And_Other_Optics Byte_Encoding_Word_Nat Byte_Encoding_Bool
+    Focus_Parser "Word_Lib.Hex_Words" "HOL-Library.Datatype_Records"
 begin
 (*>*)
 
@@ -19,9 +19,11 @@ begin
 text\<open>Read a word\<close>
 
 definition \<open>parse_byte \<equiv> parse_single :: byte byte_parser\<close>
+definition \<open>parse_bool \<equiv> parse_byte >>\<^sub>\<integral> bool_byte_focus\<close>
 definition \<open>parse_word16 \<equiv> parse_array2 >>\<^sub>\<integral> word16_byte_array_focus_le\<close>
 definition \<open>parse_word32 \<equiv> parse_array4 >>\<^sub>\<integral> word32_byte_array_focus_le\<close>
 definition \<open>parse_word64 \<equiv> parse_array8 >>\<^sub>\<integral> word64_byte_array_focus_le\<close>
+definition \<open>parse_word128 \<equiv> parse_array16 >>\<^sub>\<integral> word128_byte_array_focus_le\<close>
 
 end 
 

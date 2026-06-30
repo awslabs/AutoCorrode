@@ -1,0 +1,470 @@
+(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+   SPDX-License-Identifier: MIT *)
+
+(*<*)
+theory Byte_Encoding_Record
+  imports Byte_Encoding_Word_Nat Byte_Encoding_Bool Byte_Encoding_Array Byte_Encoding_Enum
+    "HOL-Library.Datatype_Records"
+  keywords "define_byte_record" :: thy_decl
+begin
+(*>*)
+
+section\<open>Byte encoding for fixed-layout records\<close>
+
+text\<open>A fixed-layout record lays its fields out contiguously: the byte encoding of
+\<^verbatim>\<open>{ f0, f1, ... }\<close> is the concatenation of each field's byte encoding.  This
+section provides the combinator \<^verbatim>\<open>prod_byte_prism\<close> that pairs two field
+byte-prisms, placing the first field's bytes (of fixed width \<^term>\<open>nA\<close>) before
+the second's.  Multi-field records are obtained by nesting the combinator and
+relabelling the resulting nested tuple to a named record via \<^const>\<open>iso_prism\<close>.
+
+The combinator needs to know where one field ends and the next begins, so the
+\<^emph>\<open>first\<close> field must be \<^emph>\<open>fixed-width\<close>: its embedding always has the same
+length \<^term>\<open>nA\<close>, which is the split point on decode.  (As with arrays, a plain
+\<^const>\<open>concat\<close> loses the field boundary, so the width information — carried by
+\<^verbatim>\<open>fixed_width_prism\<close> — is what makes the pair invertible.)\<close>
+
+subsection\<open>Fixed-width byte prisms\<close>
+
+text\<open>A byte-list prism is \<^emph>\<open>fixed-width\<close> at \<^term>\<open>n\<close> when it is valid, every
+embedding has length \<^term>\<open>n\<close>, and every successful projection consumes exactly
+\<^term>\<open>n\<close> bytes.  The width lets a pair split a concatenation at the right
+boundary, and the projection-length fact is what makes the width \<^emph>\<open>compose\<close>.\<close>
+
+definition fixed_width_prism :: \<open>nat \<Rightarrow> (byte list, 'a) prism \<Rightarrow> bool\<close> where
+  \<open>fixed_width_prism n p \<longleftrightarrow> is_valid_prism p \<and> (\<forall>a. length (prism_embed p a) = n)
+      \<and> (\<forall>bs a. prism_project p bs = Some a \<longrightarrow> length bs = n)\<close>
+
+lemma fixed_width_prismI:
+  assumes \<open>is_valid_prism p\<close>
+      and \<open>\<And>a. length (prism_embed p a) = n\<close>
+      and \<open>\<And>bs a. prism_project p bs = Some a \<Longrightarrow> length bs = n\<close>
+    shows \<open>fixed_width_prism n p\<close>
+  using assms by (auto simp add: fixed_width_prism_def)
+
+lemma fixed_width_prism_valid:
+  assumes \<open>fixed_width_prism n p\<close>
+    shows \<open>is_valid_prism p\<close>
+  using assms by (simp add: fixed_width_prism_def)
+
+subsection\<open>Leaf fields: the fixed-width word codecs\<close>
+
+text\<open>The little-endian word byte-list prisms are fixed-width (2/4/8/16 bytes), so
+they serve as the leaf fields of a record.  These are the facts a record
+combinator looks up for each \<^verbatim>\<open>u16\<close>/\<^verbatim>\<open>u32\<close>/\<^verbatim>\<open>u64\<close>/\<^verbatim>\<open>u128\<close> field.\<close>
+
+lemma fixed_width_word16_le: \<open>fixed_width_prism 2 word16_byte_list_prism_le\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism word16_byte_list_prism_le\<close>
+    by (rule word_byte_array_prism_validity)
+next
+  fix a show \<open>length (prism_embed word16_byte_list_prism_le a) = 2\<close>
+    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
+        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
+next
+  fix bs a assume \<open>prism_project word16_byte_list_prism_le bs = Some a\<close>
+  then show \<open>length bs = 2\<close>
+    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
+        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
+qed
+
+lemma fixed_width_word32_le: \<open>fixed_width_prism 4 word32_byte_list_prism_le\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism word32_byte_list_prism_le\<close>
+    by (rule word_byte_array_prism_validity)
+next
+  fix a show \<open>length (prism_embed word32_byte_list_prism_le a) = 4\<close>
+    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
+        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
+next
+  fix bs a assume \<open>prism_project word32_byte_list_prism_le bs = Some a\<close>
+  then show \<open>length bs = 4\<close>
+    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
+        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
+qed
+
+lemma fixed_width_word64_le: \<open>fixed_width_prism 8 word64_byte_list_prism_le\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism word64_byte_list_prism_le\<close>
+    by (rule word_byte_array_prism_validity)
+next
+  fix a show \<open>length (prism_embed word64_byte_list_prism_le a) = 8\<close>
+    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
+        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
+next
+  fix bs a assume \<open>prism_project word64_byte_list_prism_le bs = Some a\<close>
+  then show \<open>length bs = 8\<close>
+    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
+        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
+qed
+
+lemma fixed_width_word128_le: \<open>fixed_width_prism 16 word128_byte_list_prism_le\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism word128_byte_list_prism_le\<close>
+    by (rule word128_byte_array_prism_validity)
+next
+  fix a show \<open>length (prism_embed word128_byte_list_prism_le a) = 16\<close>
+    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
+        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
+next
+  fix bs a assume \<open>prism_project word128_byte_list_prism_le bs = Some a\<close>
+  then show \<open>length bs = 16\<close>
+    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
+        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
+qed
+
+subsection\<open>Leaf fields: single-byte codecs (\<^verbatim>\<open>bool\<close>, enums)\<close>
+
+text\<open>The boolean and enum encodings are single-\<^emph>\<open>byte\<close> prisms
+(\<^typ>\<open>(byte, 'a) prism\<close>), whereas a record field is a \<^emph>\<open>byte-list\<close> prism
+(\<^typ>\<open>(byte list, 'a) prism\<close>).  \<^verbatim>\<open>single_byte_prism\<close> lifts any single-byte
+codec to a one-element byte list, so a \<^verbatim>\<open>bool\<close> or enum can appear as a field.\<close>
+
+definition single_byte_prism :: \<open>(byte, 'a) prism \<Rightarrow> (byte list, 'a) prism\<close> where
+  \<open>single_byte_prism p \<equiv> make_prism
+     (\<lambda>a. [prism_embed p a])
+     (\<lambda>bs. case bs of [b] \<Rightarrow> prism_project p b | _ \<Rightarrow> None)\<close>
+
+lemma fixed_width_single_byte:
+  assumes \<open>is_valid_prism p\<close>
+    shows \<open>fixed_width_prism 1 (single_byte_prism p)\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism (single_byte_prism p)\<close>
+    using assms
+    unfolding is_valid_prism_def single_byte_prism_def
+    by (auto split: list.splits)
+next
+  fix a show \<open>length (prism_embed (single_byte_prism p) a) = 1\<close>
+    by (simp add: single_byte_prism_def)
+next
+  fix bs a assume \<open>prism_project (single_byte_prism p) bs = Some a\<close>
+  then show \<open>length bs = 1\<close>
+    by (auto simp add: single_byte_prism_def split: list.splits)
+qed
+
+text\<open>The boolean field codec, and its fixed width.\<close>
+
+definition bool_byte_list_prism :: \<open>(byte list, bool) prism\<close> where
+  \<open>bool_byte_list_prism \<equiv> single_byte_prism bool_byte_prism\<close>
+
+lemma fixed_width_bool: \<open>fixed_width_prism 1 bool_byte_list_prism\<close>
+  unfolding bool_byte_list_prism_def
+  by (rule fixed_width_single_byte[OF bool_byte_prism_valid])
+
+text\<open>A \<^verbatim>\<open>u8\<close> field is a single byte: the identity prism on \<^typ>\<open>byte\<close>, lifted to
+a one-element byte list.\<close>
+
+definition byte_byte_list_prism :: \<open>(byte list, byte) prism\<close> where
+  \<open>byte_byte_list_prism \<equiv> single_byte_prism (iso_prism (\<lambda>b. b) (\<lambda>b. b))\<close>
+
+lemma fixed_width_u8: \<open>fixed_width_prism 1 byte_byte_list_prism\<close>
+  unfolding byte_byte_list_prism_def
+  by (rule fixed_width_single_byte[OF iso_prism_valid]) simp_all
+
+subsection\<open>Leaf fields: pad and word arrays\<close>
+
+text\<open>A pad field \<^verbatim>\<open>[u8; N]\<close> is exactly \<^const>\<open>list_fixlen_prism\<close> (a byte list to a
+length-\<^term>\<open>N\<close> byte array), of fixed width \<^verbatim>\<open>LENGTH('l)\<close>.\<close>
+
+lemma fixed_width_pad:
+  \<open>fixed_width_prism (LENGTH('l::len)) (list_fixlen_prism :: (byte list, (byte, 'l) array) prism)\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism (list_fixlen_prism :: (byte list, (byte, 'l) array) prism)\<close>
+    by (rule list_fixlen_prism_valid)
+next
+  fix a show \<open>length (prism_embed (list_fixlen_prism :: (byte list, (byte, 'l) array) prism) a)
+                = LENGTH('l)\<close>
+    by (simp add: list_fixlen_prism_def list_fixlen_embed_def)
+next
+  fix bs and a :: \<open>(byte, 'l) array\<close>
+  assume \<open>prism_project (list_fixlen_prism :: (byte list, (byte, 'l) array) prism) bs = Some a\<close>
+  then show \<open>length bs = LENGTH('l)\<close>
+    by (auto simp add: list_fixlen_prism_def list_fixlen_project_def split: if_splits)
+qed
+
+text\<open>A word-array field \<^verbatim>\<open>[uW; N]\<close> is \<^const>\<open>array_byte_prism\<close> over a fixed-width
+element codec; the array is then fixed-width \<^verbatim>\<open>w * LENGTH('l)\<close>.\<close>
+
+lemma fixed_width_array:
+  assumes \<open>fixed_width_prism w p\<close>
+    shows \<open>fixed_width_prism (w * LENGTH('l::len))
+             (array_byte_prism w p :: (byte list, ('e, 'l) array) prism)\<close>
+proof (rule fixed_width_prismI)
+  from assms have vp: \<open>is_valid_prism p\<close>
+    and wp: \<open>\<And>e. length (prism_embed p e) = w\<close>
+    by (auto simp add: fixed_width_prism_def)
+  show \<open>is_valid_prism (array_byte_prism w p :: (byte list, ('e, 'l) array) prism)\<close>
+    using vp wp by (rule array_byte_prism_valid)
+next
+  from assms have wp: \<open>\<And>e. length (prism_embed p e) = w\<close>
+    by (simp add: fixed_width_prism_def)
+  fix a show \<open>length (prism_embed (array_byte_prism w p :: (byte list, ('e, 'l) array) prism) a)
+                = w * LENGTH('l)\<close>
+    using wp by (rule array_byte_prism_embed_len)
+next
+  fix bs and a :: \<open>('e, 'l) array\<close>
+  assume \<open>prism_project (array_byte_prism w p :: (byte list, ('e, 'l) array) prism) bs = Some a\<close>
+  then show \<open>length bs = w * LENGTH('l)\<close>
+    by (rule array_byte_prism_project_len)
+qed
+
+subsection\<open>The pair combinator\<close>
+
+text\<open>\<^verbatim>\<open>prod_byte_prism\<close> places \<^term>\<open>pA\<close>'s bytes (width \<^term>\<open>nA\<close>) before
+\<^term>\<open>pB\<close>'s.  Embedding concatenates; projecting splits at \<^term>\<open>nA\<close> and runs
+each side's projector.\<close>
+
+definition prod_byte_embed ::
+    \<open>(byte list, 'a) prism \<Rightarrow> (byte list, 'b) prism \<Rightarrow> 'a \<times> 'b \<Rightarrow> byte list\<close> where
+  \<open>prod_byte_embed pA pB \<equiv> \<lambda>(a, b). prism_embed pA a @ prism_embed pB b\<close>
+
+definition prod_byte_project ::
+    \<open>nat \<Rightarrow> (byte list, 'a) prism \<Rightarrow> (byte list, 'b) prism \<Rightarrow> byte list \<Rightarrow> ('a \<times> 'b) option\<close> where
+  \<open>prod_byte_project nA pA pB bs \<equiv>
+     Option.bind (prism_project pA (take nA bs)) (\<lambda>a.
+     Option.bind (prism_project pB (drop nA bs)) (\<lambda>b. Some (a, b)))\<close>
+
+definition prod_byte_prism ::
+    \<open>nat \<Rightarrow> (byte list, 'a) prism \<Rightarrow> (byte list, 'b) prism \<Rightarrow> (byte list, 'a \<times> 'b) prism\<close> where
+  \<open>prod_byte_prism nA pA pB \<equiv> make_prism (prod_byte_embed pA pB) (prod_byte_project nA pA pB)\<close>
+
+text\<open>Validity of the pair: the round-trip law for the composite follows from each
+field's law plus the fact that \<^term>\<open>pA\<close>'s embedding has the exact width
+\<^term>\<open>nA\<close> at which we split.\<close>
+
+lemma prod_byte_prism_valid:
+  assumes \<open>fixed_width_prism nA pA\<close>
+      and \<open>is_valid_prism pB\<close>
+    shows \<open>is_valid_prism (prod_byte_prism nA pA pB)\<close>
+proof -
+  from assms(1) have vA: \<open>is_valid_prism pA\<close>
+    and wA: \<open>\<And>a. length (prism_embed pA a) = nA\<close>
+    by (auto simp add: fixed_width_prism_def)
+  show ?thesis
+    unfolding is_valid_prism_def
+  proof (intro conjI allI impI)
+    fix ab :: \<open>'a \<times> 'b\<close>
+    obtain a b where ab: \<open>ab = (a, b)\<close>
+      by (cases ab)
+    have eA: \<open>prism_project pA (prism_embed pA a) = Some a\<close>
+      using vA by (simp add: prism_laws)
+    have eB: \<open>prism_project pB (prism_embed pB b) = Some b\<close>
+      using assms(2) by (simp add: prism_laws)
+    show \<open>prism_project (prod_byte_prism nA pA pB) (prism_embed (prod_byte_prism nA pA pB) ab) = Some ab\<close>
+      by (simp add: ab prod_byte_prism_def prod_byte_embed_def prod_byte_project_def wA eA eB)
+  next
+    fix bs ab
+    assume \<open>prism_project (prod_byte_prism nA pA pB) bs = Some ab\<close>
+    then obtain a b where pa: \<open>prism_project pA (take nA bs) = Some a\<close>
+                      and pb: \<open>prism_project pB (drop nA bs) = Some b\<close>
+                      and ab: \<open>ab = (a, b)\<close>
+      by (auto simp add: prod_byte_prism_def prod_byte_project_def bind_eq_Some_conv)
+    from pa vA have ta: \<open>take nA bs = prism_embed pA a\<close>
+      by (simp add: prism_laws)
+    from pb assms(2) have da: \<open>drop nA bs = prism_embed pB b\<close>
+      by (simp add: prism_laws)
+    have \<open>bs = take nA bs @ drop nA bs\<close>
+      by simp
+    then show \<open>bs = prism_embed (prod_byte_prism nA pA pB) ab\<close>
+      by (simp add: ab prod_byte_prism_def prod_byte_embed_def ta da)
+  qed
+qed
+
+text\<open>The pair is itself fixed-width (\<^term>\<open>nA + nB\<close>).  This closure lets fields
+chain — the result becomes the \<^term>\<open>pA\<close> of the next pair — and lets a whole
+record nest as a field of another.\<close>
+
+lemma prod_byte_prism_fixed_width:
+  assumes \<open>fixed_width_prism nA pA\<close>
+      and \<open>fixed_width_prism nB pB\<close>
+    shows \<open>fixed_width_prism (nA + nB) (prod_byte_prism nA pA pB)\<close>
+proof -
+  from assms have vB: \<open>is_valid_prism pB\<close>
+    and wA: \<open>\<And>a. length (prism_embed pA a) = nA\<close>
+    and wB: \<open>\<And>b. length (prism_embed pB b) = nB\<close>
+    and lA: \<open>\<And>bs a. prism_project pA bs = Some a \<Longrightarrow> length bs = nA\<close>
+    and lB: \<open>\<And>bs b. prism_project pB bs = Some b \<Longrightarrow> length bs = nB\<close>
+    by (auto simp add: fixed_width_prism_def)
+  have valid: \<open>is_valid_prism (prod_byte_prism nA pA pB)\<close>
+    using assms(1) vB by (rule prod_byte_prism_valid)
+  moreover have \<open>length (prism_embed (prod_byte_prism nA pA pB) ab) = nA + nB\<close> for ab
+    by (cases ab) (simp add: prod_byte_prism_def prod_byte_embed_def wA wB)
+  moreover have \<open>length bs = nA + nB\<close>
+    if \<open>prism_project (prod_byte_prism nA pA pB) bs = Some ab\<close> for bs ab
+  proof -
+    from that obtain a b where pa: \<open>prism_project pA (take nA bs) = Some a\<close>
+                           and pb: \<open>prism_project pB (drop nA bs) = Some b\<close>
+      by (auto simp add: prod_byte_prism_def prod_byte_project_def bind_eq_Some_conv)
+    from pa lA have \<open>length (take nA bs) = nA\<close>
+      by blast
+    moreover from pb lB have \<open>length (drop nA bs) = nB\<close>
+      by blast
+    ultimately show ?thesis
+      by simp
+  qed
+  ultimately show ?thesis
+    by (simp add: fixed_width_prism_def)
+qed
+
+subsection\<open>Relabelling a nested tuple as a named record\<close>
+
+text\<open>Wrapping the raw pair (a nested tuple) in a record type is a pure
+\<^const>\<open>iso_prism\<close>: it relabels the value without touching the bytes, so it
+preserves both validity and the fixed width.  This is what turns a chain of
+fields into a payload of a named \<^verbatim>\<open>datatype_record\<close>.\<close>
+
+lemma fixed_width_compose_iso:
+  assumes \<open>fixed_width_prism n pA\<close>
+      and \<open>\<And>x. f (g x) = x\<close>
+      and \<open>\<And>y. g (f y) = y\<close>
+    shows \<open>fixed_width_prism n (prism_compose pA (iso_prism f g))\<close>
+proof -
+  from assms(1) have vA: \<open>is_valid_prism pA\<close>
+    and wA: \<open>\<And>a. length (prism_embed pA a) = n\<close>
+    and lA: \<open>\<And>bs a. prism_project pA bs = Some a \<Longrightarrow> length bs = n\<close>
+    by (auto simp add: fixed_width_prism_def)
+  have viso: \<open>is_valid_prism (iso_prism f g)\<close>
+    using assms(2,3) by (rule iso_prism_valid)
+  show ?thesis
+    unfolding fixed_width_prism_def
+  proof (intro conjI allI impI)
+    show \<open>is_valid_prism (prism_compose pA (iso_prism f g))\<close>
+      using vA viso by (rule prism_compose_valid)
+  next
+    fix a
+    show \<open>length (prism_embed (prism_compose pA (iso_prism f g)) a) = n\<close>
+      by (simp add: prism_compose_def iso_prism_def wA)
+  next
+    fix bs a
+    assume \<open>prism_project (prism_compose pA (iso_prism f g)) bs = Some a\<close>
+    then show \<open>length bs = n\<close>
+      using lA by (auto simp add: prism_compose_def iso_prism_def bind_eq_Some_conv)
+  qed
+qed
+
+subsection\<open>The \<^verbatim>\<open>define_byte_record\<close> command\<close>
+
+text\<open>The \<^verbatim>\<open>define_byte_record\<close> command automates the per-record boilerplate.
+Given a name and a field assignment
+
+\<^verbatim>\<open>define_byte_record <T> = <f0>: <ty0> | <f1>: <ty1> | ...\<close>
+
+it defines the record type (via \<^verbatim>\<open>datatype_record\<close>), builds \<^verbatim>\<open><T>_byte_prism\<close>
+by nesting \<^const>\<open>prod_byte_prism\<close> over the per-field codecs and relabelling the
+resulting tuple to the named record via \<^const>\<open>iso_prism\<close>, and proves the
+round-trip law \<^verbatim>\<open><T>_byte_prism_valid\<close> automatically.  This is the Isabelle
+analogue of the Verus \<^verbatim>\<open>define_payload!\<close> macro.  Currently supports word fields
+(\<^verbatim>\<open>u16\<close>/\<^verbatim>\<open>u32\<close>/\<^verbatim>\<open>u64\<close>/\<^verbatim>\<open>u128\<close>).\<close>
+
+ML_file \<open>byte_encoding_record_cmd.ML\<close>
+
+subsection\<open>Worked example\<close>
+
+text\<open>\<^verbatim>\<open>VsidToSidPayload\<close> is a two-field live-update record.  Defined in one line
+by the command, with the type, codec prism, and round-trip proof all generated.\<close>
+
+define_byte_record vsid_to_sid =
+    vts_vsid: u32 | vts_sid: u32
+
+\<comment>\<open>The type, its fields, and the prism exist.\<close>
+term \<open>vts_vsid\<close> term \<open>vts_sid\<close>
+term \<open>vsid_to_sid_byte_prism :: (byte list, vsid_to_sid) prism\<close>
+
+\<comment>\<open>The round-trip law was proven automatically.\<close>
+lemma \<open>is_valid_prism vsid_to_sid_byte_prism\<close>
+  by (rule vsid_to_sid_byte_prism_valid)
+
+text\<open>A record mixing word and boolean fields.\<close>
+
+define_byte_record mixed_rec =
+    mr_count: u16 | mr_flag: bool | mr_addr: u64
+
+lemma \<open>is_valid_prism mixed_rec_byte_prism\<close>
+  by (rule mixed_rec_byte_prism_valid)
+
+text\<open>A record with pad and word-array fields.  Array/pad field types are written
+in a cartouche.\<close>
+
+define_byte_record padded_rec =
+    pr_id: u32 | pr_pad: \<open>[u8; 4]\<close> | pr_vec: \<open>[u64; 3]\<close>
+
+lemma \<open>is_valid_prism padded_rec_byte_prism\<close>
+  by (rule padded_rec_byte_prism_valid)
+
+text\<open>A record nested as a field of another record (naming convention: the field
+type \<^verbatim>\<open>vsid_to_sid\<close> resolves to \<^verbatim>\<open>vsid_to_sid_byte_prism\<close> and
+\<^verbatim>\<open>fixed_width_vsid_to_sid\<close>, both generated above).\<close>
+
+define_byte_record outer_rec =
+    or_tag: u16 | or_inner: vsid_to_sid
+
+lemma \<open>is_valid_prism outer_rec_byte_prism\<close>
+  by (rule outer_rec_byte_prism_valid)
+
+text\<open>A record with an enum field (naming convention: the field type
+\<^verbatim>\<open>serify_vcpu_action_type\<close> — defined by \<^verbatim>\<open>define_byte_enum\<close> — resolves to its
+single-byte prism, lifted to a one-byte list field).\<close>
+
+define_byte_record action_rec =
+    ar_cpu: u16 | ar_action: serify_vcpu_action_type
+
+lemma \<open>is_valid_prism action_rec_byte_prism\<close>
+  by (rule action_rec_byte_prism_valid)
+
+subsection\<open>Worked example: the command versus the same record by hand\<close>
+
+text\<open>This is the real live-update \<^verbatim>\<open>MmioRangePayload\<close>
+(\<^verbatim>\<open>{ start: u64, end: u64, prefetchable: bool, index: u8, pad0: [u8; 6] }\<close>),
+a 24-byte fixed-layout record mixing words, a boolean, a single byte, and a pad
+run.  It illustrates what the command saves: first the codec written \<^emph>\<open>by
+hand\<close> (record type, the nested field prism, and the round-trip proof), then the
+\<^emph>\<open>same\<close> record in one line via \<^verbatim>\<open>define_byte_record\<close>.\<close>
+
+datatype_record mmio_range_manual =
+  mrm_start        :: \<open>64 word\<close>
+  mrm_end          :: \<open>64 word\<close>
+  mrm_prefetchable :: \<open>bool\<close>
+  mrm_index        :: \<open>byte\<close>
+  mrm_pad0         :: \<open>(byte, 6) array\<close>
+
+definition mmio_range_manual_byte_prism :: \<open>(byte list, mmio_range_manual) prism\<close> where
+  \<open>mmio_range_manual_byte_prism \<equiv>
+     prism_compose
+       (prod_byte_prism 8 word64_byte_list_prism_le
+         (prod_byte_prism 8 word64_byte_list_prism_le
+           (prod_byte_prism 1 bool_byte_list_prism
+             (prod_byte_prism 1 byte_byte_list_prism
+               (list_fixlen_prism :: (byte list, (byte, 6) array) prism)))))
+       (iso_prism
+          (\<lambda>(s, e, p, i, pad). make_mmio_range_manual s e p i pad)
+          (\<lambda>r. (mrm_start r, mrm_end r, mrm_prefetchable r, mrm_index r, mrm_pad0 r)))\<close>
+
+lemma mmio_range_manual_byte_prism_valid: \<open>is_valid_prism mmio_range_manual_byte_prism\<close>
+  unfolding mmio_range_manual_byte_prism_def
+  apply (rule prism_compose_valid)
+   apply (rule prod_byte_prism_valid)
+    apply (rule fixed_width_word64_le)
+   apply (rule prod_byte_prism_valid)
+    apply (rule fixed_width_word64_le)
+   apply (rule prod_byte_prism_valid)
+    apply (rule fixed_width_bool)
+   apply (rule prod_byte_prism_valid)
+    apply (rule fixed_width_u8)
+   apply (rule fixed_width_prism_valid[OF fixed_width_pad])
+  apply (rule iso_prism_valid)
+   apply (simp_all split: prod.split)
+  done
+
+text\<open>The same record, in one line.\<close>
+
+define_byte_record mmio_range_auto =
+    mra_start: u64 | mra_end: u64 | mra_prefetchable: bool
+  | mra_index: u8 | mra_pad0: \<open>[u8; 6]\<close>
+
+lemma \<open>is_valid_prism mmio_range_auto_byte_prism\<close>
+  by (rule mmio_range_auto_byte_prism_valid)
+
+
+(*<*)
+end
+(*>*)

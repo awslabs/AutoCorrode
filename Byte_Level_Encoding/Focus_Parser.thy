@@ -87,6 +87,8 @@ abbreviation parse_array4 :: \<open>('a list, ('a, 4) array) focus_parser\<close
   \<open>parse_array4 \<equiv> parse_array\<close>
 abbreviation parse_array8 :: \<open>('a list, ('a, 8) array) focus_parser\<close> where
   \<open>parse_array8 \<equiv> parse_array\<close>
+abbreviation parse_array16 :: \<open>('a list, ('a, 16) array) focus_parser\<close> where
+  \<open>parse_array16 \<equiv> parse_array\<close>
 
 (*<*)
 end
