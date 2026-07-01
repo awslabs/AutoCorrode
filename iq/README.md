@@ -88,7 +88,7 @@ The bundled `iq_bridge.py` is a stdio-to-TCP proxy that forwards JSON-RPC messag
 
 - `IQ_MCP_BRIDGE_HOST`: Host to connect to (default: `localhost`)
 - `IQ_MCP_BRIDGE_PORT`: Port to connect to (default: `8765`)
-- `IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC` (default: `300`)
+- `IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC` (default: `7200`)
 - `IQ_MCP_BRIDGE_LOG_MAX_BYTES` (default: `5242880`)
 - `IQ_MCP_BRIDGE_LOG_FILE` (default: `iq/bridge_log.txt`)
 

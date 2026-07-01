@@ -20,7 +20,7 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
 
 class MCPBridgeWithReconnect:
-    _MAX_REQUEST_TIMEOUT_SEC = 3600.0
+    _MAX_REQUEST_TIMEOUT_SEC = 7200.0
     _REQUEST_TIMEOUT_GRACE_SEC = 5.0
 
     def __init__(self):
@@ -29,7 +29,7 @@ class MCPBridgeWithReconnect:
         self.last_forward_error: Optional[str] = None
         self.server_host = os.environ.get("IQ_MCP_BRIDGE_HOST", "localhost").strip() or "localhost"
         self.server_port = self._parse_positive_int_env("IQ_MCP_BRIDGE_PORT", 8765)
-        self.response_timeout_sec = float(self._parse_positive_int_env("IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC", 300))
+        self.response_timeout_sec = float(self._parse_positive_int_env("IQ_MCP_BRIDGE_RESPONSE_TIMEOUT_SEC", 7200))
         self.log_max_bytes = self._parse_non_negative_int_env("IQ_MCP_BRIDGE_LOG_MAX_BYTES", 5 * 1024 * 1024)
         self.log_file = os.environ.get(
             "IQ_MCP_BRIDGE_LOG_FILE",
@@ -246,9 +246,28 @@ class MCPBridgeWithReconnect:
             self.connected = False
             return None
 
+    def _is_notification(self, parsed: Dict[str, Any]) -> bool:
+        """A JSON-RPC notification: a server-originated message carrying a
+        `method` and no `id` (e.g. `notifications/progress`). A response always
+        echoes the `id` of its originating request, so absence of `id` plus a
+        `method` distinguishes the two."""
+        return "id" not in parsed and isinstance(parsed.get("method"), str)
+
+    def _forward_notification(self, parsed: Dict[str, Any], decoded: str) -> None:
+        """Forward a server-originated notification straight to the client on
+        stdout, verbatim and immediately. The bridge serializes requests (at
+        most one outstanding at a time), so the only id-less messages that can
+        arrive while we await a response are notifications meant for the client
+        (e.g. progress); emitting them here lets them reach the client ahead of
+        the final response instead of being stranded in the response queue."""
+        print(decoded, flush=True)
+        self.log(f"Forwarded server notification {parsed.get('method')} to client")
+
     def _extract_complete_messages(self, method: str) -> bool:
         """
         Extract complete newline-delimited JSON messages from the receive buffer.
+        Responses (carrying an `id`) are queued for id-matching; notifications
+        (id-less) are forwarded to the client immediately.
         Returns False on parse/decoding errors, True otherwise.
         """
         while b"\n" in self._recv_buffer:
@@ -259,10 +278,12 @@ class MCPBridgeWithReconnect:
             try:
                 decoded = line.decode("utf-8")
                 parsed = json.loads(decoded)
-                if isinstance(parsed, dict):
-                    self._response_queue.append(parsed)
-                else:
+                if not isinstance(parsed, dict):
                     self.log(f"Ignoring non-object JSON response for {method}: {decoded[:200]}")
+                elif self._is_notification(parsed):
+                    self._forward_notification(parsed, decoded)
+                else:
+                    self._response_queue.append(parsed)
             except (UnicodeDecodeError, json.JSONDecodeError) as e:
                 self.log(f"Response decode error for {method}: {e}")
                 self._set_forward_error(

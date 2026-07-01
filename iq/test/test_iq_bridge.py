@@ -2,10 +2,12 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
 # SPDX-License-Identifier: MIT
 
+import io
 import os
 import socket
 import sys
 import unittest
+from contextlib import redirect_stdout
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -97,6 +99,31 @@ class IQBridgeFramingTest(unittest.TestCase):
 
         self.assertEqual(response1, {"jsonrpc": "2.0", "id": "1", "result": 1})
         self.assertEqual(response2, {"jsonrpc": "2.0", "id": "2", "result": 2})
+
+    def test_server_notifications_are_forwarded_to_client(self):
+        # A progress notification (id-less) arrives interleaved before the
+        # final response. It must be written to the client's stdout, and the
+        # matching response still returned to the caller.
+        bridge = self.make_bridge(
+            [
+                b'{"jsonrpc":"2.0","method":"notifications/progress",'
+                b'"params":{"progressToken":"t","progress":1,"total":5}}\n',
+                b'{"jsonrpc":"2.0","id":"1","result":{"ok":true}}\n',
+            ]
+        )
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            response = bridge.forward_to_isabelle(
+                {"jsonrpc": "2.0", "id": "1", "method": "tools/call", "params": {}}
+            )
+
+        self.assertEqual(response, {"jsonrpc": "2.0", "id": "1", "result": {"ok": True}})
+        emitted = stdout.getvalue()
+        self.assertIn("notifications/progress", emitted)
+        self.assertIn('"progress":1', emitted)
+        # The notification must not be left stranded in the response queue.
+        self.assertEqual(bridge._response_queue, [])
 
     def test_request_timeout_returns_none_and_marks_disconnected(self):
         bridge = self.make_bridge([], timeout_after_chunks=True)

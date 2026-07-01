@@ -8,13 +8,19 @@
    tool set is the source of truth for which names exist, so "unknown tool" is
    decided at dispatch (McpToolRegistry.invoke), not here. */
 
-import isabelle.JSON
+// `package isabelle` (as Extended_Query_Operation.scala): shares the generic MCP
+// layer with `package isabelle.ic2`. JSON et al. are then in scope unqualified.
+package isabelle
 
 object McpProtocol {
   final case class JsonRpcRequest(
     method: String,
     id: Option[Any],
-    params: Map[String, JSON.T]
+    params: Map[String, JSON.T],
+    // The client's progress token from params._meta.progressToken (MCP spec),
+    // if any. A request carrying it is opting in to notifications/progress; a
+    // string or number per spec. None when absent.
+    progressToken: Option[Any] = None
   )
 
   final case class ToolCall(
@@ -82,7 +88,19 @@ object McpProtocol {
           case None => Map.empty[String, JSON.T]
         }
 
-        Right(JsonRpcRequest(method = method, id = id, params = params))
+        // params._meta.progressToken (string|number), if the client opted in.
+        val progressToken =
+          params.get("_meta") match {
+            case Some(JSON.Object(meta)) =>
+              meta.get("progressToken").collect {
+                case s: String => s
+                case n: Number => n
+              }
+            case _ => None
+          }
+
+        Right(JsonRpcRequest(method = method, id = id, params = params,
+          progressToken = progressToken))
 
       case _ =>
         Left("Invalid request: payload must be a JSON object")

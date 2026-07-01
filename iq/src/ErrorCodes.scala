@@ -1,6 +1,11 @@
 /* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT */
 
+// `package isabelle` (as Extended_Query_Operation.scala), so the generic MCP
+// layer is reachable from `package isabelle.ic2` too, not just the default
+// package the rest of I/Q lives in.
+package isabelle
+
 /**
  * Standardized error codes for I/Q MCP server responses.
  * Following JSON-RPC 2.0 specification for error codes.

@@ -5,19 +5,36 @@
 
    Owns all repl_* tools and registers them with a generic McpServer.
 
-   The only dependency on the running I/R backend is the injected IRConnection
-   seam (connect / client / connectedDir). The production jEdit adapter
-   (JEditIRConnection, over IQExploreDockable) lives on the IQ side; a headless
-   host can supply its own IRConnection without touching this class. */
+   Depends on the running I/R backend only through the injected IRConnection
+   seam (connect / client / session / resolveFile) — no jEdit, no IQUtils. The
+   production jEdit adapter (JEditIRConnection, over IQExploreDockable) lives on
+   the IQ side; a headless host (e.g. ic2) supplies its own IRConnection without
+   touching this class. In `package isabelle` so it is shareable into
+   `package isabelle.ic2`. */
+
+// In `package isabelle` (as Extended_Query_Operation.scala), so this provider
+// is reachable from `package isabelle.ic2` too. Session/Text/Command et al. are
+// then in scope unqualified.
+package isabelle
 
 
-/** The I/R backend connection seam. `connect` drives whatever lifecycle the
-  * host needs (start ML_Repl + repl.py, connect a client) and returns the
-  * connected I/R directory on success, or a failure message on failure.
-  * `client` is the connected IRClient used by the per-tool handlers. */
+/** The I/R backend connection seam.
+  *
+  *   - `connect` drives whatever lifecycle the host needs (start ML_Repl +
+  *     repl.py, connect a client) and returns the connected I/R directory on
+  *     success, or a failure message on failure;
+  *   - `client` is the connected IRClient used by the per-tool handlers;
+  *   - `session` is the live Isabelle session whose document the source-location
+  *     resolver inspects (PIDE in jEdit, Headless.Session in ic2);
+  *   - `resolveFile` maps a (possibly partial) file argument to its completed
+  *     absolute path and full text. The jEdit host completes against open
+  *     buffers and reads the live (unsaved) buffer text; a headless host
+  *     completes against the session's loaded nodes and reads from disk. */
 trait IRConnection {
   def connect(irHome: Option[String]): Either[String, String]
   def client: Option[IRClient]
+  def session: Session
+  def resolveFile(file: String): Either[String, (String, String)]
 }
 
 
@@ -89,6 +106,80 @@ final class IRTools(server: McpServer, conn: IRConnection) {
     } yield McpToolResult.fromMap(r)
   }
 
+  /** Resolve a source location (file + offset or pattern) to a document node +
+    * command id, then create a REPL from that document state.
+    *
+    * The host-specific part — completing the file argument and reading its text
+    * — is the injected `conn.resolveFile`. Everything else is session-generic:
+    * pin the character offset (from the explicit offset, or the end of a unique
+    * substring match via IQNormalization), then look up the command spanning it
+    * in `conn.session`'s snapshot. Works for the live PIDE session and a headless
+    * Headless.Session alike. */
+  private def initFromSourceLocation(
+    client: IRClient, repl: String, file: String,
+    offset: Option[Int], pattern: Option[String]
+  ): String = {
+    val (resolvedPath, content) = conn.resolveFile(file) match {
+      case Right(pc) => pc
+      case Left(err) => throw new IllegalArgumentException(err)
+    }
+    val charOffset =
+      offset match {
+        case Some(o) =>
+          // Clamp to the document, matching IQUtils.normalizeRequestedOffset.
+          if (content.isEmpty) 0 else math.max(0, math.min(o, content.length - 1))
+        case None =>
+          pattern.map(_.trim).filter(_.nonEmpty) match {
+            case Some(pat) =>
+              IQNormalization.findUniqueMatch(content, pat) match {
+                case Right((start, _)) => start + pat.length - 1
+                case Left(IQNormalization.SubstringNotFound) =>
+                  throw new IllegalArgumentException(s"Pattern '$pat' not found in $resolvedPath")
+                case Left(IQNormalization.SubstringNotUnique) =>
+                  throw new IllegalArgumentException(
+                    s"Pattern '$pat' matches multiple locations in $resolvedPath; use 'offset'")
+                case Left(IQNormalization.SubstringEmpty) =>
+                  throw new IllegalArgumentException("Pattern cannot be empty")
+              }
+            case None =>
+              throw new IllegalArgumentException("specify either offset or pattern")
+          }
+      }
+    commandAt(resolvedPath, charOffset) match {
+      case Right(command) =>
+        val node = command.node_name.node
+        val cmdId = command.id.toInt
+        client.initFromDocument(repl, node, cmdId)
+      case Left(err) => throw new IllegalArgumentException(err)
+    }
+  }
+
+  /** The command spanning `offset` in `filePath`'s node, looked up in the live
+    * session snapshot. Session-generic (no jEdit): rather than jEdit's
+    * Resources.node_name(path) (which the base Resources lacks), find the loaded
+    * node whose file path matches `filePath` directly in the document graph. */
+  private def commandAt(filePath: String, offset: Int): Either[String, Command] = {
+    val target = new java.io.File(filePath)
+    val snapshot = conn.session.snapshot()
+    val nodeName =
+      snapshot.version.nodes.iterator
+        .map(_._1)
+        .find(n => n.node.nonEmpty && File.eq(n.path.file, target))
+    nodeName match {
+      case None =>
+        Left(s"Node not loaded for $filePath (is it checked / a session node?)")
+      case Some(name) =>
+        val node = snapshot.get_node(name)
+        if (node == null || node.commands.isEmpty)
+          Left(s"Node empty for $filePath (is it checked / a session node?)")
+        else
+          node.command_iterator(Text.Range(offset, offset + 1)).toList.headOption match {
+            case Some((command, _)) => Right(command)
+            case None => Left(s"No command found at offset $offset in $filePath")
+          }
+    }
+  }
+
   private val replInitFromSource: McpToolParams => Either[String, McpToolResult] = params => {
     val p = params.toMap
     for {
@@ -97,7 +188,7 @@ final class IRTools(server: McpServer, conn: IRConnection) {
       r <- {
         val offset = optIntParam(p, "offset")
         val pattern = p.get("pattern").collect { case s: String if s.nonEmpty => s }
-        withIR(_.initFromSourceLocation(repl, file, offset, pattern))
+        withIR(initFromSourceLocation(_, repl, file, offset, pattern))
       }
     } yield McpToolResult.fromMap(r)
   }

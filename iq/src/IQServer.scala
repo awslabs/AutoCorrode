@@ -308,10 +308,16 @@ object IQArgumentUtils {
  * It handles client connections, processes requests, and returns responses according to
  * the MCP specification.
  *
- * @param port The port number to listen on (default: 8765)
+ * @param basePort The lowest port to bind; the server scans upward from here
+ *                 for the first free one (default base: 8765).
  */
+object IQServer {
+  /** How many consecutive ports to scan from basePort for a free one. */
+  val PortScanSpan: Int = 100
+}
+
 class IQServer(
-  port: Int = 8765,
+  basePort: Int = 8765,
   securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment(),
   registryOverride: Option[McpToolRegistry] = None
 ) {
@@ -519,7 +525,11 @@ class IQServer(
    * by McpServer. */
 
   private val mcpConfig = McpServerConfig(
-    port = port,
+    port = basePort,
+    // Scan up to 100 ports from basePort for the first free one (McpServer.start
+    // binds it; read it back via `port`). Previously this loop lived in
+    // IQPlugin.startServer; it is now the generic McpServer behavior.
+    portSpan = IQServer.PortScanSpan,
     authToken = securityConfig.authToken,
     maxClientThreads = securityConfig.maxClientThreads,
     logName = "I/Q Server",
@@ -527,7 +537,9 @@ class IQServer(
     authToolDescription =
       "Authenticate with the I/Q MCP server. Must be called before any other tool. " +
       "If the token is not provided to you, use the IQ_AUTH_TOKEN environment variable if set.",
-    redact = IQSecurity.redactAuthToken
+    // Compose the generic token masking (the authenticate call's "token" field)
+    // with I/Q's own "auth_token" redaction.
+    redact = line => IQSecurity.redactAuthToken(McpServerConfig.redactTokens(line))
   )
 
   private val mcpJson: McpJsonCodec = new McpJsonCodec {
@@ -538,6 +550,9 @@ class IQServer(
   private val mcpLogger: McpLogger = new McpLogger {
     def info(message: String): Unit = safeOutput(message)
     def security(message: String): Unit = safeOutput(s"I/Q Server [SECURITY]: $message")
+    // Per-request trace: dropped by default so the dockable log stays readable
+    // (matches ic2 without -v). Route to safeOutput here to debug the protocol.
+    override def debug(message: String): Unit = ()
   }
 
   private val mcpComm: McpCommLogger = new McpCommLogger {
@@ -558,6 +573,9 @@ class IQServer(
 
   def start(): Unit = mcpServer.start()
   def stop(): Unit = mcpServer.stop()
+
+  /** The actual bound port after start() — the first free port from basePort. */
+  def port: Option[Int] = mcpServer.port
   def getActiveClientCount: Int = mcpServer.getActiveClientCount
   def getAuthenticatedClientCount: Int = mcpServer.getAuthenticatedClientCount
 
@@ -4964,4 +4982,13 @@ final class JEditIRConnection extends IRConnection {
   }
 
   def client: Option[IRClient] = IQExploreDockable.ir
+
+  def session: Session = PIDE.session
+
+  /** Complete the file against jEdit's open/tracked files and read the live
+    * (possibly unsaved) buffer text — the source the prover is working from. */
+  def resolveFile(file: String): Either[String, (String, String)] =
+    IQUtils.autoCompleteFilePath(file).flatMap { path =>
+      IQUtils.getFileContent(path).map(content => (path, content))
+    }
 }
