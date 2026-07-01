@@ -161,16 +161,245 @@ object SessionTools {
     if (node == null) "" else node.source
   }
 
+  /* ---- exec cancellation via text-neutral tail edit ---- */
+
+  /** Source offset from which node `name`'s tail must be re-split to cancel any
+    * in-flight execution: the start of its earliest not-finished command, but
+    * only if the node has something actually executing (a running command or a
+    * live fork). `None` otherwise — absent/headerless node, a consolidated node,
+    * or one parsed-but-idle (no forks to reclaim, so don't edit it).
+    *
+    * A running/forked command is by definition not finished
+    * (`is_finished = touched && forks==0 && runs==0 && !failed`), so the first
+    * such command's frontier is already pinned when we reach it: return then.
+    * We cut from the earliest UNFINISHED (not merely running) command so that
+    * every running/forked command sits at or after the cut and thus lands in the
+    * next version's `removed_execs`. */
+  def cancelFrontier(session: Session, name: Document.Node.Name): Option[Int] = {
+    val snapshot = session.snapshot(node_name = name)
+    val node = snapshot.get_node(name)
+    if (node == null || !node.has_header) return None
+    val version = snapshot.version
+    var firstUnfinished: Option[Int] = None
+    val it = node.commands.iterator
+    while (it.hasNext) {
+      val cmd = it.next()
+      val st = snapshot.state.command_status(version, cmd)
+      if (firstUnfinished.isEmpty && !st.is_finished)
+        firstUnfinished = node.command_start(cmd)
+      if (st.is_running || st.forks > 0)
+        return firstUnfinished   // running ⟹ unfinished ⟹ already pinned; cut here
+    }
+    None   // scanned to end, nothing executing ⇒ nothing to cancel
+  }
+
+  /** Cancel in-flight execution of the given nodes with ONE text-neutral edit.
+    *
+    * Per `(name, fromOffset)`, replay `[fromOffset, EOF)` over itself
+    * (`removes ::: inserts`): identical source, but the change-parser re-splits
+    * the tail into fresh command ids. Batched into a single `session.update`, so
+    * one new version whose assignment diff drops every superseded exec —
+    * `Document.update` runs `Execution.cancel` on them AND their fork groups
+    * (the primitive that truly interrupts a running ML tactic) — and whose fresh
+    * execution id bars not-yet-spawned forks (the `Execution.running` barrier).
+    * This is the reclamation the batch `Headless` stop path skips: its
+    * `unload_theories` edit leaves the text UNCHANGED (only flips perspective),
+    * so it produces no `removed_execs` and never cancels the running forks.
+    *
+    * The reinserted text is identical, so the finished prefix stays common and
+    * the next `use_theories` resumes from `fromOffset` rather than re-running it.
+    * The perspective stays non-required, so the fresh tail is parsed but not
+    * evaluated until a later check re-requires it — calling this while the node
+    * is still required would re-dispatch the very tactic we are cancelling, so
+    * it MUST run after `use_theories` has returned (its `finally` unloaded the
+    * node). `fromOffset` is a Java-char offset into `Node.source` (same unit as
+    * `command_start`), so a `command_start`/`cancelFrontier` value lands on a
+    * command boundary. Empty input, or offset ≥ EOF for every node ⇒ no-op. */
+  def resetNodeTails(
+    session: Session, cuts: List[(Document.Node.Name, Int)]
+  ): Unit = {
+    val edits: List[Document.Edit_Text] =
+      cuts.flatMap { case (name, fromOffset) =>
+        val node = session.snapshot(node_name = name).get_node(name)
+        if (node == null || !node.has_header) Nil
+        else {
+          val src = node.source
+          val off = fromOffset max 0
+          if (off >= src.length) Nil
+          else {
+            val tail = src.substring(off)
+            val textEdits = Text.Edit.removes(off, tail) ::: Text.Edit.inserts(off, tail)
+            List(
+              name -> Document.Node.Deps(node.header),
+              name -> Document.Node.Edits(textEdits),
+              name -> Document.Node.Perspective(false, Text.Perspective.empty,
+                Document.Node.Overlays.empty))
+          }
+        }
+      }
+    if (edits.nonEmpty) session.update(Document.Blobs.empty, edits)
+  }
+
+
+  /* ---- file → theory node targets (shared file-path resolution) ---- */
+
+  /** Resolve absolute .thy paths to (Document.Node.Name, theory-string) pairs
+    * against a Headless.Resources. `find_theory` matches a session-known file
+    * by canonical identity; otherwise the file is qualified as DRAFT. Used by
+    * both the check pipeline (Check.resolveTargets, which delegates here) and
+    * the parse-only loader (parseFiles). */
+  def resolveFileTargets(
+    resources: Headless.Resources, files: List[String]
+  ): Either[String, List[(Document.Node.Name, String)]] =
+    try {
+      Right(files.map { f =>
+        if (!f.startsWith("/")) error("path must be absolute: " + f)
+        val expanded = Path.explode(f).expand
+        val jfile = expanded.absolute_file
+        if (!jfile.isFile) error("file not found: " + f)
+        if (!f.endsWith(".thy")) error("not a .thy file: " + f)
+        resources.find_theory(jfile) match {
+          case Some(nm) => (nm, nm.theory)
+          case None =>
+            val s = expanded.implode
+            val sNoThy = if (s.endsWith(".thy")) s.dropRight(4) else s
+            (resources.import_name(Sessions.DRAFT, "", sNoThy), sNoThy)
+        }
+      })
+    } catch { case ERROR(msg) => Left(msg) }
+
+
+  /* ---- parse-only loading (empty-perspective session.update) ---- */
+
+  /** Load theories into the session as PARSED-BUT-UNEVALUATED nodes.
+    *
+    * Given absolute .thy paths, resolves each to a Node.Name, reads its text,
+    * parses the header (via resources.check_thy, which validates imports
+    * exist), then issues a session.update with a perspective that is
+    * deliberately empty (required=false, visible=empty, overlays=empty). The
+    * Scala-side change_parser runs `Thy_Syntax.parse_change` on the edits and
+    * fills in `Document.Version.nodes[name].commands` — every command in the
+    * theory gets a stable id, span, and start offset — so every
+    * SessionTools query (list_files, entities, sorry_positions, proof_blocks,
+    * command_info, context_info, commandAt/resolveCommand, ...) becomes
+    * usable on the newly-loaded nodes.
+    *
+    * The prover does NOT evaluate anything (see document.ML:864-870's
+    * `still_visible orelse node_required` gate — both false here, so
+    * iterate_entries_after is elided and no `new_exec` fires). No ML work
+    * runs; command_status will report `unprocessed`, `has_goal` will be
+    * false everywhere, `results_text` will be empty. If a subsequent
+    * `ic2 check` targets these same paths, use_theories' load_theories will
+    * see they haven't changed text-wise and won't re-emit edits, so the
+    * incremental cost is limited to actual evaluation.
+    *
+    * Bypasses Headless.Resources' private required-set (deliberately — we
+    * don't want these nodes to count toward any check's consolidation
+    * requirements). A concurrent `ic2 check` on the same node still works;
+    * Headless.Resources' internal state is separate from Session's document
+    * graph, which is what we're touching via session.update. */
+  /** A theory resolved for loading: its node name, current source text, and
+    * parsed header. Intermediate for parseFiles' dependency-closure loading. */
+  private final case class LoadTheory(
+    name: Document.Node.Name, text: String, header: Document.Node.Header)
+
+  /** Resolve the transitive .thy dependency closure of `files` (requested
+    * nodes + every source import, minus session-heap-resident theories) and
+    * read each one's text + header. `check_thy` validates that every import
+    * is locatable. Returns the requested node names paired with the full
+    * dep-ordered LoadTheory list. */
+  private def resolveLoadClosure(
+    resources: Headless.Resources, files: List[String]
+  ): Either[String, (List[Document.Node.Name], List[LoadTheory])] =
+    resolveFileTargets(resources, files).flatMap { targets =>
+      try {
+        val requested = targets.map(_._1)
+        val deps = resources.dependencies(requested.map(_ -> Position.none)).check_errors
+        val transitive = deps.theories.filterNot(resources.loaded_theory)
+        val theories =
+          for (name <- transitive) yield {
+            val path = name.path
+            if (!name.is_theory) error("not a theory file: " + path)
+            val text = File.read(path.file)
+            val header = resources.check_thy(name, Scan.char_reader(text))
+            LoadTheory(name, text, header)
+          }
+        Right((requested, theories))
+      } catch { case ERROR(msg) => Left(msg) }
+    }
+
+  /** The Deps + (incremental) Edits + Perspective triple for one node — the
+    * same shape Headless.Resources.Theory.make_edits produces. `textEdits`
+    * are computed against whatever the node currently holds (unchanged text
+    * -> Nil, so a re-load is a no-op rather than stacking a second copy). */
+  private def nodeEdits(
+    session: Session, t: LoadTheory, perspective: Document.Node.Perspective_Text.T
+  ): List[Document.Edit_Text] = {
+    val existing = nodeText(session, t.name)   // "" if not loaded yet
+    val textEdits =
+      if (existing == t.text) Nil
+      else if (existing.isEmpty) Text.Edit.inserts(0, t.text)
+      else Text.Edit.replace(0, existing, t.text)
+    (t.name -> Document.Node.Deps(t.header)) ::
+    (if (textEdits.isEmpty) Nil else List(t.name -> Document.Node.Edits(textEdits))) :::
+    List(t.name -> perspective)
+  }
+
+  /** Wait (bounded) for the async change_parser to populate `name`'s commands
+    * after a session.update, so a caller that immediately queries the node
+    * doesn't race the parser. Returns true once commands are present. */
+  private def awaitParsed(
+    session: Session, name: Document.Node.Name, timeout_ms: Long = 5000
+  ): Boolean = {
+    val deadline = System.currentTimeMillis() + timeout_ms
+    var ready = false
+    while (!ready && System.currentTimeMillis() < deadline) {
+      val nd = session.snapshot(node_name = name).get_node(name)
+      if (nd != null && nd.commands.nonEmpty) ready = true else Thread.sleep(25)
+    }
+    ready
+  }
+
+  private def emptyPerspective: Document.Node.Perspective_Text.T =
+    Document.Node.Perspective(false, Text.Perspective.empty, Document.Node.Overlays.empty)
+
+  def parseFiles(
+    session: Headless.Session,
+    resources: Headless.Resources,
+    files: List[String]
+  ): Either[String, List[Document.Node.Name]] =
+    resolveLoadClosure(resources, files).flatMap { case (requested, theories) =>
+      try {
+        // Parse-only: every node gets an empty perspective (required=false,
+        // no visible ranges), so the Scala change_parser fills in command
+        // spans but the prover evaluates nothing.
+        val edits = theories.flatMap(t => nodeEdits(session, t, emptyPerspective))
+        session.update(Document.Blobs.empty, edits)
+        for (t <- theories) awaitParsed(session, t.name)
+        // Return only the explicitly-requested nodes (transitive deps are an
+        // implementation detail; the caller cares about what it asked for).
+        Right(requested)
+      } catch { case ERROR(msg) => Left(msg) }
+    }
 
   /* ---- command resolution (file + offset|pattern -> Command) ---- */
 
-  /** Resolve a source location to the command spanning it. `offset` (clamped to
-    * the node text) takes precedence; otherwise `pattern` is located as a unique
-    * substring (Isabelle-symbol aware via IQNormalization) and the command at
-    * the end of the match is returned. Session-generic — the same resolution
-    * IRTools.initFromSourceLocation needs, now shared. */
+  /** Resolve a source location to the command spanning it. Selection precedence:
+    *   `offset`  — character offset (clamped to the node text);
+    *   `line`    — 1-based source line; converts to the offset of the LAST char
+    *              on that line, then relies on `commandAt`'s walk-back to
+    *              return the command whose span ends on or before that offset.
+    *              This makes `line: N` mean "the command that finishes on
+    *              line N or earlier" — matching how a user reads "line N" as
+    *              a source citation and consistent with jEdit's caret-on-
+    *              whitespace behavior.
+    *   `pattern` — Isabelle-symbol-aware unique substring; the command at the
+    *              end of the match is returned.
+    * Session-generic — the same resolution IRTools.initFromSourceLocation
+    * needs, now shared. */
   def resolveCommand(
-    session: Session, file: String, offset: Option[Int], pattern: Option[String]
+    session: Session, file: String,
+    offset: Option[Int], line: Option[Int], pattern: Option[String]
   ): Either[String, Command] =
     resolveNode(session, file).flatMap { name =>
       val content = nodeText(session, name)
@@ -178,37 +407,149 @@ object SessionTools {
         offset match {
           case Some(o) =>
             Right(if (content.isEmpty) 0 else math.max(0, math.min(o, content.length - 1)))
-          case None =>
-            pattern.map(_.trim).filter(_.nonEmpty) match {
+          case None => line match {
+            case Some(l) => endOfLineOffset(content, l)
+            case None => pattern.map(_.trim).filter(_.nonEmpty) match {
               case Some(pat) =>
                 IQNormalization.findUniqueMatch(content, pat) match {
-                  case Right((start, _)) => Right(start + pat.length - 1)
+                  case Right((s, _)) => Right(s + pat.length - 1)
                   case Left(IQNormalization.SubstringNotFound) =>
                     Left(s"Pattern '$pat' not found in ${name.node}")
                   case Left(IQNormalization.SubstringNotUnique) =>
                     Left(s"Pattern '$pat' matches multiple locations in ${name.node}; use 'offset'")
                   case Left(IQNormalization.SubstringEmpty) => Left("Pattern cannot be empty")
                 }
-              case None => Left("specify either offset or pattern")
+              case None => Left("specify offset, line, or pattern")
             }
+          }
         }
       charOffset.flatMap(commandAt(session, name, _))
     }
 
-  /** The command spanning `offset` in node `name`, from the snapshot. */
+  /** Resolve a 1-based `line` to the last character offset of that line,
+    * clamped to the node text. Used by `commandsUpToLine` and by
+    * `resolveCommand(line = Some(_))` — both mean "the command that ends on
+    * or before line N" via the same walk-back rule as offset queries. */
+  private def endOfLineOffset(content: String, line: Int): Either[String, Int] = {
+    if (line <= 0) Left("line must be >= 1, got " + line)
+    else if (content.isEmpty) Right(0)
+    else {
+      val lineDoc = Line.Document(content)
+      val ln = line - 1
+      val start = lineDoc.offset(Line.Position(ln)).getOrElse(content.length)
+      val end =
+        lineDoc.offset(Line.Position(ln + 1)) match {
+          case Some(ns) if ns > 0 => math.max(start, ns - 1)
+          case _ => math.max(start, content.length - 1)
+        }
+      Right(math.max(0, math.min(end, content.length - 1)))
+    }
+  }
+
+  /** For `ic2 check FILE --line N`: identify the last non-ignored command at
+    * or before line N in the node, and return
+    *   (list of every command from node start up to AND INCLUDING that command,
+    *    the target command itself,
+    *    end offset — target's source range end)
+    * for use with a bounded-perspective session.update. `ignored` commands
+    * (inter-command whitespace/comments) are dropped from the prefix — a
+    * perspective referencing them is harmless but noisy.
+    *
+    * Uses the same jEdit walk-back semantics as `resolveCommand`, so
+    * `check --line N` and `query state-at --line N` agree on what "line N"
+    * points at. */
+  def commandsUpToLine(
+    session: Session, name: Document.Node.Name, line: Int
+  ): Either[String, (List[Command], Command, Int)] = {
+    val node = session.snapshot(node_name = name).get_node(name)
+    if (node == null || node.commands.isEmpty)
+      Left(s"Node not loaded or empty for ${name.node} (has it been parsed?)")
+    else {
+      val content = node.source
+      endOfLineOffset(content, line).flatMap { off =>
+        commandAt(session, name, off).flatMap { target =>
+          node.command_start(target) match {
+            case None => Left(s"Node ${name.node} lost the target command in its own iteration")
+            case Some(targetStart) =>
+              // Take every command in source order up to and including `target`;
+              // drop is_ignored spans (they contribute nothing to eval).
+              val prefix = scala.collection.mutable.ListBuffer.empty[Command]
+              var seen = false
+              val it = node.commands.iterator
+              while (!seen && it.hasNext) {
+                val c = it.next()
+                if (!c.is_ignored) prefix += c
+                if (c eq target) seen = true
+              }
+              val endOffset = targetStart + target.length
+              Right((prefix.toList, target, endOffset))
+          }
+        }
+      }
+    }
+  }
+
+  /** The last non-ignored command at or before `offset` in node `name`.
+    *
+    * PIDE parses inter-command whitespace/comments as their own `Ignored_Span`
+    * commands (see `Outer_Syntax.parse_spans`). A naive "command at offset X"
+    * lookup lands on one of those when the offset falls between real commands,
+    * yielding an empty-keyword, empty-source result. That's not what a caret-
+    * driven query means. jEdit's Editor.output resolves this the same way:
+    * `Document.current_command` walks BACKWARDS from the iterator's landing
+    * point via `commands.reverse.iterator(c0).find(!_.is_ignored)`, so the
+    * caret on whitespace shows the state established by the last real command.
+    * We mirror that so `--offset`, `--pattern`, and `--line` all agree with
+    * jEdit's semantics. */
   def commandAt(
     session: Session, name: Document.Node.Name, offset: Int
   ): Either[String, Command] = {
     val node = session.snapshot(node_name = name).get_node(name)
     if (node == null || node.commands.isEmpty)
       Left(s"Node not loaded or empty for ${name.node} (is it checked?)")
-    else
-      node.command_iterator(Text.Range(offset, offset + 1)).toList.headOption match {
-        case Some((command, _)) => Right(command)
-        case None => Left(s"No command found at offset $offset in ${name.node}")
+    else {
+      // Mirror Document.current_command (document.scala:777-786) exactly:
+      // command_iterator(offset) yields the first command whose span extends
+      // past `offset` (real or ignored), then walk backwards to the last
+      // non-ignored command. Iterator is empty iff offset is past the last
+      // command's end — fall back to the last non-ignored command in that case.
+      val landing = node.command_iterator(math.max(0, offset)).nextOption()
+      val resolved =
+        landing match {
+          case Some((cmd, _)) =>
+            node.commands.reverse.iterator(cmd).find(!_.is_ignored)
+          case None =>
+            node.commands.reverse.iterator.find(!_.is_ignored)
+        }
+      resolved match {
+        case Some(cmd) => Right(cmd)
+        case None => Left(s"No non-ignored command at or before offset $offset in ${name.node}")
       }
+    }
   }
 
+
+  /** Per-node progress percentage, counting COMPLETED commands
+    * (finished + warned + failed — anything past its toplevel transition)
+    * over the total, rather than PIDE's own `Node_Status.percentage` which
+    * counts `total − unprocessed` (= running + warned + failed + finished,
+    * i.e. it credits a command the moment it STARTS running). Ours only
+    * credits a command once it has finished, so the bar reflects "how much
+    * is actually done" — a theory stuck inside one long-running command sits
+    * at the pre-command percentage instead of jumping ahead.
+    *
+    * NOT capped at 99: a theory whose commands have all completed reads 100
+    * even before the CONSOLIDATED markup arrives, so it isn't left lingering
+    * at 99% merely pending consolidation (the UI drops 100% theories). An
+    * empty/heap node (total == 0) is 0. */
+  def progressPercentage(st: Document_Status.Node_Status): Int = {
+    val total = st.total
+    if (total == 0) 0
+    else {
+      val done = st.finished + st.warned + st.failed
+      ((done.toDouble / total) * 100).toInt
+    }
+  }
 
   /* ============================ file-scope tools ============================ */
 
@@ -230,7 +571,9 @@ object SessionTools {
             "theory" -> name.theory,
             "node" -> name.node,
             "is_theory" -> name.is_theory,
-            "percentage" -> st.percentage,
+            "percentage" -> progressPercentage(st),
+            "unprocessed" -> st.unprocessed,
+            "running" -> st.running,
             "finished" -> st.finished,
             "warned" -> st.warned,
             "failed" -> st.failed,
@@ -346,6 +689,35 @@ object SessionTools {
         "returned_entities" -> shown.length,
         "truncated" -> (all.length > shown.length),
         "entities" -> shown)
+    }
+  }
+
+  /** list_spans: every command span in the node (a flat view of the parse
+    * output), each carrying line, offset range, keyword, and source. Handy
+    * after `load-files` to inspect what the parser produced — no evaluation
+    * required. `includeIgnored` toggles whether inter-command whitespace/
+    * comment spans (Ignored_Span) appear too. */
+  def listSpans(
+    session: Session, name: Document.Node.Name, includeIgnored: Boolean
+  ): Map[String, Any] = {
+    val snapshot = session.snapshot(node_name = name)
+    val node = snapshot.get_node(name)
+    val content = nodeText(session, name)
+    val lineDoc = Line.Document(content)
+    if (node == null)
+      Map("path" -> name.node, "count" -> 0, "spans" -> List.empty[Map[String, Any]])
+    else {
+      val spans = node.command_iterator().toList.collect {
+        case (cmd, off) if includeIgnored || !cmd.is_ignored =>
+          Map[String, Any](
+            "line" -> lineNumber(lineDoc, off),
+            "keyword" -> cmd.span.name,
+            "kind" -> (if (cmd.is_ignored) "ignored" else "command"),
+            "start_offset" -> off,
+            "end_offset" -> (off + cmd.length),
+            "source" -> cmd.source)
+      }
+      Map("path" -> name.node, "count" -> spans.length, "spans" -> spans)
     }
   }
 
@@ -692,10 +1064,16 @@ object SessionTools {
     "get_sorry_positions" -> "sorry/oops positions with enclosing proof",
     "get_entities" -> "declared entities (lemma/definition/fun/...)",
     "get_proof_blocks" -> "proof blocks with text and line ranges",
+    "list_spans" -> "flat list of parsed command spans in a theory",
     "get_command_info" -> "command metadata/status/result at a selection",
-    "get_context_info" -> "proof-context + goal state at a selection")
+    "get_state_at" -> "proof state (goal + context) at a selection")
 
   val queryToolNames: List[String] = queryTools.map(_._1)
+
+  /** Back-compat aliases: legacy wire names still route to the new tool. Kept
+    * quiet — new callers should use the canonical name from `queryTools`. */
+  private val queryAliases: Map[String, String] = Map(
+    "get_context_info" -> "get_state_at")
 
   /* param extractors over the normalized map (shared by every caller). */
   private def reqStr(p: Map[String, Any], key: String): Either[String, String] =
@@ -726,7 +1104,7 @@ object SessionTools {
     f: Command => Map[String, Any]
   ): Either[String, Map[String, Any]] =
     reqStr(p, "path")
-      .flatMap(resolveCommand(session, _, optInt(p, "offset"), optStr(p, "pattern")))
+      .flatMap(resolveCommand(session, _, optInt(p, "offset"), optInt(p, "line"), optStr(p, "pattern")))
       .map(f)
 
   /** Run a query tool by name over `params`. The single dispatch shared by the
@@ -735,7 +1113,9 @@ object SessionTools {
   def dispatch(
     session: Session, tool: String, params: Map[String, Any]
   ): Either[String, Map[String, Any]] =
-    tool match {
+    // Route legacy names through to their canonical target — new tool names
+    // stay a single lookup, aliases fall through the same dispatch table.
+    queryAliases.getOrElse(tool, tool) match {
       case "list_files" =>
         Right(listFiles(session, optBool(params, "filter_theory")))
       case "get_processing_status" =>
@@ -758,9 +1138,12 @@ object SessionTools {
       case "get_proof_blocks" =>
         val min = optInt(params, "min_chars").getOrElse(0)
         withNode(session, params)(proofBlocks(session, _, min))
+      case "list_spans" =>
+        val includeIgnored = optBool(params, "include_ignored").getOrElse(false)
+        withNode(session, params)(listSpans(session, _, includeIgnored))
       case "get_command_info" =>
         withCommand(session, params)(commandReport(session, _))
-      case "get_context_info" =>
+      case "get_state_at" =>
         withCommand(session, params)(contextInfo(session, _))
       case other =>
         Left("unknown query tool: " + other +

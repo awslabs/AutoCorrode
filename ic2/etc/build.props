@@ -1,0 +1,23 @@
+title = ic2 — headless PIDE daemon and client
+module = lib/ic2.jar
+requirements = \
+  env:ISABELLE_SCALA_JAR
+sources = \
+  src/ErrorCodes.scala \
+  src/McpProtocol.scala \
+  src/McpServer.scala \
+  src/IQNormalization.scala \
+  src/IRClient.scala \
+  src/IRTools.scala \
+  src/SessionTools.scala \
+  src/SessionClient.scala \
+  src/json_io.scala \
+  src/endpoint.scala \
+  src/iq.scala \
+  src/daemon.scala \
+  src/client.scala \
+  src/ic2.scala \
+  src/test_tool.scala \
+  src/tools.scala
+services = \
+  isabelle.ic2.Tools

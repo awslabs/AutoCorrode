@@ -1,0 +1,7 @@
+# -*- shell-script -*- :mode=shellscript:
+
+ISABELLE_IC2_HOME="$COMPONENT"
+
+classpath "$ISABELLE_IC2_HOME/lib/ic2.jar"
+
+isabelle_scala_service "isabelle.ic2.Tools"

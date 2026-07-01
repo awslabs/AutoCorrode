@@ -68,12 +68,13 @@ final class SessionClient(session: Session, server: McpServer) {
 
     McpTool("get_diagnostics",
       "Errors or warnings, either for a whole file (scope='file', default) or at a " +
-        "command selection (scope='selection' with offset or pattern).",
+        "command selection (scope='selection' with offset, line, or pattern).",
       schema(Map(
         pathParam,
         "severity" -> str("'error' (default) or 'warning'"),
         "scope" -> str("'file' (default) or 'selection'"),
         "offset" -> int("Character offset (selection scope)"),
+        "line" -> int("1-based source line: the command that ends on or before this line (selection scope)"),
         "pattern" -> str("Unique text pattern (selection scope)")),
         List("path")),
       run("get_diagnostics")),
@@ -98,22 +99,52 @@ final class SessionClient(session: Session, server: McpServer) {
         List("path")),
       run("get_proof_blocks")),
 
+    McpTool("list_spans",
+      "Flat list of every parsed command span in a theory, with line, offset " +
+        "range, keyword, and source. Useful after `load_files` to inspect the " +
+        "raw parse output. `include_ignored` (default false) toggles inter-" +
+        "command whitespace/comment spans.",
+      schema(Map(pathParam,
+        "include_ignored" -> bool("Include Ignored_Span (whitespace/comments); default false")),
+        List("path")),
+      run("list_spans")),
+
     McpTool("get_command_info",
       "Command metadata, status, and output text (errors/warnings/writeln) at a " +
-        "source selection (path + offset or pattern). For the proof goal state " +
-        "use get_context_info — the goal is not part of a command's output text.",
+        "source selection (path + one of: offset, line, or pattern). For the proof " +
+        "goal state use get_state_at — the goal is not part of a command's output text.",
       schema(Map(pathParam,
-        "offset" -> int("Character offset (alternative to pattern)"),
-        "pattern" -> str("Unique text pattern (alternative to offset)")),
+        "offset" -> int("Character offset"),
+        "line" -> int("1-based source line: the command that ends on or before this line"),
+        "pattern" -> str("Unique text pattern")),
         List("path")),
       run("get_command_info")),
 
-    McpTool("get_context_info",
-      "Read-only context introspection at a source selection: command metadata, " +
-        "proof-context status, and goal-state (text, subgoals, free vars, constants).",
+    McpTool("get_state_at",
+      "Inspect the proof state at a source location — the KEY tool for iterative " +
+        "proof development. At `path` + one of `offset|line|pattern`, returns: the " +
+        "goal text as it stands after the resolved command, subgoal count, in-scope " +
+        "free variables and constants, whether the position is inside an open proof, " +
+        "and command metadata. Use immediately after `check` to see what's left to " +
+        "prove — e.g. `state-at foo.thy --pattern 'apply simp'` shows the goal AFTER " +
+        "`apply simp` fires. `line` uses jEdit-consistent walk-back: line N means " +
+        "\"the command that ends on or before line N\".",
       schema(Map(pathParam,
-        "offset" -> int("Character offset (alternative to pattern)"),
-        "pattern" -> str("Unique text pattern (alternative to offset)")),
+        "offset" -> int("Character offset"),
+        "line" -> int("1-based source line: the command that ends on or before this line"),
+        "pattern" -> str("Unique text pattern")),
+        List("path")),
+      run("get_state_at")),
+
+    // Legacy alias — still routed for back-compat with clients that hard-code
+    // the old name. Kept advertised (rather than hidden) because MCP doesn't
+    // have a "silent" registration; new callers should prefer `get_state_at`.
+    McpTool("get_context_info",
+      "(deprecated alias for `get_state_at`) — same schema, same result.",
+      schema(Map(pathParam,
+        "offset" -> int("Character offset"),
+        "line" -> int("1-based source line: the command that ends on or before this line"),
+        "pattern" -> str("Unique text pattern")),
         List("path")),
       run("get_context_info"))
   )
