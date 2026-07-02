@@ -98,8 +98,11 @@ text \<open>\<^bold>\<open>Universal property\<close> -- the triple holds iff it
 lemma wp_triple_iff: \<open>(\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace>) \<longleftrightarrow> (P \<longlongrightarrow> \<W>\<P> e Q)\<close>
   by %visible (auto simp: triple_def wp_def entails_def)
 
+text \<open>The RHS uses the \<^emph>\<open>entailment\<close> arrow \<^term>\<open>(\<longlongrightarrow>)\<close>, which is just syntax for
+set-inclusion \<^term>\<open>(\<subseteq>)\<close> in this case.\<close>
+
 text \<open>This is \<^emph>\<open>functor-representability\<close> of the triple by \<open>\<W>\<P>\<close>.
-  It reduces every triple proof to a single entailment, and turns
+  It reduces every triple proof to a single \<^emph>\<open>entailment\<close>, and turns
   the intermediate \<open>R\<close>'s of \<open>(SEQ)\<close> into \<^emph>\<open>computations\<close> over
   \<open>\<W>\<P>\<close>.\<close>
 
@@ -392,7 +395,7 @@ text \<open>Let's try to specify and prove what @{term bar} does:\<close>
 lemma entails_project[wp_intros]: \<open>\<alpha> \<sqinter> \<beta> \<longlongrightarrow> \<alpha>\<close> unfolding entails_def by simp
 (*>*)
 
-lemma \<comment>\<open>Pre value \<open>(x,y)\<close>, post value \<open>(x+1,y)\<close>\<close>
+lemma %visible \<comment>\<open>Pre value \<open>(x,y)\<close>, post value \<open>(x+1,y)\<close>\<close>
   shows \<open>\<lbrace> fx \<mapsto> x \<sqinter> fy \<mapsto> y \<rbrace> bar \<lbrace> \<lambda>r. fx \<mapsto> x + 1 \<sqinter> fy \<mapsto> y \<sqinter> \<langle>r = y\<rangle> \<rbrace>\<close>
   unfolding wp_triple_iff bar_def     
   apply (rule wp_intros)+        

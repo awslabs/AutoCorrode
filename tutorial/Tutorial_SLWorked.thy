@@ -118,6 +118,40 @@ definition pto :: \<open>field \<Rightarrow> int \<Rightarrow> twoint_sl assert\
 end_slide
 
 
+slide \<open>Strengthening the triple\<close>
+
+text \<open>\<^bold>\<open>Goal:\<close> Bake stability under disjoint extension into the triple.\<close>
+
+text \<open>Recall the toy Hoare triple from earlier -- ``every
+  reachable outcome from a state in \<open>P\<close> lands in \<open>Q\<close>'':\<close>
+
+(*<*)
+definition triple :: \<open>'s set \<Rightarrow> ('s, 'a) m \<Rightarrow> ('a \<Rightarrow> 's set) \<Rightarrow> bool\<close>
+    (\<open>\<lbrace>_\<rbrace>/ _/ \<lbrace>_\<rbrace>\<close>) where
+  \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace> \<equiv> \<forall>s x s'. s \<in> P \<and> s \<leadsto>\<langle>e\<rangle> (x, s') \<longrightarrow> s' \<in> Q x\<close>
+(*>*)
+
+text \<open>@{thm [display, show_question_marks=false] triple_def}\<close>
+
+text \<open>\<^bold>\<open>Strengthen it.\<close> Demand that any disjoint piece be preserved
+  \<^bold>\<open>unchanged\<close>: if \<open>s\<close> splits in \<open>s\<^sub>0\<close> and disjoint
+  \<open>s\<^sub>1\<close> with \<open>s\<^sub>0 \<in> P\<close>, then \<open>s'\<close> splits into some \<open>s\<^sub>0'\<close>
+  and the \<^bold>\<open>same\<close> \<open>s\<^sub>1\<close>, with \<open>s\<^sub>0' \<in> Q x\<close>:\<close>
+
+text \<open>@{term [display, show_question_marks=false]
+  \<open>\<forall>s x s' s\<^sub>0 s\<^sub>1. s = s\<^sub>0 + s\<^sub>1 \<and> s\<^sub>0 \<sharp> s\<^sub>1 \<and> s\<^sub>0 \<in> P \<and> s \<leadsto>\<langle>e\<rangle> (x, s')
+    \<longrightarrow> (\<exists>s\<^sub>0'. s' = s\<^sub>0' + s\<^sub>1 \<and> s\<^sub>0' \<sharp> s\<^sub>1 \<and> s\<^sub>0' \<in> Q x)\<close>}\<close>
+
+text \<open>\<^bold>\<open>Observation.\<close> Shape ``state splits into a part
+  satisfying \<open>A\<close> and a disjoint part satisfying \<open>B\<close>'' common enough to deserve a
+  connective of its own: the \<^bold>\<open>separating conjunction\<close> \<open>A \<star> B\<close>.\<close>
+
+(*<*)
+no_notation triple (\<open>\<lbrace>_\<rbrace>/ _/ \<lbrace>_\<rbrace>\<close>)
+(*>*)
+
+end_slide
+
 slide \<open>Lifting disjointness to assertions: introducing \<open>\<star>\<close>\<close>
 
 text \<open>\<^bold>\<open>Goal:\<close> Bake stability under disjoint extension into the triple.\<close>
@@ -137,6 +171,41 @@ text \<open>
 \<^item> @{thm [show_question_marks=false] asepconj_comm} \<comment>\<open>Commutativity\<close>
 \<^item> @{thm [show_question_marks=false] asepconj_assoc} \<comment>\<open>Associativity\<close>
 \<^item> @{thm [show_question_marks=false] asepconj_pure} \<comment>\<open>Ordinary conjunction on pure assertions\<close>\<close>
+
+end_slide
+
+slide \<open>Hoare triples --- in separation logic\<close>
+
+text\<open>Intuitively, we want any component disjoint from pre/post-condition left unchanged. 
+Concretely, we say that any \<^emph>\<open>assertion\<close> disjoint from pre/post-condition is preserved:\<close>
+
+definition sltriple (\<open>\<lbrace>_\<rbrace>/ _/ \<lbrace>_\<rbrace>\<close>) where 
+   \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace> \<equiv> 
+      \<forall>s x s'. \<comment>\<open>For all states @{term s}, @{term s'} and return values @{term x} ...\<close>
+      s \<leadsto>\<langle>e\<rangle> (x, s') \<comment>\<open>... if @{term e} can tranform @{term s} into @{term s'}, producing @{term x} ...\<close>
+      \<longrightarrow> (\<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<comment>\<open>then for any predicate @{term \<pi>} (disjoint from P)\<close> 
+          \<comment>\<open>if @{term s} satisfies the precondition and, disjointly, @{term \<pi>}\<close>
+          s \<Turnstile> P \<star> \<pi> \<longrightarrow> 
+          \<comment>\<open>then @{term s'} satisfies the postcondition and, disjointly, still @{term \<pi>}\<close>
+          s' \<Turnstile> Q x \<star> \<pi>)\<close>
+
+text\<open>By definition, we obtain the \<^bold>\<open>frame rule\<close>, which we saw failing in the previous session:\<close>
+
+lemma frame_rule:
+  assumes \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace>\<close>
+    shows \<open>\<lbrace>P \<star> S\<rbrace> e \<lbrace>\<lambda>x. Q x \<star> S\<rbrace>\<close>
+  unfolding sltriple_def
+proof (intro allI impI)
+  fix h x h' \<pi>
+  assume step: \<open>h \<leadsto>\<langle>e\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
+                                and pre: \<open>h \<Turnstile> (P \<star> S) \<star> \<pi>\<close>
+  have \<open>h \<Turnstile> P \<star> (S \<star> \<pi>)\<close> using pre by (simp add: asepconj_assoc)
+  moreover have \<open>ucincl (S \<star> \<pi>)\<close> using uc by (rule ucincl_asepconjR)
+  ultimately have \<open>h' \<Turnstile> Q x \<star> (S \<star> \<pi>)\<close>
+    using assms step by (force simp: sltriple_def)
+  thus \<open>h' \<Turnstile> (\<lambda>x. Q x \<star> S) x \<star> \<pi>\<close>
+    by (simp add: asepconj_assoc)
+qed
 
 end_slide
 
@@ -162,11 +231,10 @@ text \<open>AutoCorrode tracks \<open>ucincl\<close> via a named-theorems bundle
 
 end_slide
 
-
 slide \<open>Common operations on entailments\<close>
 
-text \<open>Working with \<open>\<longlongrightarrow>\<close> and \<open>\<star>\<close> feels similar to working in Pure logic, except that assertions
-are \<^bold>\<open>resourceful\<close> and cannot be duplicated (but they can be dropped under \<^term>\<open>ucincl\<close>!).\<close>
+text \<open>Working with \<open>\<longlongrightarrow>\<close> and \<open>\<star>\<close> feels similar to working in Pure logic, with \<^term>\<open>(\<longlongrightarrow>)\<close> corresponding to \<^term>\<open>(\<Longrightarrow>)\<close> and \<^term>\<open>(\<star>)\<close> 
+corresponding \<^term>\<open>(\<and>)\<close>; \<^emph>\<open>except\<close> that assertions are \<^bold>\<open>resourceful\<close> and cannot be duplicated (but they can be dropped under \<^term>\<open>ucincl\<close>!).\<close>
 
 text \<open>\<^bold>\<open>Cancellation\<close> (drop a shared conjunct on LHS and RHS):\<close>
 text \<open>
@@ -178,8 +246,8 @@ text \<open>\<^bold>\<open>Spatial \<open>drule\<close>\<close> -- replace a con
 
 text \<open>
 \<^item> @{lemma [show_question_marks=false]
-    \<open>\<lbrakk> \<phi> \<longlongrightarrow> \<xi>; \<xi> \<star> \<psi> \<longlongrightarrow> \<theta> \<rbrakk> \<Longrightarrow> \<phi> \<star> \<psi> \<longlongrightarrow> \<theta>\<close>
-    by (meson aentails_trans asepconj_mono2)}\<close>
+    \<open>\<lbrakk> \<phi> \<longlongrightarrow> \<xi>; \<xi> \<star> \<psi> \<longlongrightarrow> \<theta> \<rbrakk> \<Longrightarrow> \<phi> \<star> \<psi> \<longlongrightarrow> \<theta>\<close> 
+    by (meson aentails_trans asepconj_mono2)}\<close> \<comment>\<open>Classical analogue: \<open>(P \<Longrightarrow> Q) \<Longrightarrow> (P \<and> X \<Longrightarrow> Q \<and> X)\<close>\<close>
 (*<*)
 text\<open>\<^item> @{lemma [show_question_marks=false]
     \<open>\<lbrakk> \<psi> \<longlongrightarrow> \<xi>; \<phi> \<star> \<xi> \<longlongrightarrow> \<theta> \<rbrakk> \<Longrightarrow> \<phi> \<star> \<psi> \<longlongrightarrow> \<theta>\<close>
@@ -199,41 +267,6 @@ text\<open>\<^item> @{lemma [show_question_marks=false]
 (*>*)
 
 text \<open>\<^bold>\<open>Spatial \<open>congruence rules\<close>\<close> also exist, but not discussed here.\<close>
-
-end_slide
-
-slide \<open>Hoare triples --- in separation logic\<close>
-
-text\<open>Intuitively, we want any component disjoint from pre/post-condition left unchanged. 
-Concretely, we say that any \<^emph>\<open>assertion\<close> disjoint from pre/post-condition is preserved:\<close>
-
-definition sltriple (\<open>\<lbrace>_\<rbrace>/ _/ \<lbrace>_\<rbrace>\<close>) where 
-   \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace> \<equiv> 
-      \<forall>h x h'. \<comment>\<open>For all states @{term h}, @{term h'} and return values @{term x} ...\<close>
-      h \<leadsto>\<langle>e\<rangle> (x, h') \<comment>\<open>... if @{term e} can tranform @{term h} into @{term h'}, producing @{term x} ...\<close>
-      \<longrightarrow> (\<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<comment>\<open>then for any predicate @{term \<pi>} (disjoint from P)\<close> 
-          \<comment>\<open>if @{term h} satisfies the precondition and, disjointly, @{term \<pi>}\<close>
-          h \<Turnstile> P \<star> \<pi> \<longrightarrow> 
-          \<comment>\<open>then @{term h'} satisfies the postcondition and, disjointly, still @{term \<pi>}\<close>
-          h' \<Turnstile> Q x \<star> \<pi>)\<close>
-
-text\<open>By definition, we obtain the \<^bold>\<open>frame rule\<close>, which we saw failing in the previous session:\<close>
-
-lemma frame_rule:
-  assumes \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace>\<close>
-    shows \<open>\<lbrace>P \<star> S\<rbrace> e \<lbrace>\<lambda>x. Q x \<star> S\<rbrace>\<close>
-  unfolding sltriple_def
-proof (intro allI impI)
-  fix h x h' \<pi>
-  assume step: \<open>h \<leadsto>\<langle>e\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                and pre: \<open>h \<Turnstile> (P \<star> S) \<star> \<pi>\<close>
-  have \<open>h \<Turnstile> P \<star> (S \<star> \<pi>)\<close> using pre by (simp add: asepconj_assoc)
-  moreover have \<open>ucincl (S \<star> \<pi>)\<close> using uc by (rule ucincl_asepconjR)
-  ultimately have \<open>h' \<Turnstile> Q x \<star> (S \<star> \<pi>)\<close>
-    using assms step by (force simp: sltriple_def)
-  thus \<open>h' \<Turnstile> (\<lambda>x. Q x \<star> S) x \<star> \<pi>\<close>
-    by (simp add: asepconj_assoc)
-qed
 
 end_slide
 
@@ -532,11 +565,15 @@ text \<open>
 text \<open>From each contract, \<open>sl_call_by_contractI\<close> gives a back-chainable
   WP rule:\<close>
 
-lemma get_x_wp: \<open>\<phi> \<longlongrightarrow> FX \<mapsto> v \<star> (\<Sqinter>r. (\<langle>r = v\<rangle> \<star> FX \<mapsto> v) \<Zsurj> R r) \<Longrightarrow> \<phi> \<longlongrightarrow> \<W>\<P> get_x R\<close>
-  using get_x_triple sl_call_by_contractI by blast
+lemma get_x_wp: 
+  assumes \<open>\<phi> \<longlongrightarrow> FX \<mapsto> v \<star> (\<Sqinter>r. (\<langle>r = v\<rangle> \<star> FX \<mapsto> v) \<Zsurj> R r)\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> get_x R\<close>
+  using assms get_x_triple sl_call_by_contractI by blast
 text\<open>\<close>
-lemma put_x_wp: \<open>\<phi> \<longlongrightarrow> FX \<mapsto> u \<star> (\<Sqinter>r. FX \<mapsto> v \<Zsurj> R r) \<Longrightarrow> \<phi> \<longlongrightarrow> \<W>\<P> (put_x v) R\<close>
-  using put_x_triple sl_call_by_contractI by blast
+lemma put_x_wp: 
+  assumes \<open>\<phi> \<longlongrightarrow> FX \<mapsto> u \<star> (\<Sqinter>r. FX \<mapsto> v \<Zsurj> R r)\<close>
+  shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> (put_x v) R\<close>
+  using assms put_x_triple sl_call_by_contractI by blast
 
 (*<*)
 lemma get_y_wp: \<open>\<phi> \<longlongrightarrow> FY \<mapsto> v \<star> (\<Sqinter>r. (\<langle>r = v\<rangle> \<star> FY \<mapsto> v) \<Zsurj> R r) \<Longrightarrow> \<phi> \<longlongrightarrow> \<W>\<P> get_y R\<close>
