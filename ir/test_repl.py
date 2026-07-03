@@ -819,6 +819,344 @@ def main():
             assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
         run_test("load_theory_already_loaded", test_load_theory_already_loaded)
 
+        def test_segment_init_mid_proof_qed():
+            """Regression test for AutoCorrode#230: Ir.init at a
+            heap-recorded mid-proof segment, stepping through qed must
+            register the theorem.
+
+            Background: when a theory is built with record_theories=true AND
+            parallel proofs enabled, Toplevel.element_result forks each
+            lemma body via Proof.future_proof, which rewrites the goal's
+            after_qed to a stub that does not call Local_Theory.notes_kind.
+            Every segment recorded inside that future captures the stubbed
+            Proof.state, so a naive qed against such a state runs the stub
+            and the theorem is never registered.  The splicer compensates
+            by substituting the heap-recorded post-qed state at the
+            proof-exit transition.
+
+            Uses HOL-Library.Multiset (already loaded by test_load_theory).
+            Lemma `in_countE` has segments:
+              183: lemma in_countE (declaration)
+              185: proof -
+              187: from assms (mid-proof)
+              ...
+              207: qed
+
+            Init at seg 187 (mid-proof, chain mode after `from assms`),
+            step the remainder through qed, assert `thm in_countE` resolves.
+            """
+            send_recv(sock,
+                      'Ir.init "seg_bug" ["HOL-Library.Multiset:187"];')
+            send_recv(sock, 'Ir.step "seg_bug" '
+                      '"have \\"count M x > 0\\" by simp";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_bug" '
+                      '"then obtain n where \\"count M x = Suc n\\" '
+                      'using gr0_conv_Suc by blast";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_bug" '
+                      '"with that show thesis .";', timeout=10)
+            qed_out = send_recv(sock, 'Ir.step "seg_bug" "qed";',
+                                timeout=10)
+            thm_out = send_recv(sock,
+                                'Ir.step "seg_bug" "thm in_countE";',
+                                timeout=10)
+            send_recv(sock, 'Ir.remove "seg_bug";')
+            assert "Undefined fact" not in thm_out, (
+                "REGRESSION: Ir.init at a heap-recorded mid-proof segment "
+                "(HOL-Library.Multiset:187), then stepping through qed, "
+                "did not register the theorem.  The splicer should have "
+                "substituted the recorded post-qed state.  "
+                f"qed output: {qed_out!r}.  thm output: {thm_out!r}")
+        run_test("segment_init_mid_proof_qed",
+                 test_segment_init_mid_proof_qed)
+
+        def test_segment_init_mid_proof_oops():
+            """oops at the outermost proof exit must NOT splice in the
+            recorded post-qed state — it should leave the theorem unregistered.
+            """
+            def thm_resolves(repl_id, name):
+                out = send_recv(sock,
+                                f'Ir.step {q(repl_id)} "thm {name}";',
+                                timeout=10)
+                return "Undefined fact" not in out
+
+            send_recv(sock,
+                      'Ir.init "seg_oops" ["HOL-Library.Multiset:187"];')
+            # Step the body but use oops to abandon, not qed.
+            send_recv(sock, 'Ir.step "seg_oops" '
+                      '"have \\"count M x > 0\\" by simp";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_oops" "oops";', timeout=10)
+            resolves = thm_resolves("seg_oops", "in_countE")
+            send_recv(sock, 'Ir.remove "seg_oops";')
+            assert not resolves, (
+                "BUG: after oops at mid-proof segment init, in_countE was "
+                "spuriously registered. Splice should have been disarmed by "
+                "the oops transition.")
+        run_test("segment_init_mid_proof_oops",
+                 test_segment_init_mid_proof_oops)
+
+        def test_segment_init_mid_proof_subproof():
+            """A sub-proof inside the body (have ... proof ... qed) must
+            not consume the splice; the splice should only fire on the
+            outermost qed.  Init at seg 185 (post `proof -`, before chain)
+            so we can interleave a sub-proof cleanly.
+            """
+            def thm_resolves(repl_id, name):
+                out = send_recv(sock,
+                                f'Ir.step {q(repl_id)} "thm {name}";',
+                                timeout=10)
+                return "Undefined fact" not in out
+
+            send_recv(sock,
+                      'Ir.init "seg_sub" ["HOL-Library.Multiset:185"];')
+            # First a structured sub-proof for an irrelevant fact — its
+            # internal qed must NOT consume the splice.
+            send_recv(sock, 'Ir.step "seg_sub" '
+                      '"have helper: \\"True\\" proof show ?thesis '
+                      'by simp qed";', timeout=30)
+            # Now the actual proof body.
+            send_recv(sock, 'Ir.step "seg_sub" '
+                      '"from assms have \\"count M x > 0\\" by simp";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_sub" '
+                      '"then obtain n where \\"count M x = Suc n\\" '
+                      'using gr0_conv_Suc by blast";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_sub" '
+                      '"with that show thesis .";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_sub" "qed";', timeout=10)
+            resolves = thm_resolves("seg_sub", "in_countE")
+            send_recv(sock, 'Ir.remove "seg_sub";')
+            assert resolves, (
+                "BUG: outer qed after a structured sub-proof failed to "
+                "splice. The inner qed must not consume the splice.")
+        run_test("segment_init_mid_proof_subproof",
+                 test_segment_init_mid_proof_subproof)
+
+        def test_segment_init_mid_proof_truncate_replay():
+            """Truncate past the spliced qed and step a different finisher;
+            the splice must re-arm and the new qed must register the theorem.
+            """
+            def thm_resolves(repl_id, name):
+                out = send_recv(sock,
+                                f'Ir.step {q(repl_id)} "thm {name}";',
+                                timeout=10)
+                return "Undefined fact" not in out
+
+            send_recv(sock,
+                      'Ir.init "seg_tr" ["HOL-Library.Multiset:187"];')
+            send_recv(sock, 'Ir.step "seg_tr" '
+                      '"have \\"count M x > 0\\" by simp";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_tr" '
+                      '"then obtain n where \\"count M x = Suc n\\" '
+                      'using gr0_conv_Suc by blast";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_tr" '
+                      '"with that show thesis .";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_tr" "qed";', timeout=10)
+            assert thm_resolves("seg_tr", "in_countE"), \
+                "Initial qed should have spliced and registered."
+            # Truncate past qed, leaving the body steps but not qed.
+            send_recv(sock, 'Ir.truncate "seg_tr" ~2;')
+            # After truncation the splice should be re-armed.  A fresh qed
+            # must register the theorem again.
+            send_recv(sock, 'Ir.step "seg_tr" "qed";', timeout=10)
+            resolves = thm_resolves("seg_tr", "in_countE")
+            send_recv(sock, 'Ir.remove "seg_tr";')
+            assert resolves, (
+                "BUG: after truncating past the spliced qed and stepping "
+                "a fresh qed, the theorem was not registered. The splice "
+                "should have re-armed.")
+        run_test("segment_init_mid_proof_truncate_replay",
+                 test_segment_init_mid_proof_truncate_replay)
+
+        def test_segment_init_mid_proof_edit_replay():
+            """Edit an early step in the body of a spliced proof.  With the
+            default auto_replay=true, Ir.edit invokes replay_repl on the
+            trailing stale steps, which must re-arm the splicer from initial
+            and thread it through so that the terminating qed splices in again.
+            """
+            def thm_resolves(repl_id, name):
+                out = send_recv(sock,
+                                f'Ir.step {q(repl_id)} "thm {name}";',
+                                timeout=10)
+                return "Undefined fact" not in out
+
+            # This test relies on auto_replay being on (the default) so that
+            # Ir.edit drives replay_repl.  Bail out if the global was flipped.
+            cfg = send_recv(sock,
+                            'writeln (Bool.toString (#auto_replay (Ir.get_cfg ())));')
+            assert "true" in cfg, (
+                "Test precondition failed: auto_replay must be true (default) "
+                f"to exercise replay via Ir.edit. Got: {cfg!r}")
+
+            send_recv(sock,
+                      'Ir.init "seg_er" ["HOL-Library.Multiset:187"];')
+            send_recv(sock, 'Ir.step "seg_er" '
+                      '"have h: \\"count M x > 0\\" by simp";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_er" '
+                      '"then obtain n where \\"count M x = Suc n\\" '
+                      'using gr0_conv_Suc by blast";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_er" '
+                      '"with that show thesis .";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_er" "qed";', timeout=10)
+            assert thm_resolves("seg_er", "in_countE"), \
+                "Initial qed should have spliced and registered."
+            # Edit step 0; auto_replay drives replay_repl on stale steps 1-3,
+            # which must re-arm the splicer so the trailing qed splices again.
+            send_recv(sock, 'Ir.edit "seg_er" 0 '
+                      '"have h2: \\"0 < count M x\\" by simp";', timeout=10)
+            resolves = thm_resolves("seg_er", "in_countE")
+            send_recv(sock, 'Ir.remove "seg_er";')
+            assert resolves, (
+                "BUG: after edit-triggered replay, the qed splice did not "
+                "re-fire. replay_repl must re-arm the splicer from initial "
+                "and thread it through stale steps.")
+        run_test("segment_init_mid_proof_edit_replay",
+                 test_segment_init_mid_proof_edit_replay)
+
+        def test_segment_init_mid_proof_deep_oops():
+            """oops nested inside a structured sub-proof must disarm the
+            splicer just like a top-level oops.  In Isabelle, `oops` (via
+            Toplevel.forget_proof) always pops to the original outer theory
+            regardless of nesting depth — the entire proof is forgotten.
+            So `is_proof` transitions true -> false on that one command, and
+            our splicer must treat it like a top-level oops: disarm without
+            firing.
+            """
+            def thm_resolves(repl_id, name):
+                out = send_recv(sock,
+                                f'Ir.step {q(repl_id)} "thm {name}";',
+                                timeout=10)
+                return "Undefined fact" not in out
+
+            send_recv(sock,
+                      'Ir.init "seg_doops" ["HOL-Library.Multiset:187"];')
+            # Consume the chain with a real have so we end in proof state.
+            send_recv(sock, 'Ir.step "seg_doops" '
+                      '"have h: \\"count M x > 0\\" by simp";', timeout=10)
+            # Open a sub-proof for an irrelevant fact, then oops from inside.
+            send_recv(sock, 'Ir.step "seg_doops" '
+                      '"have helper: \\"True\\" proof -";', timeout=10)
+            # The oops here pops the WHOLE proof, not just the sub-proof —
+            # forget_proof always exits to the outer theory.
+            send_recv(sock, 'Ir.step "seg_doops" "oops";', timeout=10)
+            resolves = thm_resolves("seg_doops", "in_countE")
+            # A subsequent qed would have nothing to close; verify we are no
+            # longer in proof mode by attempting one and expecting an error.
+            qed_out = send_recv(sock, 'Ir.step "seg_doops" "qed";',
+                                timeout=10)
+            send_recv(sock, 'Ir.remove "seg_doops";')
+            assert not resolves, (
+                "BUG: deep oops at mid-proof segment init spuriously "
+                "registered in_countE. The inner-block oops still pops to "
+                "bare theory and must disarm the splicer.")
+            assert "ERR" in qed_out, (
+                "After deep oops, expected `qed` to fail (we should be at "
+                f"theory level, not in a proof). Got:\n{qed_out}")
+        run_test("segment_init_mid_proof_deep_oops",
+                 test_segment_init_mid_proof_deep_oops)
+
+        # The two tests below confirm that local-theory state is preserved
+        # through both qed (splicer fires) and oops (splicer disarms) when
+        # initing at a mid-proof segment inside a locale/context/experiment.
+        # We use HOL-Library.Multiset's `context comp_fun_commute` block,
+        # specifically the proof body of `lemma fold_mset_fusion` (state
+        # mode after `interpret comp_fun_commute g by (fact assms)`).
+        # Sibling lemma `fold_mset_fun_left_comm` lives in the same context
+        # and is used as the canary for locale-scoped visibility.
+        FUSION_BODY_SEG = 2419  # post-`interpret ...` inside fold_mset_fusion
+
+        def test_segment_init_mid_proof_oops_in_locale_preserves_locale():
+            """oops mid-proof inside a context block must keep us inside the
+            block.  The current implementation: oops disarms the splicer and
+            uses the user's actual post-state, which comes from
+            Toplevel.forget_proof.  forget_proof returns Theory orig_gthy,
+            and orig_gthy was captured at the original lemma's begin_proof
+            time — inside the context block.  So locale-scoped names remain
+            accessible after oops.
+            """
+            send_recv(sock,
+                      f'Ir.init "loc_oops" ["HOL-Library.Multiset:{FUSION_BODY_SEG}"];')
+            send_recv(sock, 'Ir.step "loc_oops" "oops";', timeout=10)
+            # The proof was discarded — fold_mset_fusion must NOT be registered.
+            test_out = send_recv(sock,
+                                  'Ir.step "loc_oops" "thm fold_mset_fusion";',
+                                  timeout=10)
+            # Pre-existing locale-scoped sibling must still be accessible.
+            sibling_out = send_recv(sock,
+                                     'Ir.step "loc_oops" "thm fold_mset_fun_left_comm";',
+                                     timeout=10)
+            send_recv(sock, 'Ir.remove "loc_oops";')
+            assert "Undefined fact" in test_out, (
+                "After oops the proof should have been discarded; "
+                f"fold_mset_fusion must NOT be registered.  Got:\n{test_out}")
+            assert "Undefined fact" not in sibling_out, (
+                "After oops inside a context block, the sibling lemma "
+                "fold_mset_fun_left_comm should still be accessible (we "
+                f"should remain inside the block).  Got:\n{sibling_out}")
+        run_test("segment_init_mid_proof_oops_in_locale_preserves_locale",
+                 test_segment_init_mid_proof_oops_in_locale_preserves_locale)
+
+        def test_segment_init_mid_proof_qed_in_locale_preserves_locale():
+            """qed mid-proof inside a context block must keep us inside the
+            block AND register the new theorem.  Current behavior: the
+            splicer fires and substitutes the heap-recorded post-qed segment.
+            That segment was recorded after the original qed ran during heap
+            build — its state is still inside the context block (the block
+            wasn't closed yet by `end`).  So both the new theorem and
+            existing locale-scoped names are accessible.
+            """
+            send_recv(sock,
+                      f'Ir.init "loc_qed" ["HOL-Library.Multiset:{FUSION_BODY_SEG}"];')
+            # Step the rest of fold_mset_fusion's body and close it.
+            send_recv(sock, 'Ir.step "loc_qed" '
+                      '"from * show ?thesis by (induct A) auto";',
+                      timeout=10)
+            send_recv(sock, 'Ir.step "loc_qed" "qed";', timeout=10)
+            # Newly registered lemma (via splice)
+            test_out = send_recv(sock,
+                                  'Ir.step "loc_qed" "thm fold_mset_fusion";',
+                                  timeout=10)
+            # Pre-existing locale-scoped sibling
+            sibling_out = send_recv(sock,
+                                     'Ir.step "loc_qed" "thm fold_mset_fun_left_comm";',
+                                     timeout=10)
+            send_recv(sock, 'Ir.remove "loc_qed";')
+            assert "Undefined fact" not in test_out, (
+                "After qed, the splicer should have registered "
+                f"fold_mset_fusion.  Got:\n{test_out}")
+            assert "Undefined fact" not in sibling_out, (
+                "After qed inside a context block, the sibling lemma "
+                "fold_mset_fun_left_comm should still be accessible (we "
+                f"should remain inside the block).  Got:\n{sibling_out}")
+        run_test("segment_init_mid_proof_qed_in_locale_preserves_locale",
+                 test_segment_init_mid_proof_qed_in_locale_preserves_locale)
+
+        def test_segment_init_mid_proof_fork_qed():
+            """Fork from a mid-proof segment-init REPL at the base state,
+            step body + qed in the fork.  The fork inherits the parent's
+            splicer, so the theorem must be registered in the fork.
+            """
+            send_recv(sock,
+                      'Ir.init "seg_fk" ["HOL-Library.Multiset:187"];')
+            send_recv(sock, 'Ir.fork "seg_fk" "seg_fk_child" 0;')
+            send_recv(sock, 'Ir.step "seg_fk_child" '
+                      '"have \\"count M x > 0\\" by simp";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_fk_child" '
+                      '"then obtain n where \\"count M x = Suc n\\" '
+                      'using gr0_conv_Suc by blast";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_fk_child" '
+                      '"with that show thesis .";', timeout=10)
+            send_recv(sock, 'Ir.step "seg_fk_child" "qed";', timeout=10)
+            thm_out = send_recv(sock,
+                                'Ir.step "seg_fk_child" "thm in_countE";',
+                                timeout=10)
+            send_recv(sock, 'Ir.remove "seg_fk";')
+            assert "Undefined fact" not in thm_out, (
+                "After forking from a mid-proof segment-init REPL and "
+                "stepping through qed in the fork, the theorem should be "
+                "registered.  The fork must inherit the parent's splicer.  "
+                f"Got:\n{thm_out}")
+        run_test("segment_init_mid_proof_fork_qed",
+                 test_segment_init_mid_proof_fork_qed)
+
         sock.close()
 
         # -- Multi-client tests --
