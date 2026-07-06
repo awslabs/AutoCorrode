@@ -10,6 +10,7 @@ session Byte_Level_Encoding = HOL +
     Enum_Theory
   theories
     Byte_Encoding_Word_Nat
+    Byte_Encoding_Prisms
     Byte_Encoding_Bool
     Byte_Encoding_Array
     Byte_Encoding_Enum

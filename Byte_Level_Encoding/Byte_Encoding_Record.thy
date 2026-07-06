@@ -3,7 +3,7 @@
 
 (*<*)
 theory Byte_Encoding_Record
-  imports Byte_Encoding_Word_Nat Byte_Encoding_Bool Byte_Encoding_Array Byte_Encoding_Enum
+  imports Byte_Encoding_Prisms Byte_Encoding_Word_Nat Byte_Encoding_Bool Byte_Encoding_Array Byte_Encoding_Enum
     "HOL-Library.Datatype_Records"
   keywords "define_byte_record" :: thy_decl
 begin
@@ -23,95 +23,6 @@ The combinator needs to know where one field ends and the next begins, so the
 length \<^term>\<open>nA\<close>, which is the split point on decode.  (As with arrays, a plain
 \<^const>\<open>concat\<close> loses the field boundary, so the width information — carried by
 \<^verbatim>\<open>fixed_width_prism\<close> — is what makes the pair invertible.)\<close>
-
-subsection\<open>Fixed-width byte prisms\<close>
-
-text\<open>A byte-list prism is \<^emph>\<open>fixed-width\<close> at \<^term>\<open>n\<close> when it is valid, every
-embedding has length \<^term>\<open>n\<close>, and every successful projection consumes exactly
-\<^term>\<open>n\<close> bytes.  The width lets a pair split a concatenation at the right
-boundary, and the projection-length fact is what makes the width \<^emph>\<open>compose\<close>.\<close>
-
-definition fixed_width_prism :: \<open>nat \<Rightarrow> (byte list, 'a) prism \<Rightarrow> bool\<close> where
-  \<open>fixed_width_prism n p \<longleftrightarrow> is_valid_prism p \<and> (\<forall>a. length (prism_embed p a) = n)
-      \<and> (\<forall>bs a. prism_project p bs = Some a \<longrightarrow> length bs = n)\<close>
-
-lemma fixed_width_prismI:
-  assumes \<open>is_valid_prism p\<close>
-      and \<open>\<And>a. length (prism_embed p a) = n\<close>
-      and \<open>\<And>bs a. prism_project p bs = Some a \<Longrightarrow> length bs = n\<close>
-    shows \<open>fixed_width_prism n p\<close>
-  using assms by (auto simp add: fixed_width_prism_def)
-
-lemma fixed_width_prism_valid:
-  assumes \<open>fixed_width_prism n p\<close>
-    shows \<open>is_valid_prism p\<close>
-  using assms by (simp add: fixed_width_prism_def)
-
-subsection\<open>Leaf fields: the fixed-width word prisms\<close>
-
-text\<open>The little-endian word byte-list prisms are fixed-width (2/4/8/16 bytes), so
-they serve as the leaf fields of a record.  These are the facts a record
-combinator looks up for each \<^verbatim>\<open>u16\<close>/\<^verbatim>\<open>u32\<close>/\<^verbatim>\<open>u64\<close>/\<^verbatim>\<open>u128\<close> field.\<close>
-
-lemma fixed_width_word16_le: \<open>fixed_width_prism 2 word16_byte_list_prism_le\<close>
-proof (rule fixed_width_prismI)
-  show \<open>is_valid_prism word16_byte_list_prism_le\<close>
-    by (rule word_byte_array_prism_validity)
-next
-  fix a show \<open>length (prism_embed word16_byte_list_prism_le a) = 2\<close>
-    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
-        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
-next
-  fix bs a assume \<open>prism_project word16_byte_list_prism_le bs = Some a\<close>
-  then show \<open>length bs = 2\<close>
-    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
-        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
-qed
-
-lemma fixed_width_word32_le: \<open>fixed_width_prism 4 word32_byte_list_prism_le\<close>
-proof (rule fixed_width_prismI)
-  show \<open>is_valid_prism word32_byte_list_prism_le\<close>
-    by (rule word_byte_array_prism_validity)
-next
-  fix a show \<open>length (prism_embed word32_byte_list_prism_le a) = 4\<close>
-    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
-        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
-next
-  fix bs a assume \<open>prism_project word32_byte_list_prism_le bs = Some a\<close>
-  then show \<open>length bs = 4\<close>
-    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
-        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
-qed
-
-lemma fixed_width_word64_le: \<open>fixed_width_prism 8 word64_byte_list_prism_le\<close>
-proof (rule fixed_width_prismI)
-  show \<open>is_valid_prism word64_byte_list_prism_le\<close>
-    by (rule word_byte_array_prism_validity)
-next
-  fix a show \<open>length (prism_embed word64_byte_list_prism_le a) = 8\<close>
-    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
-        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
-next
-  fix bs a assume \<open>prism_project word64_byte_list_prism_le bs = Some a\<close>
-  then show \<open>length bs = 8\<close>
-    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
-        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
-qed
-
-lemma fixed_width_word128_le: \<open>fixed_width_prism 16 word128_byte_list_prism_le\<close>
-proof (rule fixed_width_prismI)
-  show \<open>is_valid_prism word128_byte_list_prism_le\<close>
-    by (rule word128_byte_array_prism_validity)
-next
-  fix a show \<open>length (prism_embed word128_byte_list_prism_le a) = 16\<close>
-    by (simp add: word_byte_array_prism_defs word_byte_array_iso_prism_defs prism_compose_def
-        iso_prism_def list_fixlen_prism_def list_fixlen_embed_def)
-next
-  fix bs a assume \<open>prism_project word128_byte_list_prism_le bs = Some a\<close>
-  then show \<open>length bs = 16\<close>
-    by (auto simp add: word_byte_array_prism_defs prism_compose_def list_fixlen_prism_def
-        list_fixlen_project_def bind_eq_Some_conv split: if_splits)
-qed
 
 subsection\<open>Leaf fields: single-byte prisms (\<^verbatim>\<open>bool\<close>, enums)\<close>
 
