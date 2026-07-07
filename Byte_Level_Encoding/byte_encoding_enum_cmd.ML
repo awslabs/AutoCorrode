@@ -78,10 +78,12 @@ fun define_byte_enum typ_binding (specs : (binding * int) list) lthy =
        then `from_byte` decodes it back.  Goal (2) is a case split on the nested
        `if` in `from_byte`. *)
     val induct_thm = Proof_Context.get_thm lthy4 (typ_name ^ ".induct")
-    val case_simps = Proof_Context.get_thms lthy4 (typ_name ^ ".cases")
     val valid_prop =
       Syntax.read_prop lthy4 ("is_valid_prism " ^ Binding.name_of prism_bind)
-    val encoding_simps = to_byte_def :: from_byte_def :: case_simps
+    (* The <T>.cases reduction rules are already [simp] (declared by the enum
+       command), so we add only the encoding definitions.  Re-adding the case
+       rules would trigger "Ignoring duplicate rewrite rule" warnings. *)
+    val encoding_simps = [to_byte_def, from_byte_def]
     val simp_ctxt =
       fold Splitter.add_split @{thms if_split if_split_asm} (lthy4 addsimps encoding_simps)
 
