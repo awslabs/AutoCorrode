@@ -72,53 +72,6 @@ lemma fixed_width_u8: \<open>fixed_width_prism 1 byte_byte_list_prism\<close>
   unfolding byte_byte_list_prism_def
   by (rule fixed_width_single_byte[OF iso_prism_valid]) simp_all
 
-subsection\<open>Leaf fields: pad and word arrays\<close>
-
-text\<open>A pad field \<^verbatim>\<open>[u8; N]\<close> is exactly \<^const>\<open>list_fixlen_prism\<close> (a byte list to a
-length-\<^term>\<open>N\<close> byte array), of fixed width \<^verbatim>\<open>LENGTH('l)\<close>.\<close>
-
-lemma fixed_width_pad:
-  \<open>fixed_width_prism (LENGTH('l::len)) (list_fixlen_prism :: (byte list, (byte, 'l) array) prism)\<close>
-proof (rule fixed_width_prismI)
-  show \<open>is_valid_prism (list_fixlen_prism :: (byte list, (byte, 'l) array) prism)\<close>
-    by (rule list_fixlen_prism_valid)
-next
-  fix a show \<open>length (prism_embed (list_fixlen_prism :: (byte list, (byte, 'l) array) prism) a)
-                = LENGTH('l)\<close>
-    by (simp add: list_fixlen_prism_def list_fixlen_embed_def)
-next
-  fix bs and a :: \<open>(byte, 'l) array\<close>
-  assume \<open>prism_project (list_fixlen_prism :: (byte list, (byte, 'l) array) prism) bs = Some a\<close>
-  then show \<open>length bs = LENGTH('l)\<close>
-    by (auto simp add: list_fixlen_prism_def list_fixlen_project_def split: if_splits)
-qed
-
-text\<open>A word-array field \<^verbatim>\<open>[uW; N]\<close> is \<^const>\<open>array_byte_prism\<close> over a fixed-width
-element prism; the array is then fixed-width \<^verbatim>\<open>w * LENGTH('l)\<close>.\<close>
-
-lemma fixed_width_array:
-  assumes \<open>fixed_width_prism w p\<close>
-    shows \<open>fixed_width_prism (w * LENGTH('l::len))
-             (array_byte_prism w p :: (byte list, ('e, 'l) array) prism)\<close>
-proof (rule fixed_width_prismI)
-  from assms have vp: \<open>is_valid_prism p\<close>
-    and wp: \<open>\<And>e. length (prism_embed p e) = w\<close>
-    by (auto simp add: fixed_width_prism_def)
-  show \<open>is_valid_prism (array_byte_prism w p :: (byte list, ('e, 'l) array) prism)\<close>
-    using vp wp by (rule array_byte_prism_valid)
-next
-  from assms have wp: \<open>\<And>e. length (prism_embed p e) = w\<close>
-    by (simp add: fixed_width_prism_def)
-  fix a show \<open>length (prism_embed (array_byte_prism w p :: (byte list, ('e, 'l) array) prism) a)
-                = w * LENGTH('l)\<close>
-    using wp by (rule array_byte_prism_embed_len)
-next
-  fix bs and a :: \<open>('e, 'l) array\<close>
-  assume \<open>prism_project (array_byte_prism w p :: (byte list, ('e, 'l) array) prism) bs = Some a\<close>
-  then show \<open>length bs = w * LENGTH('l)\<close>
-    by (rule array_byte_prism_project_len)
-qed
-
 subsection\<open>The pair combinator\<close>
 
 text\<open>\<^verbatim>\<open>prod_byte_prism\<close> places \<^term>\<open>pA\<close>'s bytes (width \<^term>\<open>nA\<close>) before

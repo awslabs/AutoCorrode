@@ -3,7 +3,7 @@
 
 (*<*)
 theory Byte_Encoding_Array
-  imports Byte_Encoding_Word_Nat
+  imports Byte_Encoding_Word_Nat Byte_Encoding_Prisms
 begin
 (*>*)
 
@@ -196,6 +196,70 @@ text\<open>A concrete array encoding is obtained by instantiating the element pr
 with a fixed-width element prism — for example \<^verbatim>\<open>array_byte_prism 8
 word64_byte_list_prism_le\<close> for a \<^verbatim>\<open>[u64; N]\<close> field — whose validity follows
 from \<^verbatim>\<open>array_byte_prism_valid\<close> and the element's embedding-length fact.\<close>
+
+subsection\<open>Fixed-width facts for the array and pad leaves\<close>
+
+text\<open>A pad field \<^verbatim>\<open>[u8; N]\<close> is exactly \<^const>\<open>list_fixlen_prism\<close> (a byte list to a
+length-\<^term>\<open>N\<close> byte array), of fixed width \<^verbatim>\<open>LENGTH('l)\<close>.\<close>
+
+lemma fixed_width_pad:
+  \<open>fixed_width_prism (LENGTH('l::len)) (list_fixlen_prism :: (byte list, (byte, 'l) array) prism)\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism (list_fixlen_prism :: (byte list, (byte, 'l) array) prism)\<close>
+    by (rule list_fixlen_prism_valid)
+next
+  fix a show \<open>length (prism_embed (list_fixlen_prism :: (byte list, (byte, 'l) array) prism) a)
+                = LENGTH('l)\<close>
+    by (simp add: list_fixlen_prism_def list_fixlen_embed_def)
+next
+  fix bs and a :: \<open>(byte, 'l) array\<close>
+  assume \<open>prism_project (list_fixlen_prism :: (byte list, (byte, 'l) array) prism) bs = Some a\<close>
+  then show \<open>length bs = LENGTH('l)\<close>
+    by (auto simp add: list_fixlen_prism_def list_fixlen_project_def split: if_splits)
+qed
+
+text\<open>A word-array field \<^verbatim>\<open>[uW; N]\<close> is \<^const>\<open>array_byte_prism\<close> over a fixed-width
+element prism; the array is then fixed-width \<^verbatim>\<open>w * LENGTH('l)\<close>.\<close>
+
+lemma fixed_width_array:
+  assumes \<open>fixed_width_prism w p\<close>
+    shows \<open>fixed_width_prism (w * LENGTH('l::len))
+             (array_byte_prism w p :: (byte list, ('e, 'l) array) prism)\<close>
+proof (rule fixed_width_prismI)
+  from assms have vp: \<open>is_valid_prism p\<close>
+    and wp: \<open>\<And>e. length (prism_embed p e) = w\<close>
+    by (auto simp add: fixed_width_prism_def)
+  show \<open>is_valid_prism (array_byte_prism w p :: (byte list, ('e, 'l) array) prism)\<close>
+    using vp wp by (rule array_byte_prism_valid)
+next
+  from assms have wp: \<open>\<And>e. length (prism_embed p e) = w\<close>
+    by (simp add: fixed_width_prism_def)
+  fix a show \<open>length (prism_embed (array_byte_prism w p :: (byte list, ('e, 'l) array) prism) a)
+                = w * LENGTH('l)\<close>
+    using wp by (rule array_byte_prism_embed_len)
+next
+  fix bs and a :: \<open>('e, 'l) array\<close>
+  assume \<open>prism_project (array_byte_prism w p :: (byte list, ('e, 'l) array) prism) bs = Some a\<close>
+  then show \<open>length bs = w * LENGTH('l)\<close>
+    by (rule array_byte_prism_project_len)
+qed
+
+subsection\<open>Remaining-returning array prism\<close>
+
+text\<open>Bridging the consume-all \<^const>\<open>array_byte_prism\<close> to a remaining-returning prism
+via \<^const>\<open>split_prism\<close>: it peels the \<^verbatim>\<open>w * LENGTH('l)\<close> bytes of the array off the
+front and hands the rest back, so an array can be chained as a parser.  The one
+array induction stays in \<^verbatim>\<open>array_byte_prism_valid\<close>; the bridge adds none.\<close>
+
+definition array_split_prism ::
+    \<open>nat \<Rightarrow> (byte list, 'e) prism \<Rightarrow> (byte list, ('e, 'l::len) array \<times> byte list) prism\<close> where
+  \<open>array_split_prism w p \<equiv> split_prism (w * LENGTH('l)) (array_byte_prism w p)\<close>
+
+lemma array_split_prism_valid:
+  assumes \<open>fixed_width_prism w p\<close>
+    shows \<open>is_valid_prism (array_split_prism w p :: (byte list, ('e, 'l::len) array \<times> byte list) prism)\<close>
+  unfolding array_split_prism_def
+  by (rule split_prism_valid) (rule fixed_width_array[OF assms])
 
 (*<*)
 end
