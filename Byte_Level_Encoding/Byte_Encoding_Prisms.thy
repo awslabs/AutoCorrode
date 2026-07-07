@@ -141,6 +141,29 @@ proof -
     by (auto simp add: wp pe pj split: prod.splits)
 qed
 
+subsection\<open>The single-byte identity prism\<close>
+
+text\<open>A \<^verbatim>\<open>u8\<close> is a single byte carried unchanged.  \<^verbatim>\<open>byte_id_prism\<close> is the byte-list
+prism for one raw byte: embedding wraps it in a singleton list, projecting reads
+exactly one byte and fails otherwise.  It is the element prism of a pad field
+\<^verbatim>\<open>[u8; N]\<close> (an array of raw bytes), and is fixed-width \<^term>\<open>1\<close>.\<close>
+
+definition byte_id_prism :: \<open>(byte list, byte) prism\<close> where
+  \<open>byte_id_prism \<equiv> make_prism (\<lambda>b. [b]) (\<lambda>bs. case bs of [b] \<Rightarrow> Some b | _ \<Rightarrow> None)\<close>
+
+lemma fixed_width_byte_id: \<open>fixed_width_prism 1 byte_id_prism\<close>
+proof (rule fixed_width_prismI)
+  show \<open>is_valid_prism byte_id_prism\<close>
+    unfolding is_valid_prism_def byte_id_prism_def by (auto split: list.splits)
+next
+  fix a show \<open>length (prism_embed byte_id_prism a) = 1\<close>
+    by (simp add: byte_id_prism_def)
+next
+  fix bs a assume \<open>prism_project byte_id_prism bs = Some a\<close>
+  then show \<open>length bs = 1\<close>
+    by (auto simp add: byte_id_prism_def split: list.splits)
+qed
+
 (*<*)
 end
 (*>*)

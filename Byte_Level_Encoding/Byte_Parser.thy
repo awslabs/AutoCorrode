@@ -57,6 +57,29 @@ lemma array_parser_valid:
              (array_focus w p :: (byte list, ('e, 'l::len) array \<times> byte list) focus))\<close>
   using assms by (simp add: array_focus.rep_eq array_split_prism_valid prism_to_focus_raw_valid)
 
+subsection\<open>Relabelling a parsed tuple as a named record\<close>
+
+text\<open>A record parser is the \<open>--\<^sub>\<integral>\<close> chain of its field parsers, which produces a
+nested tuple, followed by a relabelling of that tuple as the named record.  The
+relabelling is an isomorphism \<^term>\<open>f\<close> / \<^term>\<open>g\<close> (tuple to record and back).
+As a focus it needs \<^verbatim>\<open>lift_definition\<close> (a typedef focus), which requires validity
+for \<^emph>\<open>all\<close> \<^term>\<open>f\<close> / \<^term>\<open>g\<close>; the iso focus is valid only when the two are
+mutually inverse.  As with the array and enum foci, we lift a \<^emph>\<open>guarded\<close> raw
+focus: the real iso when \<^term>\<open>f\<close> / \<^term>\<open>g\<close> are inverse, and the always-valid
+\<^const>\<open>dummy_focus\<close> otherwise.  One generic definition then serves every record,
+so the record command needs only a plain definition per record, not a
+per-record \<^verbatim>\<open>lift_definition\<close>.\<close>
+
+lift_definition iso_focus :: \<open>('a \<Rightarrow> 'b) \<Rightarrow> ('b \<Rightarrow> 'a) \<Rightarrow> ('a, 'b) focus\<close> is
+  \<open>\<lambda>f g. if (\<forall>x. g (f x) = x) \<and> (\<forall>y. f (g y) = y) then iso\<^sub>\<integral> f g else dummy_focus\<close>
+  by (auto simp add: dummy_focus_is_valid iso_focus_raw_valid)
+
+lemma iso_focus_valid:
+  assumes \<open>\<And>x. g (f x) = x\<close>
+      and \<open>\<And>y. f (g y) = y\<close>
+    shows \<open>is_valid_focus (Rep_focus (iso_focus f g))\<close>
+  using assms by (simp add: iso_focus.rep_eq iso_focus_raw_valid)
+
 subsection\<open>Examples\<close>
 
 (*<*)

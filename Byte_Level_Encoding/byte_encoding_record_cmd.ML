@@ -4,12 +4,24 @@
 (* The `define_byte_record` command.  Given a name and a list of (field,
    field-type) pairs, it
      (1) defines the record type via `datatype_record`,
-     (2) builds the field byte-prism by nesting `prod_byte_prism` over the
-         per-field prisms and relabelling the resulting tuple to the named
-         record via `iso_prism`, and
-     (3) proves `<T>_byte_prism_valid` (the round-trip law) automatically.
+     (2) builds the record parser by sequencing the per-field parsers with the
+         `--` combinator and relabelling the resulting nested tuple to the named
+         record via `iso_focus`, and
+     (3) proves `<T>_focus_valid` (the round-trip law) automatically --- for free,
+         since a parser is a validity-carrying focus.
    Field types: u8/u16/u32/u64/u128, bool, pad [u8; N], word array [uW; N],
-   enum, and nested record. *)
+   enum, and nested record.
+
+   Field parsers:
+     word W    -> parse_wordW           (library)
+     u8        -> parse_byte            (library)
+     bool      -> parse_bool            (library)
+     enum T    -> parse_byte >> T_focus (T_focus from define_byte_enum)
+     [uW; N]   -> FocusParser <T>_<f>_focus, where <T>_<f>_focus = array_focus w p
+     nested T  -> T_parser              (from a prior define_byte_record)
+   Array/pad fields need a per-field focus definition plus a [code abstract]
+   equation making it executable; the other field parsers are library constants,
+   already executable. *)
 
 signature BYTE_ENCODING_RECORD_CMD =
 sig
@@ -18,40 +30,6 @@ end
 
 structure Byte_Encoding_Record_Cmd : BYTE_ENCODING_RECORD_CMD =
 struct
-
-(* A field's encoding info:
-     hol_ty  - the HOL field type (for datatype_record)
-     codec   - the byte-list codec term, as a string
-     fw_thm  - a PROVED `fixed_width_prism <n> <codec>` theorem (concrete codec).
-   The width <n> is read off `fw_thm`. *)
-type field_enc = { hol_ty : string, codec : string, fw_thm : thm }
-
-(* Instantiate a schematic length type variable 'l in a fixed-width theorem to a
-   concrete numeral type, and simplify (turning LENGTH('l)/w*LENGTH('l) into a
-   literal width).  Optionally discharge a premise with `OF [prem]` first. *)
-fun inst_len ctxt n prems thm =
-  let
-    val thm' = case prems of [] => thm | _ => thm OF prems
-    val inst = Rule_Insts.where_rule ctxt [((("'l", 0), Position.none), string_of_int n)] [] thm'
-    (* Delete One_nat_def so the width is left as the numeral 1, not Suc 0
-       (otherwise downstream numeral/Suc unification in the validity proof fails). *)
-    val ctxt' = ctxt delsimps @{thms One_nat_def}
-  in
-    Simplifier.simplify ctxt' inst
-  end
-
-(* The word codec name and width for an integer width W (in bits). *)
-fun word_codec 16  = ("word16_byte_list_prism_le",  2)
-  | word_codec 32  = ("word32_byte_list_prism_le",  4)
-  | word_codec 64  = ("word64_byte_list_prism_le",  8)
-  | word_codec 128 = ("word128_byte_list_prism_le", 16)
-  | word_codec w   = error ("define_byte_record: unsupported word width " ^ string_of_int w)
-
-fun word_fw_thm 16  = @{thm fixed_width_word16_le}
-  | word_fw_thm 32  = @{thm fixed_width_word32_le}
-  | word_fw_thm 64  = @{thm fixed_width_word64_le}
-  | word_fw_thm 128 = @{thm fixed_width_word128_le}
-  | word_fw_thm w   = error ("define_byte_record: unsupported word width " ^ string_of_int w)
 
 (* Parse an array field type `[uW; N]` into (W, N), or NONE. *)
 fun parse_array ty =
@@ -63,61 +41,71 @@ fun parse_array ty =
   of (SOME (w, n), _) => SOME (the (Int.fromString (implode w)), the (Int.fromString (implode n)))
    | _ => NONE
 
-(* Map a field type name to its encoding info.  Supports: word fields (u16/u32/
-   u64/u128), bool, pad [u8; N], word arrays [uW; N], and (by naming convention)
-   enum / nested record types T (codec T_byte_prism, lemma fixed_width_T). *)
-fun field_info _ "u16"  = { hol_ty = "16 word",  codec = "word16_byte_list_prism_le",
-                            fw_thm = @{thm fixed_width_word16_le} }
-  | field_info _ "u32"  = { hol_ty = "32 word",  codec = "word32_byte_list_prism_le",
-                            fw_thm = @{thm fixed_width_word32_le} }
-  | field_info _ "i32"  = { hol_ty = "32 word",  codec = "word32_byte_list_prism_le",
-                            fw_thm = @{thm fixed_width_word32_le} }  (* i32: same 4 bytes as u32 *)
-  | field_info _ "u64"  = { hol_ty = "64 word",  codec = "word64_byte_list_prism_le",
-                            fw_thm = @{thm fixed_width_word64_le} }
-  | field_info _ "u128" = { hol_ty = "128 word", codec = "word128_byte_list_prism_le",
-                            fw_thm = @{thm fixed_width_word128_le} }
-  | field_info _ "u8"   = { hol_ty = "byte",     codec = "byte_byte_list_prism",
-                            fw_thm = @{thm fixed_width_u8} }
-  | field_info _ "bool" = { hol_ty = "bool",     codec = "bool_byte_list_prism",
-                            fw_thm = @{thm fixed_width_bool} }
+(* The element byte-width and element prism for a word width W (in bits). *)
+fun word_elem 16  = (2,  "word16_byte_list_prism_le")
+  | word_elem 32  = (4,  "word32_byte_list_prism_le")
+  | word_elem 64  = (8,  "word64_byte_list_prism_le")
+  | word_elem 128 = (16, "word128_byte_list_prism_le")
+  | word_elem w   = error ("define_byte_record: unsupported word width " ^ string_of_int w)
+
+(* The fixed-width fact for a word element prism (used in the array focus's
+   [code abstract] proof). *)
+fun word_elem_fw 16  = @{thm fixed_width_word16_le}
+  | word_elem_fw 32  = @{thm fixed_width_word32_le}
+  | word_elem_fw 64  = @{thm fixed_width_word64_le}
+  | word_elem_fw 128 = @{thm fixed_width_word128_le}
+  | word_elem_fw w   = error ("define_byte_record: unsupported word width " ^ string_of_int w)
+
+(* A field's parser info:
+     hol_ty  - the HOL field type (for datatype_record)
+     parser  - either a library parser term (Direct), or an array/pad field that
+               needs a per-field focus definition (Array).
+   Array carries (element width w, element prism string, element fixed-width thm),
+   from which the command generates <T>_<f>_focus = array_focus w p and its
+   [code abstract] equation, then uses FocusParser <T>_<f>_focus as the parser. *)
+datatype parser_info =
+    Direct of string                       (* a ready library parser term *)
+  | Array of int * string * thm * string   (* (elem width, elem prism, elem fw thm, array hol type) *)
+
+type field_info = { hol_ty : string, parser : parser_info }
+
+(* Map a field type name to its HOL type and parser info. *)
+fun field_info _ "u16"  = { hol_ty = "16 word",  parser = Direct "parse_word16" }
+  | field_info _ "u32"  = { hol_ty = "32 word",  parser = Direct "parse_word32" }
+  | field_info _ "i32"  = { hol_ty = "32 word",  parser = Direct "parse_word32" }  (* i32: same 4 bytes as u32 *)
+  | field_info _ "u64"  = { hol_ty = "64 word",  parser = Direct "parse_word64" }
+  | field_info _ "u128" = { hol_ty = "128 word", parser = Direct "parse_word128" }
+  | field_info _ "u8"   = { hol_ty = "byte",     parser = Direct "parse_byte" }
+  | field_info _ "bool" = { hol_ty = "bool",     parser = Direct "parse_bool" }
   | field_info ctxt ty =
       (case parse_array ty of
-         SOME (8, n) =>   (* pad: [u8; N] *)
-           { hol_ty = "(byte, " ^ string_of_int n ^ ") array",
-             codec  = "list_fixlen_prism :: (byte list, (byte, " ^ string_of_int n ^ ") array) prism",
-             fw_thm = inst_len ctxt n [] @{thm fixed_width_pad} }
-       | SOME (w, n) =>   (* word array: [uW; N] *)
-           let val (cname, ew) = word_codec w in
-             { hol_ty = "(" ^ string_of_int w ^ " word, " ^ string_of_int n ^ ") array",
-               codec  = "array_byte_prism " ^ string_of_int ew ^ " " ^ cname
-                          ^ " :: (byte list, (" ^ string_of_int w ^ " word, " ^ string_of_int n ^ ") array) prism",
-               fw_thm = inst_len ctxt n [word_fw_thm w] @{thm fixed_width_array} }
+         SOME (8, n) =>   (* pad [u8; N]: array of raw bytes *)
+           let val aty = "(byte, " ^ string_of_int n ^ ") array" in
+             { hol_ty = aty, parser = Array (1, "byte_id_prism", @{thm fixed_width_byte_id}, aty) }
            end
-       | NONE =>          (* enum / nested record, by naming convention.
-             A nested record (define_byte_record) has both T_byte_prism (already
-             a byte-list codec) and fixed_width_T.  An enum (define_byte_enum) has
-             a single-byte T_byte_prism + T_byte_prism_valid only, so we lift it
-             with single_byte_prism and build its fixed width on the spot. *)
-           (case try (Proof_Context.get_thm ctxt) ("fixed_width_" ^ ty) of
-              SOME fw =>     (* nested record *)
-                { hol_ty = ty, codec = ty ^ "_byte_prism", fw_thm = fw }
-            | NONE =>        (* enum *)
-                { hol_ty = ty,
-                  codec  = "single_byte_prism " ^ ty ^ "_byte_prism",
-                  fw_thm = @{thm fixed_width_single_byte}
-                             OF [Proof_Context.get_thm ctxt (ty ^ "_byte_prism_valid")] }))
+       | SOME (w, n) =>   (* word array [uW; N] *)
+           let
+             val (ew, cname) = word_elem w
+             val aty = "(" ^ string_of_int w ^ " word, " ^ string_of_int n ^ ") array"
+           in
+             { hol_ty = aty, parser = Array (ew, cname, word_elem_fw w, aty) }
+           end
+       | NONE =>          (* enum or nested record, by naming convention.
+             A nested record (define_byte_record) exposes T_parser directly.
+             An enum (define_byte_enum) exposes a single-byte focus T_focus,
+             composed with parse_byte to read one discriminant byte. *)
+           (case try (Proof_Context.get_thm ctxt) (ty ^ "_parser_def") of
+              SOME _ => { hol_ty = ty, parser = Direct (ty ^ "_parser") }   (* nested record *)
+            | NONE   => { hol_ty = ty,
+                          parser = Direct ("focus_parser_map parse_byte " ^ ty ^ "_focus") }))
 
-(* A nat literal may appear as a numeral, as 0, or as Suc (...) (e.g. simp leaves
-   `Suc 0` for length 1).  Extract its value robustly. *)
-fun dest_nat \<^Const_>\<open>Groups.zero _\<close> = 0
-  | dest_nat \<^Const_>\<open>Suc for m\<close> = dest_nat m + 1
-  | dest_nat t = snd (HOLogic.dest_number t)
-
-(* Read the width <n> out of a `fixed_width_prism <n> <codec>` theorem. *)
-fun width_of_fw_thm thm =
-  case HOLogic.dest_Trueprop (Thm.concl_of thm) of
-    \<^Const_>\<open>fixed_width_prism _\<close> $ n $ _ => dest_nat n
-  | _ => error "define_byte_record: malformed fixed_width theorem"
+(* Define a constant `<bind>` from a term string, returning (def theorem, lthy). *)
+fun define_from_string bind rhs_str lthy =
+  let
+    val rhs = Syntax.read_term lthy rhs_str
+    val ((_, (_, def_thm)), lthy') = lthy
+      |> Local_Theory.define ((bind, NoSyn), ((Binding.suffix_name "_def" bind, []), rhs))
+  in (def_thm, lthy') end
 
 fun define_byte_record typ_binding (fields : (binding * string) list) lthy =
   let
@@ -125,132 +113,114 @@ fun define_byte_record typ_binding (fields : (binding * string) list) lthy =
             then error "define_byte_record: need at least one field" else ()
     val typ_name = Binding.name_of typ_binding
     val field_binds = map fst fields
+    val field_name_strs = map Binding.name_of field_binds
     val field_tys = map snd fields
     val infos = map (field_info lthy) field_tys
-    val hol_tys = map #hol_ty infos
+    val n = length fields
 
-    (* Step 1: define the record type via datatype_record, inside a nested target
-       so its constructor/selectors are committed before we build terms. *)
-    val args = map2 (fn b => fn ty => (b, ty)) field_binds hol_tys
+    (* Step 1: define the record type via datatype_record, in a nested target so
+       its constructor/selectors are committed before we build later terms. *)
+    val args = map2 (fn b => fn i => (b, #hol_ty i)) field_binds infos
     val lthy1 = lthy
       |> Local_Theory.begin_nested |> snd
       |> Datatype_Records.record_cmd typ_binding Datatype_Records.default_ctr_options_cmd [] args
       |> Local_Theory.end_nested
 
-    (* Step 2: build the codec prism as a STRING and let type inference resolve it.
+    (* Step 2: for each array/pad field, define <T>_<f>_focus = array_focus w p
+       and prove its [code abstract] rep equation, so the field parser is
+       executable.  Returns the parser term string for each field. *)
+    fun field_parser (fname, { parser = Direct s, ... } : field_info) lthy_acc = (s, lthy_acc)
+      | field_parser (fname, { parser = Array (ew, elem, elem_fw, aty), ... }) lthy_acc =
+          let
+            val focus_bind = Binding.name (typ_name ^ "_" ^ fname ^ "_focus")
+            val focus_name = Binding.name_of focus_bind
+            (* Annotate with the concrete array type so the length N is pinned,
+               not left schematic. *)
+            val focus_ty = "(byte list, " ^ aty ^ " \<times> byte list) focus"
+            val (_, lthy_a) =
+              define_from_string focus_bind
+                ("array_focus " ^ string_of_int ew ^ " " ^ elem ^ " :: " ^ focus_ty) lthy_acc
+            val focus_def = Proof_Context.get_thm lthy_a (focus_name ^ "_def")
+            val rep_prop =
+              Syntax.read_prop lthy_a
+                ("Rep_focus " ^ focus_name ^ " = prism_to_focus_raw (array_split_prism "
+                   ^ string_of_int ew ^ " " ^ elem ^ " :: (byte list, " ^ aty ^ " \<times> byte list) prism)")
+            val rep_thm = Goal.prove lthy_a [] [] rep_prop
+              (fn {context = ctxt, ...} =>
+                Local_Defs.unfold_tac ctxt [focus_def]
+                THEN EqSubst.eqsubst_tac ctxt [0] @{thms array_focus.rep_eq} 1
+                THEN asm_full_simp_tac (ctxt addsimps [elem_fw] delsimps @{thms One_nat_def}) 1)
+            val lthy_b = lthy_a |> Code.declare_abstract_eqn rep_thm
+          in ("FocusParser " ^ focus_name, lthy_b) end
 
-       Nested prod_byte_prism (right-associative) over the per-field codecs:
-         prod_byte_prism w0 p0 (prod_byte_prism w1 p1 (... p(n-1)))
-       then relabel the resulting nested tuple to the named record via iso_prism:
-         forward  = \<lambda>(x0, ..., x(n-1)). make_<T> x0 ... x(n-1)
-         backward = \<lambda>r. (f0 r, ..., f(n-1) r)
-       The record constructor is `make_<T>` and the selectors are the field names. *)
-    val codec_names = map #codec infos
-    val widths = map (width_of_fw_thm o #fw_thm) infos
+    val (parser_strs, lthy2) =
+      fold_map field_parser (field_name_strs ~~ infos) lthy1
 
-    fun nested_prod [(_, p)] = "(" ^ p ^ ")"
-      | nested_prod ((w, p) :: rest) =
-          "prod_byte_prism " ^ string_of_int w ^ " (" ^ p ^ ") (" ^ nested_prod rest ^ ")"
-      | nested_prod [] = error "unreachable"
-    val tuple_prism_str = nested_prod (widths ~~ codec_names)
+    (* Step 3: sequence the field parsers with focus_parser_sequence (the -- of
+       the parser notation) left-associatively, producing a left-nested tuple
+       ((..((x0,x1),x2)..),x(n-1)).  We use the full constant name rather than the
+       -- notation so the command does not depend on the notation bundle being in
+       scope at the call site. *)
+    val parser_chain =
+      foldl1 (fn (a, b) => "focus_parser_sequence (" ^ a ^ ") (" ^ b ^ ")") parser_strs
 
-    val field_name_strs = map Binding.name_of field_binds
-    val n = length fields
+    (* The left-nested tuple pattern and the constructor application. *)
     val xs = map (fn i => "x" ^ string_of_int i) (0 upto n - 1)
-    (* For a single field the tuple degenerates to a bare value: the iso is
-       (\<lambda>x0. make_T x0) / (\<lambda>r. f0 r); otherwise it pairs the fields. *)
-    val forward_str =
-      if n = 1
-      then "\<lambda>x0. make_" ^ typ_name ^ " x0"
-      else "\<lambda>(" ^ space_implode ", " xs ^ "). make_" ^ typ_name ^ " " ^ space_implode " " xs
-    val backward_str =
-      if n = 1
-      then "\<lambda>r. " ^ hd field_name_strs ^ " r"
-      else "\<lambda>r. (" ^ space_implode ", " (map (fn f => f ^ " r") field_name_strs) ^ ")"
+    fun left_nest [x] = x
+      | left_nest xs' = "(" ^ left_nest (rev (tl (rev xs'))) ^ ", " ^ List.last xs' ^ ")"
+    val tuple_pat = left_nest xs
+    val make_app = "make_" ^ typ_name ^ " " ^ space_implode " " xs
+    val sels_nest = left_nest (map (fn f => f ^ " r") field_name_strs)
 
-    val prism_str =
-      "prism_compose (" ^ tuple_prism_str ^ ") (iso_prism (" ^ forward_str ^ ") (" ^ backward_str ^ "))"
+    val forward_str = "\<lambda>" ^ tuple_pat ^ ". " ^ make_app
+    val backward_str = "\<lambda>r. " ^ sels_nest
 
-    val prism_body = Syntax.read_term lthy1 prism_str
-    val prism_bind = Binding.suffix_name "_byte_prism" typ_binding
-    val ((_, (_, prism_def)), lthy2) = lthy1
-      |> Local_Theory.define ((prism_bind, NoSyn),
-           ((Binding.suffix_name "_def" prism_bind, []), prism_body))
-
-    (* Step 3: prove <T>_byte_prism_valid.
-
-       The codec is `prism_compose <prod-chain> <iso>`.  After prism_compose_valid:
-         goal L: is_valid_prism <prod-chain>
-         goal R: is_valid_prism <iso>
-       For L, the prod-chain is right-nested over fields [f0, ..., f(n-1)].  Each
-       prod_byte_prism_valid needs `fixed_width_prism (f_i)` for the head and
-       `is_valid_prism (rest)` for the tail; the innermost field is closed by
-       `fixed_width_prism_valid OF <its fw_thm>`.  Walking the field fw_thms in
-       order discharges the whole chain. *)
-    val fw_thms = map #fw_thm infos
-    val total_width = fold (fn t => fn acc => acc + width_of_fw_thm t) fw_thms 0
-
-    (* Discharge `is_valid_prism <prod-chain>` by walking the field fw_thms. *)
-    fun prod_valid_tac ctxt [last_fw] =
-          resolve_tac ctxt [@{thm fixed_width_prism_valid} OF [last_fw]] 1
-      | prod_valid_tac ctxt (fw :: rest) =
-          resolve_tac ctxt @{thms prod_byte_prism_valid} 1
-          THEN resolve_tac ctxt [fw] 1
-          THEN prod_valid_tac ctxt rest
-      | prod_valid_tac _ [] = no_tac
-
-    (* Discharge `fixed_width_prism <w> <prod-chain>` by walking the fw_thms. *)
-    fun prod_fw_tac ctxt [last_fw] =
-          resolve_tac ctxt [last_fw] 1
-      | prod_fw_tac ctxt (fw :: rest) =
-          resolve_tac ctxt @{thms prod_byte_prism_fixed_width} 1
-          THEN resolve_tac ctxt [fw] 1
-          THEN prod_fw_tac ctxt rest
-      | prod_fw_tac _ [] = no_tac
-
-    val iso_tac = fn ctxt =>
-      resolve_tac ctxt @{thms iso_prism_valid} 1
-      THEN ALLGOALS (asm_full_simp_tac (fold Splitter.add_split @{thms prod.split} ctxt))
-
-    (* Step 3: prove <T>_byte_prism_valid. *)
-    val valid_prop =
-      Syntax.read_prop lthy2 ("is_valid_prism " ^ Binding.name_of prism_bind)
-    val valid_thm = Goal.prove lthy2 [] [] valid_prop
-      (fn {context = ctxt, ...} =>
-        Local_Defs.unfold_tac ctxt [prism_def]
-        THEN resolve_tac ctxt @{thms prism_compose_valid} 1
-        THEN prod_valid_tac ctxt fw_thms
-        THEN iso_tac ctxt)
-    val valid_bind = Binding.suffix_name "_byte_prism_valid" typ_binding
-    val (_, lthy3) = lthy2
-      |> Local_Theory.note ((valid_bind, []), [valid_thm])
-
-    (* Step 4: prove fixed_width_<T>, so the record can itself be a nested field.
-       State the width as the sum w0 + w1 + ... (NOT pre-summed) so each
-       prod_byte_prism_fixed_width step unifies its nA + nB without arithmetic;
-       then simplify the registered theorem so its width is the literal total. *)
-    (* right-associated sum w0 + (w1 + (... + w(n-1))), matching the right-nested
-       prod chain, so prod_byte_prism_fixed_width unifies nA + nB at each step. *)
-    fun right_sum [w] = string_of_int w
-      | right_sum (w :: rest) = string_of_int w ^ " + (" ^ right_sum rest ^ ")"
-      | right_sum [] = "0"
-    val width_sum = right_sum (map width_of_fw_thm fw_thms)
-    val fw_prop =
+    (* Step 4: define <T>_tuple_focus = iso_focus <forward> <backward> and prove
+       its [code abstract] rep equation (the iso laws hold by the record simps). *)
+    val tuple_bind = Binding.name (typ_name ^ "_tuple_focus")
+    val tuple_name = Binding.name_of tuple_bind
+    val (_, lthy3) =
+      define_from_string tuple_bind
+        ("iso_focus (" ^ forward_str ^ ") (" ^ backward_str ^ ")") lthy2
+    val tuple_def = Proof_Context.get_thm lthy3 (tuple_name ^ "_def")
+    val tuple_rep_prop =
       Syntax.read_prop lthy3
-        ("fixed_width_prism (" ^ width_sum ^ ") " ^ Binding.name_of prism_bind)
-    val fw_thm0 = Goal.prove lthy3 [] [] fw_prop
+        ("Rep_focus " ^ tuple_name ^ " = iso\<^sub>\<integral> (" ^ forward_str ^ ") (" ^ backward_str ^ ")")
+    val tuple_rep_thm = Goal.prove lthy3 [] [] tuple_rep_prop
       (fn {context = ctxt, ...} =>
-        Local_Defs.unfold_tac ctxt [prism_def]
-        THEN resolve_tac ctxt @{thms fixed_width_compose_iso} 1
-        THEN prod_fw_tac ctxt fw_thms
-        THEN ALLGOALS (asm_full_simp_tac (fold Splitter.add_split @{thms prod.split} ctxt)))
-    val fw_thm = Simplifier.simplify lthy3 fw_thm0
-    val fw_bind = Binding.name ("fixed_width_" ^ typ_name)
-    val (_, lthy4) = lthy3
-      |> Local_Theory.note ((fw_bind, []), [fw_thm])
-    val _ = total_width
+        Local_Defs.unfold_tac ctxt [tuple_def]
+        THEN EqSubst.eqsubst_tac ctxt [0] @{thms iso_focus.rep_eq} 1
+        THEN asm_full_simp_tac (fold Splitter.add_split @{thms prod.split} ctxt) 1)
+    val lthy4 = lthy3 |> Code.declare_abstract_eqn tuple_rep_thm
+
+    (* Step 5: <T>_parser = (parser chain) >> <T>_tuple_focus.  Declare its
+       defining equation as a code equation so the parser is executable (the
+       field parsers and focus reps are already executable). *)
+    val parser_bind = Binding.suffix_name "_parser" typ_binding
+    val (parser_def, lthy5) =
+      define_from_string parser_bind
+        ("focus_parser_map (" ^ parser_chain ^ ") " ^ tuple_name) lthy4
+    val lthy5 = lthy5 |> Code.declare_default_eqns [(parser_def, true)]
+
+    (* Step 6: <T>_focus = run_parser_all <T>_parser, and its validity --- for
+       free, since a focus is validity-carrying (Rep_focus lands in the typedef). *)
+    val focus_bind = Binding.suffix_name "_focus" typ_binding
+    val (_, lthy6) =
+      define_from_string focus_bind
+        ("run_parser_all " ^ Binding.name_of parser_bind) lthy5
+    val focus_def = Proof_Context.get_thm lthy6 (Binding.name_of focus_bind ^ "_def")
+    val valid_prop =
+      Syntax.read_prop lthy6
+        ("is_valid_focus (Rep_focus " ^ Binding.name_of focus_bind ^ ")")
+    val valid_thm = Goal.prove lthy6 [] [] valid_prop
+      (fn {context = ctxt, ...} =>
+        Local_Defs.unfold_tac ctxt [focus_def]
+        THEN resolve_tac ctxt @{thms Rep_focus[simplified]} 1)
+    val valid_bind = Binding.suffix_name "_focus_valid" typ_binding
+    val (_, lthy7) = lthy6
+      |> Local_Theory.note ((valid_bind, []), [valid_thm])
   in
-    lthy4
+    lthy7
   end
 
 end
@@ -258,7 +228,7 @@ end
 (* Parser: `define_byte_record <name> = <f0>: <ty0> | <f1>: <ty1> | ...` *)
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>define_byte_record\<close>
-    "define a fixed-layout record type together with its byte serialization"
+    "define a fixed-layout record type together with its byte-parser serialization"
     (Parse.binding --
       (Parse.$$$ "=" |--
         Parse.enum1 "|" (Parse.binding --| Parse.$$$ ":" -- Parse.embedded))
