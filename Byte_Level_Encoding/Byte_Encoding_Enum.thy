@@ -41,10 +41,33 @@ text\<open>A concrete enum becomes an instance by supplying \<^term>\<open>to_by
 \<^term>\<open>from_byte\<close> and discharging the two round-trip facts;
 \<^verbatim>\<open>enum_byte_prism_valid\<close> then yields validity unconditionally, and the prism
 lifts to a focus exactly as the boolean encoding does
-(\<^const>\<open>bool_byte_focus\<close>).  The generic combinator itself stops at the
-conditional validity law, since the lift to a focus requires the discriminant
-encoding to be fixed; the \<^verbatim>\<open>define_byte_enum\<close> command below automates the
-per-instance boilerplate.\<close>
+(\<^const>\<open>bool_byte_focus\<close>).\<close>
+
+subsection\<open>Lifting the enum prism to a focus\<close>
+
+text\<open>To use an enum as a field of a parser we need it as a \<^emph>\<open>focus\<close>, not just a
+prism.  A parser needs a proper (typedef) focus, which only \<^verbatim>\<open>lift_definition\<close> can
+build; \<^verbatim>\<open>lift_definition\<close> in turn requires the lifted raw focus to be valid for
+\<^emph>\<open>all\<close> \<^term>\<open>to_byte\<close> / \<^term>\<open>from_byte\<close>.  The enum focus is valid only when the
+two round-trip facts hold, so we lift a \<^emph>\<open>guarded\<close> raw focus: the real focus when
+they hold, and the always-valid \<^const>\<open>dummy_focus\<close> otherwise.  A concrete enum
+always satisfies the facts, so the dummy branch is never taken;
+\<^verbatim>\<open>enum_byte_focus_valid\<close> records validity under that assumption.  This is the same
+device as the array focus, and lets one generic definition serve every enum
+without a per-instance \<^verbatim>\<open>lift_definition\<close>.\<close>
+
+lift_definition enum_byte_focus :: \<open>('e \<Rightarrow> byte) \<Rightarrow> (byte \<Rightarrow> 'e option) \<Rightarrow> (byte, 'e) focus\<close> is
+  \<open>\<lambda>to_byte from_byte.
+     if (\<forall>e. from_byte (to_byte e) = Some e) \<and> (\<forall>w e. from_byte w = Some e \<longrightarrow> to_byte e = w)
+     then prism_to_focus_raw (enum_byte_prism to_byte from_byte)
+     else dummy_focus\<close>
+  by (auto simp add: dummy_focus_is_valid prism_to_focus_raw_valid enum_byte_prism_valid)
+
+lemma enum_byte_focus_valid:
+  assumes \<open>\<And>e. from_byte (to_byte e) = Some e\<close>
+      and \<open>\<And>w e. from_byte w = Some e \<Longrightarrow> to_byte e = w\<close>
+    shows \<open>is_valid_focus (Rep_focus (enum_byte_focus to_byte from_byte))\<close>
+  using assms by (simp add: enum_byte_focus.rep_eq prism_to_focus_raw_valid enum_byte_prism_valid)
 
 subsection\<open>The \<^verbatim>\<open>define_byte_enum\<close> command\<close>
 

@@ -81,9 +81,9 @@ fun define_byte_enum typ_binding (specs : (binding * int) list) lthy =
     val case_simps = Proof_Context.get_thms lthy4 (typ_name ^ ".cases")
     val valid_prop =
       Syntax.read_prop lthy4 ("is_valid_prism " ^ Binding.name_of prism_bind)
-    val codec_simps = to_byte_def :: from_byte_def :: case_simps
+    val encoding_simps = to_byte_def :: from_byte_def :: case_simps
     val simp_ctxt =
-      fold Splitter.add_split @{thms if_split if_split_asm} (lthy4 addsimps codec_simps)
+      fold Splitter.add_split @{thms if_split if_split_asm} (lthy4 addsimps encoding_simps)
 
     val valid_thm = Goal.prove lthy4 [] [] valid_prop
       (fn {context = ctxt, ...} =>
@@ -97,8 +97,56 @@ fun define_byte_enum typ_binding (specs : (binding * int) list) lthy =
     val valid_bind = Binding.suffix_name "_byte_prism_valid" typ_binding
     val (_, lthy5) = lthy4
       |> Local_Theory.note ((valid_bind, []), [valid_thm])
+
+    (* Step 6: declare the encoding definitions as code equations, so the enum's
+       encoding is executable (needed once the enum focus below is run in a
+       parser).  The prism/to_byte/from_byte are plain definitions; their
+       defining equations become the code equations. *)
+    val lthy6 = lthy5
+      |> Code.declare_default_eqns [(prism_def, true), (to_byte_def, true), (from_byte_def, true)]
+
+    (* Step 7: define <T>_focus = enum_byte_focus <T>_to_byte <T>_from_byte.
+       This is the enum as a (typedef) focus, ready to be composed into a parser
+       by the record command.  It is a plain definition on the generic guarded
+       enum_byte_focus, so no per-enum lift_definition is needed. *)
+    val focus_bind = Binding.suffix_name "_focus" typ_binding
+    val focus_str =
+      "enum_byte_focus " ^ Binding.name_of to_byte_bind ^ " " ^ Binding.name_of from_byte_bind
+    val (_, lthy7) = define_from_string focus_bind focus_str lthy6
+
+    (* Step 8: <T>_focus_rep [code abstract] --- discharge the guard of the
+       generic enum_byte_focus so the focus is executable.  First prove the guard
+       (the two round-trip facts, by induction/if-split as in Step 5); then the
+       focus reduces to its real branch prism_to_focus_raw <T>_byte_prism. *)
+    val focus_name = Binding.name_of focus_bind
+    val focus_def = Proof_Context.get_thm lthy7 (focus_name ^ "_def")
+    val to_str = Binding.name_of to_byte_bind
+    val from_str = Binding.name_of from_byte_bind
+    val guard_prop =
+      Syntax.read_prop lthy7
+        ("(\<forall>e. " ^ from_str ^ " (" ^ to_str ^ " e) = Some e) \<and> " ^
+         "(\<forall>w e. " ^ from_str ^ " w = Some e \<longrightarrow> " ^ to_str ^ " e = w)")
+    val rep_simp_ctxt =
+      fold Splitter.add_split @{thms if_split if_split_asm} (lthy7 addsimps encoding_simps)
+    val guard_thm = Goal.prove lthy7 [] [] guard_prop
+      (fn {context = ctxt, ...} =>
+        (resolve_tac ctxt @{thms conjI} 1
+         THEN resolve_tac ctxt @{thms allI} 1
+         THEN resolve_tac ctxt [induct_thm] 1
+         THEN ALLGOALS (asm_full_simp_tac rep_simp_ctxt))
+        THEN ALLGOALS (asm_full_simp_tac rep_simp_ctxt))
+    val rep_prop =
+      Syntax.read_prop lthy7
+        ("Rep_focus " ^ focus_name ^ " = prism_to_focus_raw " ^ Binding.name_of prism_bind)
+    val rep_thm = Goal.prove lthy7 [] [] rep_prop
+      (fn {context = ctxt, ...} =>
+        Local_Defs.unfold_tac ctxt [focus_def]
+        THEN asm_full_simp_tac
+               (lthy7 addsimps [@{thm enum_byte_focus.rep_eq}, @{thm if_P} OF [guard_thm], prism_def]) 1)
+    val lthy8 = lthy7
+      |> Code.declare_abstract_eqn rep_thm
   in
-    lthy5
+    lthy8
   end
 
 end
