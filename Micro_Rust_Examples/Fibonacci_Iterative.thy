@@ -29,14 +29,13 @@ subsection\<open>Mathematical Specification\<close>
 text\<open>First, we define the mathematical Fibonacci function recursively.
 Solution taken from: https://isabelle.in.tum.de/library/HOL/HOL-Number_Theory/Fib.html \<close>
 
-fun fib :: "nat \<Rightarrow> nat" where
-    fib0: "fib 0 = 0" |
-    fib1: "fib (Suc 0) = 1" |
-    fib2: "fib (Suc (Suc n)) = fib (Suc n) + fib n"
+fun fib :: \<open>nat \<Rightarrow> nat\<close> where
+    fib0: \<open>fib 0 = 0\<close> |
+    fib1: \<open>fib (Suc 0) = 1\<close> |
+    fib2: \<open>fib (Suc (Suc n)) = fib (Suc n) + fib n\<close>
 
-text\<open>Some basic properties of the mathematical definition\<close>
-
-lemma fib_plus_2: "fib (n + 2) = fib (n + 1) + fib n"
+lemma fib_plus_2: 
+  shows \<open>fib (n + 2) = fib (n + 1) + fib n\<close>
   by (metis Suc_eq_plus1 add_2_eq_Suc' fib.simps(3))
 
 subsection\<open>Iterative Implementation\<close>
@@ -56,76 +55,7 @@ definition fib_iterative :: \<open>64 word \<Rightarrow> (_, nat, _, _, _) funct
     *a
   \<rbrakk>\<close>
 
-
-subsection\<open>Memory safety\<close>
-
-text\<open>First, let's define a contract, which helps us make a Hoare triple, for memory safety proving.
-For this, let's use uRust's \<^term>\<open>can_alloc_reference\<close>. \<close>
-
-definition fib_memory_contract :: \<open>64 word \<Rightarrow> ('s, nat, 'b) function_contract\<close> where
-  \<open>fib_memory_contract n \<equiv>
-     let pre  = can_alloc_reference in
-     let post = \<lambda>r. can_alloc_reference in
-     make_function_contract pre post\<close>
-ucincl_auto fib_memory_contract
-
-subsection \<open>Proof of safety\<close>
-
-text \<open>Second, let's prove that the function satisfies the contract, in other words, the function
-is memory safe.\<close>
-
-lemma fib_memory_spec:
-  shows \<open>\<Gamma>; fib_iterative n \<Turnstile>\<^sub>F fib_memory_contract n\<close>
-proof (crush_boot f: fib_iterative_def contract: fib_memory_contract_def, goal_cases)
-  case 1
-  then show ?case
-    apply crush_base
-    subgoal for a_ref b_ref 
-\<comment>  \<open>Invariant: After i iterations, references a_ref and b_ref both exist and point to some nat values(we don't care what values)
-T - full ownership
-ga\<down> - global value
- \<star> - Separation logic "and" \<close>
-      apply (ucincl_discharge\<open>
-        rule_tac 
-          INV=\<open>\<lambda>_ i. \<Squnion> ga gb a b. a_ref \<mapsto>\<langle>\<top>\<rangle> ga\<down>(a :: nat) \<star> b_ref \<mapsto>\<langle>\<top>\<rangle> gb\<down>(b :: nat)\<close>
-          and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-          and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-        in wp_raw_for_loop_framedI'
-      \<close>)
-      by crush_base
-  done
-qed
-
-text\<open>Contracts and proofs for the function that it's correct for values 0 and 1.\<close>
-
-definition fib_zero_contract :: \<open>('s, nat, 'b) function_contract\<close> where
-  \<open>fib_zero_contract  \<equiv>
-    let pre  = can_alloc_reference in
-    let post = \<lambda> r. \<langle>r = fib 0\<rangle> \<star> can_alloc_reference in
-    make_function_contract pre post\<close>
-ucincl_auto fib_zero_contract
-  
-
-lemma fib_zero_spec:
-  shows \<open>\<Gamma>; fib_iterative 0 \<Turnstile>\<^sub>F fib_zero_contract\<close>
-  apply (crush_boot f: fib_iterative_def contract: fib_zero_contract_def)
-  apply crush_base
-  done
-
-definition fib_one_contract :: \<open>('s, nat, 'b) function_contract\<close> where
-  \<open> fib_one_contract  \<equiv>
-    let pre  = can_alloc_reference in
-    let post = \<lambda> r. \<langle>r = fib 1\<rangle> \<star> can_alloc_reference in
-    make_function_contract pre post\<close>
-ucincl_auto fib_one_contract
-
-lemma fib_one_spec:
-  shows \<open>\<Gamma>; fib_iterative 1 \<Turnstile>\<^sub>F fib_one_contract\<close>
-  apply (crush_boot f: fib_iterative_def contract: fib_one_contract_def)
-  apply crush_base
-  done
-
-text\<open>Lastly, prove that the iterative Fibonacci is correct with the mathematical definition.\<close>
+text\<open>Contract specification and correctness proof for the iterative Fibonacci function.\<close>
 
 definition fib_correct_contract :: \<open>64 word \<Rightarrow> ('s, nat, 'b) function_contract\<close> where
   \<open>fib_correct_contract n \<equiv>
