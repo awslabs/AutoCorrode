@@ -123,6 +123,7 @@ CLI_VERBS = {
     "back":          ("Ir.back",         ["s"],         "revert the last successful step"),
     "merge":         ("Ir.merge",        ["s"],         "inline sub-REPL into its parent"),
     "remove":        ("Ir.remove",       ["s"],         "delete REPL R and its sub-REPLs"),
+    "interrupt":     ("Ir.interrupt",    ["s"],         "cooperatively interrupt a busy REPL"),
     "load-theory":   ("Ir.load_theory",  ["s"],         "load theory NAME into the session"),
     "source":        ("Ir.source",       ["s", "i", "i"], "theory THY commands START..STOP"),
     "sledgehammer":  ("Ir.sledgehammer", ["s", "i"],    "run sledgehammer on R (SECS timeout)"),
@@ -135,6 +136,7 @@ _CLI_ARGHELP = {
     "init": "R [THEORY...]", "show": "R", "text": "R", "step": "R TEXT",
     "state": "R IDX", "fork": "R NEW IDX", "edit": "R IDX TEXT", "replay": "R",
     "truncate": "R IDX", "back": "R", "merge": "R", "remove": "R",
+    "interrupt": "R",
     "load-theory": "NAME", "source": "THY START STOP", "sledgehammer": "R SECS",
     "timeout": "R SECS", "find-theorems": "R N QUERY",
 }

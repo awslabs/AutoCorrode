@@ -37,6 +37,7 @@ sig
   val rebase : string -> unit
 
   val remove : string -> unit
+  val interrupt : string -> unit
   val repls : unit -> unit
   val theories : unit -> unit
   val load_theory : string -> unit
@@ -244,7 +245,11 @@ type claim_info = {
   step_count: int,
   stale_count: int,
   operation: claim_op,
-  claimed_at: Time.time
+  claimed_at: Time.time,
+  (* Isabelle worker thread running the tactic under this claim.
+     Recorded so Ir.interrupt can signal it cooperatively via
+     Isabelle_Thread.interrupt_thread. *)
+  thread: Isabelle_Thread.T
 };
 
 datatype repl_entry = Repl of repl | Claimed of claim_info;
@@ -289,7 +294,8 @@ fun claim id op_kind =
            step_count = length (#steps r),
            stale_count = length (filter #stale (#steps r)),
            operation = op_kind,
-           claimed_at = Time.now ()}
+           claimed_at = Time.now (),
+           thread = Isabelle_Thread.self ()}
     in (r, Symtab.update (id, Claimed ci) tab) end);
 
 fun mark_pin_stale (r : repl) : repl =
@@ -707,6 +713,26 @@ fun remove id =
       in (to_remove, tab') end)
   in out ("Removed " ^ commas (map quote removed)) end;
 
+(* Send a cooperative interrupt to whatever tactic is currently running under
+   a REPL's claim. Uses Isabelle_Thread.interrupt_thread on the worker thread
+   recorded in claim_info at claim time, which raises Interrupt at the next
+   interruption point; with_claim's Exn.capture then releases the claim.
+   After the interrupt, subsequent operations on the REPL work normally.
+   NB: bypasses entry_repl (which errors "is busy" on Claimed) — this is one
+   of the few commands designed to operate on a claimed entry. *)
+fun interrupt id =
+  case Symtab.lookup (Synchronized.value repl_tab) id of
+    NONE => error ("No REPL " ^ quote id)
+  | SOME (Repl _) => out ("REPL " ^ quote id ^ " is not busy")
+  | SOME (Claimed ci) =>
+      let val elapsed = Time.toReal (Time.- (Time.now (), #claimed_at ci))
+      in (Isabelle_Thread.interrupt_thread (#thread ci)
+            handle Thread.Thread _ => ());
+         out ("Interrupt sent to " ^ quote id ^
+              " (was busy [" ^ claim_op_str (#operation ci) ^ "] " ^
+              Real.fmt (StringCvt.FIX (SOME 1)) elapsed ^ "s)")
+      end;
+
 fun repls () =
   let val tab = Synchronized.value repl_tab
       val now = Time.now ()
@@ -831,6 +857,7 @@ fun help () = out
   \  find_theorems id n q   search theorems (n=max, 0=unlimited)\n\
   \  timeout id secs        set step timeout for REPL (0=unlimited, default 10s)\n\
   \  remove id              remove REPL and its sub-REPLs\n\
+  \  interrupt id           cooperatively interrupt a REPL busy on a step\n\
   \  repls ()               list all REPLs\n\
   \  theories ()            list loaded theories\n\
   \  load_theory s          load theory by name\n\

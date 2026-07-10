@@ -396,6 +396,16 @@ async def timeout(repl: str, secs: int, ctx: Context = None) -> str:
 async def remove(repl: str, ctx: Context = None) -> str:
     return await _send(ctx, f"Ir.remove {ml_str(repl)};")
 
+@mcp.tool(description="Cooperatively interrupt a REPL that is currently busy on a "
+          "step/edit/replay/etc. Sends Isabelle_Thread.interrupt_thread to the "
+          "worker thread recorded at claim time; the tactic raises Interrupt at "
+          "its next interruption point and the REPL becomes idle again. Safe on "
+          "an idle REPL (reports 'not busy'). Use this when a tactic has gone into "
+          "a runaway loop and you want to reclaim the REPL without restarting "
+          "the daemon.")
+async def interrupt(repl: str, ctx: Context = None) -> str:
+    return await _send(ctx, f"Ir.interrupt {ml_str(repl)};")
+
 @mcp.tool(description="Pin (snapshot) a REPL's current theory state for use as a base in other REPLs (via \"pin@NAME\" in init). The REPL must be at theory level (not mid-proof). If the REPL is subsequently modified, the pin is marked stale until re-pinned.")
 async def repl_pin(repl: str, ctx: Context = None) -> str:
     return await _send(ctx, f"Ir.pin {ml_str(repl)};")

@@ -108,6 +108,7 @@ IR_CMDS = {
     'Ir.unpin':          'id  — remove a REPL\'s pin',
     'Ir.rebase':         'id  — update base to latest pins (marks steps stale)',
     'Ir.remove':         'id  — delete REPL and all its sub-REPLs',
+    'Ir.interrupt':      'id  — cooperatively interrupt a busy REPL (raises Interrupt in its worker thread)',
     'Ir.repls':          '()  — list all REPLs with step counts and origins',
     'Ir.theories':       '()  — list all theories loaded in the session',
     'Ir.load_theory':    'name  — load theory by name, e.g. "HOL-Library.Multiset"',
@@ -148,6 +149,7 @@ IR_SIGS = {
     'Ir.unpin':         (['id'], 'remove a REPL\'s pin'),
     'Ir.rebase':        (['id'], 'update base to latest pins (marks steps stale)'),
     'Ir.remove':        (['id'], 'delete REPL and all its sub-REPLs'),
+    'Ir.interrupt':     (['id'], 'cooperatively interrupt a busy REPL'),
     'Ir.repls':         ([], 'list all REPLs with step counts and origins'),
     'Ir.theories':      ([], 'list all theories loaded in the session'),
     'Ir.load_theory':   (['name'], 'load theory by name, e.g. "HOL-Library.Multiset"'),
@@ -224,6 +226,8 @@ class IrCompleter(Completer if _HAVE_PROMPT_TOOLKIT else object):
                     (?P<cmd>Ir\.source) \s+ (?P<thy>"[^"]*") \s+ (?P<num>[^\s]+) \s+ (?P<num>[^\s]+)
                 |
                     (?P<cmd>Ir\.remove) \s+ (?P<rid>"[^"]*")
+                |
+                    (?P<cmd>Ir\.interrupt) \s+ (?P<rid>"[^"]*")
                 |
                     # fork: id new_id state_idx
                     (?P<cmd>Ir\.fork) \s+ (?P<rid>"[^"]*") \s+ (?P<sid>"[^"]*") \s+ (?P<num>[^\s]+)
@@ -324,6 +328,7 @@ _REPL_TARGET_VERBS = frozenset({
     "init", "init_from_document", "init_at_line", "fork",
     "step", "show", "state", "text",
     "edit", "replay", "truncate", "back", "merge", "remove", "rebase",
+    "interrupt",
     "pin", "unpin",
     "sledgehammer", "timeout", "find_theorems",
 })

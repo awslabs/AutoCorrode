@@ -131,6 +131,12 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
   /** Delete REPL and all its sub-REPLs. */
   def remove(repl: String): String = send(s"Ir.remove ${q(repl)}")
 
+  /** Cooperatively interrupt a REPL busy on a step/edit/replay. Sends
+    * Isabelle_Thread.interrupt_thread to the recorded worker; the running
+    * tactic raises Interrupt at its next interruption point and the REPL
+    * becomes idle. Safe on an idle REPL (reports 'not busy'). */
+  def interrupt(repl: String): String = send(s"Ir.interrupt ${q(repl)}")
+
   /** List all REPLs with step counts and origins. */
   def repls(): String = send("Ir.repls ()")
 
@@ -180,6 +186,7 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       |                                      repl_init_from_source tool)
       |  fork("r", "s", stateIdx)           Fork new REPL from r at state index
       |  remove("r")                        Delete REPL and sub-REPLs
+      |  interrupt("r")                     Cooperatively interrupt a busy REPL
       |  repls()                            List all REPLs
       |
       |Stepping (failed steps leave REPL unchanged — don't call back() after a failure):
