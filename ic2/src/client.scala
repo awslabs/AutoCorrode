@@ -339,32 +339,41 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
   /** Default number of per-theory progress bars shown by check status/attach. */
   private val DEFAULT_BARS: Int = MAX_ACTIVE_BARS
 
-  /** Parse `-n NAME` for the check subcommands (there is at most one check, so
-   *  no job id); auto-select the sole server when -n is omitted. */
-  private def name_opt(cmd: String, args: List[String]): String = {
-    var name: Option[String] = None
-    val getopts = Getopts(s"""
+  /** Parse `-n NAME` for a check subcommand (there is at most one check, so no
+   *  job id); auto-select the sole server when -n is omitted. `desc` is a
+   *  one-line summary shown in `--help`. */
+  private def name_opt(cmd: String, desc: String, args: List[String]): String = {
+    val usage = s"""
 Usage: isabelle ic2 $cmd [-n NAME]
 
+  $desc
+
   -n NAME   server name (default: the sole running server)
-""", "n:" -> (a => name = Some(a)))
+"""
+    if (wants_help(args)) { Output.writeln(usage, stdout = true); sys.exit(2) }
+    var name: Option[String] = None
+    val getopts = Getopts(usage, "n:" -> (a => name = Some(a)))
     val rest = getopts(args)
     if (rest.nonEmpty) getopts.usage()
     resolve_name(name)
   }
 
-  /** Parse `-n NAME` and `-c N` (max progress bars; 0 = unlimited) for the check
-   *  status / attach subcommands. Returns (resolved server, bar limit) where the
-   *  limit is a large number for "unlimited". */
-  private def name_and_bars_opt(cmd: String, args: List[String]): (String, Int) = {
-    var name: Option[String] = None
-    var bars: Int = DEFAULT_BARS
-    val getopts = Getopts(s"""
+  /** Parse `-n NAME` and `-c N` (max progress bars; 0 = unlimited) for a check
+   *  subcommand. Returns (resolved server, bar limit; a large number for
+   *  "unlimited"). `desc` is a one-line summary shown in `--help`. */
+  private def name_and_bars_opt(cmd: String, desc: String, args: List[String]): (String, Int) = {
+    val usage = s"""
 Usage: isabelle ic2 $cmd [-n NAME] [-c N]
+
+  $desc
 
   -n NAME   server name (default: the sole running server)
   -c N      max per-theory progress bars to show (default $DEFAULT_BARS; 0 = all)
-""",
+"""
+    if (wants_help(args)) { Output.writeln(usage, stdout = true); sys.exit(2) }
+    var name: Option[String] = None
+    var bars: Int = DEFAULT_BARS
+    val getopts = Getopts(usage,
       "n:" -> (a => name = Some(a)),
       "c:" -> (a => bars = Value.Int.parse(a)))
     val rest = getopts(args)
@@ -378,7 +387,9 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
    *  per-theory percentage / finished / running counts (not just elapsed ms),
    *  two successive polls reveal whether the check is advancing or stalled. */
   def check_status(args: List[String]): Unit = {
-    val (name, bars) = name_and_bars_opt("check status", args)
+    val (name, bars) = name_and_bars_opt("check status",
+      "Report the current/last check's state (running/ok/failed/idle), elapsed\n" +
+      "  time, and per-theory progress. One-shot; does not stream.", args)
     val reply = request(name, JSON.Object("op" -> "check_status"))
     if (!JSON.string(reply, "event").contains("check_status")) {
       print_job_status(reply); sys.exit(3)
@@ -389,8 +400,7 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
     val reason = JSON.string(reply, "reason").map(r => " reason=" + r).getOrElse("")
     val nodes = JSON.array(reply, "nodes").getOrElse(Nil).flatMap(parse_theory_status)
 
-    // Headline: state + elapsed + theories (the old one-liner, still useful for
-    // scripts grepping the first line).
+    // Headline: state + elapsed + theories (first line is grep-friendly).
     Output.writeln(state + " " + el + "ms" + reason +
       (if (thys.nonEmpty) "  theories=" + thys.mkString(",") else ""))
     // Per-theory frame — only while running and there is node detail to show
@@ -402,7 +412,8 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
 
   /** `ic2 check cancel`: request cancellation of the in-flight check. */
   def check_cancel(args: List[String]): Unit = {
-    val name = name_opt("check cancel", args)
+    val name = name_opt("check cancel",
+      "Abort the in-flight check (reason \"cancelled\"). No-op if none is running.", args)
     val reply = request(name, JSON.Object("op" -> "check_cancel"))
     JSON.string(reply, "event") match {
       case Some("check_cancel") =>
@@ -420,7 +431,9 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
    *  progress to completion, like a foreground check. Does not cancel on
    *  disconnect. */
   def check_attach(args: List[String]): Unit = {
-    val (name, bars) = name_and_bars_opt("check attach", args)
+    val (name, bars) = name_and_bars_opt("check attach",
+      "Stream the in-flight check's progress to completion, like a foreground\n" +
+      "  check. Does NOT cancel the check on disconnect.", args)
     val io = open_connection(resolve_socket(name))
     io.write(JSON.Object("op" -> "check_attach"))
     val use_tui = System.console() != null
@@ -501,7 +514,9 @@ Usage: isabelle ic2 load-files [OPTIONS] FILE...
   cost, not the parse cost. Header imports are checked (they must be
   locatable in the session), but their bodies aren't evaluated either.
 
-  Exit codes: 0 (loaded), 3 (server-side error, e.g. header parse failed).
+  Exit codes: 0 (loaded); 1 (bad FILE: not .thy, or does not exist); 2 (usage:
+  no FILE, or --include-ignored without --print); 3 (server-side error, e.g.
+  header parse failed).
 """
 
   /** `ic2 load-files FILE...` — parse the given .thy files into the session's
@@ -587,14 +602,8 @@ Usage: isabelle ic2 load-files [OPTIONS] FILE...
     "command-info"       -> "command metadata/status/result at a selection (FILE)",
     "state-at"           -> "proof state (goal + context) at a selection (FILE)")
 
-  /** CLI subtool name -> the wire/MCP tool name it maps to. Back-compat: the
-    * old `context-info` name is kept as a silent alias for `state-at`, so
-    * existing scripts and MCP configs keep working.
-    *
-    * Note both CLI names route to the legacy `get_context_info` on the wire
-    * (the new server rewrites it to `get_state_at` on entry, the old server
-    * still speaks the old name) — so a fresh client stays compatible with
-    * older daemons while presenting the new name to the user. */
+  /** CLI subtool name -> the wire/MCP tool name it maps to. `context-info` is a
+    * silent alias for `state-at`; both route to `get_context_info` on the wire. */
   private val QUERY_TOOL_WIRE: Map[String, String] = Map(
     "list-files" -> "list_files",
     "processing-status" -> "get_processing_status",
@@ -612,7 +621,7 @@ Usage: isabelle ic2 load-files [OPTIONS] FILE...
     val tools = QUERY_TOOLS.map { case (n, d) => f"    $n%-20s $d" }.mkString("\n")
     Output.writeln(
       "Usage: isabelle ic2 query SUBTOOL [FILE] [OPTIONS]\n\n" +
-      "  Read-only diagnostic queries over the warm session (the CLI form of the\n" +
+      "  Read-only diagnostic queries over the resident session (the CLI form of the\n" +
       "  MCP diagnostic tools). Most take a theory FILE (a loaded/checked node;\n" +
       "  partial paths are completed). Output is human-readable; use --json for the\n" +
       "  raw tool JSON.\n\n" +
@@ -646,7 +655,7 @@ Usage: isabelle ic2 load-files [OPTIONS] FILE...
   }
 
   /** `ic2 query SUBTOOL [FILE] [OPTIONS]`: one-shot read-only diagnostic over the
-   *  warm session. Builds a `{op:query, tool, ...}` request, then renders the
+   *  session. Builds a `{op:query, tool, ...}` request, then renders the
    *  result as human text (default) or raw JSON (--json). */
   def query(args: List[String]): Unit = {
     // Manual parse: a mix of long flags (Getopts is single-letter only) and a
@@ -824,7 +833,7 @@ Usage: isabelle ic2 load-files [OPTIONS] FILE...
 
   /** `ic2 repl-create FILE:LINE NAME`: create an interactive I/R REPL named NAME
    *  from a source location — the command spanning LINE (1-based) of theory
-   *  FILE, in the warm session. The daemon does the resolution (it has the
+   *  FILE, in the resident session. The daemon does the resolution (it has the
    *  session + the I/R client); the bare `repl.py cli` cannot, so this is the
    *  way to start a REPL at a `.thy` position. Prints the REPL's initial state
    *  AND the exact `repl.py cli` commands to drive it. FILE must be a loaded
@@ -996,7 +1005,7 @@ Usage: isabelle ic2 server status [OPTIONS]
       (if (omitted > 0) " (" + omitted + " heap node(s) omitted)" else ""))
     val name_w = (term_width - 46).max(20).min(70)
     for ((thy, pct, fin, failed, warned, _, _, unproc) <- rows) {
-      val _ = fin   // reserved for future use in the row summary
+      val _ = fin
       val nm = if (thy.length > name_w) "..." + thy.substring(thy.length - name_w + 3)
                else thy.padTo(name_w, ' ')
       // Parse-only nodes (0% but with commands still to process) show a

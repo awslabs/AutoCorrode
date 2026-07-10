@@ -95,7 +95,7 @@ Usage: isabelle ic2 server start [OPTIONS]
   process (cf. I/P).
 
   Unless --no-iq is given, the daemon also brings up AutoCorrode's I/R
-  interactive REPL against the warm session (loading the I/R ML, opening the
+  interactive REPL against the resident session (loading the I/R ML, opening the
   in-prover ML_Repl, and spawning the ir/repl.py bridge); the resulting
   client-facing repl.py port and token are shown by `isabelle ic2 server status`.
 
@@ -153,22 +153,13 @@ Usage: isabelle ic2 server start [OPTIONS]
         case Some(p) => new Combined_Progress(verbose, p)
         case None => new Console_Progress(verbose = verbose, stderr = true)
       }
-      // Default `show_states` on so per-command proof STATE messages land in
-      // the snapshot for get_context_info / get_command_info to read.
-      //
-      // Two prover mechanisms can emit a proof state; only one works headless:
-      //   * `print_state` (gated on editor_output_state) runs as a PRINT
-      //     FUNCTION, which fires only for VISIBLE commands. A Headless session
-      //     hardcodes Text.Perspective.empty (headless.scala), so nothing is
-      //     ever visible and this never fires — which is why goal text was
-      //     always empty despite editor_output_state=true.
-      //   * `show_states` emits Output.state directly in the toplevel command
-      //     transition (Isar/toplevel.ML), during evaluation itself — NOT via a
-      //     print function, so it is independent of the perspective and fires
-      //     for every evaluated (required) command. This is the one that works
-      //     headless.
-      // Keep editor_output_state too for parity with jEdit/VSCode. Listed FIRST
-      // so an explicit `-o show_states=...` on the command line still overrides.
+      // Default `show_states` on so per-command proof STATE messages land in the
+      // snapshot for get_context_info / get_command_info to read. It emits
+      // Output.state from the toplevel transition (Isar/toplevel.ML), so it fires
+      // for every evaluated command even headless — unlike `print_state`, a print
+      // function gated on a visible perspective (which Headless.Session leaves
+      // empty). editor_output_state stays on for parity with jEdit/VSCode. Listed
+      // FIRST so an explicit `-o show_states=...` still overrides.
       val options = Options.init(specs =
         (Options.Spec.make("show_states=true") ::
           Options.Spec.make("editor_output_state=true") ::
@@ -427,7 +418,7 @@ Usage: isabelle ic2 server start [OPTIONS]
     def resources: Option[Headless.Resources] = resources_opt
     def ir: Option[IQ.IR_Endpoint] = ir_opt
     def ir_client: Option[IRClient] = ir_client_opt
-    /** True once the warm session is up: session-dependent ops may proceed. */
+    /** True once the session is up: session-dependent ops may proceed. */
     def session_ready: Boolean = build.is_ready && session_opt.isDefined
 
     private def uptime_s: Long = (System.currentTimeMillis() - start_ms) / 1000
@@ -640,7 +631,7 @@ Usage: isabelle ic2 server start [OPTIONS]
                   "ic2-timing-tracker")(tracker.note)
 
               /* I/R (unless --no-iq): bring up the interactive REPL against the
-               * warm session via the session-generic IRLauncher — load the I/R
+               * resident session via the session-generic IRLauncher — load the I/R
                * ML, open the in-prover ML_Repl, spawn the repl.py bridge. The MCP
                * server in front of it is stood up only with --mcp. Best-effort:
                * failures only disable I/R+MCP, never checking. The repl.py child
@@ -705,7 +696,7 @@ Usage: isabelle ic2 server start [OPTIONS]
   }
 
 
-  /* ------------------------------------------------------------------- *)
+  /* -------------------------------------------------------------------
    * Connection handler — runs in its own thread, owns one client channel.
    * ------------------------------------------------------------------- */
 
@@ -723,7 +714,7 @@ Usage: isabelle ic2 server start [OPTIONS]
      *  A DETACHED check is never stored here — it outlives the connection. */
     private val attached = new AtomicReference[Option[Check.Job]](None)
 
-    /** The warm session+resources if the daemon is ready, else None. */
+    /** The session+resources if the daemon is ready, else None. */
     private def ready_session: Option[(Headless.Session, Headless.Resources)] =
       (state.session, state.resources) match {
         case (Some(s), Some(r)) if state.session_ready => Some((s, r))
@@ -734,7 +725,7 @@ Usage: isabelle ic2 server start [OPTIONS]
       "server not ready (" + state.build.phase_token +
         "): the session is still coming up — check `ic2 server status`"
 
-    /** Run `body` with the warm session + resources, or reply with a "still
+    /** Run `body` with the session + resources, or reply with a "still
      *  starting" error if the daemon is not yet ready (heap still building,
      *  session loading, or bring-up failed). The query / repl ops funnel through
      *  this so they never touch a null session; `check` uses `ready_session`
@@ -870,9 +861,8 @@ Usage: isabelle ic2 server start [OPTIONS]
         "ok" -> false, "reason" -> "invalid request"))
     }
 
-    /** Render a job Event to this connection's wire JSON. The Job_Progress
-     *  produces exactly the data the old Connection_Progress emitted, so the
-     *  wire format (started / progress[nodes] / error / finished) is unchanged. */
+    /** Render a job Event to this connection's wire JSON
+     *  (started / progress[nodes] / error / finished). */
     private def wireEvent(io: JSON_IO)(e: Check.Event): Unit = e match {
       case Check.Event.Started(theories) =>
         io.write(JSON.Object("event" -> "started", "theories" -> theories))
@@ -926,8 +916,7 @@ Usage: isabelle ic2 server start [OPTIONS]
           }
           // Wait on a RELAY thread, not the connection thread: the connection
           // thread must return to its read loop so a client disconnect is
-          // detected (its `finally` then cancels this job). This mirrors the
-          // original worker-thread design that kept the reader free.
+          // detected (its `finally` then cancels this job).
           val relay = new Thread(new Runnable {
             def run(): Unit =
               try {
@@ -1007,12 +996,6 @@ Usage: isabelle ic2 server start [OPTIONS]
       JSON.Object("event" -> "check_cancel", "cancelled" -> running)
     }
 
-    /** One-shot read-only diagnostic query over the warm session — the wire
-     *  counterpart of the MCP diagnostic tools. Routes `{op:query, tool, ...}`
-     *  through the SAME SessionTools.dispatch the MCP SessionClient uses (so the
-     *  two surfaces can't drift), wrapping the tool's JSON result. The request's
-     *  own fields (minus `op`) are the tool params: a parsed JSON object is a
-     *  Map[String,Any] with the value types dispatch's extractors expect. */
     /** Parse-only load: parse the given .thy files into the session's
      *  document graph WITHOUT evaluating any commands. Delegates to the
      *  shared `SessionTools.parseFiles`. On success returns the list of
@@ -1028,6 +1011,11 @@ Usage: isabelle ic2 server start [OPTIONS]
         case Left(msg) => server_error("load-files: " + msg)
       }
 
+    /** One-shot read-only diagnostic query — the wire counterpart of the MCP
+     *  diagnostic tools. Routes `{op:query, tool, ...}` through the SAME
+     *  SessionTools.dispatch the MCP SessionClient uses (so the two surfaces
+     *  can't drift), wrapping the tool's JSON result. The request's own fields
+     *  (minus `op`) are the tool params. */
     private def query_reply(session: Headless.Session, t: JSON.T): JSON.Object.T =
       JSON.string(t, "tool") match {
         case None => server_error("query: missing 'tool'")
@@ -1040,7 +1028,7 @@ Usage: isabelle ic2 server start [OPTIONS]
       }
 
     /** Create an I/R REPL from a source location: `{op:repl, file, line, name}`.
-     *  The daemon has both halves the bare `repl.py cli` lacks — the warm
+     *  The daemon has both halves the bare `repl.py cli` lacks — the resident
      *  session (to map file+line -> command id) and the connected I/R client —
      *  so it resolves server-side and creates the REPL via IQ.replFromSource.
      *  The reply carries the REPL's initial state AND the concrete `repl.py cli`

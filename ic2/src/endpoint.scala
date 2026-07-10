@@ -10,10 +10,12 @@ flags.
 Layout: $ISABELLE_HOME_USER/ic2/<name>.sock  (and <name>.log for daemons)
 
 Access control is the *directory*, not the socket node: the JVM creates the
-AF_UNIX socket file world-traversable (rwxr-xr-x), so the only reliable gate is
-a private parent directory (mode 0700). With that in place no other user can
-reach the socket, and there is no auth token to manage. (Same model as the
-ssh-agent / tmux socket directories.)
+AF_UNIX socket file world-traversable (rwxr-xr-x), so the only gate is a private
+parent directory (mode 0700). With that in place no other OS user can reach the
+socket, and there is no auth token to manage. Caveats: the mode is set just after
+the directory is created, not atomically (a brief create->chmod window), and is
+skipped on Windows (no POSIX permissions), where the directory is not a boundary.
+The threat model is same-OS-user trust; see the README "Access control" section.
 
 Multiple servers can coexist by passing -n <name>.
 */

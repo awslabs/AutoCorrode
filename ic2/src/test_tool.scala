@@ -141,7 +141,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *  have been consolidated by any prior check, so it genuinely re-runs the
      *  ML sleep — the timing window the cancel / survives-disconnect tests need.
      *  (The shared Slow.thy fixture gets consolidated by the progress test, so
-     *  a later re-check of it returns in ~100ms off the warm session.) */
+     *  a later re-check of it returns in ~100ms against the resident session.) */
     private def fresh_slow_theory(secs: Double = 8.0): String = {
       val name = "Slow_" + short_id()
       val dir = Files.createTempDirectory("ic2_slow")
@@ -879,7 +879,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
             "skipping SessionTools coverage")
         case Some(mcp) =>
           try {
-            // Load the fixtures into the warm session so the tools have nodes.
+            // Load the fixtures into the session so the tools have nodes.
             // Running `check` loads the node regardless of whether the check
             // passes — Trivial_Fail and Diagnostics deliberately don't all pass,
             // but they still become loaded nodes, which is all the tools need.
@@ -1072,8 +1072,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       if (JSON.string(byOff, "command_type") != Some("theory_structure"))
         error("command_info(offset=0): should be the theory header")
       // results_text captures the command's output messages: the failing
-      // `by simp` in Trivial_Fail emits an error that must show up here
-      // (regression guard for the command_results version-identity bug).
+      // `by simp` in Trivial_Fail emits an error that must show up here.
       val failCmd = mcp.call("get_command_info", obj("path" -> "Trivial_Fail.thy", "pattern" -> "by simp"))
       val failText = JSON.string(failCmd, "results_text").getOrElse("")
       if (!failText.contains("Failed to apply"))
@@ -1103,8 +1102,6 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       // (`definition`) emits writeln output ("consts answer :: nat"), and a
       // completed proof (`qed`) emits the proved theorem ("theorem ..."), but
       // NEITHER is an open goal. Both must report has_goal:false / empty goal.
-      // (Regression: the prior logic folded that incidental output in and
-      // mislabeled both has_goal:true with the output text as a bogus goal.)
       def assert_no_goal(pattern: String): Unit = {
         val ci = mcp.call("get_context_info", obj("path" -> "Diagnostics.thy", "pattern" -> pattern))
         val g = JSON.value(ci, "goal").getOrElse(error("context_info(" + pattern + "): missing goal"))
@@ -1170,7 +1167,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     private def t_check_progress(mcp: Mcp_Session, failAbs: String): Unit = {
       // Fresh, uniquely-named slow theories: never consolidated, so each check
       // genuinely re-runs the 8s ML sleep — the window the progress / timeout
-      // assertions need (a warm re-check of a shared fixture returns in ~100ms,
+      // assertions need (a re-check of a shared fixture returns in ~100ms,
       // streaming no progress and finishing before any timeout budget bites).
       val slowAbs = fresh_slow_theory()
       val slow2Abs = fresh_slow_theory()
@@ -1224,7 +1221,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *  OK check reaches state ok. */
     private def t_check_async(mcp: Mcp_Session, okAbs: String): Unit = {
       // A fresh, uniquely-named slow theory so the check is reliably still
-      // running when check_status polls it (a warm re-check would already be ok).
+      // running when check_status polls it (a re-check would already be ok).
       val slowAbs = fresh_slow_theory()
       // Submit a slow check without blocking.
       val sub = mcp.call("check_async", obj("files" -> List[Any](slowAbs)))
@@ -1346,7 +1343,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     /** Checks are mutually exclusive server-wide: two clients each submit a
      *  (distinct, slow) check at once; EXACTLY ONE is accepted and the other is
      *  refused with "already in flight". This is the cross-connection gate that
-     *  guarantees use_theories never runs concurrently on the warm session. */
+     *  guarantees use_theories never runs concurrently on the session. */
     private def e2e_concurrent_clients(server_name: String, fixtures: Path): Unit = {
       val file1 = fresh_slow_theory()
       val file2 = fresh_slow_theory()
@@ -1613,18 +1610,13 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     }
 
     /** Cancel a mid-flight check, then RE-CHECK the same theory — it must run
-     *  to completion. Regression for cancel+resume corruption: cancelling
-     *  `use_theories` mid-evaluation used to leave the node with a settled-
-     *  but-incomplete exec assignment, so a subsequent `use_theories` on the
-     *  same (unchanged-text) node treated the dangling commands as "common"
-     *  and never re-evaluated them — the re-check returned immediately
-     *  reporting the stale post-cancel state (finished < total, a spurious
-     *  `failed` from the cancelled command) instead of a clean full check.
+     *  to completion (the cancelled node must be left re-checkable, not stuck
+     *  reporting its stale post-cancel state).
      *
-     *  A fresh, uniquely-named slow theory (8s ML sleep between two lemmas)
-     *  so the FIRST check is genuinely interruptible mid-sleep and the
-     *  re-check genuinely re-runs it (a warm re-check of a shared fixture
-     *  would finish in ~100ms and mask the bug). */
+     *  Uses a fresh, uniquely-named slow theory (8s ML sleep between two lemmas)
+     *  so the FIRST check is genuinely interruptible mid-sleep and the re-check
+     *  genuinely re-runs it (a re-check of a shared fixture would finish in
+     *  ~100ms and mask the bug). */
     private def e2e_recheck_after_cancel(server_name: String, fixtures: Path): Unit = {
       val slow = fresh_slow_theory()
       // 1) Submit detached, wait until it's actually running, then cancel.
@@ -1671,10 +1663,9 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       if (f.endsWith(".thy")) f.dropRight(4) else f
     }
 
-    /** Witnesses the two progress-display changes:
+    /** Witnesses two progress-display properties:
      *   (a) the client's rendered frame lists in-flight theories in
-     *       descending-percentage order (was: recently-changed order, which
-     *       caused theories to swap around);
+     *       descending-percentage order (stable, not swapping around);
      *   (b) commands that have been running for a while are surfaced under
      *       their theory's progress bar, with the correct source line.
      *
@@ -1770,7 +1761,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       } finally io.close()
     }
 
-    /** Load Diagnostics.thy (and Trivial_OK) into the warm session for the query
+    /** Load Diagnostics.thy (and Trivial_OK) into the session for the query
      *  tests; running a check loads the node regardless of pass/fail. */
     private def load_query_fixtures(server_name: String, fixtures: Path): String = {
       val diag = (fixtures + Path.basic("Diagnostics.thy")).expand.implode
@@ -1831,7 +1822,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     private def e2e_query_cli(server_name: String, fixtures: Path): Unit = {
       val n = Bash.string(server_name)
       // Ensure all four fixtures are loaded. Prior tests may have loaded some
-      // of them; run_check is a no-op-ish re-check when the warm session
+      // of them; run_check is a no-op-ish re-check when the session
       // already has the node consolidated.
       for (f <- List("Diagnostics.thy", "Trivial_OK.thy", "Trivial_Fail.thy",
                      "CommandLookup.thy")) {
@@ -2257,7 +2248,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     }
 
     /** `ic2 repl FILE:LINE NAME`: create an I/R REPL at a source location. The
-     *  daemon resolves the line to a command in the warm session and creates the
+     *  daemon resolves the line to a command in the session and creates the
      *  REPL via the connected I/R client. Skips cleanly when I/R isn't up. Also
      *  checks the local usage errors (bad FILE:LINE) and a server-side failure
      *  (unknown file). */
@@ -2598,12 +2589,11 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
           error("load-files (2nd call): expected count=1, got " + JSON.Format(loaded2))
 
         // (g) `server status --full` displays parse-only nodes with a `parsed`
-        //     flag. This exists because the heap-node filter (`percentage==0
-        //     && finished==0 && failed==0 && warned==0 && !consolidated`) used
-        //     to swallow parse-only nodes too — they have the same all-zero
-        //     shape. The filter was widened to also require `unprocessed==0`,
-        //     which is TRUE for heap nodes (no PIDE commands tracked) but
-        //     FALSE for parse-only nodes (every command is unprocessed).
+        //     flag. The heap-node filter requires `unprocessed==0` to exclude
+        //     them: TRUE for heap nodes (no PIDE commands tracked), FALSE for
+        //     parse-only nodes (every command is unprocessed) — so they are not
+        //     mistaken for heap-resident library nodes despite the same all-zero
+        //     percentage/finished/failed/warned shape.
         val fullOut = ic2("server status --full -n " + Bash.string(name))
         if (fullOut.rc != 0)
           error("server status --full: expected rc=0, got " + fullOut.rc + " err=" + fullOut.err)
@@ -2657,8 +2647,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *   (d) CLI `ic2 check --line N` exits 0;
      *   (e) `check --line` with 0 or >1 files is refused (usage error);
      *   (f) FORKED-PROOF bounding (SpinTactic.thy): `--line 41` dispatches
-     *       ONLY spin1, never the forked spin2 at line 44 — the regression
-     *       the bounded-perspective design fixes;
+     *       ONLY spin1, never the forked spin2 at line 44;
      *   (g) DEPENDENCY loading (SpinImport.thy imports SpinDep.thy): a
      *       bounded check must still fully evaluate the local import, else
      *       the prefix can't type-check.
@@ -2728,7 +2717,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
           case Some(mcp) =>
             try {
               // A UNIQUELY-named slow theory so it isn't already consolidated
-              // (a warm re-check would trivially finish before the target).
+              // (a re-check would trivially finish before the target).
               val slowAbs = fresh_slow_theory(8.0)
               val mcpStart = System.currentTimeMillis()
               val mcpRes = mcp.call("check", obj("files" -> List[Any](slowAbs), "line" -> 5))
@@ -2744,7 +2733,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         }
 
         // (d) CLI `ic2 check --line N` (on the same Slow.thy that (a) used,
-        //     so it's warm; this arm tests the CLI wrapper's exit codes).
+        //     so it's already loaded; this arm tests the CLI wrapper's exit codes).
         val n = Bash.string(name)
         val cliOk = ic2("check -P -n " + n + " " + Bash.string(file) + " --line 13")
         if (cliOk.rc != 0)
@@ -2831,8 +2820,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         //     Pins: (i) check --line 20 exits ok; (ii) SpinDep is fully
         //     processed/consolidated afterwards; (iii) the importing theory
         //     is bounded (its own tail, if any, and here the whole thing
-        //     up to the target — the point is SpinDep must be done). This is
-        //     the regression where bounded checks skipped dep evaluation.
+        //     up to the target — the point is SpinDep must be done): a bounded
+        //     check must still fully evaluate its dependencies.
         val imp = fixtures + Path.basic("SpinImport.thy")
         val dep = fixtures + Path.basic("SpinDep.thy")
         if (imp.is_file && dep.is_file) {

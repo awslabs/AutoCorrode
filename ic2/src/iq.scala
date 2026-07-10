@@ -6,7 +6,7 @@
 AutoCorrode I/R support for the daemon.
 
 At session start (unless `--no-iq`) the daemon brings up the full I/R stack
-against its warm Headless.Session AND an MCP server in front of it, so an agent
+against its Headless.Session AND an MCP server in front of it, so an agent
 or operator can drive interactive Isar proof development against the same session
 that serves checks — no separate jEdit + I/Q instance needed.
 
@@ -58,38 +58,20 @@ import scala.jdk.CollectionConverters._
  *  Progress used) stay with each caller.
  *
  *  There is AT MOST ONE check in flight at a time, server-wide: `use_theories`
- *  is not safe to run concurrently on the one warm `Headless.Session` (the calls
+ *  is not safe to run concurrently on the one `Headless.Session` (the calls
  *  share a single document state + version history), so `submit` refuses a new
  *  check while one is running. The caller cancels the running check and
  *  resubmits the merged set of theories. Because checks never overlap, there is
  *  no registry, no job ids, and no per-check bookkeeping — just `slot`. */
 object Check {
 
-  /* ------------------------------------------------------------------- *
-   * Why ic2 reaches below the public headless API in two places.
-   *
-   * `isabelle server` / `Headless.Session` is batch-oriented: its "cancel"
-   * only flips `progress.stopped` (releasing the Scala waiter while the ML
-   * kernel keeps running the tactic — its `unload_theories` edit leaves the
-   * text unchanged, so PIDE's own execution reclamation never fires), and its
-   * liveness signals over-count forked proofs. ic2 drives *interactive*
-   * development, so it needs live progress and a real stop. Hence two
-   * deliberate divergences:
-   *
-   *   (a) Timing_Tracker — count the raw `command_timing` stream to report
-   *       which commands are genuinely executing (Command_Status counts
-   *       forks too → the spurious "text 13.7s").
-   *   (b) cancelViaEdit() — after stop() unwinds use_theories, reclaim any
-   *       still-running forked proof with a text-changing tail edit. Changing
-   *       the text forces the change-parser to re-split the tail, so the new
-   *       version's assignment drops the superseded execs (Document.update
-   *       runs Execution.cancel on them and their forks) and mints a fresh
-   *       execution-id barrier — exactly the native reclamation jEdit gets
-   *       from a keystroke, which stop()'s text-neutral unload skips.
-   *       (SessionTools.cancelFrontier + resetNodeTails.)
-   *
-   * Each mechanism's own docstring has the details; this is the map.
-   * ------------------------------------------------------------------- */
+  /* Headless.Session is batch-oriented: its "cancel" only flips
+   * progress.stopped (the ML kernel keeps running the tactic), and its liveness
+   * signals over-count forked proofs. ic2 needs live progress and a real stop,
+   * so it reaches below the public API in two places (details in each docstring):
+   *   (a) Timing_Tracker — reports which commands are genuinely executing.
+   *   (b) cancelViaEdit() — reclaims a still-running forked proof after stop().
+   */
 
   /** Delegates to `SessionTools.resolveFileTargets`, which is the shared
     * file→(Node.Name, theory-string) resolver used by both this check
@@ -101,26 +83,14 @@ object Check {
 
 
   /* Timing_Tracker — mechanism (a): which commands are executing RIGHT NOW.
-   *
-   * PIDE's Command_Status can't answer this: `is_running` counts Markup.running
-   * from every forked background task, not just the transition, so a `text`
-   * with a print fork reads running for tens of seconds (the "text 13.7s" bug);
-   * and `Command_Timings.running` keys by source offset, where a forked `by`
-   * collides with its own transition and the transition's ~1ms elapsed clears
-   * the slot (jEdit's Timing dockable has the same blind spot).
-   *
-   * The raw `command_timing` stream (Pure/General/timing.ML, on the public
-   * `session.command_timings` outlet) is emitted at exactly two sites — the
-   * toplevel transition and the forked terminal `by` — and never for print
-   * forks. A per-exec-id counter over it (running:+1, elapsed:-1, drop at 0) is
-   * therefore correct for every command shape and, unlike the offset map,
-   * immune to entry/exit arrival order. The counter returns to 0 on join (even
-   * on interrupt: timing.ML wraps the body in Exn.result), so nothing lingers.
-   *
-   * Keyed by exec id; stores only (count, first-seen start). Keyword/line/
-   * preview are resolved from the authoritative Command at render time, so
-   * nothing here can drift. Session-global: one tracker serves every check
-   * (foreground / attach / status), filtered by node in `running`. */
+   * Counts the raw `command_timing` stream (Pure/General/timing.ML, on the
+   * public `session.command_timings` outlet) per exec id (running:+1, elapsed:-1,
+   * drop at 0). That stream fires only at the toplevel transition and the forked
+   * terminal `by`, never for print forks, so it is correct for forked proofs —
+   * unlike Command_Status.is_running (counts every fork) or Command_Timings
+   * (offset-keyed, so a forked `by` collides with its transition). Keyword/line/
+   * preview come from the authoritative Command at render time. Session-global:
+   * one tracker serves every check, filtered by node in `running`. */
   final class Timing_Tracker {
     private final case class Entry(count: Int, start: Date)
     private val live =
@@ -739,7 +709,7 @@ object Check {
   }
 
   /** The single in-flight check slot. At most one check runs at a time
-    * (use_theories is not concurrency-safe on one warm session), so there is no
+    * (use_theories is not concurrency-safe on one session), so there is no
     * registry — just the current/last job. One daemon process per server, so a
     * single slot is correct. */
   private val slot = new AtomicReference[Option[Job]](None)
@@ -868,7 +838,7 @@ object IQ {
   }
 
   /** Create an I/R REPL named `repl` from a source location: resolve `file` +
-    * 1-based `line` to the command spanning that line in the warm session's
+    * 1-based `line` to the command spanning that line in the session's
     * document, then `Ir.init_from_document`. This needs BOTH the session (to map
     * line -> command id) and the connected I/R client, which only the daemon has
     * — the bare `repl.py cli` can't do it. Returns the REPL's reply, or Left on a
@@ -950,7 +920,7 @@ object IQ {
       case Some(dir) =>
         try {
           val irDir = dir.expand.implode
-          progress.echo("Bringing up I/R against the warm session (sources in " + irDir + ") ...")
+          progress.echo("Bringing up I/R against the session (sources in " + irDir + ") ...")
           val launcher = new IRLauncher(session, msg => progress.echo("I/R: " + msg))
           launcher.launch(irDir) match {
             case Right(launched) =>
@@ -1032,9 +1002,8 @@ object IQ {
         def format(value: Any): String = JSON.Format(value)
       }
       // McpServer already prefixes its own diagnostics with logName ("ic2 MCP"),
-      // so the logger must NOT prepend it again (that produced "ic2 MCP: ic2
-      // MCP: ..."). info/security are high-level and always shown; debug is the
-      // per-request trace, gated behind -v (progress.echo verbose=true).
+      // so don't prepend it again here. info/security are high-level and always
+      // shown; debug is the per-request trace, gated behind -v (verbose=true).
       val logger = new McpLogger {
         def info(message: String): Unit = progress.echo(message)
         def security(message: String): Unit = progress.echo("ic2 MCP [SECURITY]: " + message)
@@ -1118,7 +1087,7 @@ object IQ {
   ): McpTool =
     McpTool(
       name = "check",
-      description = "Type-check .thy files against the warm session (the MCP " +
+      description = "Type-check .thy files against the resident session (the MCP " +
         "analogue of `isabelle ic2 check`). Files must be absolute paths to " +
         "existing .thy files. Returns ok plus the resolved theory names; on " +
         "failure, a reason. Stops at the first failed theory. Blocks until the " +

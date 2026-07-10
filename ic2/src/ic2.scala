@@ -31,7 +31,7 @@ object IC2 {
 Usage: isabelle ic2 COMMAND [ARGS...]
 
   Headless PIDE daemon + client for iterative Isabelle theory development.
-  A long-lived server holds one warm session; short-lived clients submit
+  A long-lived server holds one resident session; short-lived clients submit
   checks and query proof state over a Unix-domain socket.
 
   ============================== Typical loop ==============================
@@ -40,7 +40,7 @@ Usage: isabelle ic2 COMMAND [ARGS...]
 
          isabelle ic2 server start --daemon -l HOL
 
-    2) Type-check a theory against the warm session:
+    2) Type-check a theory against the resident session:
 
          isabelle ic2 check src/MyThy.thy
 
