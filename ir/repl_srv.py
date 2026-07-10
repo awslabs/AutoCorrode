@@ -1110,6 +1110,45 @@ class Server:
             return None, f"Usage: {usage}{hint}"
         return m, None
 
+    def connections_text(self, ansi=True):
+        """Render the /connections view as a multi-line string.
+        With ansi=False, drop ANSI colour codes so the output is safe to
+        embed in TCP error frames consumed by non-TTY clients."""
+        B = BOLD if ansi else ""
+        D = DIM if ansi else ""
+        Y = YELLOW if ansi else ""
+        G = GREEN if ansi else ""
+        C = CYAN if ansi else ""
+        R = RST if ansi else ""
+        lines = [f"{D}Listening on 127.0.0.1:{self.port}{R}"]
+        infos = self.client_info()
+        if not infos:
+            lines.append(f"{D}No open connections.{R}")
+            return "\n".join(lines)
+        now = time.time()
+        lines.append(f"{B}{len(infos)} open connection(s):{R}")
+        for i, c in enumerate(infos):
+            since = c.get("in_flight_since")
+            if since is None:
+                idle = int(now - c["last_active"])
+                state = f"idle={idle}s  {D}idle{R}"
+            else:
+                elapsed = now - since
+                cmd_txt = c.get("in_flight_cmd") or ""
+                cmd_txt = cmd_txt.replace("\n", " ")
+                if len(cmd_txt) > 60:
+                    cmd_txt = cmd_txt[:57] + "..."
+                repl_id = c.get("in_flight_repl")
+                repl_tag = f" {G}repl={repl_id!r}{R}" if repl_id else ""
+                state = (f"{Y}busy [{elapsed:.1f}s]{R}"
+                         f"{repl_tag} "
+                         f"{D}{cmd_txt}{R}")
+            stats = (f"{D}cmds={c['commands']} "
+                     f"in={c['bytes_in']}B "
+                     f"out={c['bytes_out']}B{R}")
+            lines.append(f"  {C}{i}: {c['peer']}{R}  {state}  {stats}")
+        return "\n".join(lines)
+
     def _handle_local_command(self, text, ansi=False):
         """Handle a /-prefixed command locally. Returns response string or None.
         ansi=True for the management console (YXML→ANSI), False for TCP (YXML→plain)."""
@@ -1451,13 +1490,15 @@ class Server:
                         # any other command failure, so existing clients (cli,
                         # IRClient.scala, MCP) will parse it as had_error=True.
                         pool_size = self.pool._size - 1
+                        conns = self.connections_text(ansi=False)
                         msg = (
                             f"ERR\nPool exhausted: no ML slot free within "
                             f"{self.pool_acquire_timeout:.1f}s (all "
                             f"{pool_size} slots busy). This usually means "
                             f"one or more slots are blocked on runaway "
                             f"commands. Retry after the wedge clears (or "
-                            f"restart the server).\n"
+                            f"restart the server).\n\n"
+                            f"Current connections:\n{conns}\n"
                             + SENTINEL + "\n").encode("utf-8")
                         client.sendall(msg)
                         with self.clients_lock:
@@ -1723,40 +1764,7 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
     if stripped.startswith("/") and not cmd_lines:
         cmd = stripped.split()[0].lower()
         if cmd == "/connections":
-            infos = server.client_info()
-            out(f"{DIM}Listening on 127.0.0.1:{server.port}{RST}")
-            if not infos:
-                out(f"{DIM}No open connections.{RST}")
-            else:
-                now = time.time()
-                out(f"{BOLD}{len(infos)} open connection(s):{RST}")
-                for i, c in enumerate(infos):
-                    since = c.get("in_flight_since")
-                    if since is None:
-                        # last_active is only updated after a command
-                        # completes, so idle=<n> only makes sense when the
-                        # client is not currently mid-command.
-                        idle = int(now - c["last_active"])
-                        state = f"idle={idle}s  {DIM}idle{RST}"
-                    else:
-                        elapsed = now - since
-                        cmd_txt = c.get("in_flight_cmd") or ""
-                        # Flatten newlines and cap at ~60 chars for readability.
-                        cmd_txt = cmd_txt.replace("\n", " ")
-                        if len(cmd_txt) > 60:
-                            cmd_txt = cmd_txt[:57] + "..."
-                        repl_id = c.get("in_flight_repl")
-                        repl_tag = (f" {GREEN}repl={repl_id!r}{RST}"
-                                    if repl_id else "")
-                        state = (f"{YELLOW}busy [{elapsed:.1f}s]{RST}"
-                                 f"{repl_tag} "
-                                 f"{DIM}{cmd_txt}{RST}")
-                    stats = (f"{DIM}cmds={c['commands']} "
-                             f"in={c['bytes_in']}B "
-                             f"out={c['bytes_out']}B{RST}")
-                    out(f"  {CYAN}{i}: {c['peer']}{RST}  "
-                        f"{state}  "
-                        f"{stats}")
+            out(server.connections_text(ansi=True))
         elif cmd == "/info":
             out(server.info_text(ansi=True))
         elif cmd in ("/sources", "/timings", "/source-map", "/resolve"):
