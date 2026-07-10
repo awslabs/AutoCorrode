@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: MIT
+
+name: I/C2
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: Unit tests (no session)
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set Isabelle environment
+      run: |
+        ISABELLE_BIN=/home/isabelle/Isabelle/bin/isabelle
+        echo "ISABELLE=$ISABELLE_BIN" >> $GITHUB_ENV
+
+    # The jar (ic2/lib/ic2.jar) is not tracked, so build it here: register the
+    # component so scala_build can see it, then compile. Unit tests need no heap.
+    - name: Build ic2.jar
+      run: |
+        $ISABELLE components -u "$PWD/ic2"
+        $ISABELLE scala_build
+
+    - name: Run unit tests
+      run: $ISABELLE ic2_test unit
+
+  e2e:
+    name: End-to-end tests (HOL)
+    runs-on: ubuntu-latest
+    container:
+      image: makarius/isabelle:Isabelle2025-2
+      options: --user root
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Isabelle
+      uses: ./.github/actions/setup-isabelle-action
+
+    # python3 + prompt_toolkit let the e2e suite exercise the I/R bring-up
+    # (the daemon spawns ir/repl.py against the warm session), matching I/R CI.
+    - name: Install dependencies
+      run: |
+        apt-get update -qq && apt-get install -y -qq python3 python3-pip python3-venv > /dev/null
+        pip3 install --break-system-packages prompt_toolkit
+
+    - name: Build HOL heap
+      run: $ISABELLE build -b HOL
+
+    - name: Build ic2.jar
+      run: |
+        $ISABELLE components -u "$PWD/ic2"
+        $ISABELLE scala_build
+
+    - name: Run end-to-end tests
+      run: $ISABELLE ic2_test e2e
