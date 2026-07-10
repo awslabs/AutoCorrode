@@ -1751,10 +1751,12 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                         state = (f"{YELLOW}busy [{elapsed:.1f}s]{RST}"
                                  f"{repl_tag} "
                                  f"{DIM}{cmd_txt}{RST}")
+                    stats = (f"{DIM}cmds={c['commands']} "
+                             f"in={c['bytes_in']}B "
+                             f"out={c['bytes_out']}B{RST}")
                     out(f"  {CYAN}{i}: {c['peer']}{RST}  "
-                        f"cmds={c['commands']}  "
-                        f"in={c['bytes_in']}B out={c['bytes_out']}B  "
-                        f"{state}")
+                        f"{state}  "
+                        f"{stats}")
         elif cmd == "/info":
             out(server.info_text(ansi=True))
         elif cmd in ("/sources", "/timings", "/source-map", "/resolve"):
