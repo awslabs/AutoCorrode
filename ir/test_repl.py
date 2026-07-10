@@ -822,13 +822,16 @@ def main():
         # -- `repl.py cli` one-shot client (subprocess against this server) --
 
         def run_cli(*cli_args, want_rc=0):
-            """Run `repl.py cli VERB --port P --token T [ARGS...]` as a subprocess
+            """Run `repl.py cli VERB --port=P --token=T [ARGS...]` as a subprocess
             against the running server, returning (stdout, stderr). Asserts rc.
             Options go right after the verb (before any args / `--`), since `--`
-            makes everything after it literal."""
+            makes everything after it literal. `--token=T` (equal-sign form) so
+            argparse doesn't try to interpret a token starting with `-` (which
+            base64url tokens from `secrets.token_urlsafe` sometimes do) as the
+            next option."""
             verb, rest = cli_args[0], list(cli_args[1:])
             cmd = [sys.executable, repl_py, "cli", verb,
-                   "--port", str(port), "--token", token, *rest]
+                   f"--port={port}", f"--token={token}", *rest]
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
             assert r.returncode == want_rc, (
                 f"cli {' '.join(cli_args)}: expected rc={want_rc}, got {r.returncode}\n"
