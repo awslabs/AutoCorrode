@@ -1341,6 +1341,10 @@ class Server:
                     "commands": 0,
                     "bytes_in": 0,
                     "bytes_out": 0,
+                    # In-flight ML command tracking, updated by _handle_client
+                    # around the send_streaming call. Both are None when idle.
+                    "in_flight_since": None,
+                    "in_flight_cmd": None,
                 }
             threading.Thread(
                 target=self._handle_client, args=(client,), daemon=True
@@ -1446,7 +1450,19 @@ class Server:
                         self.log_input(f"[{peer}]", command)
                         def on_msg(kind, props, body):
                             self.log_output(f"[{peer}]", kind, props, body)
-                        raw_output, had_error = ml_conn.send_streaming(command, on_msg)
+                        # Mark this client's command as in-flight so
+                        # /connections can report it.
+                        with self.clients_lock:
+                            if client in self.clients:
+                                self.clients[client]["in_flight_since"] = time.time()
+                                self.clients[client]["in_flight_cmd"] = command
+                        try:
+                            raw_output, had_error = ml_conn.send_streaming(command, on_msg)
+                        finally:
+                            with self.clients_lock:
+                                if client in self.clients:
+                                    self.clients[client]["in_flight_since"] = None
+                                    self.clients[client]["in_flight_cmd"] = None
                         self.pool.release(ml_conn)
                         ml_conn = None
                     except (ConnectionResetError, BrokenPipeError):
@@ -1498,8 +1514,10 @@ class Server:
                 self.log(f"{DIM}[probe] {peer} sent {info['bytes_in']}B, no command{RST}")
 
     def client_info(self):
+        """Return a per-client snapshot list. Copies the dicts so callers
+        can safely read fields even while _handle_client mutates them."""
         with self.clients_lock:
-            return list(self.clients.values())
+            return [dict(info) for info in self.clients.values()]
 
     @property
     def num_clients(self):
@@ -1679,11 +1697,24 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                 for i, c in enumerate(infos):
                     age = int(now - c["started"])
                     idle = int(now - c["last_active"])
+                    since = c.get("in_flight_since")
+                    if since is None:
+                        state = f"{DIM}idle{RST}"
+                    else:
+                        elapsed = now - since
+                        cmd_txt = c.get("in_flight_cmd") or ""
+                        # Flatten newlines and cap at ~60 chars for readability.
+                        cmd_txt = cmd_txt.replace("\n", " ")
+                        if len(cmd_txt) > 60:
+                            cmd_txt = cmd_txt[:57] + "..."
+                        state = (f"{YELLOW}busy [{elapsed:.1f}s]{RST} "
+                                 f"{DIM}{cmd_txt}{RST}")
                     out(f"  {CYAN}{i}: {c['peer']}{RST}  "
                         f"age={age}s  "
                         f"idle={idle}s  "
                         f"cmds={c['commands']}  "
-                        f"in={c['bytes_in']}B out={c['bytes_out']}B")
+                        f"in={c['bytes_in']}B out={c['bytes_out']}B  "
+                        f"{state}")
         elif cmd == "/info":
             out(server.info_text(ansi=True))
         elif cmd in ("/sources", "/timings", "/source-map", "/resolve"):
