@@ -40,6 +40,7 @@ The server operator gets a management console on stdin/stdout:
 
 Management commands:
   /connections   Show open client connections with stats
+  /interrupt <t> Interrupt a busy connection by #id or ip:port
   /info          Show server status summary
   /verbosity N   Set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)
   /show_types    Toggle type annotations in output
@@ -125,6 +126,7 @@ IR_CMDS = {
     '/source-map':            '"THEORY"  — segment-to-line mapping with timing',
     '/resolve':               '"THEORY" LINE  — find theory:segment for a location',
     '/connections':           'show open client connections',
+    '/interrupt':             '<#id> | <ip:port> — interrupt a busy connection',
     '/verbosity':             'set verbosity 0-3 (0=off, 1=non-empty, 2=all, 3=hex)',
     '/show_types':            'toggle display of type annotations',
     '/info':                  'show server status summary',
@@ -991,6 +993,10 @@ class Server:
         self.verbose = 0  # 0=off, 1=body, 2=body+headers, 3=body+headers+hex
         self.clients = {}
         self.clients_lock = threading.Lock()
+        # Monotonic per-connection id. Stable across the daemon lifetime;
+        # /connections uses these numbers so /interrupt <id> can reliably
+        # target a specific connection even if others drop in between.
+        self._next_conn_id = 0
         self._start_time = time.time()
         self.session = session
         self.directory = directory
@@ -1110,6 +1116,71 @@ class Server:
             return None, f"Usage: {usage}{hint}"
         return m, None
 
+    def interrupt_connection(self, target):
+        """Send Ir.interrupt to the REPL currently claimed by connection `target`.
+
+        `target` is either a persistent connection id (the '#N' number shown
+        in /connections) or a peer string "ip:port". The id survives across
+        other connections dropping — index-based lookup would be racy.
+
+        The Ir.interrupt call is routed through the reserved console
+        connection (self.poly), which bypasses the ML pool — so this works
+        even when the pool is fully saturated (which is the scenario where
+        an interrupt is most needed).
+        """
+        with self.clients_lock:
+            entries = [dict(info) for info in self.clients.values()]
+
+        # Resolve the target
+        picked = None
+        try:
+            # Accept "#7" or "7"
+            key = target.lstrip("#")
+            wanted_id = int(key)
+            for e in entries:
+                if e.get("id") == wanted_id:
+                    picked = e
+                    break
+            if picked is None:
+                open_ids = ", ".join(f"#{e['id']}" for e in entries) or "none"
+                return (f"No connection with id #{wanted_id} "
+                        f"(open: {open_ids})")
+        except ValueError:
+            for e in entries:
+                if e["peer"] == target:
+                    picked = e
+                    break
+            if picked is None:
+                return f"No connection with peer {target!r}"
+
+        # Must be busy on a REPL-targeting command
+        since = picked.get("in_flight_since")
+        if since is None:
+            return f"Connection {picked['peer']} is idle — nothing to interrupt"
+        repl_id = picked.get("in_flight_repl")
+        if not repl_id:
+            cmd_txt = (picked.get("in_flight_cmd") or "").replace("\n", " ")
+            if len(cmd_txt) > 60:
+                cmd_txt = cmd_txt[:57] + "..."
+            return (f"Connection {picked['peer']} is busy but its command "
+                    f"does not target a REPL — cannot interrupt "
+                    f"({cmd_txt!r})")
+
+        # Send via the console conn (bypasses pool). Quote the id ML-style.
+        escaped = repl_id.replace("\\", "\\\\").replace('"', '\\"')
+        ml = f'Ir.interrupt "{escaped}";'
+        try:
+            raw_reply = self.poly.send(ml)
+        except Exception as e:
+            return (f"Failed to send Ir.interrupt for connection "
+                    f"{picked['peer']} (repl={repl_id!r}): {e}")
+        # self.poly.send returns raw YXML-framed output; strip markup so the
+        # user just sees the human-readable line from Ir.interrupt's writeln.
+        clean = noise_filter(
+            apply_transforms(tcp_transforms, raw_reply)).strip()
+        return (f"Interrupt sent for {picked['peer']} repl={repl_id!r}:\n"
+                f"{clean}")
+
     def connections_text(self, ansi=True):
         """Render the /connections view as a multi-line string.
         With ansi=False, drop ANSI colour codes so the output is safe to
@@ -1127,7 +1198,7 @@ class Server:
             return "\n".join(lines)
         now = time.time()
         lines.append(f"{B}{len(infos)} open connection(s):{R}")
-        for i, c in enumerate(infos):
+        for c in infos:
             since = c.get("in_flight_since")
             if since is None:
                 idle = int(now - c["last_active"])
@@ -1146,7 +1217,8 @@ class Server:
             stats = (f"{D}cmds={c['commands']} "
                      f"in={c['bytes_in']}B "
                      f"out={c['bytes_out']}B{R}")
-            lines.append(f"  {C}{i}: {c['peer']}{R}  {state}  {stats}")
+            lines.append(
+                f"  {C}#{c['id']}: {c['peer']}{R}  {state}  {stats}")
         return "\n".join(lines)
 
     def _handle_local_command(self, text, ansi=False):
@@ -1399,7 +1471,10 @@ class Server:
             except OSError:
                 break
             with self.clients_lock:
+                conn_id = self._next_conn_id
+                self._next_conn_id += 1
                 self.clients[client] = {
+                    "id": conn_id,
                     "peer": f"{addr[0]}:{addr[1]}",
                     "started": time.time(),
                     "last_active": time.time(),
@@ -1479,7 +1554,11 @@ class Server:
                     if not command:
                         continue
                     if not logged_connect:
-                        self.log(f"{GREEN}[+] {peer} connected ({self.num_clients} total){RST}")
+                        with self.clients_lock:
+                            cid = (self.clients[client]["id"]
+                                   if client in self.clients else "?")
+                        self.log(f"{GREEN}[+] #{cid} {peer} connected "
+                                 f"({self.num_clients} total){RST}")
                         logged_connect = True
                     ml_conn = self.pool.acquire(
                         timeout=self.pool_acquire_timeout)
@@ -1583,7 +1662,8 @@ class Server:
             if logged_connect:
                 peer_str = info["peer"] if info else peer
                 cmds = info["commands"] if info else 0
-                self.log(f"{RED}[-] {peer_str} disconnected: {disconnect_reason} "
+                cid_str = f"#{info['id']} " if info and 'id' in info else ""
+                self.log(f"{RED}[-] {cid_str}{peer_str} disconnected: {disconnect_reason} "
                          f"(cmds={cmds}, {self.num_clients} remaining){RST}")
             elif disconnect_reason != "closed by client":
                 self.log(f"{DIM}[probe] {peer} {disconnect_reason}{RST}")
@@ -1765,6 +1845,12 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
         cmd = stripped.split()[0].lower()
         if cmd == "/connections":
             out(server.connections_text(ansi=True))
+        elif cmd == "/interrupt":
+            parts = stripped.split(None, 1)
+            if len(parts) != 2 or not parts[1].strip():
+                out(f"{RED}Usage: /interrupt <#id> | <ip:port>{RST}")
+            else:
+                out(server.interrupt_connection(parts[1].strip()))
         elif cmd == "/info":
             out(server.info_text(ansi=True))
         elif cmd in ("/sources", "/timings", "/source-map", "/resolve"):
@@ -1794,6 +1880,7 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
             labels = {0: "off", 1: "non-empty", 2: "all messages", 3: "all+hex"}
             state = labels[server.verbose]
             out(f"  {YELLOW}/connections{RST}     Show open client connections")
+            out(f"  {YELLOW}/interrupt <t>{RST}   Interrupt a connection by #id or ip:port")
             out(f"  {YELLOW}/info{RST}            Show server status summary")
             out(f"  {YELLOW}/verbosity [N]{RST}   Set verbosity (currently {server.verbose} / {state})")
             out(f"                      0=off  1=non-empty  2=all messages  3=all+hex")
