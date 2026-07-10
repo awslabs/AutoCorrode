@@ -1102,6 +1102,94 @@ def main():
         run_test("stress", test_stress)
         run_test("rude_disconnect", test_rude_disconnect)
 
+        def test_pool_exhausted():
+            """When the ML pool is saturated, a further command must return
+            a well-formed 'Pool exhausted' ERR frame within a bounded window
+            (--pool-acquire-timeout, default 30s), and the client's
+            connection must stay open so a follow-up command succeeds once
+            the pool drains.
+
+            Holds slots for 45s (> 30s default) so the probe deterministically
+            trips the timeout rather than waiting for the holders to release.
+            """
+            n_busy = 5
+            busy_duration_ms = 45_000  # must exceed --pool-acquire-timeout
+            timeout_slack_s = 10.0     # how much longer than the timeout we'll
+                                       # wait for the ERR frame before failing
+            barrier_up = threading.Event()
+            errors = []
+            lock = threading.Lock()
+
+            def hold_slot():
+                try:
+                    s = connect(port, token=token)
+                    try:
+                        barrier_up.set()  # ok if racy — first thread's fine
+                        send_recv(
+                            s,
+                            f'OS.Process.sleep (Time.fromMilliseconds '
+                            f'{busy_duration_ms});',
+                            timeout=busy_duration_ms / 1000.0 + 5.0)
+                    finally:
+                        s.close()
+                except Exception as e:
+                    with lock:
+                        errors.append(("hold_slot", repr(e)))
+
+            holders = [threading.Thread(target=hold_slot, daemon=True)
+                       for _ in range(n_busy)]
+            for h in holders:
+                h.start()
+
+            # Wait for at least the first holder to get into its send_recv
+            # (proxy for "slots are being consumed"). Then give the others a
+            # short head-start so ALL are past pool.acquire before we probe.
+            assert barrier_up.wait(timeout=5.0), \
+                "slot-holder threads did not start in time"
+            time.sleep(0.5)
+
+            # Probe: open a fresh connection and send a command that would
+            # normally take milliseconds. It should come back as an ERR frame
+            # bounded by --pool-acquire-timeout, well before the 45s hold ends.
+            probe_sock = connect(port, token=token)
+            try:
+                t0 = time.time()
+                # recv timeout must exceed the server's pool-acquire-timeout
+                # (default 30s) plus slack.
+                probe_recv_timeout = 30.0 + timeout_slack_s
+                out = send_recv(probe_sock, 'Ir.help ();',
+                                timeout=probe_recv_timeout)
+                probe_elapsed = time.time() - t0
+
+                assert "Pool exhausted" in out, (
+                    f"Expected 'Pool exhausted' in probe reply, got (in "
+                    f"{probe_elapsed:.2f}s):\n{out}")
+                # The probe must NOT have waited for holders to release (that
+                # would be ~45s). Allow up to 30s (default timeout) + slack.
+                assert probe_elapsed < 30.0 + timeout_slack_s, (
+                    f"Probe returned only after {probe_elapsed:.2f}s — that's "
+                    f"waiting for slow commands to release, not the "
+                    f"pool-acquire-timeout")
+
+                # Now wait for the busy holders to drain, then confirm the
+                # same probe connection can still be used.
+                for h in holders:
+                    h.join(timeout=busy_duration_ms / 1000.0 + 10.0)
+                    assert not h.is_alive(), \
+                        "slot-holder thread did not finish"
+                if errors:
+                    raise AssertionError(f"slot-holder errors: {errors}")
+
+                # Same connection — not a fresh connect — proves the server
+                # did not close it after the pool-exhausted reply.
+                out2 = send_recv(probe_sock, 'Ir.help ();', timeout=10.0)
+                assert "Ir.init" in out2, (
+                    f"Follow-up command on retained connection failed:\n{out2}")
+            finally:
+                probe_sock.close()
+
+        run_test("pool_exhausted", test_pool_exhausted)
+
     finally:
         if proc is not None and proc.poll() is None:
             os.killpg(proc.pid, signal.SIGTERM)

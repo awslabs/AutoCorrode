@@ -24,6 +24,11 @@ Authentication: TCP clients must send the server token as the
 first line after connecting; the server responds with "OK\\n" or
 "ERR: authentication failed\\n".
 
+Pool slots: each command needs an ML pool slot. If all slots are busy
+(e.g. on runaway tactics), acquire waits up to --pool-acquire-timeout
+seconds (default 30s) then returns a pool-exhausted ERR frame; the
+connection stays open so the client can retry.
+
 Note: The I/R REPL operates at the Isar level. A session (created
 via Ir.init) starts in the context of a named theory — there is
 no need to issue 'theory' commands. Steps are Isar commands such as
@@ -874,9 +879,19 @@ class MLConnectionPool:
         """The reserved console connection (not in the shared pool)."""
         return self._console
 
-    def acquire(self):
-        """Block until a pool connection is available, then return it."""
-        self._semaphore.acquire()
+    def acquire(self, timeout=None):
+        """Acquire a pool connection.
+
+        With timeout=None (default) blocks until a connection is available and
+        always returns one. With a numeric timeout, blocks for at most that
+        many seconds and returns None if no connection becomes available in
+        that window.
+        """
+        if timeout is None:
+            self._semaphore.acquire()
+        else:
+            if not self._semaphore.acquire(timeout=timeout):
+                return None
         with self._lock:
             return self._idle.pop()
 
@@ -921,13 +936,19 @@ class Server:
 
     def __init__(self, pool, port, host="127.0.0.1", mgmt_output=None,
                  session=None, directory=None, heap_info=None,
-                 remote_host=None):
+                 remote_host=None, pool_acquire_timeout=30.0):
         self.pool = pool
         self.poly = pool.console  # convenience alias for console access
         self.host = host
         self.token = os.environ.get("IR_AUTH_TOKEN", "").strip() or secrets.token_urlsafe(24)
         self.mgmt_output = mgmt_output or print
         self.remote_host = remote_host
+        # Per-command pool-slot timeout (seconds). Instead of blocking a
+        # client's command indefinitely when all pool slots are busy, we wait
+        # only this long; on timeout we send a well-formed ERR frame back
+        # (keeping the connection open — the client can retry). Bumped in a
+        # loop by retrying acquire on subsequent commands.
+        self.pool_acquire_timeout = float(pool_acquire_timeout)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if port == 0:
@@ -1387,7 +1408,34 @@ class Server:
                     if not logged_connect:
                         self.log(f"{GREEN}[+] {peer} connected ({self.num_clients} total){RST}")
                         logged_connect = True
-                    ml_conn = self.pool.acquire()
+                    ml_conn = self.pool.acquire(
+                        timeout=self.pool_acquire_timeout)
+                    if ml_conn is None:
+                        # Pool exhausted: return a well-formed ERR frame and
+                        # keep the connection open so the client can retry.
+                        # The wire-level shape (ERR-prefix + sentinel) matches
+                        # any other command failure, so existing clients (cli,
+                        # IRClient.scala, MCP) will parse it as had_error=True.
+                        pool_size = self.pool._size - 1
+                        msg = (
+                            f"ERR\nPool exhausted: no ML slot free within "
+                            f"{self.pool_acquire_timeout:.1f}s (all "
+                            f"{pool_size} slots busy). This usually means "
+                            f"one or more slots are blocked on runaway "
+                            f"commands. Retry after the wedge clears (or "
+                            f"restart the server).\n"
+                            + SENTINEL + "\n").encode("utf-8")
+                        client.sendall(msg)
+                        with self.clients_lock:
+                            if client in self.clients:
+                                self.clients[client]["commands"] += 1
+                                self.clients[client]["bytes_out"] += len(msg)
+                                self.clients[client]["last_active"] = time.time()
+                        self.log(
+                            f"{YELLOW}[pool] {peer} pool exhausted, "
+                            f"rejected command after "
+                            f"{self.pool_acquire_timeout:.1f}s wait{RST}")
+                        continue
                     try:
                         if not ml_conn.alive():
                             ml_conn.close()
@@ -2096,6 +2144,12 @@ def main():
     p.add_argument("--pool-size", type=int, default=5,
                    help="Number of persistent ML connections (default: 5, "
                         "1 reserved for console)")
+    p.add_argument("--pool-acquire-timeout", type=float, default=30.0,
+                   help="Per-command timeout for acquiring an ML pool slot "
+                        "(seconds, default: 30.0). If no slot is free within "
+                        "this window the command is rejected with a "
+                        "pool-exhausted ERR frame — the connection stays "
+                        "open, the client can retry.")
     args = p.parse_args()
     if args.repl_only:
         args.no_heap_db = True
@@ -2459,7 +2513,8 @@ def main():
         size=pool_size)
     server = Server(pool, args.port, host="127.0.0.1",
                     session=args.session, directory=args.dir,
-                    heap_info=heap_info, remote_host=remote_host)
+                    heap_info=heap_info, remote_host=remote_host,
+                    pool_acquire_timeout=args.pool_acquire_timeout)
     mgmt_output = server.mgmt_output
     accept_thread = threading.Thread(target=server.serve_forever, daemon=True)
     accept_thread.start()
