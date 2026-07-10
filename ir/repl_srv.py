@@ -318,6 +318,27 @@ SENTINEL = "<<DONE>>"
 REPL_DEFAULT_PORT = 9147
 ML_REPL_DEFAULT_PORT = 9146
 
+# Verbs whose first ML string argument is a REPL id. Used purely to enrich
+# /connections output with a "repl=<id>" hint; false positives are harmless.
+_REPL_TARGET_VERBS = frozenset({
+    "init", "init_from_document", "init_at_line", "fork",
+    "step", "show", "state", "text",
+    "edit", "replay", "truncate", "back", "merge", "remove", "rebase",
+    "pin", "unpin",
+    "sledgehammer", "timeout", "find_theorems",
+})
+_REPL_ID_RE = re.compile(r'^\s*Ir\.(\w+)\s+"((?:[^"\\]|\\.)*)"')
+
+def _extract_repl_id(command):
+    """Extract the target REPL id from an Ir.<verb> "id" ... command, if any.
+    Returns None for verbs that don't take a REPL id or for non-Ir commands."""
+    m = _REPL_ID_RE.match(command)
+    if not m or m.group(1) not in _REPL_TARGET_VERBS:
+        return None
+    # ML string with backslash escapes → unescape the common ones for display.
+    raw = m.group(2)
+    return raw.replace('\\"', '"').replace('\\\\', '\\')
+
 
 def _load_symbols(isabelle_bin):
     """Load unicode-to-Isabelle-ASCII mapping from $ISABELLE_HOME/etc/symbols."""
@@ -1342,9 +1363,13 @@ class Server:
                     "bytes_in": 0,
                     "bytes_out": 0,
                     # In-flight ML command tracking, updated by _handle_client
-                    # around the send_streaming call. Both are None when idle.
+                    # around the send_streaming call. All three are None when
+                    # idle. in_flight_repl is the target REPL id extracted
+                    # from the command text (e.g. Ir.step "abc" ... → "abc"),
+                    # or None if the command doesn't target a REPL.
                     "in_flight_since": None,
                     "in_flight_cmd": None,
+                    "in_flight_repl": None,
                 }
             threading.Thread(
                 target=self._handle_client, args=(client,), daemon=True
@@ -1451,11 +1476,16 @@ class Server:
                         def on_msg(kind, props, body):
                             self.log_output(f"[{peer}]", kind, props, body)
                         # Mark this client's command as in-flight so
-                        # /connections can report it.
+                        # /connections can report it. The REPL id (if any) is
+                        # derived from the command text so /connections can
+                        # draw the connection ↔ REPL line without needing an
+                        # ML-side round trip.
+                        target_repl = _extract_repl_id(command)
                         with self.clients_lock:
                             if client in self.clients:
                                 self.clients[client]["in_flight_since"] = time.time()
                                 self.clients[client]["in_flight_cmd"] = command
+                                self.clients[client]["in_flight_repl"] = target_repl
                         try:
                             raw_output, had_error = ml_conn.send_streaming(command, on_msg)
                         finally:
@@ -1463,6 +1493,7 @@ class Server:
                                 if client in self.clients:
                                     self.clients[client]["in_flight_since"] = None
                                     self.clients[client]["in_flight_cmd"] = None
+                                    self.clients[client]["in_flight_repl"] = None
                         self.pool.release(ml_conn)
                         ml_conn = None
                     except (ConnectionResetError, BrokenPipeError):
@@ -1707,7 +1738,11 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                         cmd_txt = cmd_txt.replace("\n", " ")
                         if len(cmd_txt) > 60:
                             cmd_txt = cmd_txt[:57] + "..."
-                        state = (f"{YELLOW}busy [{elapsed:.1f}s]{RST} "
+                        repl_id = c.get("in_flight_repl")
+                        repl_tag = (f" {GREEN}repl={repl_id!r}{RST}"
+                                    if repl_id else "")
+                        state = (f"{YELLOW}busy [{elapsed:.1f}s]{RST}"
+                                 f"{repl_tag} "
                                  f"{DIM}{cmd_txt}{RST}")
                     out(f"  {CYAN}{i}: {c['peer']}{RST}  "
                         f"age={age}s  "
