@@ -27,6 +27,10 @@ or collaboratively conduct interactive theorem proving using Isabelle. See [iq](
 
 [I/R](ir) -- short for Isabelle/REPL -- provides interactive theory exploration outside of jEdit, from the command line or programmatically via TCP and MCP. See [ir](ir) for more information.
 
+## IC2
+
+[IC2](ic2) manages headless, persistent Isabelle sessions from the command line -- similar to `isabelle server` and `isabelle client`, but integrated with [I/R](ir) and [I/Q](iq). A resident session serves repeated `.thy` checks and diagnostic queries, and can bring up I/R against the same session, optionally over MCP, so an agent can drive Isar proofs without a separate Isabelle/jEdit + I/Q. See [ic2](ic2) for more information.
+
 ## Isabelle Assistant
 
 [Isabelle Assistant](isabelle-assistant) is an LLM-powered proof assistant for Isabelle/jEdit, built on [AWS Bedrock](https://aws.amazon.com/bedrock/). It provides autonomous proof search, interactive chat with LaTeX rendering, proof suggestions, code explanation, refactoring, and more — all integrated into the Isabelle/jEdit IDE. When combined with [I/Q](iq), generated proofs are automatically verified against Isabelle before display. See [isabelle-assistant](isabelle-assistant) for more information.
