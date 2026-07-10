@@ -997,6 +997,10 @@ class Server:
         # /connections uses these numbers so /interrupt <id> can reliably
         # target a specific connection even if others drop in between.
         self._next_conn_id = 0
+        # Serialises use of the reserved console ML connection (self.poly).
+        # Both the mgmt console and the pool-bypass paths write to it, so
+        # concurrent access would race bytes on the wire.
+        self.console_lock = threading.Lock()
         self._start_time = time.time()
         self.session = session
         self.directory = directory
@@ -1170,7 +1174,8 @@ class Server:
         escaped = repl_id.replace("\\", "\\\\").replace('"', '\\"')
         ml = f'Ir.interrupt "{escaped}";'
         try:
-            raw_reply = self.poly.send(ml)
+            with self.console_lock:
+                raw_reply = self.poly.send(ml)
         except Exception as e:
             return (f"Failed to send Ir.interrupt for connection "
                     f"{picked['peer']} (repl={repl_id!r}): {e}")
@@ -1563,21 +1568,64 @@ class Server:
                     ml_conn = self.pool.acquire(
                         timeout=self.pool_acquire_timeout)
                     if ml_conn is None:
-                        # Pool exhausted: return a well-formed ERR frame and
-                        # keep the connection open so the client can retry.
-                        # The wire-level shape (ERR-prefix + sentinel) matches
-                        # any other command failure, so existing clients (cli,
-                        # IRClient.scala, MCP) will parse it as had_error=True.
-                        pool_size = self.pool._size - 1
-                        conns = self.connections_text(ansi=False)
+                        # Pool exhausted. Two sub-cases:
+                        #   1) Command is Ir.interrupt <id> — forward it via
+                        #      the reserved console connection (bypasses the
+                        #      pool entirely) so a wedged pool can still be
+                        #      cleared without needing mgmt-console access.
+                        #   2) Anything else — return a well-formed ERR frame
+                        #      that lists currently-claimed REPLs, so the
+                        #      caller knows which id to Ir.interrupt to free
+                        #      a slot. Connection stays open for retry.
+                        m = _REPL_ID_RE.match(command)
+                        is_interrupt = (m is not None
+                                        and m.group(1) == "interrupt")
+                        if is_interrupt:
+                            try:
+                                with self.console_lock:
+                                    raw = self.poly.send(command)
+                                had_err = False
+                            except Exception as e:
+                                raw = str(e)
+                                had_err = True
+                            transformed = noise_filter(
+                                apply_transforms(tcp_transforms, raw))
+                            prefix = "ERR\n" if had_err else ""
+                            resp = (prefix + transformed +
+                                    "\n" + SENTINEL + "\n").encode("utf-8")
+                            client.sendall(resp)
+                            with self.clients_lock:
+                                if client in self.clients:
+                                    self.clients[client]["commands"] += 1
+                                    self.clients[client]["bytes_out"] += len(resp)
+                                    self.clients[client]["last_active"] = time.time()
+                            self.log(
+                                f"{YELLOW}[pool] #{cid} {peer} pool full, "
+                                f"forwarded Ir.interrupt via console{RST}")
+                            continue
+                        # Non-interrupt: reject with a diagnostic ERR frame.
+                        try:
+                            with self.console_lock:
+                                claims_raw = self.poly.send("Ir.claims ();")
+                        except Exception:
+                            claims_raw = ""
+                        claims_txt = noise_filter(
+                            apply_transforms(tcp_transforms, claims_raw)).strip()
+                        if claims_txt:
+                            claims_block = (
+                                "\n\nList of current REPLs claimed by a "
+                                "communication channel:\n"
+                                + "\n".join(f"  {ln}"
+                                            for ln in claims_txt.splitlines())
+                                + "\nUse `interrupt <repl_id>` to interrupt "
+                                  "and potentially free a channel.")
+                        else:
+                            claims_block = ""
                         msg = (
-                            f"ERR\nPool exhausted: no ML slot free within "
-                            f"{self.pool_acquire_timeout:.1f}s (all "
-                            f"{pool_size} slots busy). This usually means "
-                            f"one or more slots are blocked on runaway "
-                            f"commands. Retry after the wedge clears (or "
-                            f"restart the server).\n\n"
-                            f"Current connections:\n{conns}\n"
+                            f"ERR\nPool exhausted: no I/R communication "
+                            f"channel available (waited "
+                            f"{self.pool_acquire_timeout:.1f}s)."
+                            f"{claims_block}\n"
                             + SENTINEL + "\n").encode("utf-8")
                         client.sendall(msg)
                         with self.clients_lock:

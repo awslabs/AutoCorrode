@@ -38,6 +38,7 @@ sig
 
   val remove : string -> unit
   val interrupt : string -> unit
+  val claims : unit -> unit
   val repls : unit -> unit
   val theories : unit -> unit
   val load_theory : string -> unit
@@ -733,6 +734,24 @@ fun interrupt id =
               Real.fmt (StringCvt.FIX (SOME 1)) elapsed ^ "s)")
       end;
 
+(* Compact machine-readable listing of currently-claimed REPLs. One line per
+   claim: '<id> [<op>] <elapsed>s'. Used by the daemon's pool-exhausted ERR
+   frame to tell a client which REPL ids are holding pool slots and could be
+   Ir.interrupt'ed to free one. Bypasses entry_repl since it looks up claims. *)
+fun claims () =
+  let val tab = Synchronized.value repl_tab
+      val now = Time.now ()
+  in
+    Symtab.fold (fn (id, entry) => fn () =>
+      case entry of
+        Claimed ci =>
+          let val elapsed = Time.toReal (Time.- (now, #claimed_at ci))
+          in out (id ^ " [" ^ claim_op_str (#operation ci) ^ "] " ^
+                  Real.fmt (StringCvt.FIX (SOME 1)) elapsed ^ "s")
+          end
+      | Repl _ => ()) tab ()
+  end;
+
 fun repls () =
   let val tab = Synchronized.value repl_tab
       val now = Time.now ()
@@ -858,6 +877,7 @@ fun help () = out
   \  timeout id secs        set step timeout for REPL (0=unlimited, default 10s)\n\
   \  remove id              remove REPL and its sub-REPLs\n\
   \  interrupt id           cooperatively interrupt a REPL busy on a step\n\
+  \  claims ()              compact list of currently-claimed REPLs\n\
   \  repls ()               list all REPLs\n\
   \  theories ()            list loaded theories\n\
   \  load_theory s          load theory by name\n\
