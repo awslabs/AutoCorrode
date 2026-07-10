@@ -1726,11 +1726,13 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                 now = time.time()
                 out(f"{BOLD}{len(infos)} open connection(s):{RST}")
                 for i, c in enumerate(infos):
-                    age = int(now - c["started"])
-                    idle = int(now - c["last_active"])
                     since = c.get("in_flight_since")
                     if since is None:
-                        state = f"{DIM}idle{RST}"
+                        # last_active is only updated after a command
+                        # completes, so idle=<n> only makes sense when the
+                        # client is not currently mid-command.
+                        idle = int(now - c["last_active"])
+                        state = f"idle={idle}s  {DIM}idle{RST}"
                     else:
                         elapsed = now - since
                         cmd_txt = c.get("in_flight_cmd") or ""
@@ -1745,8 +1747,6 @@ def process_mgmt_console_input(line, server, cmd_lines, output_fn=None,
                                  f"{repl_tag} "
                                  f"{DIM}{cmd_txt}{RST}")
                     out(f"  {CYAN}{i}: {c['peer']}{RST}  "
-                        f"age={age}s  "
-                        f"idle={idle}s  "
                         f"cmds={c['commands']}  "
                         f"in={c['bytes_in']}B out={c['bytes_out']}B  "
                         f"{state}")
