@@ -746,7 +746,7 @@ fun claims () =
       case entry of
         Claimed ci =>
           let val elapsed = Time.toReal (Time.- (now, #claimed_at ci))
-          in out (id ^ " [" ^ claim_op_str (#operation ci) ^ "] " ^
+          in out ("id=" ^ id ^ " [" ^ claim_op_str (#operation ci) ^ "] " ^
                   Real.fmt (StringCvt.FIX (SOME 1)) elapsed ^ "s")
           end
       | Repl _ => ()) tab ()

@@ -28,7 +28,7 @@ import java.nio.file.Paths
 object Client {
 
   /** How many active progress bars the ANSI UI shows at once. */
-  private val MAX_ACTIVE_BARS: Int = 8
+  private val MAX_ACTIVE_BARS: Int = 20
 
   /** Default threshold (seconds) for the long-running-command list under each
    *  bar. Overridable per-invocation with `check --long-running SECS`. */
@@ -484,6 +484,8 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
         warned = JSON.int(t, "warned").getOrElse(0),
         failed = JSON.int(t, "failed").getOrElse(0),
         consolidated = JSON.bool(t, "consolidated").getOrElse(false),
+        updated = JSON.long(t, "update_seq")
+          .orElse(JSON.int(t, "update_seq").map(_.toLong)).getOrElse(0L),
         long_running = long_running)
     }
 
@@ -1361,6 +1363,10 @@ Usage: isabelle ic2 server attach [OPTIONS]
     warned: Int,
     failed: Int,
     consolidated: Boolean,
+    /** Server-side monotonic "last updated" stamp (0 if the server didn't
+      * report one). The display sorts shown theories by this so it tracks
+      * where the check is actively working. */
+    updated: Long = 0L,
     long_running: List[Running_Command] = Nil
   ) {
     /** "Done" for display purposes: every command has completed, so the
@@ -1434,8 +1440,11 @@ Usage: isabelle ic2 server attach [OPTIONS]
       f"  $finished%d/$total%d done   running=$total_running%d   unprocessed=$total_unproc%d" +
       (if (total_failed > 0) f"   FAILED=$total_failed%d" else "")
 
-    // In-flight theories first (most complete first), bounded to max_rows.
-    val active = nodes.filter(n => !n.done).sortBy(n => -n.percentage)
+    // In-flight theories, most-recently-updated first (alphabetical tiebreak
+    // among same-tick updates), bounded to max_rows. This is a one-shot frame
+    // with no cross-tick state, so it can't do the live UI's sticky ordering —
+    // it just shows the current last-updated bucket.
+    val active = nodes.filter(n => !n.done).sortBy(n => (-n.updated, n.theory))
     val shown = active.take(max_rows)
     val name_w = (term_width - 50).max(20).min(60)
     val rows = shown.flatMap { n =>
@@ -1455,14 +1464,15 @@ Usage: isabelle ic2 server attach [OPTIONS]
    *  running longer than `long_running_secs` are printed indented under the
    *  progress line for their theory. */
   class Plain_UI(
-    max_active: Int = 3,
+    max_active: Int = 20,
     long_running_secs: Double = DEFAULT_LONG_RUNNING_SECS
   ) extends Progress_UI {
     def started(theories: List[String]): Unit =
       Output.writeln("checking " + theories.length + " theory/theories: " +
         theories.mkString(", "))
     def progress(nodes: List[Theory_Status]): Unit = {
-      val active = nodes.filter(n => !n.done).sortBy(n => -n.percentage)
+      // Most-recently-updated first, alphabetical tiebreak among same-tick.
+      val active = nodes.filter(n => !n.done).sortBy(n => (-n.updated, n.theory))
       val (done, total) = (nodes.count(_.done), nodes.length)
       val shown = active.take(max_active)
       Output.writeln(s"[$done/$total done] " + shown.map(n =>
@@ -1478,11 +1488,17 @@ Usage: isabelle ic2 server attach [OPTIONS]
     def close(): Unit = ()
   }
 
-  /** ANSI live UI: shows the N in-flight theories with the highest processing
-   *  percentage, repainted in place. Consolidated theories drop off the list
-   *  but are still counted in the header. Under each theory's bar, commands
-   *  running longer than `long_running_secs` are listed indented, longest
-   *  elapsed first. */
+  /** ANSI live UI: shows the N in-flight theories the check most recently
+   *  worked on, repainted in place. Consolidated theories drop off the list but
+   *  are still counted in the header. Under each theory's bar, commands running
+   *  longer than `long_running_secs` are listed indented, longest elapsed first.
+   *
+   *  The shown set is kept STABLE across ticks to avoid flicker: the bucket of
+   *  the N most-recently-updated in-flight theories is computed each tick, but
+   *  their on-screen order is preserved — survivors keep their previous slots,
+   *  theories that fell out of the bucket are removed, and freshly-entering
+   *  theories are added at the top. So a run touching a steady set of <N
+   *  theories does not reshuffle them every tick (see `stable_order`). */
   class ANSI_UI(
     max_active: Int,
     out: PrintStream = System.out,
@@ -1496,6 +1512,11 @@ Usage: isabelle ic2 server attach [OPTIONS]
     /** for each theory we've ever seen: last known status. */
     private val last_state =
       scala.collection.mutable.Map.empty[String, Theory_Status]
+
+    /** Theory names currently on screen, in display order — carried across
+      * ticks so the shown set only changes at the edges (drop-outs removed,
+      * newcomers prepended) rather than being re-sorted every repaint. */
+    private var displayed: List[String] = Nil
 
     private val width: Int = term_width
 
@@ -1536,12 +1557,20 @@ Usage: isabelle ic2 server attach [OPTIONS]
       out.println(header)
       lines_drawn = 1
 
-      val active =
-        last_state.values.iterator
-          .filter(!_.done)
-          .toList
-          .sortBy(-_.percentage)
-          .take(max_active)
+      // The bucket: the N in-flight theories the check most recently touched
+      // (highest update stamp; alphabetical tiebreak among same-tick updates).
+      val inflight = last_state.values.iterator.filter(!_.done).toList
+      val bucket =
+        inflight.sortBy(n => (-n.updated, n.theory)).take(max_active).map(_.theory)
+      // Keep the display STABLE: survivors stay in their old relative order,
+      // drop-outs are removed, and theories new to the bucket are prepended
+      // (most-recently-updated first). This is (a)+(b)+(c) from the spec.
+      val bucketSet = bucket.toSet
+      val survivors = displayed.filter(bucketSet.contains)
+      val survivorSet = survivors.toSet
+      val newcomers = bucket.filterNot(survivorSet.contains)
+      displayed = newcomers ::: survivors
+      val active = displayed.flatMap(last_state.get)
 
       val name_w = (width - 50).max(20).min(60)
       for (n <- active) {

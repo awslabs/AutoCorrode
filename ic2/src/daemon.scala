@@ -866,10 +866,10 @@ Usage: isabelle ic2 server start [OPTIONS]
     private def wireEvent(io: JSON_IO)(e: Check.Event): Unit = e match {
       case Check.Event.Started(theories) =>
         io.write(JSON.Object("event" -> "started", "theories" -> theories))
-      case Check.Event.Progress(nodes, runningCommands) =>
+      case Check.Event.Progress(nodes, runningCommands, updateSeqs) =>
         io.write(JSON.Object("event" -> "progress",
           "nodes" -> nodes.map { case (n, st) =>
-            Check.nodeStatusJson(n, st, runningCommands.getOrElse(n, Nil)) }))
+            Check.nodeStatusJson(n, st, runningCommands.getOrElse(n, Nil), updateSeqs.getOrElse(n, 0L)) }))
       case Check.Event.Error(theory, file, line, message) =>
         io.write(JSON.Object("event" -> "error", "theory" -> theory) ++
           file.map(f => JSON.Object("file" -> f)).getOrElse(JSON.Object()) ++

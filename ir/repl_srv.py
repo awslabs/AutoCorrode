@@ -1615,7 +1615,7 @@ class Server:
                             claims_block = (
                                 "\n\nList of current REPLs claimed by a "
                                 "communication channel:\n"
-                                + "\n".join(f"  {ln}"
+                                + "\n".join(f"  * {ln}"
                                             for ln in claims_txt.splitlines())
                                 + "\nUse `interrupt <repl_id>` to interrupt "
                                   "and potentially free a channel.")

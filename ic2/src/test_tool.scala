@@ -1684,19 +1684,21 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *  the transition/fork offset collision. */
     private def e2e_progress_display_changes(server_name: String, fixtures: Path): Unit = {
       // (a) rendered order: three in-flight theories in a MIXED input order —
-      // the rendered frame must list them by descending percentage.
+      // the rendered frame must list them by descending last-updated stamp
+      // (not by percentage), so the display tracks where the check is
+      // actively working.
       val nodes = List(
-        Client.Theory_Status("A", 10, 5, 1, 0, 0, 0, false),
-        Client.Theory_Status("B", 60, 0, 2, 8, 0, 0, false),
-        Client.Theory_Status("C", 40, 3, 1, 4, 0, 0, false))
+        Client.Theory_Status("A", 10, 5, 1, 0, 0, 0, false, updated = 3),
+        Client.Theory_Status("B", 60, 0, 2, 8, 0, 0, false, updated = 1),
+        Client.Theory_Status("C", 40, 3, 1, 4, 0, 0, false, updated = 2))
       val frame = Client.render_progress_frame(nodes, 8)
       // First distinct theory-name letters seen after the header, in order.
       val order = frame.tail.flatMap { line =>
         List("A", "B", "C").find(t => line.contains(t + " ") || line.contains(" " + t))
       }.distinct
-      if (order.take(3) != List("B", "C", "A"))
+      if (order.take(3) != List("A", "C", "B"))
         error("render_progress_frame should sort in-flight theories by " +
-          "descending percentage; expected [B, C, A], got " +
+          "descending last-updated stamp; expected [A, C, B], got " +
           order.take(3).mkString(", ") + " in frame:\n" + frame.mkString("\n"))
 
       // (b) end-to-end: at least one `by` command from SpinTactic.thy should

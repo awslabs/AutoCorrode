@@ -196,7 +196,8 @@ object Check {
   def nodeStatusJson(
     name: Document.Node.Name,
     st: Document_Status.Node_Status,
-    runningCommands: List[RunningCommand] = Nil
+    runningCommands: List[RunningCommand] = Nil,
+    updateSeq: Long = 0L
   ): JSON.Object.T = {
     val base = JSON.Object(
       "theory" -> name.theory,
@@ -208,6 +209,9 @@ object Check {
       "finished" -> st.finished,
       "warned" -> st.warned,
       "failed" -> st.failed,
+      // Monotonic "last updated" stamp (0 if unknown); the client sorts the
+      // shown theories by this so the display tracks recent activity.
+      "update_seq" -> updateSeq,
       "consolidated" -> st.consolidated)
     if (runningCommands.isEmpty) base
     else base ++ JSON.Object("long_running" -> runningCommands.map { rc =>
@@ -246,7 +250,8 @@ object Check {
       * running commands (with elapsed time), for indented rendering under bars. */
     final case class Progress(
       nodes: List[(Document.Node.Name, Document_Status.Node_Status)],
-      runningCommands: Map[Document.Node.Name, List[RunningCommand]] = Map.empty
+      runningCommands: Map[Document.Node.Name, List[RunningCommand]] = Map.empty,
+      updateSeqs: Map[Document.Node.Name, Long] = Map.empty
     ) extends Event
     final case class Error(theory: String, file: Option[String], line: Option[Int], message: String) extends Event
     final case class Finished(ok: Boolean, reason: String) extends Event
@@ -269,6 +274,15 @@ object Check {
   private final class Job_Progress(job: Job, session: Headless.Session) extends Progress {
     private val per_theory =
       Synchronized(Map.empty[Document.Node.Name, Document_Status.Node_Status])
+    // Per-node "last updated" stamp: a monotonic sequence bumped each time a
+    // node's status actually changes, so the client can show the theories the
+    // check most recently touched (where work is happening) rather than the
+    // most-progressed ones. Not wall-clock — a sequence keeps it deterministic
+    // and cheap, and only relative order matters to the display.
+    private val update_seq =
+      Synchronized(Map.empty[Document.Node.Name, Long])
+    private val seq_counter = new java.util.concurrent.atomic.AtomicLong(0L)
+    def updateSeqOf(name: Document.Node.Name): Long = update_seq.value.getOrElse(name, 0L)
     private val error_latch = Synchronized(false)
     private val last_emit = Synchronized[Option[Long]](None)
     private val emit_interval_ms: Long = 200
@@ -315,7 +329,7 @@ object Check {
               if (cur.nonEmpty) {
                 val running = snapshotRunning(cur)
                 if (running.nonEmpty)
-                  job.fan(Event.Progress(cur.toList.sortBy(_._1.theory), running))
+                  job.fan(Event.Progress(cur.toList.sortBy(_._1.theory), running, update_seq.value))
               }
             } catch { case _: Throwable => }
             try Thread.sleep(tick_interval_ms) catch { case _: InterruptedException => return }
@@ -351,7 +365,16 @@ object Check {
       check_partial_reached()
       val updated = per_theory.change_result { cache =>
         var c = cache
-        for (name <- ns.domain) { val st = ns(name); if (!st.is_empty) c = c + (name -> st) }
+        for (name <- ns.domain) {
+          val st = ns(name)
+          // Bump the node's update stamp only when its status actually changed,
+          // so an unchanged node re-reported on a quiet tick keeps its place
+          // rather than churning to the top of the last-updated list.
+          if (!st.is_empty && !cache.get(name).contains(st)) {
+            c = c + (name -> st)
+            update_seq.change(_ + (name -> seq_counter.incrementAndGet()))
+          }
+        }
         (c, c)
       }
       updated.find { case (_, st) => st.failed > 0 } match {
@@ -369,7 +392,7 @@ object Check {
             case _ => (true, Some(now))
           }
           if (emit)
-            job.fan(Event.Progress(updated.toList.sortBy(_._1.theory), snapshotRunning(updated)))
+            job.fan(Event.Progress(updated.toList.sortBy(_._1.theory), snapshotRunning(updated), update_seq.value))
       }
     }
 
@@ -377,7 +400,7 @@ object Check {
       * remain here (the run has settled), so `runningCommands` is empty. */
     def flush_final(): Unit = {
       val cur = per_theory.value
-      if (cur.nonEmpty) job.fan(Event.Progress(cur.toList.sortBy(_._1.theory)))
+      if (cur.nonEmpty) job.fan(Event.Progress(cur.toList.sortBy(_._1.theory), Map.empty, update_seq.value))
     }
 
     /** Post-result fallback: result is failure but the live callback never saw
@@ -703,7 +726,7 @@ object Check {
         "theories" -> theories,
         "elapsed_ms" -> elapsedMs,
         "nodes" -> progress.snapshot_status.toList.sortBy(_._1.theory)
-          .map { case (n, s) => nodeStatusJson(n, s) }) ++
+          .map { case (n, s) => nodeStatusJson(n, s, Nil, progress.updateSeqOf(n)) }) ++
       (st match { case Outcome.Failed(r) if r.nonEmpty => JSON.Object("reason" -> r); case _ => JSON.Object() })
     }
   }
@@ -1069,7 +1092,7 @@ object IQ {
     def processed(nodes: List[(Document.Node.Name, Document_Status.Node_Status)]): Int =
       math.min(nodes.count { case (n, st) => job.nodeNames.contains(n) && st.consolidated }, total)
     job.subscribe {
-      case Check.Event.Progress(nodes, _) => sink(progressDict(processed(nodes), total))
+      case Check.Event.Progress(nodes, _, _) => sink(progressDict(processed(nodes), total))
       case Check.Event.Finished(ok, _) => sink(progressDict(if (ok) total else 0, total))
       case _ =>
     }
