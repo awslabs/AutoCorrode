@@ -935,6 +935,7 @@ Usage: isabelle ic2 server status [OPTIONS]
       case Some(st) =>
         Output.writeln(format_status(name, st))
         Output.writeln(format_options(st))
+        Output.writeln(format_where(st))
         Output.writeln(format_ir(st))
         if (full) print_full_nodes(name, st)
         sys.exit(0)
@@ -1040,21 +1041,32 @@ Usage: isabelle ic2 server status [OPTIONS]
     }
   }
 
-  /** Every server with a socket node: ping each (summary line + I/R line).
-   *  Informational — always exits 0, even with stale nodes present. */
+  /** Every server with a socket node: ping each (summary line + where line +
+   *  I/R line). Live servers are ordered by most-recent activity first (so a
+   *  stale server sinks to the bottom of the list, where its `last=…` age is
+   *  the reason it's there); stale-socket entries come after them, in name
+   *  order. Informational — always exits 0. */
   private def status_all(): Unit = {
     val names = Endpoint.list_names()
-    if (names.isEmpty)
+    if (names.isEmpty) {
       Output.writeln("no ic2 servers (looked in " + Endpoint.dir.expand.implode + ")")
-    else
-      for (n <- names) {
-        Daemon.ping_status(n) match {
-          case Some(st) =>
-            Output.writeln(format_status(n, st))
-            Output.writeln(format_ir(st))
-          case None => Output.writeln(n + ": stale socket (no server listening)")
-        }
-      }
+      sys.exit(0)
+    }
+    val pinged = names.map(n => n -> Daemon.ping_status(n))
+    val live: List[(String, JSON.T)] =
+      pinged.collect { case (n, Some(st)) => (n, st) }
+    val stale: List[String] = pinged.collect { case (n, None) => n }
+    // Most-recently-active first; ties (and servers that never reported the
+    // field) fall back to name order so the display is stable.
+    val ordered = live.sortBy { case (n, st) =>
+      (-JSON.long(st, "last_activity_ms").getOrElse(0L), n)
+    }
+    for ((n, st) <- ordered) {
+      Output.writeln(format_status(n, st))
+      Output.writeln(format_where(st))
+      Output.writeln(format_ir(st))
+    }
+    for (n <- stale) Output.writeln(n + ": stale socket (no server listening)")
     sys.exit(0)
   }
 
@@ -1112,6 +1124,41 @@ Usage: isabelle ic2 server status [OPTIONS]
       (if (no_build) List("no_build") else Nil) :::
       (if (no_iq) List("no_iq") else Nil)
     "    started with: " + parts.mkString("  ")
+  }
+
+  /** Third status line: where + when the server was started, and when it last
+   *  saw a real (non-status/shutdown) client op. Two absolute timestamps plus
+   *  a relative age on `last` so a stale server is easy to spot at a glance.
+   *  Older servers may not report the three fields — each falls back to a "?"
+   *  or is elided so nothing crashes on a mixed-version fleet. */
+  private def format_where(st: JSON.T): String = {
+    val cwd = JSON.string(st, "cwd").getOrElse("?")
+    val started = JSON.long(st, "started_ms").map(format_wall).getOrElse("?")
+    val last_at = JSON.long(st, "last_activity_ms").map(format_wall).getOrElse("?")
+    val last_ago =
+      JSON.long(st, "last_activity_ms")
+        .map(t => " (" + format_age(System.currentTimeMillis() - t) + " ago)")
+        .getOrElse("")
+    "    cwd=" + cwd + "  started=" + started + "  last=" + last_at + last_ago
+  }
+
+  /** Render an epoch-ms as `YYYY-MM-DD HH:mm:ss` in the local timezone, so the
+   *  timestamp reads at a glance without a mental math round-trip through UTC. */
+  private def format_wall(ms: Long): String = {
+    val zdt = java.time.Instant.ofEpochMilli(ms)
+      .atZone(java.time.ZoneId.systemDefault)
+    zdt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+  }
+
+  /** A short human age for a millisecond delta: `5s` / `3m12s` / `2h05m` /
+   *  `4d03h`, sized to the largest unit that keeps two significant components.
+   *  Negative / zero deltas render as `0s`. */
+  private def format_age(delta_ms: Long): String = {
+    val s = (delta_ms.max(0L)) / 1000
+    if (s < 60) s + "s"
+    else if (s < 3600) f"${s / 60}%dm${s % 60}%02ds"
+    else if (s < 86400) f"${s / 3600}%dh${(s % 3600) / 60}%02dm"
+    else f"${s / 86400}%dd${(s % 86400) / 3600}%02dh"
   }
 
   /** I/R status lines, if I/R was brought up: the client-facing repl.py port/token

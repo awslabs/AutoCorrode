@@ -399,7 +399,26 @@ Usage: isabelle ic2 server start [OPTIONS]
     val opts: Start_Options, val pid: Long, val build: Build_Status
   ) {
     private val start_ms: Long = System.currentTimeMillis()
+    /** Working directory of the server process at start — reported by `status`
+     *  so a user staring at several servers can tell which is which. Captured
+     *  eagerly so it reflects the launch environment even if `user.dir` mutates
+     *  later. */
+    private val cwd: String =
+      try new java.io.File(".").getCanonicalPath
+      catch { case _: Throwable =>
+        val ud = System.getProperty("user.dir"); if (ud == null) "?" else ud
+      }
+    /** Wall-clock of the last real client interaction (any op other than
+     *  status/shutdown probes). Used by `ic2 server status` to spot stale
+     *  servers. Initialised to start_ms so a freshly-started server that has
+     *  never been touched still reads as "recent" until the first status poll. */
+    private val last_activity_ms = new AtomicLong(start_ms)
     val active_connections = new AtomicLong(0L)
+
+    /** Note that the server was just interfaced with (called for every non-poll
+     *  op). status/shutdown are deliberately NOT counted so that a monitor
+     *  polling `status` doesn't mask an otherwise idle server. */
+    def note_activity(): Unit = last_activity_ms.set(System.currentTimeMillis())
 
     // Filled in when the bring-up worker completes each stage. Volatile: written
     // by the worker thread, read by connection-handler threads.
@@ -435,6 +454,13 @@ Usage: isabelle ic2 server start [OPTIONS]
         "state" -> build.phase_token,
         "pid" -> pid,
         "uptime_s" -> uptime_s,
+        // Absolute wall-clock (ms since the epoch) of server start and of the
+        // last real client interaction, plus the server's CWD at launch. Reported
+        // as ms rather than pre-formatted strings so the client controls locale
+        // / timezone / relative rendering.
+        "started_ms" -> start_ms,
+        "last_activity_ms" -> last_activity_ms.get,
+        "cwd" -> cwd,
         "busy" -> Check.busy,
         "checks_in_flight" -> (if (Check.busy) 1 else 0),
         // Active connections include the one issuing this status query.
@@ -767,6 +793,7 @@ Usage: isabelle ic2 server start [OPTIONS]
             case Some(t) =>
               JSON.string(t, "op") match {
                 case Some("check") =>
+                  state.note_activity()
                   val files = JSON.strings(t, "files").getOrElse(Nil)
                   val detach = JSON.bool(t, "detach").getOrElse(false)
                   val line = JSON.int(t, "line")
@@ -783,29 +810,38 @@ Usage: isabelle ic2 server start [OPTIONS]
                     case None => fail_check(io, not_ready_msg)
                   }
                 case Some("check_status") =>
+                  state.note_activity()
                   vlog("op=check_status")
                   io.write(check_status_reply())
                 case Some("check_attach") =>
+                  state.note_activity()
                   vlog("op=check_attach")
                   check_attach(io)
                 case Some("check_cancel") =>
+                  state.note_activity()
                   vlog("op=check_cancel")
                   io.write(check_cancel_reply())
                 case Some("query") =>
+                  state.note_activity()
                   vlog("op=query tool=" + JSON.string(t, "tool").getOrElse("<missing>"))
                   with_session(io) { (session, _) => io.write(query_reply(session, t)) }
                 case Some("repl") =>
+                  state.note_activity()
                   vlog("op=repl")
                   with_session(io) { (session, _) => io.write(repl_reply(session, t)) }
                 case Some("load-files") =>
+                  state.note_activity()
                   val files = JSON.strings(t, "files").getOrElse(Nil)
                   vlog("op=load-files: " + files.length + " file(s): " + files.mkString(", "))
                   with_session(io) { (session, resources) =>
                     io.write(load_files_reply(session, resources, files)) }
                 case Some("status") =>
+                  // Deliberately NOT counted as activity: a monitor polling
+                  // `status` shouldn't hide an otherwise idle server.
                   vlog("op=status")
                   io.write(state.status_json)
                 case Some("shutdown") =>
+                  // Also not counted: shutdown is the end of activity, not a use.
                   vlog("op=shutdown")
                   io.write(JSON.Object("event" -> "shutting_down"))
                   done = true
