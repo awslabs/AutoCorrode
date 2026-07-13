@@ -4,15 +4,15 @@
 /*  Title:      ic2/src/client.scala
 
 Client subcommands for `isabelle ic2`: `check FILE...`, `status`, `stop`.
-`check` renders one ANSI progress bar per active theory; it falls back to
-plain-text event lines on a non-TTY (or with -P).
+`check` submits work to the server and returns immediately. Live progress is
+only available through `check attach`, which is intended for human TTY use.
 
 Connects to the daemon's Unix-domain socket (discovered by name). There is no
 auth handshake — the 0700 socket directory is the access boundary.
 
-On exit (normal exit, exception, JVM shutdown) during a check, the channel
-closes and the server's cancel-on-disconnect path interrupts the in-flight
-check. There is no explicit cancel op: dropping the connection is the cancel.
+Foreground wire-protocol checks still use cancel-on-disconnect internally; the
+CLI `check` path uses detached checks instead, so automation cannot accidentally
+stream progress into a transcript.
 */
 
 package isabelle.ic2
@@ -31,7 +31,7 @@ object Client {
   private val MAX_ACTIVE_BARS: Int = 20
 
   /** Default threshold (seconds) for the long-running-command list under each
-   *  bar. Overridable per-invocation with `check --long-running SECS`. */
+   *  bar. */
   private val DEFAULT_LONG_RUNNING_SECS: Double = 5.0
 
   /** True if args request help. We intercept `help`/`--help`/`-h` in the
@@ -40,6 +40,21 @@ object Client {
    *  work uniformly across every `ic2` command. */
   private def wants_help(args: List[String]): Boolean =
     args.exists(a => a == "help" || a == "--help" || a == "-h")
+
+  private val NONINTERACTIVE_ATTACH_ENV: List[String] =
+    List("NONINTERACTIVE", "CI", "CODEX_CI", "CLAUDECODE")
+
+  private def env_marker_is_set(name: String): Boolean = {
+    val value = Isabelle_System.getenv(name).trim
+    value.nonEmpty && value != "0" && value.toLowerCase != "false"
+  }
+
+  private def noninteractive_attach_marker: Option[String] =
+    NONINTERACTIVE_ATTACH_ENV.find(env_marker_is_set).orElse {
+      val term = Isabelle_System.getenv("TERM").trim
+      if (term.isEmpty || term == "dumb") Some("TERM=" + (if (term.isEmpty) "<empty>" else term))
+      else None
+    }
 
 
   /* ---- discovery + connection ---- */
@@ -121,26 +136,23 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
 
   Options are:
     -n NAME             server name (default: the sole running server)
-    -P                  plain mode (disable ANSI progress bars)
-    --detach            submit the check and return immediately, without
-                        waiting; track it with `ic2 check status`
     --line N            check only the prefix of the (single) FILE up to
                         and including the command that ends on or before
                         source line N (1-based). Fast partial check for
-                        iterative development. Same UI + cancel semantics
-                        as a full check; commands after line N are left
+                        iterative development. Commands after line N are left
                         UNPROCESSED. Requires exactly one FILE.
-    --long-running SECS commands running longer than SECS are listed under
-                        their theory's progress bar (default 5; 0 disables)
 
-  Type-check the given .thy files against the running server; the first error
-  stops the check (exit 1). Ctrl-C closes the connection, which cancels it.
-  With --detach the check keeps running after the command returns.
+  Submit a type-check of the given .thy files to the running server and return
+  immediately. Track progress with `isabelle ic2 check status`; abort the
+  in-flight check with `isabelle ic2 check cancel`.
+
+  Live output is only available via `isabelle ic2 check attach`, which requires
+  an interactive terminal with normal terminal capabilities and is intended for
+  human users.
 
   Examples:
-    isabelle ic2 check src/MyThy.thy               # full check
-    isabelle ic2 check src/MyThy.thy --line 42     # up to line 42 only
-    isabelle ic2 check src/MyThy.thy --detach      # background it
+    isabelle ic2 check src/MyThy.thy               # submit full check
+    isabelle ic2 check src/MyThy.thy --line 42     # submit up to line 42
 
   Subcommands (in place of FILE...): status | attach | cancel — see
   `isabelle ic2 --help`.
@@ -149,22 +161,13 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
   def check(args: List[String]): Unit = {
     if (wants_help(args)) { Output.writeln(check_usage_text, stdout = true); sys.exit(2) }
     var name: Option[String] = None
-    var plain: Boolean = false
-    // `--detach`, `--long-running`, and `--line` are long options, which
-    // Isabelle's single-letter Getopts can't express; strip them ourselves
-    // first (same trick as `ic2 server start --daemon`).
-    val detach = args.contains("--detach")
-    var long_running_secs: Double = DEFAULT_LONG_RUNNING_SECS
-    val (long_running_stripped, afterLR) = extract_long_running(args) match {
-      case Some((secs, rest)) => long_running_secs = secs; (true, rest)
-      case None => (false, args)
-    }
-    val _ = long_running_stripped
-    val (line_opt, afterLine) = extract_line(afterLR)
-    val rest_args = afterLine.filterNot(_ == "--detach")
+    reject_removed_check_options(args)
+    // `--line` is a long option, which Isabelle's single-letter Getopts can't
+    // express; strip it ourselves first (same trick as `ic2 server start
+    // --daemon`).
+    val (line_opt, rest_args) = extract_line(args)
     val getopts = Getopts(check_usage_text,
-      "n:" -> (a => name = Some(a)),
-      "P"  -> (_ => plain = true))
+      "n:" -> (a => name = Some(a)))
 
     val files = getopts(rest_args)
     if (files.isEmpty) {
@@ -175,9 +178,16 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
       sys.exit(2)
     }
     val server = resolve_name(name)
-    if (detach) do_check_detach(server, files, line_opt)
-    else do_check(server, plain, files, long_running_secs, line_opt)
+    do_check_detach(server, files, line_opt)
   }
+
+  private def reject_removed_check_options(args: List[String]): Unit =
+    args.find(a => a == "-P" || a == "--detach" || a == "--long-running").foreach { opt =>
+      Output.error_message("check: option " + opt + " was removed; " +
+        "check always submits and returns. Use `isabelle ic2 check status` " +
+        "for polling or `isabelle ic2 check attach` for human live output.")
+      sys.exit(2)
+    }
 
   /** Pull an optional `--line N` from the args: returns (parsed line-or-None,
    *  args with the flag+value removed). Exits(2) if N isn't a positive integer,
@@ -197,82 +207,9 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
     }
   }
 
-  /** Pull an optional `--long-running SECS` from the args, returning the
-   *  parsed threshold + the args with both tokens removed; None if absent. */
-  private def extract_long_running(args: List[String]): Option[(Double, List[String])] = {
-    val i = args.indexOf("--long-running")
-    if (i < 0 || i + 1 >= args.length) None
-    else {
-      val v = args(i + 1)
-      v.toDoubleOption match {
-        case Some(secs) if secs >= 0 =>
-          Some((secs, args.take(i) ::: args.drop(i + 2)))
-        case _ =>
-          Output.error_message("check: --long-running SECS expects a non-negative number, got " + v)
-          sys.exit(2)
-      }
-    }
-  }
-
-  private def do_check(name: String, plain: Boolean, files: List[String],
-                       long_running_secs: Double = DEFAULT_LONG_RUNNING_SECS,
-                       line: Option[Int] = None): Unit = {
-    // Validate locally first — fail fast with the user's CWD context, before
-    // any round-trip. The server re-checks too (defence in depth).
-    val abs_files = files.map { f =>
-      if (!f.endsWith(".thy")) {
-        Output.error_message("not a .thy file: " + f); sys.exit(1)
-      }
-      val jfile = Path.explode(f).expand.absolute_file
-      if (!jfile.isFile) {
-        Output.error_message("file not found: " + f); sys.exit(1)
-      }
-      File.standard_path(jfile)
-    }
-
-    val io = open_connection(resolve_socket(name))
-
-    /* Cancel on JVM shutdown (Ctrl-C, etc.): closing the channel is the
-     * cancel — the server interrupts the in-flight check on disconnect. */
-    val sig_handler = new Thread(new Runnable {
-      def run(): Unit = try { io.close() } catch { case _: Throwable => }
-    }, "ic2-sigint")
-    Runtime.getRuntime.addShutdownHook(sig_handler)
-
-    io.write(JSON.Object("op" -> "check", "files" -> abs_files) ++
-      line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object()))
-
-    val use_tui = !plain && System.console() != null
-    val ui: Progress_UI =
-      if (use_tui) new ANSI_UI(MAX_ACTIVE_BARS, long_running_secs = long_running_secs)
-      else new Plain_UI(long_running_secs = long_running_secs)
-
-    var ok: Option[Boolean] = None
-    var reason: String = ""
-
-    try {
-      stream_check_events(io, ui, b => ok = Some(b), r => reason = r)
-    } finally {
-      ui.close()
-      try { Runtime.getRuntime.removeShutdownHook(sig_handler) }
-      catch { case _: IllegalStateException => /* shutdown in progress */ }
-      try { io.close() } catch { case _: Throwable => }
-    }
-
-    ok match {
-      case Some(true) => sys.exit(0)
-      case Some(false) =>
-        if (reason.nonEmpty) Output.error_message("check failed: " + reason)
-        sys.exit(1)
-      case None =>
-        Output.error_message("check: connection lost before completion")
-        sys.exit(3)
-    }
-  }
-
   /** Read the check event stream from `io`, rendering started/progress/error to
-   *  `ui` and reporting the terminal `finished` via setOk/setReason. Shared by
-   *  the foreground `check` and `check-attach`. Returns when `finished` or EOF. */
+   *  `ui` and reporting the terminal `finished` via setOk/setReason. Used by
+   *  `check attach`. Returns when `finished` or EOF. */
   private def stream_check_events(
     io: JSON_IO, ui: Progress_UI, setOk: Boolean => Unit, setReason: String => Unit
   ): Unit = {
@@ -292,8 +229,10 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
                 JSON.int(t, "line").getOrElse(0),
                 JSON.string(t, "message").getOrElse(""))
             case Some("finished") =>
-              setOk(JSON.bool(t, "ok").getOrElse(false))
-              setReason(JSON.string(t, "reason").getOrElse(""))
+              val ok = JSON.bool(t, "ok").getOrElse(false)
+              val reason = JSON.string(t, "reason").getOrElse("")
+              setOk(ok)
+              setReason(reason)
               done = true
             case Some("server_error") => ui.server_error(JSON.string(t, "message").getOrElse(""))
             case Some("shutting_down") => ui.note("server shutting down")
@@ -322,7 +261,7 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
           "track with: isabelle ic2 check status -n " + name)
         sys.exit(0)
       case _ =>
-        Output.error_message("check --detach failed: " +
+        Output.error_message("check submit failed: " +
           JSON.string(reply, "message").getOrElse(JSON.Format(reply)))
         sys.exit(1)
     }
@@ -381,6 +320,50 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
     (resolve_name(name), if (bars <= 0) Int.MaxValue else bars)
   }
 
+  /** Like `name_and_bars_opt`, with attach-only long-running-command display
+   *  threshold. `--long-running 0` disables the under-bar command list. */
+  private def name_bars_long_running_opt(
+    cmd: String, desc: String, args: List[String]
+  ): (String, Int, Double) = {
+    val usage = s"""
+Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
+
+  $desc
+
+  -n NAME              server name (default: the sole running server)
+  -c N                 max per-theory progress bars to show (default $DEFAULT_BARS; 0 = all)
+  --long-running SECS  list commands running longer than SECS under their
+                       theory's progress bar (default $DEFAULT_LONG_RUNNING_SECS; 0 disables)
+"""
+    if (wants_help(args)) { Output.writeln(usage, stdout = true); sys.exit(2) }
+    val (long_running_secs, rest_args) = extract_long_running_for_attach(args)
+    var name: Option[String] = None
+    var bars: Int = DEFAULT_BARS
+    val getopts = Getopts(usage,
+      "n:" -> (a => name = Some(a)),
+      "c:" -> (a => bars = Value.Int.parse(a)))
+    val rest = getopts(rest_args)
+    if (rest.nonEmpty) getopts.usage()
+    (resolve_name(name), if (bars <= 0) Int.MaxValue else bars, long_running_secs)
+  }
+
+  private def extract_long_running_for_attach(args: List[String]): (Double, List[String]) = {
+    val i = args.indexOf("--long-running")
+    if (i < 0) (DEFAULT_LONG_RUNNING_SECS, args)
+    else if (i + 1 >= args.length) {
+      Output.error_message("check attach: --long-running requires a non-negative number of seconds")
+      sys.exit(2)
+    }
+    else args(i + 1).toDoubleOption match {
+      case Some(secs) if secs >= 0 =>
+        (secs, args.take(i) ::: args.drop(i + 2))
+      case _ =>
+        Output.error_message("check attach: --long-running SECS expects a non-negative number, got " +
+          args(i + 1))
+        sys.exit(2)
+    }
+  }
+
   /** `ic2 check status`: print one static frame of the current/last check —
    *  the same "checking N theory/theories" + per-theory bar view that
    *  `check attach` streams, but rendered once and returned. Because it shows
@@ -427,17 +410,26 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
     }
   }
 
-  /** `ic2 check attach`: stream the in-flight (typically detached) check's
-   *  progress to completion, like a foreground check. Does not cancel on
-   *  disconnect. */
+  /** `ic2 check attach`: stream the in-flight check's progress to completion
+   *  for a human using an interactive terminal. Does not cancel on disconnect. */
   def check_attach(args: List[String]): Unit = {
-    val (name, bars) = name_and_bars_opt("check attach",
-      "Stream the in-flight check's progress to completion, like a foreground\n" +
-      "  check. Does NOT cancel the check on disconnect.", args)
+    val (name, bars, long_running_secs) = name_bars_long_running_opt("check attach",
+      "Stream the in-flight check's progress to completion for a human user.\n" +
+      "  Requires an interactive terminal with normal terminal capabilities;\n" +
+      "  use check status in automation or agentic workflows.", args)
+    noninteractive_attach_marker.foreach { marker =>
+      Output.error_message("check attach is disabled in non-interactive/agent environments (" +
+        marker + " is set); use `isabelle ic2 check status -n " + name + "` for polling")
+      sys.exit(2)
+    }
+    if (System.console() == null) {
+      Output.error_message("check attach requires an interactive terminal; use " +
+        "`isabelle ic2 check status -n " + name + "` for non-interactive polling")
+      sys.exit(2)
+    }
     val io = open_connection(resolve_socket(name))
     io.write(JSON.Object("op" -> "check_attach"))
-    val use_tui = System.console() != null
-    val ui: Progress_UI = if (use_tui) new ANSI_UI(bars) else new Plain_UI(bars)
+    val ui: Progress_UI = new ANSI_UI(bars, long_running_secs = long_running_secs)
     var ok: Option[Boolean] = None; var reason = ""
     try { stream_check_events(io, ui, b => ok = Some(b), r => reason = r) }
     finally { ui.close(); try { io.close() } catch { case _: Throwable => } }
@@ -1292,7 +1284,7 @@ Usage: isabelle ic2 server attach [OPTIONS]
 
   /** A single running command reported alongside its theory in a progress
     *  event. Rendered indented under that theory's bar when its `elapsed_s`
-    *  clears the client's --long-running threshold. `preview` is a single-line
+    *  clears the live UI threshold. `preview` is a single-line
     *  trimmed excerpt of the command source (empty when the daemon couldn't
     *  produce one, e.g. batch/pro-forma theory nodes), used to disambiguate
     *  otherwise-identical entries (two `by (…)` proofs on different lines). */
@@ -1402,35 +1394,6 @@ Usage: isabelle ic2 server attach [OPTIONS]
     }
     val more = if (active.size > shown.size) List(s"  ... +${active.size - shown.size} more in flight") else Nil
     header :: rows ::: more
-  }
-
-  /** No fancy UI: one event per line. `max_active` bounds how many in-flight
-   *  theories appear in each progress line (Int.MaxValue = all). Commands
-   *  running longer than `long_running_secs` are printed indented under the
-   *  progress line for their theory. */
-  class Plain_UI(
-    max_active: Int = 20,
-    long_running_secs: Double = DEFAULT_LONG_RUNNING_SECS
-  ) extends Progress_UI {
-    def started(theories: List[String]): Unit =
-      Output.writeln("checking " + theories.length + " theory/theories: " +
-        theories.mkString(", "))
-    def progress(nodes: List[Theory_Status]): Unit = {
-      // Most-recently-updated first, alphabetical tiebreak among same-tick.
-      val active = nodes.filter(n => !n.done).sortBy(n => (-n.updated, n.theory))
-      val (done, total) = (nodes.count(_.done), nodes.length)
-      val shown = active.take(max_active)
-      Output.writeln(s"[$done/$total done] " + shown.map(n =>
-        s"${n.theory} ${n.percentage}%").mkString("; "))
-      // Under each shown theory, indent its long-running commands.
-      for (n <- shown; ln <- render_long_running(n.long_running, long_running_secs))
-        Output.writeln("  [" + n.theory + "]" + ln.stripPrefix("     "))
-    }
-    def error(theory: String, file: String, line: Int, msg: String): Unit =
-      Output.error_message(s"ERROR in $theory at $file:$line\n$msg")
-    def server_error(msg: String): Unit = Output.error_message("server: " + msg)
-    def note(msg: String): Unit = Output.writeln(msg)
-    def close(): Unit = ()
   }
 
   /** ANSI live UI: shows the N in-flight theories the check most recently

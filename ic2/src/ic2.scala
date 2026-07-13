@@ -60,18 +60,17 @@ Usage: isabelle ic2 COMMAND [ARGS...]
         server status          report a server (-n NAME), or survey all
         server attach          stream a backgrounded server's console log
 
-    check [FILE...]            Type-check .thy files against the running
-                               server; first-error stop; exit 0 on success.
+    check [FILE...]            Submit .thy files to be type-checked by the
+                               running server; returns after submission.
       Variants (in place of FILE...):
         check status           report the current/last check's state
-        check attach           stream the in-flight check to completion
+        check attach           stream the in-flight check to completion;
+                               requires an interactive terminal context
         check cancel           cancel the in-flight check
       Options:
         --line N               check only the prefix of the (single) FILE
                                up to the command ending on or before source
                                line N; commands after N are left UNPROCESSED
-        --detach               submit and return immediately (poll via
-                               `check status` / `check attach`)
 
     query state-at FILE ...    Query document / proof state at a target
                                location. Location is FILE plus one of:
@@ -105,7 +104,8 @@ Usage: isabelle ic2 COMMAND [ARGS...]
   ============================== Concrete flow ============================
 
     isabelle ic2 server start --daemon -l HOL
-    isabelle ic2 check src/MyThy.thy                       # exit 0 = ok
+    isabelle ic2 check src/MyThy.thy                       # submit check
+    isabelle ic2 check status                              # poll result
     isabelle ic2 check src/MyThy.thy --line 87             # only up to 87
     isabelle ic2 query state-at src/MyThy.thy --line 87    # inspect goal
     isabelle ic2 server stop
@@ -161,7 +161,7 @@ Usage: isabelle ic2 server SUBCOMMAND [ARGS...]
       case "status" :: rest => Client.check_status(rest)
       case "attach" :: rest => Client.check_attach(rest)
       case "cancel" :: rest => Client.check_cancel(rest)
-      case _ => Client.check(args)   // FILE... [+ --detach/-n/-P], or its own --help/usage
+      case _ => Client.check(args)   // FILE... [+ --line/-n], or its own --help/usage
     }
 
   private def run_tool(args: List[String]): Unit =

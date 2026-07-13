@@ -634,6 +634,22 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       } finally io.close()
     }
 
+    private def wait_check_state(name: String, states: Set[String], deadline_secs: Int = 30): JSON.T = {
+      val deadline = System.currentTimeMillis() + deadline_secs * 1000L
+      var st = request_op(name, JSON.Object("op" -> "check_status"))
+      while (!states.contains(JSON.string(st, "state").getOrElse("")) &&
+             System.currentTimeMillis() < deadline) {
+        Thread.sleep(200)
+        st = request_op(name, JSON.Object("op" -> "check_status"))
+      }
+      if (JSON.string(st, "event") != Some("check_status"))
+        error("check_status should reply check_status, got " + JSON.Format(st))
+      if (!states.contains(JSON.string(st, "state").getOrElse("")))
+        error("check_status did not reach " + states.mkString("/") +
+          " within " + deadline_secs + "s, got " + JSON.Format(st))
+      st
+    }
+
     /** Theory names are session-qualified on the wire (e.g. "Draft.Trivial_OK");
      *  tests compare against the unqualified basename. */
     private def base_name(theory: String): String = {
@@ -1336,19 +1352,43 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       }
     }
 
-    /** The `ic2 check` CLI front door: exit 0 on success, 1 on a check failure,
-     *  2 on a usage error (no FILE). -P forces the plain UI for determinism. */
+    /** The `ic2 check` CLI front door submits and returns. Completion state is
+     *  observed with `check_status`; live `check attach` is TTY-only. */
     private def e2e_check_cli(server_name: String, fixtures: Path): Unit = {
       val ok = (fixtures + Path.basic("Trivial_OK.thy")).expand.implode
       val bad = (fixtures + Path.basic("Trivial_Fail.thy")).expand.implode
       val n = Bash.string(server_name)
 
-      val r0 = ic2("check -P -n " + n + " " + Bash.string(ok))
-      if (r0.rc != 0) error("check OK should exit 0, got " + r0.rc + " err=" + r0.err.mkString)
-      val r1 = ic2("check -P -n " + n + " " + Bash.string(bad))
-      if (r1.rc != 1) error("check Fail should exit 1, got " + r1.rc)
-      val r2 = ic2("check -P -n " + n)
+      val r0 = ic2("check -n " + n + " " + Bash.string(ok))
+      if (r0.rc != 0) error("check OK should submit with exit 0, got " + r0.rc + " err=" + r0.err.mkString)
+      val r0_text = r0.out.mkString + r0.err.mkString
+      if (!r0_text.contains("submitted"))
+        error("check OK should print submitted ack, got output=" + r0_text)
+      val s0 = wait_check_state(server_name, Set("ok"))
+      if (JSON.bool(s0, "ok") != Some(true))
+        error("submitted OK check should finish ok, got " + JSON.Format(s0))
+
+      val r1 = ic2("check -n " + n + " " + Bash.string(bad))
+      if (r1.rc != 0) error("check Fail should submit with exit 0, got " + r1.rc)
+      val s1 = wait_check_state(server_name, Set("failed"))
+      if (JSON.bool(s1, "ok") != Some(false))
+        error("submitted failing check should finish failed/ok=false, got " + JSON.Format(s1))
+
+      val r2 = ic2("check -n " + n)
       if (r2.rc != 2) error("check with no FILE should exit 2, got " + r2.rc)
+      val r3 = ic2("check -P -n " + n + " " + Bash.string(ok))
+      if (r3.rc != 2) error("check -P should be rejected as bad usage, got " + r3.rc)
+      val r4 = ic2("check --detach -n " + n + " " + Bash.string(ok))
+      if (r4.rc != 2) error("check --detach should be rejected as bad usage, got " + r4.rc)
+      val r5 = ic2("check attach -n " + n)
+      if (r5.rc != 2) error("check attach without TTY should exit 2, got " + r5.rc)
+      if (!r5.err.mkString.contains("check status"))
+        error("check attach without TTY should point to check status, got err=" + r5.err.mkString)
+      val r6 = ic2("check attach --long-running 1 -n " + n)
+      if (r6.rc != 2) error("check attach --long-running without TTY should exit 2, got " + r6.rc)
+      if (!r6.err.mkString.contains("check status"))
+        error("check attach --long-running should be accepted before the TTY guard, got err=" +
+          r6.err.mkString)
     }
 
     /** Re-checking a changed theory should preserve the unchanged processed
@@ -2654,20 +2694,23 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         // (d) CLI `ic2 check --line N` (on the same Slow.thy that (a) used,
         //     so it's already loaded; this arm tests the CLI wrapper's exit codes).
         val n = Bash.string(name)
-        val cliOk = ic2("check -P -n " + n + " " + Bash.string(file) + " --line 13")
+        val cliOk = ic2("check -n " + n + " " + Bash.string(file) + " --line 13")
         if (cliOk.rc != 0)
           error("ic2 check --line 13 should exit 0, got rc=" + cliOk.rc + " err=" + cliOk.err)
+        val cliSt = wait_check_state(name, Set("ok"))
+        if (JSON.bool(cliSt, "ok") != Some(true))
+          error("ic2 check --line 13 should finish ok, got " + JSON.Format(cliSt))
 
         // (e) Usage errors.
         //     - `--line` with no value.
-        val e1 = ic2("check -P -n " + n + " " + Bash.string(file) + " --line")
+        val e1 = ic2("check -n " + n + " " + Bash.string(file) + " --line")
         if (e1.rc != 2) error("check --line with no value: expected rc=2, got " + e1.rc)
         //     - `--line` with two FILEs.
         val other = (fixtures + Path.basic("Trivial_OK.thy")).expand.implode
-        val e2 = ic2("check -P -n " + n + " " + Bash.string(file) + " " + Bash.string(other) + " --line 3")
+        val e2 = ic2("check -n " + n + " " + Bash.string(file) + " " + Bash.string(other) + " --line 3")
         if (e2.rc != 2) error("check --line with 2 FILEs: expected rc=2, got " + e2.rc)
         //     - `--line 0`.
-        val e3 = ic2("check -P -n " + n + " " + Bash.string(file) + " --line 0")
+        val e3 = ic2("check -n " + n + " " + Bash.string(file) + " --line 0")
         if (e3.rc != 2) error("check --line 0: expected rc=2, got " + e3.rc)
 
         // (f) LINE BOUNDING — `--line N` stops evaluation at the target line.

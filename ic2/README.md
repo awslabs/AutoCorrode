@@ -10,8 +10,8 @@ serves work against it, avoiding repeated per-invocation session/heap loads.
 run side by side, with no host/port/token to configure):
 
   * **`ic2 server`** — start/stop/inspect the resident session.
-  * **`ic2 check FILE...`** — type-check `.thy` files, with live progress and a
-    scriptable exit code.
+  * **`ic2 check FILE...`** — submit `.thy` files for checking, then poll with
+    `check status`.
   * **`ic2 query SUBTOOL FILE`** — read-only diagnostics over the session.
   * **`ic2 repl-create FILE:LINE NAME`** — fork an interactive I/R REPL at a
     source location.
@@ -44,7 +44,8 @@ isabelle ic2 server start --daemon -l AutoCorrode -d AutoCorrode
 
 # Wait until the session is ready, then check a file:
 isabelle ic2 server status                  # state: building → loading → ready
-isabelle ic2 check /abs/path/to/Foo.thy     # exit 0 = ok, 1 = first error
+isabelle ic2 check /abs/path/to/Foo.thy     # submit
+isabelle ic2 check status                   # poll result
 
 # Stop:
 isabelle ic2 server stop
@@ -64,40 +65,39 @@ watch a cold build to completion).
 
 ## `ic2 check`
 
-Type-checks `.thy` files (absolute paths) against the running server, showing one
-live progress bar per theory and stopping at the first error.
+Submits `.thy` files (absolute paths) to be type-checked by the running server
+and returns immediately. Poll with `check status`; cancel with `check cancel`.
 
 ```bash
-isabelle ic2 check Foo.thy Bar.thy      # check both, stop at first error
-isabelle ic2 check Foo.thy --line 87    # partial: only up to line 87
-isabelle ic2 check Foo.thy -P           # plain output (no ANSI bars)
+isabelle ic2 check Foo.thy Bar.thy      # submit both
+isabelle ic2 check status               # state + per-theory status
+isabelle ic2 check Foo.thy --line 87    # submit partial check up to line 87
+isabelle ic2 check cancel               # abort the in-flight check
 ```
 
 `--line N` evaluates only the prefix up to line `N`, leaving the rest
 unprocessed and re-checkable — handy for iterating on the line you're editing.
-On Ctrl-C the check is cancelled and interrupted promptly; the server stays up.
 
 Exit codes drop into scripts and editor integrations:
 
 | code | meaning |
 |---|---|
-| 0 | all checks passed |
-| 1 | a check failed (a proof error was found, or the run was stopped) — **also** a bad FILE argument (not `.thy`, or does not exist) |
+| 0 | check submitted |
+| 1 | submission failed, or a bad FILE argument (not `.thy`, or does not exist) |
 | 2 | bad usage (no FILE, or `--line` with ≠1 file) |
-| 3 | server unreachable, not ready, or connection dropped mid-check |
+| 3 | server unreachable or not ready |
 
-Note the code-1 overlap: a missing or non-`.thy` path exits 1, the same as a
-real proof error. If a script must distinguish them, validate the path before
-calling `check`.
+Proof success or failure is reported by `check status`, not by the submit
+command's exit code.
 
-**Detached checks.** `--detach` submits and returns immediately; the check keeps
-running server-side after the command exits. Track it without `-n` ambiguity:
+`check attach` is the only live output path. It is intended for a human watching
+an interactive terminal with normal terminal capabilities; it rejects non-TTY,
+`TERM=dumb`, and common non-interactive/agent environments with a pointer to
+`check status` for automation or agentic workflows.
 
 ```bash
-isabelle ic2 check --detach Foo.thy     # "submitted (...)"
-isabelle ic2 check status               # state + per-theory status
-isabelle ic2 check attach               # stream to completion
-isabelle ic2 check cancel               # abort the in-flight check
+isabelle ic2 check attach                    # live terminal UI for human users
+isabelle ic2 check attach --long-running 10  # list commands running >=10s
 ```
 
 **At most one check runs at a time, server-wide** (`use_theories` is not safe to

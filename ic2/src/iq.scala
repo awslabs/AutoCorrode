@@ -231,8 +231,8 @@ object Check {
 
   /** Currently long-running commands in `name`, via the session's bound
     * `Timing_Tracker` (see it for why that stream is the right signal).
-    * Returns Nil when no tracker is bound. The threshold is applied by the
-    * CLIENT (`--long-running`), so this reports every live command. */
+    * Returns Nil when no tracker is bound. Display thresholds are applied by
+    * clients, so this reports every live command. */
   def runningCommandsFor(
     session: Session, name: Document.Node.Name
   ): List[RunningCommand] =
