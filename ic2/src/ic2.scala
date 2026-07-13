@@ -7,8 +7,6 @@ The single `isabelle ic2` tool. Dispatches to command groups:
 
   ic2 server start|stop|status     manage the headless PIDE daemon
   ic2 check [FILE...|status|attach|cancel]   run / inspect / control a check
-  ic2 load-files FILE...           parse .thy files into the session graph
-                                   without evaluating them
   ic2 query SUBTOOL ...             read-only diagnostics over the session
   ic2 repl-create FILE:LINE NAME    create an interactive I/R REPL
 
@@ -104,11 +102,6 @@ Usage: isabelle ic2 COMMAND [ARGS...]
                                diagnostics, command-info, ...).
                                `query help` for the full catalogue.
 
-    load-files FILE...         Parse .thy files into the session's document
-                               graph WITHOUT evaluating them. After loading,
-                               `query` sees the theory shape (list-files,
-                               entities, command-info, ...) at zero ML cost.
-
   ============================== Concrete flow ============================
 
     isabelle ic2 server start --daemon -l HOL
@@ -175,7 +168,6 @@ Usage: isabelle ic2 server SUBCOMMAND [ARGS...]
     args match {
       case "server" :: rest => server(rest)
       case "check" :: rest => check(rest)
-      case "load-files" :: rest => Client.load_files(rest)
       case "query" :: rest => Client.query(rest)
       case "repl-create" :: rest => Client.repl_create(rest)
       case ("help" | "-h" | "--help") :: _ | Nil => usage()

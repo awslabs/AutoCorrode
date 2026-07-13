@@ -837,12 +837,6 @@ Usage: isabelle ic2 server start [OPTIONS]
                   state.note_activity()
                   vlog("op=repl")
                   with_session(io) { (session, _) => io.write(repl_reply(session, t)) }
-                case Some("load-files") =>
-                  state.note_activity()
-                  val files = JSON.strings(t, "files").getOrElse(Nil)
-                  vlog("op=load-files: " + files.length + " file(s): " + files.mkString(", "))
-                  with_session(io) { (session, resources) =>
-                    io.write(load_files_reply(session, resources, files)) }
                 case Some("status") =>
                   // Deliberately NOT counted as activity: a monitor polling
                   // `status` shouldn't hide an otherwise idle server.
@@ -1039,21 +1033,6 @@ Usage: isabelle ic2 server start [OPTIONS]
       if (running) Check.current.foreach(_.cancel("cancelled"))
       JSON.Object("event" -> "check_cancel", "cancelled" -> running)
     }
-
-    /** Parse-only load: parse the given .thy files into the session's
-     *  document graph WITHOUT evaluating any commands. Delegates to the
-     *  shared `SessionTools.parseFiles`. On success returns the list of
-     *  loaded node paths; on failure returns a server_error. */
-    private def load_files_reply(
-      session: Headless.Session, resources: Headless.Resources, files: List[String]
-    ): JSON.Object.T =
-      SessionTools.parseFiles(session, resources, files) match {
-        case Right(names) =>
-          JSON.Object("event" -> "load-files",
-            "loaded" -> names.map(_.node),
-            "count" -> names.length)
-        case Left(msg) => server_error("load-files: " + msg)
-      }
 
     /** One-shot read-only diagnostic query — the wire counterpart of the MCP
      *  diagnostic tools. Routes `{op:query, tool, ...}` through the SAME

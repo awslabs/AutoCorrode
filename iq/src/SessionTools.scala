@@ -246,8 +246,7 @@ object SessionTools {
   /** Resolve absolute .thy paths to (Document.Node.Name, theory-string) pairs
     * against a Headless.Resources. `find_theory` matches a session-known file
     * by canonical identity; otherwise the file is qualified as DRAFT. Used by
-    * both the check pipeline (Check.resolveTargets, which delegates here) and
-    * the parse-only loader (parseFiles). */
+    * the check pipeline (Check.resolveTargets, which delegates here). */
   def resolveFileTargets(
     resources: Headless.Resources, files: List[String]
   ): Either[String, List[(Document.Node.Name, String)]] =
@@ -268,119 +267,6 @@ object SessionTools {
       })
     } catch { case ERROR(msg) => Left(msg) }
 
-
-  /* ---- parse-only loading (empty-perspective session.update) ---- */
-
-  /** Load theories into the session as PARSED-BUT-UNEVALUATED nodes.
-    *
-    * Given absolute .thy paths, resolves each to a Node.Name, reads its text,
-    * parses the header (via resources.check_thy, which validates imports
-    * exist), then issues a session.update with a perspective that is
-    * deliberately empty (required=false, visible=empty, overlays=empty). The
-    * Scala-side change_parser runs `Thy_Syntax.parse_change` on the edits and
-    * fills in `Document.Version.nodes[name].commands` — every command in the
-    * theory gets a stable id, span, and start offset — so every
-    * SessionTools query (list_files, entities, sorry_positions, proof_blocks,
-    * command_info, context_info, commandAt/resolveCommand, ...) becomes
-    * usable on the newly-loaded nodes.
-    *
-    * The prover does NOT evaluate anything (see document.ML:864-870's
-    * `still_visible orelse node_required` gate — both false here, so
-    * iterate_entries_after is elided and no `new_exec` fires). No ML work
-    * runs; command_status will report `unprocessed`, `has_goal` will be
-    * false everywhere, `results_text` will be empty. If a subsequent
-    * `ic2 check` targets these same paths, use_theories' load_theories will
-    * see they haven't changed text-wise and won't re-emit edits, so the
-    * incremental cost is limited to actual evaluation.
-    *
-    * Bypasses Headless.Resources' private required-set (deliberately — we
-    * don't want these nodes to count toward any check's consolidation
-    * requirements). A concurrent `ic2 check` on the same node still works;
-    * Headless.Resources' internal state is separate from Session's document
-    * graph, which is what we're touching via session.update. */
-  /** A theory resolved for loading: its node name, current source text, and
-    * parsed header. Intermediate for parseFiles' dependency-closure loading. */
-  private final case class LoadTheory(
-    name: Document.Node.Name, text: String, header: Document.Node.Header)
-
-  /** Resolve the transitive .thy dependency closure of `files` (requested
-    * nodes + every source import, minus session-heap-resident theories) and
-    * read each one's text + header. `check_thy` validates that every import
-    * is locatable. Returns the requested node names paired with the full
-    * dep-ordered LoadTheory list. */
-  private def resolveLoadClosure(
-    resources: Headless.Resources, files: List[String]
-  ): Either[String, (List[Document.Node.Name], List[LoadTheory])] =
-    resolveFileTargets(resources, files).flatMap { targets =>
-      try {
-        val requested = targets.map(_._1)
-        val deps = resources.dependencies(requested.map(_ -> Position.none)).check_errors
-        val transitive = deps.theories.filterNot(resources.loaded_theory)
-        val theories =
-          for (name <- transitive) yield {
-            val path = name.path
-            if (!name.is_theory) error("not a theory file: " + path)
-            val text = File.read(path.file)
-            val header = resources.check_thy(name, Scan.char_reader(text))
-            LoadTheory(name, text, header)
-          }
-        Right((requested, theories))
-      } catch { case ERROR(msg) => Left(msg) }
-    }
-
-  /** The Deps + (incremental) Edits + Perspective triple for one node — the
-    * same shape Headless.Resources.Theory.make_edits produces. `textEdits`
-    * are computed against whatever the node currently holds (unchanged text
-    * -> Nil, so a re-load is a no-op rather than stacking a second copy). */
-  private def nodeEdits(
-    session: Session, t: LoadTheory, perspective: Document.Node.Perspective_Text.T
-  ): List[Document.Edit_Text] = {
-    val existing = nodeText(session, t.name)   // "" if not loaded yet
-    val textEdits =
-      if (existing == t.text) Nil
-      else if (existing.isEmpty) Text.Edit.inserts(0, t.text)
-      else Text.Edit.replace(0, existing, t.text)
-    (t.name -> Document.Node.Deps(t.header)) ::
-    (if (textEdits.isEmpty) Nil else List(t.name -> Document.Node.Edits(textEdits))) :::
-    List(t.name -> perspective)
-  }
-
-  /** Wait (bounded) for the async change_parser to populate `name`'s commands
-    * after a session.update, so a caller that immediately queries the node
-    * doesn't race the parser. Returns true once commands are present. */
-  private def awaitParsed(
-    session: Session, name: Document.Node.Name, timeout_ms: Long = 5000
-  ): Boolean = {
-    val deadline = System.currentTimeMillis() + timeout_ms
-    var ready = false
-    while (!ready && System.currentTimeMillis() < deadline) {
-      val nd = session.snapshot(node_name = name).get_node(name)
-      if (nd != null && nd.commands.nonEmpty) ready = true else Thread.sleep(25)
-    }
-    ready
-  }
-
-  private def emptyPerspective: Document.Node.Perspective_Text.T =
-    Document.Node.Perspective(false, Text.Perspective.empty, Document.Node.Overlays.empty)
-
-  def parseFiles(
-    session: Headless.Session,
-    resources: Headless.Resources,
-    files: List[String]
-  ): Either[String, List[Document.Node.Name]] =
-    resolveLoadClosure(resources, files).flatMap { case (requested, theories) =>
-      try {
-        // Parse-only: every node gets an empty perspective (required=false,
-        // no visible ranges), so the Scala change_parser fills in command
-        // spans but the prover evaluates nothing.
-        val edits = theories.flatMap(t => nodeEdits(session, t, emptyPerspective))
-        session.update(Document.Blobs.empty, edits)
-        for (t <- theories) awaitParsed(session, t.name)
-        // Return only the explicitly-requested nodes (transitive deps are an
-        // implementation detail; the caller cares about what it asked for).
-        Right(requested)
-      } catch { case ERROR(msg) => Left(msg) }
-    }
 
   /* ---- command resolution (file + offset|pattern -> Command) ---- */
 
@@ -693,10 +579,9 @@ object SessionTools {
   }
 
   /** list_spans: every command span in the node (a flat view of the parse
-    * output), each carrying line, offset range, keyword, and source. Handy
-    * after `load-files` to inspect what the parser produced — no evaluation
-    * required. `includeIgnored` toggles whether inter-command whitespace/
-    * comment spans (Ignored_Span) appear too. */
+    * output), each carrying line, offset range, keyword, and source.
+    * `includeIgnored` toggles whether inter-command whitespace/comment spans
+    * (Ignored_Span) appear too. */
   def listSpans(
     session: Session, name: Document.Node.Name, includeIgnored: Boolean
   ): Map[String, Any] = {

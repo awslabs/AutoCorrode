@@ -158,6 +158,37 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       file.toAbsolutePath.toString
     }
 
+    /** Write a fresh theory whose expensive command is BEFORE a cheap marker
+     *  command that tests can rewrite. Used to pin incremental re-checks: after
+     *  a successful baseline check, changing only the marker must not re-run
+     *  the earlier sleep. */
+    private def fresh_incremental_recheck_theory(secs: Double = 4.0): String = {
+      val name = "Incremental_" + short_id()
+      val dir = Files.createTempDirectory("ic2_incremental")
+      val file = dir.resolve(name + ".thy")
+      val body =
+        "theory " + name + "\n" +
+        "  imports Main\n" +
+        "begin\n\n" +
+        "ML_command ‹\n" +
+        "  writeln \"IC2_INCREMENTAL_SLEEP_BEGIN\";\n" +
+        "  OS.Process.sleep (Time.fromReal " + secs + ");\n" +
+        "  writeln \"IC2_INCREMENTAL_SLEEP_END\"\n" +
+        "›\n\n" +
+        "ML_command ‹writeln \"IC2_INCREMENTAL_MARKER_0\"›\n\n" +
+        "end\n"
+      Files.write(file, body.getBytes("UTF-8"))
+      file.toAbsolutePath.toString
+    }
+
+    private def rewrite_marker(path: String, from: String, to: String): Unit = {
+      val p = Paths.get(path)
+      val oldText = new String(Files.readAllBytes(p), "UTF-8")
+      if (!oldText.contains(from))
+        error("rewrite_marker: marker not found in " + path + ": " + from)
+      Files.write(p, oldText.replace(from, to).getBytes("UTF-8"))
+    }
+
     /** Run `isabelle ic2 <args>` as a subprocess and return its result. Used by
      *  the tests that exercise the CLI front door (exit codes, printed output)
      *  rather than the wire protocol directly. */
@@ -433,6 +464,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         etest("check_ok") { e2e_check_ok(server_name, fixtures) }
         etest("check_fail") { e2e_check_fail(server_name, fixtures) }
         etest("check_cli_exit_codes") { e2e_check_cli(server_name, fixtures) }
+        etest("recheck_after_edit_skips_unchanged_prefix") { e2e_recheck_after_edit_skips_prefix(server_name) }
         etest("multi_file_first_error") { e2e_multi_file(server_name, fixtures) }
         etest("concurrent_clients") { e2e_concurrent_clients(server_name, fixtures) }
         etest("second_check_rejected") { e2e_second_check_rejected(server_name, fixtures) }
@@ -466,8 +498,6 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         test("no_iq_skips_ir") { e2e_no_iq(fixtures) }
         // MCP is opt-in: a server without --mcp has I/R but no MCP endpoint.
         test("mcp_off_by_default") { e2e_mcp_off_by_default(fixtures) }
-        // Parse-only loading: own -N server so the fixture starts UNloaded.
-        test("load_files_parse_only") { e2e_load_files_parse_only(fixtures) }
         // Partial check (`check --line N`): own -N server so we can observe
         // the post-check state (only the prefix evaluated, tail unprocessed).
         test("check_line_partial") { e2e_check_line_partial(fixtures) }
@@ -1319,6 +1349,34 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       if (r1.rc != 1) error("check Fail should exit 1, got " + r1.rc)
       val r2 = ic2("check -P -n " + n)
       if (r2.rc != 2) error("check with no FILE should exit 2, got " + r2.rc)
+    }
+
+    /** Re-checking a changed theory should preserve the unchanged processed
+     *  prefix. The baseline check evaluates an expensive ML command, then the
+     *  test rewrites only a later marker command. A correct incremental check
+     *  should finish the second run without re-running the earlier sleep. */
+    private def e2e_recheck_after_edit_skips_prefix(server_name: String): Unit = {
+      val file = fresh_incremental_recheck_theory(secs = 5.0)
+
+      val (_, firstFinished) = run_check(server_name, List(file), deadline_secs = 30)
+      if (firstFinished.flatMap(JSON.bool(_, "ok")) != Some(true))
+        error("baseline incremental check should pass, got " + firstFinished)
+
+      rewrite_marker(file, "IC2_INCREMENTAL_MARKER_0", "IC2_INCREMENTAL_MARKER_1")
+
+      val start = System.currentTimeMillis()
+      val (events, secondFinished) = run_check(server_name, List(file), deadline_secs = 4)
+      val elapsed = System.currentTimeMillis() - start
+      val replayedSleep = events.exists(t =>
+        JSON.array(t, "nodes").getOrElse(Nil).exists(n =>
+          JSON.array(n, "long_running").getOrElse(Nil).exists(rc =>
+            JSON.string(rc, "preview").exists(_.contains("IC2_INCREMENTAL_SLEEP_BEGIN")))))
+      if (secondFinished.flatMap(JSON.bool(_, "ok")) != Some(true))
+        error("post-edit re-check should finish within 4s by reusing the unchanged prefix; " +
+          "got finished=" + secondFinished + ", events=" + events.length +
+          ", elapsed_ms=" + elapsed + ", replayed_sleep=" + replayedSleep)
+      if (replayedSleep)
+        error("post-edit re-check reported the pre-edit sleep as running")
     }
 
     /** Submit OK + Fail together; first-error stop must blame Fail, never OK. */
@@ -2489,147 +2547,6 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
             if (JSON.value(ir, "mcp_port").isDefined || JSON.value(ir, "mcp_token").isDefined)
               error("without --mcp, status must not expose an MCP endpoint, got " + JSON.Format(ir))
         }
-      } finally {
-        try { proc.terminate() } catch { case _: Throwable => }
-        cleanup_server(name)
-      }
-    }
-
-    /** `ic2 load-files`: parse a .thy file into the session's document graph
-     *  WITHOUT evaluating it, then confirm that structural queries see the
-     *  theory shape and that no evaluation happened.
-     *
-     *  Uses its own -N server so we can start from a state where the fixture
-     *  is guaranteed NOT loaded (the main server's earlier tests will have
-     *  checked it). The test pins:
-     *   (a) load-files reply reports the correct count + node path;
-     *   (b) list-files then includes the node with percentage=0, unconsolidated;
-     *   (c) entities finds the expected declarations by line;
-     *   (d) command-info at a definition reports status=unprocessed (not
-     *       finished/failed — proof of no evaluation);
-     *   (e) context-info at a lemma reports has_goal=false (no STATE msgs);
-     *   (f) load-files is idempotent — a second call on the same file
-     *       succeeds (session.update sees no text change and no-ops the
-     *       edits, but the wire reply still reports it "loaded"). */
-    private def e2e_load_files_parse_only(fixtures: Path): Unit = {
-      val name = "t_lf_" + short_id()
-      val proc = start_server(name, extra_args = List("-N", "--no-iq"))
-      try {
-        wait_for_server(name, timeout = 60)
-        val file = (fixtures + Path.basic("CommandLookup.thy")).expand.implode
-
-        // Precondition: the node is not yet in the session.
-        val lfBefore = request_op(name, JSON.Object("op" -> "query", "tool" -> "list_files"))
-        val before = JSON.value(lfBefore, "result").flatMap(r => JSON.array(r, "files")).getOrElse(Nil)
-        if (before.exists(f => JSON.string(f, "node").exists(_.endsWith("CommandLookup.thy"))))
-          error("precondition: CommandLookup.thy should NOT be loaded on the fresh server yet")
-
-        // (a) load-files reply.
-        val loaded = request_op(name, JSON.Object("op" -> "load-files", "files" -> List(file)))
-        if (JSON.string(loaded, "event") != Some("load-files"))
-          error("load-files: unexpected event: " + JSON.Format(loaded))
-        if (JSON.int(loaded, "count") != Some(1))
-          error("load-files: expected count=1, got " + JSON.Format(loaded))
-        val loadedNodes = JSON.strings(loaded, "loaded").getOrElse(Nil)
-        if (!loadedNodes.exists(_.endsWith("CommandLookup.thy")))
-          error("load-files: reply 'loaded' should include CommandLookup.thy, got " + loadedNodes)
-
-        // (b) list-files now includes the node, unconsolidated at 0%.
-        //     The Scala change_parser runs asynchronously; poll briefly.
-        var found: Option[JSON.T] = None
-        val deadline = System.currentTimeMillis() + 5000
-        while (found.isEmpty && System.currentTimeMillis() < deadline) {
-          val lf = request_op(name, JSON.Object("op" -> "query", "tool" -> "list_files"))
-          found = JSON.value(lf, "result").flatMap(r => JSON.array(r, "files")).getOrElse(Nil)
-            .find(f => JSON.string(f, "node").exists(_.endsWith("CommandLookup.thy")))
-          if (found.isEmpty) Thread.sleep(150)
-        }
-        val entry = found.getOrElse(error("list-files after load: CommandLookup.thy not present within 5s"))
-        if (JSON.int(entry, "percentage").getOrElse(-1) != 0)
-          error("list-files: parse-only node should be at 0% (no eval), got " + JSON.int(entry, "percentage"))
-        if (JSON.bool(entry, "consolidated") != Some(false))
-          error("list-files: parse-only node should be unconsolidated, got " + JSON.Format(entry))
-
-        // (c) entities finds the expected declarations.
-        val ents = request_op(name, JSON.Object("op" -> "query", "tool" -> "get_entities",
-          "path" -> "CommandLookup.thy"))
-        val entities = JSON.value(ents, "result").flatMap(r => JSON.array(r, "entities")).getOrElse(Nil)
-        val entKeys = entities.flatMap(e =>
-          for (kw <- JSON.string(e, "keyword"); nm <- JSON.string(e, "name")) yield (kw, nm))
-        for (expected <- List(("definition", "foo"), ("definition", "bar"),
-                              ("definition", "p"), ("definition", "q"),
-                              ("lemma", "apply_style"), ("lemma", "structured"))) {
-          if (!entKeys.contains(expected))
-            error("entities: parse-only node should expose " + expected + ", got " + entKeys)
-        }
-
-        // (d) command-info at a definition line reports status=unprocessed —
-        //     the definitive signal that no evaluation happened. `finished`/
-        //     `failed` would indicate the prover ran the command.
-        val ci = request_op(name, JSON.Object("op" -> "query", "tool" -> "get_command_info",
-          "path" -> "CommandLookup.thy", "line" -> 5))
-        val ciR = JSON.value(ci, "result").getOrElse(JSON.Object())
-        val status = JSON.value(ciR, "status").flatMap(st => JSON.string(st, "summary")).getOrElse("?")
-        if (status != "unprocessed")
-          error(s"command-info --line 5: expected status=unprocessed on a parse-only node, got '$status' (full reply: ${JSON.Format(ciR)})")
-        val src = JSON.string(ciR, "source").getOrElse("")
-        if (!src.contains("foo = 0"))
-          error("command-info --line 5: source should be the definition body, got: " + src)
-
-        // (e) context-info reports has_goal=false — parse-only has no STATE msgs.
-        val ctx = request_op(name, JSON.Object("op" -> "query", "tool" -> "get_context_info",
-          "path" -> "CommandLookup.thy", "line" -> 12))
-        val ctxR = JSON.value(ctx, "result").getOrElse(JSON.Object())
-        if (JSON.bool(ctxR, "has_goal") != Some(false))
-          error(s"context-info: parse-only lemma should have has_goal=false, got ${JSON.Format(ctxR)}")
-
-        // (f) Idempotent: a second load-files on the same file still succeeds.
-        val loaded2 = request_op(name, JSON.Object("op" -> "load-files", "files" -> List(file)))
-        if (JSON.string(loaded2, "event") != Some("load-files"))
-          error("load-files (2nd call): expected event=load-files, got " + JSON.Format(loaded2))
-        if (JSON.int(loaded2, "count") != Some(1))
-          error("load-files (2nd call): expected count=1, got " + JSON.Format(loaded2))
-
-        // (g) `server status --full` displays parse-only nodes with a `parsed`
-        //     flag. The heap-node filter requires `unprocessed==0` to exclude
-        //     them: TRUE for heap nodes (no PIDE commands tracked), FALSE for
-        //     parse-only nodes (every command is unprocessed) — so they are not
-        //     mistaken for heap-resident library nodes despite the same all-zero
-        //     percentage/finished/failed/warned shape.
-        val fullOut = ic2("server status --full -n " + Bash.string(name))
-        if (fullOut.rc != 0)
-          error("server status --full: expected rc=0, got " + fullOut.rc + " err=" + fullOut.err)
-        val fullText = fullOut.out + fullOut.err
-        if (!fullText.contains("Draft.CommandLookup"))
-          error("server status --full should now list the parse-only node, got:\n" + fullText)
-        if (!fullText.contains("parsed"))
-          error("server status --full should tag parse-only nodes with 'parsed', got:\n" + fullText)
-        if (!fullText.contains("0%"))
-          error("server status --full: parse-only node should be at 0%, got:\n" + fullText)
-
-        // (h) `list-files` now emits `unprocessed` and `running` fields (added
-        //     to distinguish parse-only from heap-resident). Pin the parse-
-        //     only shape: unprocessed>0, running=0.
-        val lfNow = request_op(name, JSON.Object("op" -> "query", "tool" -> "list_files"))
-        val loadedEntry = JSON.value(lfNow, "result").flatMap(r => JSON.array(r, "files")).getOrElse(Nil)
-          .find(f => JSON.string(f, "node").exists(_.endsWith("CommandLookup.thy")))
-          .getOrElse(error("list-files: CommandLookup.thy missing"))
-        if (JSON.int(loadedEntry, "unprocessed").getOrElse(0) <= 0)
-          error("list-files: parse-only node should have unprocessed>0, got " + JSON.Format(loadedEntry))
-        if (JSON.int(loadedEntry, "running") != Some(0))
-          error("list-files: parse-only node should have running=0, got " + JSON.Format(loadedEntry))
-
-        // (i) CLI-side: load-files exit codes.
-        //   - Missing FILE -> exit 2 (usage).
-        //   - Unknown/non-existent file -> exit 1 (local pre-check).
-        //   - Not a .thy file -> exit 1.
-        val n = Bash.string(name)
-        if (ic2("load-files -n " + n).rc != 2)
-          error("load-files with no FILE should exit 2")
-        if (ic2("load-files -n " + n + " /no/such/path/Foo.thy").rc != 1)
-          error("load-files on non-existent file should exit 1")
-        if (ic2("load-files -n " + n + " " + Bash.string(file.replace(".thy", ""))).rc != 1)
-          error("load-files on non-.thy path should exit 1")
       } finally {
         try { proc.terminate() } catch { case _: Throwable => }
         cleanup_server(name)

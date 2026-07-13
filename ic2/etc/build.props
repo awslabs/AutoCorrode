@@ -13,6 +13,7 @@ sources = \
   src/SessionClient.scala \
   src/json_io.scala \
   src/endpoint.scala \
+  src/ic2_use_theories.scala \
   src/iq.scala \
   src/daemon.scala \
   src/client.scala \

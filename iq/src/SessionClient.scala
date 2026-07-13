@@ -101,8 +101,8 @@ final class SessionClient(session: Session, server: McpServer) {
 
     McpTool("list_spans",
       "Flat list of every parsed command span in a theory, with line, offset " +
-        "range, keyword, and source. Useful after `load_files` to inspect the " +
-        "raw parse output. `include_ignored` (default false) toggles inter-" +
+        "range, keyword, and source. Useful for inspecting the raw parse " +
+        "output. `include_ignored` (default false) toggles inter-" +
         "command whitespace/comment spans.",
       schema(Map(pathParam,
         "include_ignored" -> bool("Include Ignored_Span (whitespace/comments); default false")),

@@ -13,8 +13,6 @@ run side by side, with no host/port/token to configure):
   * **`ic2 check FILE...`** — type-check `.thy` files, with live progress and a
     scriptable exit code.
   * **`ic2 query SUBTOOL FILE`** — read-only diagnostics over the session.
-  * **`ic2 load-files FILE...`** — parse theories into the graph without
-    evaluating, so structural queries work at near-zero cost.
   * **`ic2 repl-create FILE:LINE NAME`** — fork an interactive I/R REPL at a
     source location.
 
@@ -143,19 +141,7 @@ $ isabelle ic2 query diagnostics Foo.thy --json | jq .      # raw payload
 The selection tools take one of `--offset N` / `--line N` / `--pattern P` to
 point at a command; `--line N` resolves to the command ending on or before that
 line (as jEdit does). The FILE must be a loaded session node — check it
-(`ic2 check`) or parse it (`ic2 load-files`) first.
-
-## `ic2 load-files`
-
-Parses `.thy` files into the document graph **without evaluating any commands** —
-no ML runs, no proof state. The structural `query` subtools then work on the
-loaded nodes at near-zero cost, and a later `ic2 check` pays only the evaluation
-cost, not the parse cost.
-
-```bash
-isabelle ic2 load-files Foo.thy Bar.thy
-isabelle ic2 load-files Foo.thy --print   # also dump each node's parsed spans
-```
+(`ic2 check`) first.
 
 ## `ic2 repl-create`
 
@@ -231,7 +217,7 @@ With `--mcp` (opt-in, off by default), the server also stands up a generic
     I/Q exposes;
   * **session diagnostic tools** — `list_files`, `get_diagnostics`,
     `get_sorry_positions`, `get_entities`, `get_proof_blocks`,
-    `get_command_info`, `get_state_at`, `load_files`, `status`, etc. These read
+    `get_command_info`, `get_state_at`, `status`, etc. These read
     only the document snapshot (base PIDE, no jEdit), so the identical code
     serves ic2's headless session and I/Q's live PIDE session — the `query` CLI
     routes through the same dispatch;
@@ -328,7 +314,7 @@ src/ic2.scala       — the `isabelle ic2` front door (subcommand dispatch)
 src/daemon.scala    — `ic2 server start`: daemon, --daemon launch, status op
 src/iq.scala        — I/R + MCP bring-up (IRLauncher, McpServer + tools) and the
                       single-slot Check model (Job, cancel/reset, --line worker)
-src/client.scala    — check / query / load-files / server / repl-create + UIs
+src/client.scala    — check / query / server / repl-create + UIs
 src/endpoint.scala  — socket-path discovery + the 0700 directory
 src/json_io.scala   — newline-delimited JSON over a socket channel
 src/test_tool.scala — `isabelle ic2_test` runner

@@ -73,9 +73,8 @@ object Check {
    *   (b) cancelViaEdit() — reclaims a still-running forked proof after stop().
    */
 
-  /** Delegates to `SessionTools.resolveFileTargets`, which is the shared
-    * file→(Node.Name, theory-string) resolver used by both this check
-    * pipeline and the parse-only loader (`SessionTools.parseFiles`). */
+  /** Delegates to `SessionTools.resolveFileTargets`, the shared
+    * file→(Node.Name, theory-string) resolver used by the check pipeline. */
   def resolveTargets(
     resources: Headless.Resources, files: List[String]
   ): Either[String, List[(Document.Node.Name, String)]] =
@@ -405,7 +404,7 @@ object Check {
 
     /** Post-result fallback: result is failure but the live callback never saw
       * it (consolidation on the final tick). Emit the first error, once. */
-    def emit_post_result_error(result: Headless.Use_Theories_Result): Unit =
+    def emit_post_result_error(result: IC2_Use_Theories.Result): Unit =
       result.nodes.find { case (_, st) => st.failed > 0 } match {
         case Some((name, _)) => if (claim_error()) emit_error_from(name, Some(result.snapshot(name)))
         case None =>
@@ -532,20 +531,22 @@ object Check {
       t.start()
     }
 
-    /** The Full-mode worker: run `use_theories` and classify the outcome from
+    /** The Full-mode worker: run IC2's copied `use_theories` and classify the outcome from
       * its result + the observed cancel/first-error flags. */
     private def full_body(theoryStrings: List[String]): Runnable = new Runnable {
       def run(): Unit = {
         val result =
-          try Exn.Res(session.use_theories(theoryStrings,
+          try Exn.Res(IC2_Use_Theories.use_theories(session,
+            resources.getOrElse(error("check job missing Headless.Resources")), theoryStrings,
             qualifier = Sessions.DRAFT, master_dir = "",
-            check_delay = Time.seconds(0.2), watchdog_timeout = Time.seconds(0),
+            check_delay = Time.seconds(0.2), check_limit = session.default_check_limit,
+            watchdog_timeout = Time.seconds(0),
             nodes_status_delay = Time.seconds(0.2), progress = progress))
           catch { case e: Throwable => Exn.Exn(e) }
           finally {
             progress.stop_ticker()   // does NOT set progress.stopped
             progress.flush_final()
-            // use_theories has returned (its finally ran unload_theories, so
+            // IC2_Use_Theories has returned (its finally ran unload_theories, so
             // the node is no longer required) — reclaim any still-running fork
             // now via a text-changing tail edit. No-op unless something is
             // still executing (i.e. this check was cancelled mid-flight).
@@ -583,7 +584,7 @@ object Check {
 
     /** The Partial-mode worker for `check FILE --line N`.
       *
-      * Runs a normal `use_theories([target])` — which loads and evaluates the
+      * Runs a normal IC2 copied `use_theories([target])` — which loads and evaluates the
       * target's whole dependency closure exactly like a full check, so the
       * prefix type-checks and Headless.Resources' bookkeeping stays
       * consistent (no direct session.update, so no double-load desync with a
@@ -618,10 +619,12 @@ object Check {
         val out =
           try {
             arm_target_resolver(p)
-            val result: Exn.Result[Headless.Use_Theories_Result] =
-              try Exn.Res(session.use_theories(List(p.targetTheory),
+            val result: Exn.Result[IC2_Use_Theories.Result] =
+              try Exn.Res(IC2_Use_Theories.use_theories(session,
+                resources.getOrElse(error("partial check job missing Headless.Resources")), List(p.targetTheory),
                 qualifier = Sessions.DRAFT, master_dir = "",
-                check_delay = Time.seconds(0.2), watchdog_timeout = Time.seconds(0),
+                check_delay = Time.seconds(0.2), check_limit = session.default_check_limit,
+                watchdog_timeout = Time.seconds(0),
                 nodes_status_delay = Time.seconds(0.2), progress = progress))
               catch { case e: Throwable => Exn.Exn(e) }
             classify_partial(result)
@@ -678,7 +681,7 @@ object Check {
       * SUCCESS — the target was reached, the tail was intentionally
       * abandoned. Everything else (first-error stop, other cancel reasons,
       * genuine interrupts) surfaces as failure, matching Full mode. */
-    private def classify_partial(result: Exn.Result[Headless.Use_Theories_Result]): Outcome =
+    private def classify_partial(result: Exn.Result[IC2_Use_Theories.Result]): Outcome =
       result match {
         case Exn.Res(r) =>
           if (progress.error_emitted) Outcome.Failed("first-error stop")
@@ -755,7 +758,8 @@ object Check {
     if (busy) Left("a check is already in flight; cancel it before submitting another")
     else if (files.isEmpty) Left("empty files list")
     else resolveTargets(resources, files).map { resolved =>
-      val job = new Job(resolved.map(_._1.theory), resolved.map(_._1), session)
+      val job = new Job(resolved.map(_._1.theory), resolved.map(_._1), session,
+        resources = Some(resources))
       slot.set(Some(job))
       job.start(resolved.map(_._2))
       job
@@ -1055,7 +1059,6 @@ object IQ {
           .flatMap(_ => server.register(checkAsyncTool(session, resources, progress)))
           .flatMap(_ => server.register(checkStatusTool))
           .flatMap(_ => server.register(checkCancelTool))
-          .flatMap(_ => server.register(loadFilesTool(session, resources, progress)))
           .flatMap(_ => new SessionClient(session, server).register())
           .flatMap(_ => new IRTools(server, conn).register())
       registration match {
@@ -1229,41 +1232,6 @@ object IQ {
           "cancelled" -> running,
           "message" -> (if (running) "cancellation requested" else "no check running"))))
       })
-
-  /** MCP `load_files`: parse the given .thy files into the session's document
-    * graph without evaluating them. Wraps `SessionTools.parseFiles`. On
-    * success returns `{loaded: [<node paths>], count: N}`; on failure the
-    * tool returns an isError result carrying the resolution/header-parse
-    * message. */
-  private def loadFilesTool(
-    session: Headless.Session, resources: Headless.Resources, log: Progress
-  ): McpTool =
-    McpTool(
-      name = "load_files",
-      description = "Parse .thy files into the session's document graph " +
-        "WITHOUT evaluating any commands. The Scala side splits each theory " +
-        "into commands (fixing spans/IDs/offsets), so `list_files`, " +
-        "`get_entities`, `get_command_info`, and friends can then see the " +
-        "theory shape — but no proof state is produced, no ML work runs. Use " +
-        "for cheap structural exploration; call `check` afterwards to " +
-        "actually evaluate. Files must be absolute .thy paths. Header " +
-        "imports must be locatable in the session.",
-      inputSchema = Map(
-        "type" -> "object",
-        "properties" -> Map(
-          "files" -> Map("type" -> "array", "items" -> Map("type" -> "string"),
-            "description" -> "Absolute paths of .thy files to parse-load")),
-        "required" -> List("files"),
-        "additionalProperties" -> false),
-      handler = params =>
-        SessionTools.parseFiles(session, resources, checkFiles(params)) match {
-          case Left(msg) => Left("load_files: " + msg)
-          case Right(names) =>
-            log.echo("[mcp] load-files: " + names.length + " theory node(s)")
-            Right(McpToolResult.fromMap(Map(
-              "loaded" -> names.map(_.node),
-              "count" -> names.length)))
-        })
 
   /* ---- check param helpers (shared by check / check_async) ---- */
 

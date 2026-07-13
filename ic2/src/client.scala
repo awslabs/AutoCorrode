@@ -490,106 +490,6 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N]
     }
 
 
-  /* ========================== load-files =========================== */
-
-  private val load_files_usage_text: String = """
-Usage: isabelle ic2 load-files [OPTIONS] FILE...
-
-  Options are:
-    -n NAME             server name (default: the sole running server)
-    --print             after loading, print the parsed command spans of
-                        each loaded node (line, offset range, keyword,
-                        source) — same output as `ic2 query spans FILE`
-    --include-ignored   with --print, include inter-command whitespace/
-                        comment spans too (Ignored_Span)
-
-  Parse the given .thy files into the running server's document graph
-  WITHOUT evaluating any commands: the Scala side splits each theory into
-  its commands (fixing spans, IDs, offsets, line positions), but no ML
-  process runs and no proof state is produced. After loading:
-
-    - `ic2 query list-files` lists the newly-loaded nodes.
-    - `ic2 query entities|sorry|spans|proof-blocks|command-info|state-at`
-      work on the loaded nodes (with proof/status fields empty).
-
-  A subsequent `ic2 check` on the same files will pay only the evaluation
-  cost, not the parse cost. Header imports are checked (they must be
-  locatable in the session), but their bodies aren't evaluated either.
-
-  Exit codes: 0 (loaded); 1 (bad FILE: not .thy, or does not exist); 2 (usage:
-  no FILE, or --include-ignored without --print); 3 (server-side error, e.g.
-  header parse failed).
-"""
-
-  /** `ic2 load-files FILE...` — parse the given .thy files into the session's
-   *  document graph, without evaluating them. Same file-resolution shape as
-   *  `ic2 check`. With `--print`, follows up with a `list_spans` query for
-   *  every loaded node so the raw parse output is visible without a second
-   *  invocation. */
-  def load_files(args: List[String]): Unit = {
-    if (wants_help(args)) { Output.writeln(load_files_usage_text, stdout = true); sys.exit(2) }
-    var name: Option[String] = None
-    // `--print` and `--include-ignored` are long options (Getopts is single-
-    // letter only); strip them ourselves first.
-    val print_spans = args.contains("--print")
-    val include_ignored = args.contains("--include-ignored")
-    if (include_ignored && !print_spans) {
-      Output.error_message("load-files: --include-ignored requires --print")
-      sys.exit(2)
-    }
-    val rest_args = args.filterNot(a => a == "--print" || a == "--include-ignored")
-    val getopts = Getopts(load_files_usage_text,
-      "n:" -> (a => name = Some(a)))
-    val files = getopts(rest_args)
-    if (files.isEmpty) {
-      Output.error_message("load-files: at least one FILE required"); sys.exit(2)
-    }
-    // Same local validation as `check`: absolute .thy, exists.
-    val abs_files = files.map { f =>
-      if (!f.endsWith(".thy")) { Output.error_message("not a .thy file: " + f); sys.exit(1) }
-      val jfile = Path.explode(f).expand.absolute_file
-      if (!jfile.isFile) { Output.error_message("file not found: " + f); sys.exit(1) }
-      File.standard_path(jfile)
-    }
-    val server = resolve_name(name)
-    val reply = request(server, JSON.Object("op" -> "load-files", "files" -> abs_files))
-    JSON.string(reply, "event") match {
-      case Some("load-files") =>
-        val loaded = JSON.strings(reply, "loaded").getOrElse(Nil)
-        Output.writeln("loaded " + loaded.length + " theory node(s):")
-        for (n <- loaded) Output.writeln("  " + n, stdout = true)
-        if (print_spans) print_loaded_spans(server, loaded, include_ignored)
-        sys.exit(0)
-      case _ =>
-        Output.error_message(JSON.string(reply, "message").getOrElse("load-files failed: " + JSON.Format(reply)))
-        sys.exit(3)
-    }
-  }
-
-  /** After `load-files --print`: fetch and render the `list_spans` result for
-   *  each loaded node. Uses the SAME query pipeline `ic2 query spans` does —
-   *  the wire tool, param map, and human renderer — so its output stays
-   *  byte-identical between the two entry points. */
-  private def print_loaded_spans(
-    server: String, nodes: List[String], include_ignored: Boolean
-  ): Unit = {
-    for (node <- nodes) {
-      qout("")
-      val params: List[(String, JSON.T)] =
-        ("path" -> (node: JSON.T)) ::
-        (if (include_ignored) List(("include_ignored" -> (true: JSON.T))) else Nil)
-      val reply = request(server, JSON.Object(
-        (("op" -> "query") :: ("tool" -> "list_spans") :: params): _*))
-      JSON.value(reply, "result") match {
-        case Some(result) => render_query("spans", result)
-        case None =>
-          Output.error_message("load-files --print: " +
-            JSON.string(reply, "message").getOrElse("no result for " + node))
-      }
-    }
-  }
-
-
   /* ============================ query ============================= */
 
   private val QUERY_TOOLS: List[(String, String)] = List(
@@ -972,8 +872,8 @@ Usage: isabelle ic2 server status [OPTIONS]
 
     // Column-aligned node table: name, bar, %, and finished/failed/warned
     // tallies. `unprocessed` is carried too (as tuple position 8) so the
-    // heap-node filter below can distinguish a parse-only node (has commands
-    // to process) from a fully heap-resident node (nothing tracked).
+    // heap-node filter below can distinguish active document nodes from fully
+    // heap-resident nodes (nothing tracked).
     val allRows = files.map { f =>
       (JSON.string(f, "theory").orElse(JSON.string(f, "node")).getOrElse("?"),
        JSON.int(f, "percentage").getOrElse(0),
@@ -987,10 +887,6 @@ Usage: isabelle ic2 server status [OPTIONS]
     // Omit heap/library nodes: those already resident in the prebuilt heap
     // show up in the document graph but have no PIDE commands tracked in this
     // session — every counter is zero AND `unprocessed == 0` (nothing to do).
-    // A parse-only node loaded via `ic2 load-files` has the same zeros for
-    // finished/failed/warned/consolidated but `unprocessed > 0` (every command
-    // is tracked, none evaluated), so it survives the filter and shows up as
-    // a real (0%) row rather than being folded into the "heap omitted" count.
     val rows = allRows.filterNot { case (_, pct, fin, failed, warned, cons, _, unproc) =>
       pct == 0 && fin == 0 && failed == 0 && warned == 0 && !cons && unproc == 0
     }
