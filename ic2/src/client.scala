@@ -1082,13 +1082,15 @@ Usage: isabelle ic2 server status [OPTIONS]
     // A server that isn't yet "ready" is still coming up (heap build / session
     // load) or failed: report the phase + a one-line build readout instead of
     // the idle/busy activity, so a client polling during a cold build sees it.
+    // The phase is emitted as `state=…` first thing after the name, so a
+    // reader scanning for readiness never has to hunt for it.
     val state = JSON.string(st, "state").getOrElse("ready")
     val activity =
-      if (state != "ready") state + format_build(st)
+      if (state != "ready") "STARTING UP" + format_build(st)
       else if (busy) "busy(" + cif + " check" + (if (cif == 1) "" else "s") + ")"
       else "idle"
-    name + ": session=" + session + " pid=" + pid + " up=" + up + "s " +
-      activity + " conns=" + conns
+    name + ": state=" + state + " session=" + session + " pid=" + pid +
+      " up=" + up + "s " + activity + " conns=" + conns
   }
 
   /** The compact build readout appended while a server is not yet ready: the

@@ -675,7 +675,15 @@ Usage: isabelle ic2 server start [OPTIONS]
                   case None => state.bind_ir(None, None)
                 }
               }
-              if (live) { build_status.set_phase(Phase.Ready); progress.echo("Ready.") }
+              if (live) {
+                build_status.set_phase(Phase.Ready)
+                // Count reaching Ready as an activity so `last=` doesn't
+                // display the whole heap-build wall-clock as "inactivity" the
+                // moment the server first becomes usable — until a real op
+                // arrives, "last" is the readiness transition, not launch.
+                state.note_activity()
+                progress.echo("Ready.")
+              }
             }
           }
         }
