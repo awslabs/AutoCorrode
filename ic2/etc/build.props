@@ -7,6 +7,7 @@ sources = \
   src/McpProtocol.scala \
   src/McpServer.scala \
   src/IQNormalization.scala \
+  src/Extended_Query_Operation.scala \
   src/IRClient.scala \
   src/IRTools.scala \
   src/SessionTools.scala \

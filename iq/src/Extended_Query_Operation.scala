@@ -11,7 +11,19 @@
 
    - Allow query to run at arbitrary command, not only the current one
    - Capture error output sent to special overlay file
-*/
+   - Generic over an `isabelle.Session` (works for the live PIDE session in
+     Isabelle/jEdit and a headless `Headless.Session` alike). The few
+     host-specific capabilities a query operation needs — mutate the node
+     perspective/overlays, flush pending edits, and marshal work onto the host's
+     document thread — are abstracted behind `Extended_Query_Operation.Host`.
+     jEdit supplies a Host backed by its `Editor`; a headless caller supplies one
+     backed by `session.update`.
+
+   The caret-driven entry points of the original (`apply_query` against the
+   current command, `locate_query` via a GUI hyperlink) are intentionally NOT
+   here: they are editor-specific. Callers resolve the target command themselves
+   (any way they like) and drive `apply_query_at_command`. In `package isabelle`
+   so it is shareable into `package isabelle.ic2`. */
 
 package isabelle
 
@@ -36,11 +48,32 @@ object Extended_Query_Operation {
     output: List[XML.Tree] = Nil,
     status: Status = Status.inactive,
     exec_id: Document_ID.Exec = Document_ID.none)
+
+  /** The host-specific capabilities a query operation needs, beyond the generic
+    * `Session`. jEdit backs these with its `Editor` / `Document_Model` (so overlay
+    * edits ride jEdit's own perspective flushes); a headless host backs them with
+    * direct `session.update` calls.
+    *
+    *   - `insert_overlay` / `remove_overlay`: add/drop the print-function overlay on
+    *     a command (a node perspective mutation). Inserting an overlay also makes
+    *     the command visible, so the print function runs even off-screen / headless
+    *     (Thy_Syntax.command_perspective folds overlay-bearing commands into the
+    *     visible set).
+    *   - `flush`: push pending perspective/overlay edits to the prover.
+    *   - `require_dispatcher` / `send_dispatcher`: run a body on the host's document
+    *     thread. jEdit requires the GUI thread; a headless host can run inline. */
+  trait Host {
+    def insert_overlay(command: Command, fn: String, args: List[String]): Unit
+    def remove_overlay(command: Command, fn: String, args: List[String]): Unit
+    def flush(): Unit
+    def require_dispatcher[A](body: => A): A
+    def send_dispatcher(body: => Unit): Unit
+  }
 }
 
 class Extended_Query_Operation(
-  editor: Editor,
-  editor_context: editor.Context,
+  session: Session,
+  host: Extended_Query_Operation.Host,
   operation_name: String,
   consume_status: Extended_Query_Operation.Status => Unit,
   consume_output: (Document.Snapshot, Command.Results, List[XML.Elem]) => Unit,
@@ -51,7 +84,7 @@ class Extended_Query_Operation(
   def get_print_function: String = print_function
 
 
-  /* implicit state -- owned by editor thread */
+  /* implicit state -- owned by the host dispatcher */
 
   private val current_state = Synchronized(Extended_Query_Operation.State.empty)
 
@@ -60,7 +93,7 @@ class Extended_Query_Operation(
   private def remove_overlay(): Unit = {
     val state = current_state.value
     for (command <- state.location) {
-      editor.remove_overlay(command, print_function, state.instance :: state.query)
+      host.remove_overlay(command, print_function, state.instance :: state.query)
     }
   }
 
@@ -68,7 +101,7 @@ class Extended_Query_Operation(
   /* content update */
 
   private def content_update(): Unit = {
-    editor.require_dispatcher {}
+    host.require_dispatcher {}
 
     /* snapshot */
 
@@ -77,7 +110,7 @@ class Extended_Query_Operation(
     val (snapshot, command_results, results, errors, removed) =
       state0.location match {
         case Some(cmd) =>
-          val snapshot = editor.node_snapshot(cmd.node_name)
+          val snapshot = session.snapshot(node_name = cmd.node_name)
           val command_results = snapshot.command_results(cmd)
 
           val results = (for {
@@ -193,20 +226,22 @@ class Extended_Query_Operation(
   /* query operations */
 
   def cancel_query(): Unit =
-    editor.require_dispatcher { editor.session.cancel_exec(current_state.value.exec_id) }
+    host.require_dispatcher { session.cancel_exec(current_state.value.exec_id) }
 
-  // New method that allows specifying the command to apply the query to
+  // Run the query against an explicitly-resolved command. Inserting the overlay
+  // makes that command visible, so the print function runs regardless of viewport
+  // or (headless) empty perspective.
   def apply_query_at_command(command: Command, query: List[String]): Unit = {
-    editor.require_dispatcher {}
+    host.require_dispatcher {}
 
     cleanup_state()
 
     val state = Extended_Query_Operation.State.make(command, query)
     current_state.change(_ => state)
-    editor.insert_overlay(command, print_function, state.instance :: query)
+    host.insert_overlay(command, print_function, state.instance :: query)
 
     consume_status(current_state.value.status)
-    editor.flush()
+    host.flush()
   }
 
   // Helper method for cleanup
@@ -215,36 +250,6 @@ class Extended_Query_Operation(
     current_state.change(_ => Extended_Query_Operation.State.empty)
     consume_output(Document.Snapshot.init, Command.Results.empty, Nil)
     consume_status(Extended_Query_Operation.Status.inactive)
-  }
-
-  // Re-implemented apply_query method using apply_query_at_command
-  def apply_query(query: List[String]): Unit = {
-    editor.require_dispatcher {}
-
-    editor.current_node_snapshot(editor_context) match {
-      case Some(snapshot) =>
-        editor.current_command(editor_context, snapshot) match {
-          case Some(command) =>
-            apply_query_at_command(command, query)
-          case None =>
-            // No command selected, just clean up
-            cleanup_state()
-        }
-      case None =>
-        // No snapshot available, just clean up
-        cleanup_state()
-    }
-  }
-
-  def locate_query(): Unit = {
-    editor.require_dispatcher {}
-
-    val state = current_state.value
-    for {
-      command <- state.location
-      snapshot = editor.node_snapshot(command.node_name)
-      link <- editor.hyperlink_command(snapshot, command.id, focus = true)
-    } link.follow(editor_context)
   }
 
 
@@ -260,17 +265,17 @@ class Extended_Query_Operation(
             (state.status != Extended_Query_Operation.Status.finished &&
               state.status != Extended_Query_Operation.Status.failed &&
               changed.commands.contains(command)) =>
-            editor.send_dispatcher { content_update() }
+            host.send_dispatcher { content_update() }
           case _ =>
         }
     }
 
   def activate(): Unit = {
-    editor.session.commands_changed += main
+    session.commands_changed += main
   }
 
   def deactivate(): Unit = {
-    editor.session.commands_changed -= main
+    session.commands_changed -= main
     cleanup_state()
   }
 }

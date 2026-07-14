@@ -55,6 +55,9 @@ enum ExploreQuery(val wire: String, val internalName: String) {
   case Proof extends ExploreQuery("proof", "isar_explore")
   case Sledgehammer extends ExploreQuery("sledgehammer", "sledgehammer")
   case FindTheorems extends ExploreQuery("find_theorems", "find_theorems")
+  // print_state is a core Isabelle query print function (Pure/PIDE/query_operation.ML),
+  // always available — no Isar_Explore.thy import needed. Takes no arguments.
+  case State extends ExploreQuery("state", "print_state")
 }
 
 object ExploreQuery {
