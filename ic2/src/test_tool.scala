@@ -484,6 +484,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         etest("query_cli") { e2e_query_cli(server_name, fixtures) }
         etest("state_at_returns_goal") { e2e_state_at_returns_goal(server_name, fixtures) }
         etest("state_at_never_visible") { e2e_state_at_never_visible(server_name, fixtures) }
+        etest("query_heap_theory_message") { e2e_query_heap_theory_message(server_name) }
         etest("command_at_walkback") { e2e_command_at_walkback(server_name, fixtures) }
         etest("repl_from_source") { e2e_repl_from_source(server_name, fixtures) }
 
@@ -1959,6 +1960,29 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       val noSel = q("get_context_info", "path" -> "Diagnostics.thy")
       if (JSON.string(noSel, "event") != Some("server_error"))
         error("query get_context_info without offset/pattern should be server_error, got " + JSON.Format(noSel))
+    }
+
+    /** Querying a theory that is built into the session HEAP (not loaded as a live
+     *  document node) must give an accurate message — it is a heap theory, not a
+     *  missing/uncheckable one. The old blanket "exists but is not a loaded session
+     *  node (check it first...)" was misleading here: checking it does nothing, it
+     *  is already in the heap. The main server runs -l HOL, so HOL's own Main.thy
+     *  source is such a heap theory. Skip if the source file isn't present. */
+    private def e2e_query_heap_theory_message(server_name: String): Unit = {
+      val mainThy = Path.explode("$ISABELLE_HOME/src/HOL/Main.thy").expand
+      if (!mainThy.is_file) {
+        Output.writeln("    (note) HOL/Main.thy source not found; skipping heap-theory message test")
+        return
+      }
+      val reply = request_op(server_name, JSON.Object(
+        "op" -> "query", "tool" -> "get_diagnostics", "path" -> mainThy.implode))
+      // A resolution failure surfaces as server_error; assert its message names
+      // the heap case rather than the misleading "check it first".
+      val msg = JSON.string(reply, "message").getOrElse(JSON.Format(reply))
+      if (!msg.contains("heap"))
+        error("query on a heap theory (HOL/Main.thy) should explain it is a heap theory, got: " + msg)
+      if (msg.contains("check it first"))
+        error("query on a heap theory should NOT advise 'check it first' (misleading), got: " + msg)
     }
 
     /** get_state_at returns real goal state at a proof command. This exercises the

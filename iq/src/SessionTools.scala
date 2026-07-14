@@ -133,13 +133,39 @@ object SessionTools {
         if (f.isFile)
           names.find(n => n.node.nonEmpty && File.eq(n.path.file, f)) match {
             case Some(n) => Right(n)
-            case None => Left(s"File '$file' exists but is not a loaded session node " +
-              "(check it first, or it is outside the session)")
+            case None => Left(unresolvedFileMessage(session, file, f))
           }
         else Left(s"No loaded theory matching '$file'")
       case many =>
         Left(s"Multiple loaded theories match '$file': " +
           many.map(_.node).sorted.mkString(", "))
+    }
+  }
+
+  /** Explain why an existing file did not resolve to a live document node,
+    * distinguishing the cases that the old blanket "check it first" message
+    * conflated. In particular a theory BUILT INTO THE SESSION HEAP is not a
+    * document node (it has no per-command state in the live document), so
+    * "check it first" is wrong advice for it — recognise it and say so. */
+  private def unresolvedFileMessage(
+    session: Session, file: String, f: java.io.File
+  ): String = {
+    val heapTheory =
+      try {
+        session.resources.find_theory(f) match {
+          case Some(name) if session.resources.loaded_theory(name) => Some(name.theory)
+          case _ => None
+        }
+      } catch { case _: Throwable => None }
+    heapTheory match {
+      case Some(theory) =>
+        s"Theory '$theory' ('$file') is built into the session heap, not a live " +
+          "document node — its per-command state is not available for this query. " +
+          "Query a theory loaded into the document (checking a theory pulls in its " +
+          "imports as document nodes), or rebuild with this theory as a document theory."
+      case None =>
+        s"File '$file' exists but is not a loaded session node — check it first, " +
+          "or it is outside the session."
     }
   }
 
