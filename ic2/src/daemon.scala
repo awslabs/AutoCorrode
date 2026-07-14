@@ -153,17 +153,12 @@ Usage: isabelle ic2 server start [OPTIONS]
         case Some(p) => new Combined_Progress(verbose, p)
         case None => new Console_Progress(verbose = verbose, stderr = true)
       }
-      // Default `show_states` on so per-command proof STATE messages land in the
-      // snapshot for get_context_info / get_command_info to read. It emits
-      // Output.state from the toplevel transition (Isar/toplevel.ML), so it fires
-      // for every evaluated command even headless — unlike `print_state`, a print
-      // function gated on a visible perspective (which Headless.Session leaves
-      // empty). editor_output_state stays on for parity with jEdit/VSCode. Listed
-      // FIRST so an explicit `-o show_states=...` still overrides.
-      val options = Options.init(specs =
-        (Options.Spec.make("show_states=true") ::
-          Options.Spec.make("editor_output_state=true") ::
-          option_specs.reverse.map(Options.Spec.make)))
+      // No forced `show_states` / `editor_output_state`: proof state is no longer
+      // read passively from per-command STATE messages. SessionTools.goalState
+      // queries it ON DEMAND via a print_state Extended_Query_Operation (the query
+      // makes the command visible so the print function runs), so we do not pay to
+      // emit a STATE message for every evaluated command.
+      val options = Options.init(specs = option_specs.reverse.map(Options.Spec.make))
       run(options, name, start_options, trace_dead_events, progress)
     }
   }

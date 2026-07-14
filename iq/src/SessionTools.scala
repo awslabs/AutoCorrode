@@ -792,14 +792,75 @@ object SessionTools {
       "has_goal" -> false, "goal_text" -> "", "num_subgoals" -> 0,
       "free_vars" -> List.empty[String], "constants" -> List.empty[String])
     try {
-      val snapshot = session.snapshot(node_name = command.node_name)
-      val states =
-        (for {
-          (_, msg) <- snapshot.command_results(command).iterator
-          if !Protocol.is_result(msg) && Protocol.is_state(msg)
-        } yield msg).toList
-      if (states.isEmpty) empty else analyzeGoalMessages(states)
+      queryProofState(session, command) match {
+        case Some(messages) if messages.nonEmpty => analyzeGoalMessages(messages)
+        case _ => empty
+      }
     } catch { case ex: Throwable => empty + ("analysis_error" -> ex.getMessage) }
+  }
+
+  /** A session-generic `Extended_Query_Operation.Host` for headless / non-editor
+    * callers: overlay edits are pushed directly via `session.update`. Inserting
+    * the overlay makes its command visible (Thy_Syntax.command_perspective folds
+    * overlay-bearing commands into the visible set), so the query's print function
+    * runs even though a headless session has no viewport — and even for a command
+    * that was processed but never made visible.
+    *
+    * The perspective edit preserves the node's current `required` flag (so a
+    * concurrent check is not un-scheduled) and carries an empty text perspective;
+    * the overlay alone drives visibility. Dispatch runs inline: `content_update`
+    * is invoked from the session's dispatcher thread, and `session.update` targets
+    * the distinct manager thread, so a direct call there does not deadlock. */
+  final class Session_Query_Host(session: Session) extends Extended_Query_Operation.Host {
+    private def node_required(name: Document.Node.Name): Boolean = {
+      val node = session.snapshot(node_name = name).get_node(name)
+      node != null && node.perspective.required
+    }
+    private def push(command: Command, overlays: Document.Node.Overlays): Unit =
+      session.update(Document.Blobs.empty,
+        List(command.node_name -> Document.Node.Perspective(
+          node_required(command.node_name), Text.Perspective.empty, overlays)))
+    def insert_overlay(command: Command, fn: String, args: List[String]): Unit =
+      push(command, Document.Node.Overlays.empty.insert(command, fn, args))
+    def remove_overlay(command: Command, fn: String, args: List[String]): Unit =
+      push(command, Document.Node.Overlays.empty)
+    def flush(): Unit = ()   // session.update already pushed the edit
+    def require_dispatcher[A](body: => A): A = body
+    def send_dispatcher(body: => Unit): Unit = body
+  }
+
+  /** Proof state at a command, obtained ON DEMAND via a `print_state`
+    * Extended_Query_Operation rather than a passive `command_results` read. The
+    * query renders `Toplevel.pretty_state` at the command and returns its
+    * (instance-tagged) result messages, or None on timeout/failure/no-state. This
+    * needs no `show_states` / `editor_output_state` option: it fires the core
+    * `print_state_query` print function on demand, and the overlay makes the
+    * command visible so the print function runs. Session-generic — the same query
+    * serves a headless session and (with an editor-backed Host) Isabelle/jEdit.
+    *
+    * Synchronous: fires the query and blocks (bounded) for the instance-tagged
+    * result. Best-effort — any failure yields None. */
+  def queryProofState(
+    session: Session, command: Command, timeoutMs: Long = 10000L
+  ): Option[List[XML.Tree]] = {
+    val latch = new java.util.concurrent.CountDownLatch(1)
+    @volatile var output: List[XML.Tree] = Nil
+    @volatile var failed = false
+    val op = new Extended_Query_Operation(
+      session, new Session_Query_Host(session), "print_state",
+      status =>
+        status match {
+          case Extended_Query_Operation.Status.finished => latch.countDown()
+          case Extended_Query_Operation.Status.failed => failed = true; latch.countDown()
+          case _ =>
+        },
+      (_, _, out) => output = out)
+    op.activate()
+    try {
+      op.apply_query_at_command(command, Nil)
+      val ok = latch.await(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+      if (ok && !failed) Some(output) else None
+    } finally op.deactivate()
   }
 
 
