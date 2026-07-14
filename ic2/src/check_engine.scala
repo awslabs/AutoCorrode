@@ -163,31 +163,61 @@ object Check_Engine {
     }
 
 
-  /* ---- B) evaluate: mark the target required and wait for consolidation ---- */
+  /* ---- B) evaluate: drive the prover and wait for completion ---- */
 
-  /** Mark ONLY `model.targets` required, then wait until every node in
-    * `model.closure` has consolidated — or `shouldStop()` returns true (caller-
-    * driven early exit: partial line-reached, first-error stop, or cancel).
+  /** A bounded, partial-check target: evaluate node `node` only up to and including
+    * the command spanning `range` (the command that ends at line N). Used by
+    * `check FILE --line N`. */
+  final case class Bound(node: Document.Node.Name, range: Text.Range, command: Command)
+
+  /** Drive the prover over `model`, and wait until it is done — or `shouldStop()`
+    * returns true (caller-driven early exit: first-error stop or cancel).
+    *
+    * Two modes, selected by `bound`:
+    *
+    *  - FULL (`bound = None`): mark ONLY `model.targets` required and wait until every
+    *    node in `model.closure` has consolidated. The prover propagates `required`
+    *    from the targets to all ancestors (Pure/PIDE/document.ML `make_required`),
+    *    so the whole closure is evaluated.
+    *
+    *  - BOUNDED (`bound = Some(b)`): set a bounded VISIBLE perspective on `b.node`
+    *    covering `[0, b.range.stop)` — `required = false`. The prover schedules the
+    *    prefix up to and including the visible-last command (`b.command`) and STOPS
+    *    there (document.ML: `prev = visible_last node then NONE`), so nothing past
+    *    the target line is ever scheduled — no overshoot. `make_required`
+    *    additionally requires the visible node's ancestors, so the imports are fully
+    *    evaluated and the prefix type-checks. Completion is the target command
+    *    reaching `is_terminated` — the bounded prefix never "consolidates" (that
+    *    needs theory end), so it is the natural signal (same one the previous
+    *    watchdog used).
     *
     * `onStatus` is invoked (best-effort) on each document change with the current
     * per-node status for the whole closure, so the caller can drive progress and
     * first-error detection. It also fires once at the end with the settled status.
-    *
-    * On a `shouldStop` exit the returned `Result` reports whatever status the nodes
-    * had reached (not necessarily consolidated); on normal completion every closure
-    * node is consolidated. `poll_delay` bounds how long the wait blocks between
-    * re-checks even if no `commands_changed` event arrives. */
+    * `poll_delay` bounds how long the wait blocks between re-checks even if no
+    * `commands_changed` event arrives. */
   def evaluate(
     session: Headless.Session,
     model: Model,
     onStatus: List[(Document.Node.Name, Document_Status.Node_Status)] => Unit = _ => (),
     shouldStop: () => Boolean = () => false,
+    bound: Option[Bound] = None,
     poll_delay: Time = Time.seconds(0.2)
   ): Result = {
     val closure = model.closure
 
-    // Mark only the targets required; the prover propagates required to ancestors.
-    session.update(Document.Blobs.empty, model.targets.map(_ -> required))
+    // Drive the prover: FULL requires the targets; BOUNDED makes the target node's
+    // prefix visible (required=false) so eval stops at the visible-last command,
+    // while make_required still fully evaluates that node's ancestors.
+    val driveEdits: List[Document.Edit_Text] =
+      bound match {
+        case None => model.targets.map(_ -> required)
+        case Some(b) =>
+          List(b.node -> Document.Node.Perspective(
+            false, Text.Perspective(List(Text.Range(0, b.range.stop))),
+            Document.Node.Overlays.empty))
+      }
+    session.update(Document.Blobs.empty, driveEdits)
 
     val done = new java.util.concurrent.CountDownLatch(1)
     @volatile var result: Option[Result] = None
@@ -200,22 +230,28 @@ object Check_Engine {
       closure.map(name => name -> Document_Status.Node_Status.make(now, state, version, name))
     }
 
-    // A closure node counts as "done" on the same disjunction the reference
-    // use_theories used: either its formal theory CONSOLIDATED marker has arrived
-    // (Node_Status.consolidated), or it is quasi-consolidated (all commands
-    // terminated — the marker can lag behind under editor_consolidate_delay), or
-    // its last command reached the consolidated state. Using only the theory
-    // marker would risk hanging while a fully-evaluated node waits for the marker.
+    // A FULL-mode closure node counts as "done" on the same disjunction the
+    // reference use_theories used: either its formal theory CONSOLIDATED marker has
+    // arrived (Node_Status.consolidated), or it is quasi-consolidated (all commands
+    // terminated — the marker can lag behind under editor_consolidate_delay), or its
+    // last command reached the consolidated state. Using only the theory marker
+    // would risk hanging while a fully-evaluated node waits for the marker.
     def nodeDone(
       state: Document.State, version: Document.Version,
       name: Document.Node.Name, st: Document_Status.Node_Status
     ): Boolean =
       st.consolidated || st.quasi_consolidated || state.node_consolidated(version, name)
 
-    // Recompute status, publish it, and settle the result when the closure has
-    // consolidated (or the caller asked to stop). Idempotent once settled, and
-    // serialized: poll() is driven both by the commands_changed consumer and the
-    // await loop below, so the lock keeps their status computations from racing.
+    // BOUNDED mode: done when the target command has terminated. A bounded prefix
+    // never consolidates (that needs theory end), so this — not nodeDone — is the
+    // completion signal for a partial check.
+    def boundReached(state: Document.State, version: Document.Version): Boolean =
+      bound.exists(b => state.command_status(version, b.command).is_terminated)
+
+    // Recompute status, publish it, and settle the result when the prover is done
+    // (or the caller asked to stop). Idempotent once settled, and serialized: poll()
+    // is driven both by the commands_changed consumer and the await loop below, so
+    // the lock keeps their status computations from racing.
     def poll(): Unit = poll_lock.synchronized {
       if (result.isDefined) return
       val state = session.get_state()
@@ -224,9 +260,12 @@ object Check_Engine {
         case Some(version) =>
           val status = perNodeStatus(state, version)
           try onStatus(status) catch { case _: Throwable => }
-          val stop = shouldStop()
-          val all_done = status.forall { case (name, st) => nodeDone(state, version, name, st) }
-          if (stop || all_done) {
+          val complete =
+            bound match {
+              case None => status.forall { case (name, st) => nodeDone(state, version, name, st) }
+              case Some(_) => boundReached(state, version)
+            }
+          if (shouldStop() || complete) {
             result = Some(new Result(state, version, status))
             done.countDown()
           }
@@ -240,7 +279,7 @@ object Check_Engine {
 
     session.commands_changed += consumer
     try {
-      poll()   // in case it is already consolidated / already stopped
+      poll()   // in case it is already complete / already stopped
       while (result.isEmpty) {
         val _ = done.await(poll_delay.ms, java.util.concurrent.TimeUnit.MILLISECONDS)
         poll()

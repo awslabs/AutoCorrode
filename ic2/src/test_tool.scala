@@ -502,10 +502,10 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         // Partial check (`check --line N`): own -N server so we can observe
         // the post-check state (only the prefix evaluated, tail unprocessed).
         test("check_line_partial") { e2e_check_line_partial(fixtures) }
-        // Partial check with PARALLEL proofs: both forked `by (spin)` proofs
-        // run concurrently; stopping at the shorter target must cleanly cancel
-        // the longer tail fork. Own -N server for a clean start.
-        test("partial_cancels_forked_tail") { e2e_partial_cancels_forked_tail(fixtures) }
+        // Partial check with PARALLEL proofs: bounding to the shorter target must
+        // never schedule the longer tail proof (no overshoot). Own -N server for a
+        // clean start.
+        test("partial_bounded_tail_not_scheduled") { e2e_partial_bounded_tail_not_scheduled(fixtures) }
 
         // TERMINAL: kills the main server. Registered last so test-ordering
         // (and -t selection, which preserves code order) never runs it early.
@@ -2866,32 +2866,32 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     }
 
     /** Partial check with PARALLEL PROOFS ON — the complement of
-     *  `check_line_partial` case (f), which pins parallel_proofs=0 so spin2
-     *  never forks. Here both terminal `by (spin N)` proofs run as concurrent
-     *  forks (spin1 15s at line 41, spin2 30s at line 44). A `--line 41` check
-     *  must:
-     *    (1) initially show BOTH forks executing (spin1 AND spin2 surface as
-     *        long_running with real elapsed — they run concurrently); then
-     *    (2) once spin1 (the target) completes at ~15s, the line-reached
-     *        watchdog stops the check and spin2 — still ~15s into its 30s — is
-     *        cleanly cancelled: it never reaches its full 30s, and afterwards
-     *        the theory is not fully processed (spin2 unprocessed/cancelled,
-     *        never a clean success).
+     *  `check_line_partial` case (f), which pins parallel_proofs=0. SpinTactic has
+     *  two terminal `by (spin N)` proofs (spin1 15s at line 41, spin2 30s at line
+     *  44) that would fork and run concurrently under default parallel proofs.
      *
-     *  This exercises the forked-proof reclamation path (cancelViaEdit's
-     *  text-changing tail edit) end-to-end: the cancel must interrupt a proof
-     *  that is genuinely mid-flight on its own worker thread. Own -N server so
-     *  the post-check state is observable from a fresh start. Skip if the
-     *  fixture is absent. */
-    private def e2e_partial_cancels_forked_tail(fixtures: Path): Unit = {
+     *  A `--line 41` check drives a BOUNDED VISIBLE perspective to spin1: the
+     *  prover schedules the target node only up to the visible-last command (spin1)
+     *  and never dispatches spin2. So — unlike the old require-then-cancel model,
+     *  which let spin2 fork and then reclaimed it — there is NO OVERSHOOT to cancel:
+     *    (1) spin1 (the target) genuinely runs to a large elapsed;
+     *    (2) spin2 (past the target line) is never scheduled — it accrues ~no
+     *        elapsed and is left unprocessed;
+     *    (3) the check returns shortly after spin1, well before spin2's 30s;
+     *    (4) the theory is not fully processed afterwards.
+     *
+     *  Own -N server so the post-check state is observable from a fresh start.
+     *  Skip if the fixture is absent. */
+    private def e2e_partial_bounded_tail_not_scheduled(fixtures: Path): Unit = {
       val spin = fixtures + Path.basic("SpinTactic.thy")
       if (!spin.is_file) {
-        Output.writeln("    (note) SpinTactic.thy fixture missing; skipping forked-tail cancel test")
+        Output.writeln("    (note) SpinTactic.thy fixture missing; skipping bounded-tail test")
         return
       }
       val name = "t_fc_" + short_id()
-      // Default parallel proofs (do NOT pin to 0): the two terminal `by` proofs
-      // fork and run concurrently, which is the whole point of this test.
+      // Default parallel proofs (do NOT pin to 0): spin2 WOULD fork and run
+      // concurrently if it were scheduled — the point is that bounding to line 41
+      // means it never is.
       val proc = start_server(name, extra_args = List("-N"))
       try {
         wait_for_server(name, timeout = 60)
@@ -2900,7 +2900,6 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         val sio = connection(name)
         var spin1Max = 0.0
         var spin2Max = 0.0
-        var bothConcurrent = false   // saw one progress frame with BOTH forks live
         val started_ms = System.currentTimeMillis()
         try {
           sio.write(JSON.Object("op" -> "check",
@@ -2910,58 +2909,45 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
           while (!done && System.currentTimeMillis() < deadline) {
             sio.read(1500) match {
               case JSON_IO.Value(t) if JSON.string(t, "event") == Some("progress") =>
-                var s1 = false
-                var s2 = false
                 for (nd <- JSON.array(t, "nodes").getOrElse(Nil)
                      if JSON.string(nd, "theory").map(base_name) == Some("SpinTactic");
                      rc <- JSON.array(nd, "long_running").getOrElse(Nil)) {
                   JSON.int(rc, "line") match {
-                    case Some(41) => spin1Max = math.max(spin1Max, elapsedOf(rc)); s1 = true
-                    case Some(44) => spin2Max = math.max(spin2Max, elapsedOf(rc)); s2 = true
+                    case Some(41) => spin1Max = math.max(spin1Max, elapsedOf(rc))
+                    case Some(44) => spin2Max = math.max(spin2Max, elapsedOf(rc))
                     case _ =>
                   }
                 }
-                // Both forks live in the SAME frame, each with real elapsed —
-                // proof they were dispatched and ran concurrently.
-                if (s1 && s2 && spin1Max >= 2.0 && spin2Max >= 2.0) bothConcurrent = true
               case JSON_IO.Value(t) if JSON.string(t, "event") == Some("finished") => done = true
               case JSON_IO.EOF => done = true
               case _ =>
             }
           }
           val total_ms = System.currentTimeMillis() - started_ms
-          // (1) both forks ran concurrently at some point.
-          if (!bothConcurrent)
-            error("partial check with parallel proofs: expected to see BOTH spin1 (line 41) " +
-              "and spin2 (line 44) running concurrently with elapsed >= 2s; saw " +
-              "spin1Max=" + spin1Max + "s spin2Max=" + spin2Max + "s")
-          // (2a) spin1 (the 15s target) genuinely spun to a large elapsed.
+          // (1) spin1 (the 15s target) genuinely spun to a large elapsed.
           if (spin1Max < 10.0)
             error("partial check: spin1 (line 41, 15s) should reach a large elapsed, " +
               "max seen " + spin1Max + "s")
-          // (2b) spin2 (30s) was cancelled once spin1 finished — it must NOT
-          //      have run to its full 30s. Generous ceiling (well below 30,
-          //      comfortably above the ~15s it accrues before spin1 completes)
-          //      to stay robust against scheduling jitter.
-          if (spin2Max >= 25.0)
-            error("partial check: spin2 (line 44, 30s) reached " + spin2Max + "s — it should " +
-              "have been cancelled when spin1 completed at ~15s, not run to completion")
-          // The whole check must have returned well before spin2's 30s would
-          // have elapsed — proof the stop actually cut it short.
+          // (2) spin2 (past line 41) was NEVER scheduled by the bounded perspective
+          //     — it must show ~no elapsed (a small ceiling absorbs any brief
+          //     display flicker; it must be nowhere near its 30s runtime).
+          if (spin2Max >= 5.0)
+            error("partial check: spin2 (line 44, 30s) ran for " + spin2Max + "s — a bounded " +
+              "check to line 41 must never schedule it (no overshoot); expected ~0s")
+          // (3) the check returned shortly after spin1's 15s, not spin2's 30s.
           if (total_ms >= 28000)
-            error("partial check took " + total_ms + "ms; expected to stop shortly after " +
-              "spin1's 15s (spin2 cancelled), not wait out spin2's 30s")
+            error("partial check took " + total_ms + "ms; expected to return shortly after " +
+              "spin1's 15s (spin2 never scheduled), not wait out spin2's 30s")
         } finally sio.close()
-        // (2c) spin2 must NOT have finished successfully: the tail was cut at
-        //      the target line (left unprocessed, or cancelled).
+        // (4) spin2 must NOT have finished successfully: bounded to the target line.
         val di = request_op(name, JSON.Object("op" -> "query", "tool" -> "get_document_info",
           "path" -> "SpinTactic.thy"))
         val diR = JSON.value(di, "result").getOrElse(JSON.Object())
         if (JSON.bool(diR, "fully_processed") == Some(true))
-          error("partial check: SpinTactic should NOT be fully processed (spin2 cancelled), " +
+          error("partial check: SpinTactic should NOT be fully processed (spin2 never scheduled), " +
             "got " + JSON.Format(diR))
         if (JSON.int(diR, "unprocessed").getOrElse(0) + JSON.int(diR, "failed").getOrElse(0) <= 0)
-          error("partial check: expected spin2 left unprocessed or cancelled, got " + JSON.Format(diR))
+          error("partial check: expected spin2 left unprocessed, got " + JSON.Format(diR))
       } finally {
         try { proc.terminate() } catch { case _: Throwable => }
         cleanup_server(name)

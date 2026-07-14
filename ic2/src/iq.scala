@@ -273,13 +273,14 @@ object Check {
     * commands_changed events). Session-generic; carries no transport.
     *
     * `stopped` is the single "please stop" flag Check_Engine.evaluate polls via
-    * `shouldStop`: it is set by first-error detection (`record_status`), by
-    * `Job.cancel` (via `stop()`), and by the partial line-reached watchdog. It
-    * replaces the old `Progress.stopped` that use_theories used to poll. */
+    * `shouldStop`: it is set by first-error detection (`record_status`) and by
+    * `Job.cancel` (via `stop()`). It replaces the old `Progress.stopped` that
+    * use_theories used to poll. (Partial mode no longer stops via this flag — it
+    * bounds the perspective and completes when the target command terminates.) */
   private final class Job_Progress(job: Job, session: Headless.Session) {
     @volatile private var _stopped: Boolean = false
     def stopped: Boolean = _stopped
-    /** Request stop (first-error, cancel, or line-reached). Also halts the ticker. */
+    /** Request stop (first-error or cancel). Also halts the ticker. */
     def stop(): Unit = { ticker_stop = true; _stopped = true }
 
     private val per_theory =
@@ -304,29 +305,6 @@ object Check {
     private def claim_error(): Boolean = error_latch.change_result(e => (true, !e))
     def snapshot_status: Map[Document.Node.Name, Document_Status.Node_Status] = per_theory.value
 
-    // Partial-mode watchdog (check --line): once the target command is armed,
-    // fire `reached()` as soon as it reports is_terminated. Single-shot. The
-    // ticker polls it (a spinning target may emit no fresh nodes_status
-    // callback, so we can't rely on that path alone).
-    @volatile private var partial_target: Option[(Command, () => Unit)] = None
-    private val partial_fired = new java.util.concurrent.atomic.AtomicBoolean(false)
-    def set_partial_target(
-      name: Document.Node.Name, cmd: Command, reached: () => Unit
-    ): Unit = { val _ = name; partial_target = Some((cmd, reached)) }
-    private def check_partial_reached(): Unit = {
-      if (partial_fired.get) return
-      partial_target.foreach { case (cmd, reached) =>
-        try {
-          val state = session.get_state()
-          state.stable_tip_version.foreach { version =>
-            val cs = state.command_status(version, cmd)
-            if (cs.is_terminated && partial_fired.compareAndSet(false, true))
-              try reached() catch { case _: Throwable => }
-          }
-        } catch { case _: Throwable => /* best-effort */ }
-      }
-    }
-
     /** Idempotent; exits when `ticker_stop` or the first-error latch fires. */
     def start_ticker(): Unit = synchronized {
       if (ticker.isDefined) return
@@ -334,7 +312,6 @@ object Check {
         def run(): Unit = {
           while (!ticker_stop && !error_emitted) {
             try {
-              check_partial_reached()
               val cur = per_theory.value
               if (cur.nonEmpty) {
                 val running = snapshotRunning(cur)
@@ -371,10 +348,6 @@ object Check {
       * it replaces the old `Progress.nodes_status` override. */
     def record_status(status: List[(Document.Node.Name, Document_Status.Node_Status)]): Unit = {
       if (stopped || error_emitted) return
-      // Partial mode: check the line-reached watchdog on every callback (the
-      // primary trigger while evaluate streams status); the ticker polls it too,
-      // for a target whose spin emits no fresh callback.
-      check_partial_reached()
       val updated = per_theory.change_result { cache =>
         var c = cache
         for ((name, st) <- status) {
@@ -528,21 +501,30 @@ object Check {
 
     /** Run step A (updateModel) then step B (evaluate), classify the outcome, and
       * run step C (stop) on every exit path. `shouldStop` is the first-error/cancel
-      * flag the progress driver and `cancel()` share (`progress.stopped`); partial
-      * mode adds the line-reached watchdog to the same flag via `set_partial_target`.
+      * flag the progress driver and `cancel()` share (`progress.stopped`).
       *
-      * Check_Engine.stop is the whole teardown: it un-requires the targets AND
-      * reclaims any still-running fork (a text-changing tail remint), so a cancelled
-      * / first-error / timed-out check leaves nothing executing and the next check of
-      * this theory resumes cleanly instead of hanging on an abandoned tail. */
-    private def runEngine(): Exn.Result[Check_Engine.Result] =
+      * `resolveBound` selects the drive mode. FULL mode returns None (require the
+      * targets, wait for consolidation). PARTIAL mode returns Some(Bound): after
+      * updateModel has parsed the node, it resolves `line N` to the target command
+      * so evaluate can drive a BOUNDED visible perspective to it. It may throw
+      * (ERROR) if the line can't be resolved (theory too short / parse error), which
+      * classifies as a failed check.
+      *
+      * Check_Engine.stop is the whole teardown: it un-requires / un-shows the
+      * targets AND reclaims any still-running fork (a text-changing tail remint), so
+      * a cancelled / first-error / timed-out check leaves nothing executing and the
+      * next check of this theory resumes cleanly instead of hanging on a tail. */
+    private def runEngine(
+      resolveBound: Check_Engine.Model => Option[Check_Engine.Bound] = _ => None
+    ): Exn.Result[Check_Engine.Result] =
       Check_Engine.updateModel(session, theResources, nodeNames) match {
         case Left(msg) => Exn.Exn(ERROR(msg))
         case Right(model) =>
           try Exn.Res(
             Check_Engine.evaluate(session, model,
               onStatus = progress.record_status,
-              shouldStop = () => progress.stopped))
+              shouldStop = () => progress.stopped,
+              bound = resolveBound(model)))
           catch { case e: Throwable => Exn.Exn(e) }
           finally Check_Engine.stop(session, model)
       }
@@ -593,41 +575,26 @@ object Check {
 
     /** The Partial-mode worker for `check FILE --line N`.
       *
-      * Runs the same A/B engine as a full check — `updateModel([target])` loads
-      * and syncs the target's whole dependency closure, then `evaluate` requires
-      * the target so the prefix type-checks and the closure is processed — and
-      * STOPS it as soon as the caret line has been processed:
+      * Runs the same A/B/C engine as a full check, but step B drives a BOUNDED
+      * visible perspective instead of requiring the target: `updateModel([target])`
+      * parses and syncs the target's whole dependency closure, `resolveTargetBound`
+      * resolves `line N` to the target command, and `evaluate(bound = ...)` makes
+      * the target node visible up to that command. The prover then:
       *
-      *  - a background resolver waits for the target's commands to parse,
-      *    resolves `line N` to a target Command (jEdit walk-back, same as
-      *    `query state-at --line N`), and hands it to the watchdog;
-      *  - the watchdog (driven by the ticker) fires `cancel("line-reached")`
-      *    once the target command reaches `is_terminated`. That sets the stop flag
-      *    (`evaluate` returns as `shouldStop` goes true); step C (Check_Engine.stop)
-      *    then un-requires the target — un-scheduling not-yet-dispatched tail
-      *    commands — and reclaims any tail command already forked via a
-      *    text-changing tail remint.
+      *  - evaluates the target's ancestors fully (make_required requires the
+      *    predecessors of any visible node), so the prefix type-checks; and
+      *  - schedules the target node ONLY up to the visible-last command and stops
+      *    there — so commands past the line are NEVER scheduled. No overshoot, no
+      *    watchdog, no line-reached cancel.
       *
-      * This can OVERSHOOT slightly: with parallel proofs enabled, commands
-      * after the target line may already have been dispatched (forked) by the
-      * time the target terminates, so they run until the cancel reaches them.
-      * That's an accepted imprecision — it never under-evaluates the prefix,
-      * and with `-o parallel_proofs=0` (sequential eval) there is no overshoot
-      * at all (the test uses that for determinism). A "line-reached" cancel is
-      * the SUCCESS outcome; a real first-error or other interrupt still
-      * surfaces as failure.
-      *
-      * A partial check always ends by cancelling the tail, so step C
-      * (Check_Engine.stop, run in runEngine's finally) does the real work: its
-      * text-changing tail remint both interrupts any still-forked tail command and
-      * re-mints the abandoned tail — otherwise a later check would hang on it. */
+      * Completion is the target command reaching `is_terminated` (a bounded prefix
+      * never consolidates). Step C (Check_Engine.stop) still un-shows the target and
+      * reclaims anything left running (e.g. an ancestor fork, or the target command
+      * itself if the check was cancelled mid-flight). */
     private def partial_body(p: Mode.Partial): Runnable = new Runnable {
       def run(): Unit = {
         val out =
-          try {
-            arm_target_resolver(p)
-            classify_partial(runEngine())
-          }
+          try classify_partial(runEngine(resolveBound = m => Some(resolveTargetBound(p, m))))
           catch {
             case exn: Throwable if Exn.is_interrupt(exn) =>
               if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
@@ -643,50 +610,42 @@ object Check {
       }
     }
 
-    /** Background poller: wait (bounded) for the target node's commands to
-      * appear (updateModel's parse is async), resolve `line N` to a Command,
-      * install it as the watchdog target on Job_Progress. If it can't resolve
-      * (theory shorter than N, parse error), cancel with a clear reason so the
-      * outcome is reported cleanly rather than hanging. */
-    private def arm_target_resolver(p: Mode.Partial): Unit = {
-      val t = new Thread(new Runnable {
-        def run(): Unit = {
-          val deadline = System.currentTimeMillis() + 30000
-          var resolved: Option[Command] = None
-          while (resolved.isEmpty && System.currentTimeMillis() < deadline
-                 && !progress.stopped && isRunning) {
-            SessionTools.commandsUpToLine(session, p.target, p.line) match {
-              case Right((_, cmd, _)) => resolved = Some(cmd)
-              case Left(_) => try Thread.sleep(100) catch { case _: InterruptedException => return }
-            }
-          }
-          resolved match {
-            case Some(cmd) => progress.set_partial_target(p.target, cmd, () => cancel("line-reached"))
-            case None => if (cancelReason.isEmpty && isRunning) cancel("could not resolve line " + p.line)
-          }
+    /** Resolve `line N` to the bounded target command for a partial check. Called
+      * after updateModel, whose text edit triggers the (async) change-parser, so we
+      * poll (bounded, 30s) until the target node's commands appear, then resolve
+      * `line N` to a command (jEdit walk-back, same as `query state-at --line N`).
+      * The returned Bound makes evaluate drive a visible perspective to `[0, end)`.
+      * Throws ERROR if the line can't be resolved (theory too short / parse error)
+      * or the check is cancelled while waiting — both classify as a failed check. */
+    private def resolveTargetBound(p: Mode.Partial, model: Check_Engine.Model): Check_Engine.Bound = {
+      val deadline = System.currentTimeMillis() + 30000
+      var result: Option[Check_Engine.Bound] = None
+      while (result.isEmpty && System.currentTimeMillis() < deadline && !progress.stopped && isRunning) {
+        SessionTools.commandsUpToLine(session, p.target, p.line) match {
+          case Right((_, cmd, endOffset)) =>
+            result = Some(Check_Engine.Bound(p.target, Text.Range(0, endOffset), cmd))
+          case Left(_) => try Thread.sleep(100) catch { case _: InterruptedException => }
         }
-      }, "ic2-partial-target-resolver")
-      t.setDaemon(true)
-      t.start()
+      }
+      result.getOrElse(
+        if (progress.stopped || !isRunning) error("partial check cancelled before line " + p.line + " resolved")
+        else error("could not resolve line " + p.line + " in " + p.target.theory))
     }
 
-    /** Outcome classification for partial mode. A "line-reached" cancel is
-      * SUCCESS — the target was reached, the tail was intentionally
-      * abandoned. Everything else (first-error stop, other cancel reasons,
-      * genuine interrupts) surfaces as failure, matching Full mode. */
+    /** Outcome classification for partial mode. evaluate drives a bounded visible
+      * perspective to the target command and returns normally once it terminates,
+      * so reaching the target is the ordinary `Exn.Res` success — there is no
+      * line-reached cancel. A failure in the evaluated prefix is "errors"; a
+      * caller cancel (timeout/disconnect) surfaces as its reason. Mirrors Full mode. */
     private def classify_partial(result: Exn.Result[Check_Engine.Result]): Outcome =
       result match {
         case Exn.Res(r) =>
-          // A failure in the evaluated prefix (live-detected or in the settled
-          // result) is "errors" and wins over the line-reached success signal.
-          if (progress.error_emitted) Outcome.Failed("errors")
-          else if (cancelReason.contains("line-reached")) Outcome.Ok
+          if (!r.ok) { progress.emit_post_result_error(r); Outcome.Failed("errors") }
+          else if (progress.error_emitted) Outcome.Failed("errors")
           else if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
-          else if (r.ok) Outcome.Ok
-          else { progress.emit_post_result_error(r); Outcome.Failed("errors") }
+          else Outcome.Ok
         case Exn.Exn(exn) if Exn.is_interrupt(exn) =>
-          if (cancelReason.contains("line-reached")) Outcome.Ok
-          else if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
+          if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
           else if (progress.error_emitted) Outcome.Failed("errors")
           else Outcome.Failed("interrupted")
         case Exn.Exn(ERROR(msg)) => Outcome.Failed(msg)
