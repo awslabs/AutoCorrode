@@ -482,6 +482,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         etest("check_attach") { e2e_check_attach(server_name, fixtures) }
         etest("query_wire") { e2e_query_wire(server_name, fixtures) }
         etest("query_cli") { e2e_query_cli(server_name, fixtures) }
+        etest("state_at_returns_goal") { e2e_state_at_returns_goal(server_name, fixtures) }
+        etest("state_at_never_visible") { e2e_state_at_never_visible(server_name, fixtures) }
         etest("command_at_walkback") { e2e_command_at_walkback(server_name, fixtures) }
         etest("repl_from_source") { e2e_repl_from_source(server_name, fixtures) }
 
@@ -1957,6 +1959,80 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       val noSel = q("get_context_info", "path" -> "Diagnostics.thy")
       if (JSON.string(noSel, "event") != Some("server_error"))
         error("query get_context_info without offset/pattern should be server_error, got " + JSON.Format(noSel))
+    }
+
+    /** get_state_at returns real goal state at a proof command. This exercises the
+     *  ON-DEMAND print_state query path (SessionTools.goalState -> queryProofState):
+     *  with show_states removed, the goal is produced by firing print_state at the
+     *  command, not read from a pre-existing STATE message. Diagnostics.thy's
+     *  `structured` lemma has an open goal at `proof -`. */
+    private def e2e_state_at_returns_goal(server_name: String, fixtures: Path): Unit = {
+      load_query_fixtures(server_name, fixtures)
+
+      def state_at(pattern: String): JSON.T =
+        JSON.value(request_op(server_name, JSON.Object(
+          "op" -> "query", "tool" -> "get_state_at",
+          "path" -> "Diagnostics.thy", "pattern" -> pattern)), "result").getOrElse(JSON.Object())
+
+      // At `proof -` of the `structured` lemma, an open goal exists.
+      val st = state_at("proof -")
+      if (JSON.bool(st, "has_goal") != Some(true))
+        error("get_state_at at 'proof -' should report has_goal:true (on-demand print_state query); got " +
+          JSON.Format(st))
+      val goal = JSON.value(st, "goal").getOrElse(JSON.Object())
+      val goalText = JSON.string(goal, "goal_text").getOrElse("")
+      if (!goalText.contains("answer = 42"))
+        error("get_state_at goal_text should show the goal 'answer = 42', got: " + goalText)
+      if (JSON.int(goal, "num_subgoals").getOrElse(0) < 1)
+        error("get_state_at should report >= 1 subgoal at an open proof, got " + JSON.Format(goal))
+
+      // A definition command has no goal — the query correctly reports none
+      // (empty state, not a spurious goal).
+      val defSt = state_at("definition answer")
+      if (JSON.bool(defSt, "has_goal") != Some(false))
+        error("get_state_at at a definition should report has_goal:false, got " + JSON.Format(defSt))
+    }
+
+    /** THE key property of on-demand state: get_state_at returns the goal for a
+     *  proof command that was processed but NEVER made visible. A headless session
+     *  has an empty perspective (no command is ever visible), so the old passive
+     *  command_results read saw a STATE message only because show_states forced one
+     *  for every command. With show_states removed, goal state must instead come
+     *  from firing print_state at the command — whose overlay makes it visible so
+     *  the print function runs. This test checks a fresh theory (never viewed) and
+     *  asserts the goal is recovered at a deep proof command. */
+    private def e2e_state_at_never_visible(server_name: String, fixtures: Path): Unit = {
+      // A fresh, uniquely-named theory with a proof that has a distinctive goal.
+      // Never opened in any viewport (there is none — this is headless), and
+      // freshly checked, so nothing pre-produced its STATE message.
+      val name = "NeverVisible_" + short_id()
+      val goalStr = "(n::nat) + 0 = n"
+      val text =
+        s"theory $name\n  imports Main\nbegin\n\n" +
+        s"lemma deep: \"$goalStr\"\n" +
+        "proof -\n" +
+        s"  show \"$goalStr\" by simp\n" +
+        "qed\n\nend\n"
+      val dir = Files.createTempDirectory("ic2_nv_test")
+      val file = dir.resolve(name + ".thy")
+      Files.write(file, text.getBytes("UTF-8"))
+      val abs = file.toAbsolutePath.toString
+
+      val (_, finished) = run_check(server_name, List(abs))
+      if (finished.flatMap(JSON.bool(_, "ok")) != Some(true))
+        error("baseline check of the never-visible theory should pass, got " + finished)
+
+      // Query the state at `show ... by simp` — a proof command deep in the theory
+      // that was never in any viewport. On-demand print_state must recover its goal.
+      val st = JSON.value(request_op(server_name, JSON.Object(
+        "op" -> "query", "tool" -> "get_state_at",
+        "path" -> abs, "pattern" -> "proof -")), "result").getOrElse(JSON.Object())
+      if (JSON.bool(st, "has_goal") != Some(true))
+        error("get_state_at on a never-visible proof command should report has_goal:true " +
+          "(on-demand print_state query recovers it); got " + JSON.Format(st))
+      val goalText = JSON.string(JSON.value(st, "goal").getOrElse(JSON.Object()), "goal_text").getOrElse("")
+      if (!goalText.contains("n + 0 = n") && !goalText.contains("(n::nat) + 0 = n"))
+        error("get_state_at on never-visible command should show the goal text, got: " + goalText)
     }
 
     /** The `ic2 query` CLI front door: covers every subtool (all 9), every
