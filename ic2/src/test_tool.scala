@@ -463,6 +463,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         etest("session_tools") { e2e_session_tools(server_name, fixtures) }
         etest("check_ok") { e2e_check_ok(server_name, fixtures) }
         etest("check_fail") { e2e_check_fail(server_name, fixtures) }
+        etest("check_resolves_dependencies") { e2e_check_resolves_dependencies(server_name, fixtures) }
         etest("check_cli_exit_codes") { e2e_check_cli(server_name, fixtures) }
         etest("recheck_after_edit_skips_unchanged_prefix") { e2e_recheck_after_edit_skips_prefix(server_name) }
         etest("multi_file_first_error") { e2e_multi_file(server_name, fixtures) }
@@ -1350,6 +1351,57 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         case Some(t) if JSON.bool(t, "ok") == Some(false) => ()
         case other => error("expected finished{ok:false}, got " + other)
       }
+    }
+
+    /** Automatic dependency resolution (step A): a FULL check of a theory that
+     *  imports a LOCAL (non-heap) theory must resolve, load, and evaluate that
+     *  import WITHOUT the client naming it. SpinImport.thy imports SpinDep.thy and
+     *  its `uses_dep` lemma references `spin_dep_const` from the dependency, so a
+     *  green check proves SpinDep was resolved and evaluated by the check engine
+     *  (Check_Engine.updateModel's resources.dependencies closure), not by luck.
+     *
+     *  Pins: (i) check of SpinImport ALONE finishes ok:true; (ii) the unnamed
+     *  dependency SpinDep appears in the progress nodes AND is consolidated;
+     *  (iii) SpinDep is fully processed with no failures per get_processing_status.
+     *  Skips cleanly if the fixtures are absent (bare checkout). */
+    private def e2e_check_resolves_dependencies(server_name: String, fixtures: Path): Unit = {
+      val imp = fixtures + Path.basic("SpinImport.thy")
+      val dep = fixtures + Path.basic("SpinDep.thy")
+      if (!imp.is_file || !dep.is_file) {
+        Output.writeln("    (note) SpinImport/SpinDep fixtures missing; skipping dependency-resolution test")
+        return
+      }
+
+      // Check ONLY the importer. If the engine did not resolve+evaluate SpinDep,
+      // SpinImport.uses_dep would fail to type-check and the check would be ok:false.
+      val (events, finished) = run_check(server_name, List(imp.expand.implode), deadline_secs = 90)
+      if (finished.flatMap(JSON.bool(_, "ok")) != Some(true))
+        error("check of SpinImport (imports SpinDep, unnamed) should be ok:true — a failure " +
+          "means the dependency SpinDep was not auto-resolved/evaluated; got " + finished +
+          " events=" + events.length)
+
+      // The unnamed dependency must show up in the progress nodes and be consolidated.
+      val last_progress = events.reverse.find(t => JSON.string(t, "event") == Some("progress"))
+      val depNode =
+        last_progress.flatMap(t => JSON.array(t, "nodes")).getOrElse(Nil)
+          .find(n => JSON.string(n, "theory").map(base_name) == Some("SpinDep"))
+      depNode match {
+        case Some(n) =>
+          if (JSON.bool(n, "consolidated") != Some(true))
+            error("auto-resolved dependency SpinDep should be consolidated at end, got " + JSON.Format(n))
+        case None =>
+          error("dependency SpinDep should appear among the progress nodes (auto-resolved), " +
+            "but no node for it was found in the final progress event")
+      }
+
+      // Cross-check via the query tool: SpinDep fully processed, no failures.
+      val ps = request_op(server_name, JSON.Object("op" -> "query",
+        "tool" -> "get_processing_status", "path" -> "SpinDep.thy"))
+      val psR = JSON.value(ps, "result").getOrElse(JSON.Object())
+      if (JSON.bool(psR, "fully_processed") != Some(true))
+        error("auto-resolved dependency SpinDep should be fully_processed, got " + JSON.Format(psR))
+      if (JSON.int(psR, "failed").getOrElse(0) != 0)
+        error("auto-resolved dependency SpinDep should have no failures, got " + JSON.Format(psR))
     }
 
     /** The `ic2 check` CLI front door submits and returns. Completion state is

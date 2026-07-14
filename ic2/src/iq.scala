@@ -57,7 +57,7 @@ import scala.jdk.CollectionConverters._
  *  transport-specific parts (JSON event streaming vs MCP notifications, the
  *  Progress used) stay with each caller.
  *
- *  There is AT MOST ONE check in flight at a time, server-wide: `use_theories`
+ *  There is AT MOST ONE check in flight at a time, server-wide: the check engine
  *  is not safe to run concurrently on the one `Headless.Session` (the calls
  *  share a single document state + version history), so `submit` refuses a new
  *  check while one is running. The caller cancels the running check and
@@ -65,12 +65,13 @@ import scala.jdk.CollectionConverters._
  *  no registry, no job ids, and no per-check bookkeeping — just `slot`. */
 object Check {
 
-  /* Headless.Session is batch-oriented: its "cancel" only flips
-   * progress.stopped (the ML kernel keeps running the tactic), and its liveness
-   * signals over-count forked proofs. ic2 needs live progress and a real stop,
-   * so it reaches below the public API in two places (details in each docstring):
+  /* Headless.Session is batch-oriented: a bare stop-flag flip leaves the ML kernel
+   * running the tactic, and its liveness signals over-count forked proofs. ic2
+   * needs live progress and a real stop, so it reaches below the public API in two
+   * places (details in each docstring):
    *   (a) Timing_Tracker — reports which commands are genuinely executing.
-   *   (b) cancelViaEdit() — reclaims a still-running forked proof after stop().
+   *   (b) Check_Engine.stop (step C) — reclaims a still-running forked proof via a
+   *       text-changing tail remint (SessionTools.resetNodeTails).
    */
 
   /** Delegates to `SessionTools.resolveFileTargets`, the shared
@@ -158,12 +159,12 @@ object Check {
 
 
   /* ------------------------------------------------------------------- *
-   * Job: a single check (the one running `use_theories`), held by `slot`.
+   * Job: a single check (running the A/B check engine), held by `slot`.
    *
-   * `submit` is non-blocking: it resolves targets, starts a worker running
-   * use_theories, parks the Job in `slot`, and returns. It REFUSES if a job is
-   * already running (Left) — checks never overlap. A Job outlives the
-   * connection/request that started it.
+   * `submit` is non-blocking: it resolves targets, starts a worker running the
+   * check engine (Check_Engine.updateModel then evaluate), parks the Job in
+   * `slot`, and returns. It REFUSES if a job is already running (Left) — checks
+   * never overlap. A Job outlives the connection/request that started it.
    *
    * Blocking is a CALLER-SIDE policy on top of submit: subscribe to the job's
    * events, await its terminal state, and (for the wire path) cancel the job if
@@ -172,8 +173,8 @@ object Check {
    *
    * The Job carries a Job_Progress doing the session-generic work: track
    * per-theory Node_Status, FIRST-ERROR STOP (set the failed theory + stop(),
-   * which use_theories polls and cancels), and fan typed Events out to
-   * subscribers. Each transport renders Events its own way (wire JSON events;
+   * which Check_Engine.evaluate polls via shouldStop), and fan typed Events out
+   * to subscribers. Each transport renders Events its own way (wire JSON events;
    * MCP notifications), so no transport detail lives here.
    * ------------------------------------------------------------------- */
 
@@ -264,13 +265,23 @@ object Check {
     case object Running extends Outcome { val ok = false; val reason = "running" }
   }
 
-  /** Progress driver for a Job: the single Progress passed to use_theories.
-    * Records per-theory status, performs first-error stop, and fans Events to
-    * the job's subscribers. A background ticker re-emits Progress events with
-    * fresh elapsed times so long-running-command payloads keep updating even
-    * when the document itself is quiet (a spinning command triggers no
-    * commands_changed events). Session-generic; carries no transport. */
-  private final class Job_Progress(job: Job, session: Headless.Session) extends Progress {
+  /** Progress driver for a Job: fed by Check_Engine.evaluate's `onStatus`
+    * callback (step B). Records per-theory status, performs first-error stop, and
+    * fans Events to the job's subscribers. A background ticker re-emits Progress
+    * events with fresh elapsed times so long-running-command payloads keep updating
+    * even when the document itself is quiet (a spinning command triggers no
+    * commands_changed events). Session-generic; carries no transport.
+    *
+    * `stopped` is the single "please stop" flag Check_Engine.evaluate polls via
+    * `shouldStop`: it is set by first-error detection (`record_status`), by
+    * `Job.cancel` (via `stop()`), and by the partial line-reached watchdog. It
+    * replaces the old `Progress.stopped` that use_theories used to poll. */
+  private final class Job_Progress(job: Job, session: Headless.Session) {
+    @volatile private var _stopped: Boolean = false
+    def stopped: Boolean = _stopped
+    /** Request stop (first-error, cancel, or line-reached). Also halts the ticker. */
+    def stop(): Unit = { ticker_stop = true; _stopped = true }
+
     private val per_theory =
       Synchronized(Map.empty[Document.Node.Name, Document_Status.Node_Status])
     // Per-node "last updated" stamp: a monotonic sequence bumped each time a
@@ -340,11 +351,9 @@ object Check {
       t.start()
     }
 
-    /** Stop the ticker WITHOUT triggering the Progress cancel path — used from
-      * the worker's `finally` after use_theories returns normally. */
+    /** Stop the ticker WITHOUT setting the stop flag — used from the worker's
+      * `finally` after Check_Engine.evaluate returns normally. */
     def stop_ticker(): Unit = ticker_stop = true
-
-    override def stop(): Unit = { ticker_stop = true; super.stop() }
 
     private def snapshotRunning(
       status: Map[Document.Node.Name, Document_Status.Node_Status]
@@ -356,16 +365,19 @@ object Check {
           if (rcs.isEmpty) None else Some(name -> rcs)
         }.toMap
 
-    override def nodes_status(ns: Progress.Nodes_Status): Unit = {
+    /** Fold one status snapshot (per closure node) into the recorded state, fan a
+      * throttled Progress event, and trigger first-error stop. This is the
+      * `onStatus` callback Check_Engine.evaluate invokes on each document change;
+      * it replaces the old `Progress.nodes_status` override. */
+    def record_status(status: List[(Document.Node.Name, Document_Status.Node_Status)]): Unit = {
       if (stopped || error_emitted) return
       // Partial mode: check the line-reached watchdog on every callback (the
-      // primary trigger while use_theories streams status); the ticker polls
-      // it too, for a target whose spin emits no fresh callback.
+      // primary trigger while evaluate streams status); the ticker polls it too,
+      // for a target whose spin emits no fresh callback.
       check_partial_reached()
       val updated = per_theory.change_result { cache =>
         var c = cache
-        for (name <- ns.domain) {
-          val st = ns(name)
+        for ((name, st) <- status) {
           // Bump the node's update stamp only when its status actually changed,
           // so an unchanged node re-reported on a quiet tick keeps its place
           // rather than churning to the top of the last-updated list.
@@ -382,7 +394,7 @@ object Check {
             val state = session.get_state()
             val snap = if (state.stable_tip_version.isDefined) Some(state.snapshot(name)) else None
             emit_error_from(name, snap)
-            super.stop()   // first-error stop: use_theories polls stopped and cancels
+            stop()   // first-error stop: evaluate polls `stopped` via shouldStop
           }
         case None =>
           val now = System.currentTimeMillis()
@@ -404,7 +416,7 @@ object Check {
 
     /** Post-result fallback: result is failure but the live callback never saw
       * it (consolidation on the final tick). Emit the first error, once. */
-    def emit_post_result_error(result: IC2_Use_Theories.Result): Unit =
+    def emit_post_result_error(result: Check_Engine.Result): Unit =
       result.nodes.find { case (_, st) => st.failed > 0 } match {
         case Some((name, _)) => if (claim_error()) emit_error_from(name, Some(result.snapshot(name)))
         case None =>
@@ -423,11 +435,10 @@ object Check {
     }
   }
 
-  /** What granularity a Job targets. Full-theory checks run `use_theories` (the
-    * common case). A partial check limits evaluation to a prefix of ONE theory
-    * ending at a resolved command — it drives `session.update` with a bounded
-    * perspective directly and consumes `commands_changed` callbacks to track
-    * progress.
+  /** What granularity a Job targets. Full-theory checks evaluate the whole target
+    * (the common case). A partial check limits evaluation to a prefix of ONE
+    * theory ending at a resolved command — it runs the same A/B engine and stops
+    * `evaluate` once the command at `line` has been processed.
     *
     * Both modes reuse the same event fan-out, cancel-running-execs +
     * cancel-pulse, subscribe API, and status JSON — they differ ONLY in the
@@ -437,17 +448,13 @@ object Check {
   sealed trait Mode
   object Mode {
     case object Full extends Mode
-    /** Partial-check target: the node under test, its theory-string (as
-      * `use_theories` expects — the same value Full mode passes, derived from
-      * resolveFileTargets, NOT the already-qualified `target.theory`), and the
-      * 1-based caret line. partial_body runs `use_theories(targetTheory)` and
-      * stops it once the command at `line` has been processed. */
-    final case class Partial(
-      target: Document.Node.Name, targetTheory: String, line: Int
-    ) extends Mode
+    /** Partial-check target: the node under test and the 1-based caret line.
+      * partial_body runs the A/B engine on the job's target node and stops it
+      * once the command at `line` has been processed. */
+    final case class Partial(target: Document.Node.Name, line: Int) extends Mode
   }
 
-  /** A check job: a worker thread running `use_theories` (Full mode, or Partial
+  /** A check job: a worker thread running the A/B check engine (Full mode, or Partial
     * mode which stops it at the target line), held in `slot`.
     * Subscribers receive Events live; the recorded status/outcome stays
     * available after completion for late status queries (until replaced). */
@@ -465,8 +472,8 @@ object Check {
     // as that reason (e.g. "timeout", "cancelled", "disconnect") rather than a
     // generic "interrupted". Set before cancel(); read on the interrupt path.
     @volatile private var cancelReason: Option[String] = None
-    // The settled per-theory status from use_theories' result — the reliable
-    // terminal state (the last live nodes_status callback lags consolidation),
+    // The settled per-theory status from the engine result — the reliable
+    // terminal state (the last live status callback lags consolidation),
     // used for the final progress snapshot. Empty until the worker returns.
     @volatile private var finalStatus: List[(Document.Node.Name, Document_Status.Node_Status)] = Nil
     private val latch = new java.util.concurrent.CountDownLatch(1)
@@ -487,42 +494,27 @@ object Check {
 
     def outcome: Outcome = state
     def isRunning: Boolean = state == Outcome.Running
-    /** Cancel the check — mechanism (b). `progress.stop()` flips
-      * `progress.stopped`, so `use_theories` unwinds (cancel_result +
-      * unload_theories, un-scheduling not-yet-dispatched commands). That alone
-      * does NOT interrupt a running ML tactic — its unload edit is text-neutral
-      * — so the worker's `finally` runs `cancelViaEdit()` once use_theories has
-      * returned, which reclaims any still-running fork via a text-changing tail
-      * edit. */
+    /** Cancel the check. `progress.stop()` flips the stop flag, so
+      * Check_Engine.evaluate stops waiting (`shouldStop` returns true) and returns.
+      * The actual teardown — un-require the targets AND reclaim any still-running
+      * fork via a text-changing tail remint — is step C (Check_Engine.stop), run in
+      * runEngine's `finally`; the flip here does not itself interrupt a running ML
+      * tactic. */
     def cancel(reason: String = "cancelled"): Unit = {
       if (cancelReason.isEmpty) cancelReason = Some(reason)
       progress.stop()
     }
 
-    /** Reclaim any still-running forked proofs after `use_theories` has returned
-      * (its `finally` ran `unload_theories`, so the node is no longer required).
-      * A text-changing tail edit per incomplete target node — batched into one
-      * `session.update` — makes PIDE re-split the tail and cancel the superseded
-      * execs and their forks (see SessionTools.resetNodeTails); the batch stop
-      * path skips this because its unload edit leaves the text unchanged. Safe
-      * to call unconditionally: a consolidated node has no running command, so
-      * `cancelFrontier` returns None and the edit is a no-op. Best-effort. */
-    private def cancelViaEdit(): Unit =
-      try {
-        val cuts = nodeNames.flatMap(n => SessionTools.cancelFrontier(session, n).map(n -> _))
-        SessionTools.resetNodeTails(session, cuts)
-      } catch { case _: Throwable => /* best-effort */ }
-
     def await(): Outcome = { latch.await(); state }
     /** Bounded await; returns true if it reached a terminal state in time. */
     def await(ms: Long): Boolean = latch.await(ms, java.util.concurrent.TimeUnit.MILLISECONDS)
 
-    private[Check] def start(theoryStrings: List[String]): Unit = {
+    private[Check] def start(): Unit = {
       startMs = System.currentTimeMillis()
       fan(Event.Started(theories))
       progress.start_ticker()
       val body: Runnable = mode match {
-        case Mode.Full => full_body(theoryStrings)
+        case Mode.Full => full_body()
         case p: Mode.Partial => partial_body(p)
       }
       val t = new Thread(body, "ic2-check")
@@ -531,26 +523,39 @@ object Check {
       t.start()
     }
 
-    /** The Full-mode worker: run IC2's copied `use_theories` and classify the outcome from
-      * its result + the observed cancel/first-error flags. */
-    private def full_body(theoryStrings: List[String]): Runnable = new Runnable {
+    private def theResources: Headless.Resources =
+      resources.getOrElse(error("check job missing Headless.Resources"))
+
+    /** Run step A (updateModel) then step B (evaluate), classify the outcome, and
+      * run step C (stop) on every exit path. `shouldStop` is the first-error/cancel
+      * flag the progress driver and `cancel()` share (`progress.stopped`); partial
+      * mode adds the line-reached watchdog to the same flag via `set_partial_target`.
+      *
+      * Check_Engine.stop is the whole teardown: it un-requires the targets AND
+      * reclaims any still-running fork (a text-changing tail remint), so a cancelled
+      * / first-error / timed-out check leaves nothing executing and the next check of
+      * this theory resumes cleanly instead of hanging on an abandoned tail. */
+    private def runEngine(): Exn.Result[Check_Engine.Result] =
+      Check_Engine.updateModel(session, theResources, nodeNames) match {
+        case Left(msg) => Exn.Exn(ERROR(msg))
+        case Right(model) =>
+          try Exn.Res(
+            Check_Engine.evaluate(session, model,
+              onStatus = progress.record_status,
+              shouldStop = () => progress.stopped))
+          catch { case e: Throwable => Exn.Exn(e) }
+          finally Check_Engine.stop(session, model)
+      }
+
+    /** The Full-mode worker: run the A/B engine and classify the outcome from its
+      * result + the observed cancel/first-error flags. */
+    private def full_body(): Runnable = new Runnable {
       def run(): Unit = {
         val result =
-          try Exn.Res(IC2_Use_Theories.use_theories(session,
-            resources.getOrElse(error("check job missing Headless.Resources")), theoryStrings,
-            qualifier = Sessions.DRAFT, master_dir = "",
-            check_delay = Time.seconds(0.2), check_limit = session.default_check_limit,
-            watchdog_timeout = Time.seconds(0),
-            nodes_status_delay = Time.seconds(0.2), progress = progress))
-          catch { case e: Throwable => Exn.Exn(e) }
+          try runEngine()   // runs step C (Check_Engine.stop) in its own finally
           finally {
-            progress.stop_ticker()   // does NOT set progress.stopped
+            progress.stop_ticker()   // does NOT set the stop flag
             progress.flush_final()
-            // IC2_Use_Theories has returned (its finally ran unload_theories, so
-            // the node is no longer required) — reclaim any still-running fork
-            // now via a text-changing tail edit. No-op unless something is
-            // still executing (i.e. this check was cancelled mid-flight).
-            cancelViaEdit()
           }
         // Record the settled per-theory status from the result for finalNodes
         // (reliable even when the last live callback lagged consolidation).
@@ -561,12 +566,15 @@ object Check {
         val out =
           result match {
             case Exn.Res(r) =>
-              // A first-error stop reads as failure even if use_theories also
-              // returned (the cancel and the result can race on the last tick).
-              if (progress.error_emitted) Outcome.Failed("first-error stop")
+              // A caller-driven cancel (timeout/disconnect/explicit) that left no
+              // failed node surfaces as that reason. A failed node — whether via
+              // a live first-error stop or found in the settled result — is
+              // "errors". (evaluate always returns a Result now, even on a
+              // first-error stop, so we classify from the authoritative result.)
+              if (!r.ok) { progress.emit_post_result_error(r); Outcome.Failed("errors") }
+              else if (progress.error_emitted) Outcome.Failed("errors")
               else if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
-              else if (r.ok) Outcome.Ok
-              else { progress.emit_post_result_error(r); Outcome.Failed("errors") }
+              else Outcome.Ok
             // An interrupt the CALLER caused (timeout/disconnect/explicit
             // cancel) surfaces as that reason. But a real error must never be
             // masked as a bare interrupt: if the run actually saw a failed
@@ -574,8 +582,9 @@ object Check {
             // interrupt. Only a truly reasonless interrupt is "interrupted".
             case Exn.Exn(exn) if Exn.is_interrupt(exn) =>
               if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
-              else if (progress.error_emitted) Outcome.Failed("first-error stop")
+              else if (progress.error_emitted) Outcome.Failed("errors")
               else Outcome.Failed("interrupted")
+            case Exn.Exn(ERROR(msg)) => Outcome.Failed(msg)
             case Exn.Exn(e) => Outcome.Failed("exception: " + e.getMessage)
           }
         settle(out)
@@ -584,22 +593,20 @@ object Check {
 
     /** The Partial-mode worker for `check FILE --line N`.
       *
-      * Runs a normal IC2 copied `use_theories([target])` — which loads and evaluates the
-      * target's whole dependency closure exactly like a full check, so the
-      * prefix type-checks and Headless.Resources' bookkeeping stays
-      * consistent (no direct session.update, so no double-load desync with a
-      * later full check) — and STOPS it as soon as the caret line has been
-      * processed:
+      * Runs the same A/B engine as a full check — `updateModel([target])` loads
+      * and syncs the target's whole dependency closure, then `evaluate` requires
+      * the target so the prefix type-checks and the closure is processed — and
+      * STOPS it as soon as the caret line has been processed:
       *
       *  - a background resolver waits for the target's commands to parse,
       *    resolves `line N` to a target Command (jEdit walk-back, same as
       *    `query state-at --line N`), and hands it to the watchdog;
       *  - the watchdog (driven by the ticker) fires `cancel("line-reached")`
-      *    once the target command reaches `is_terminated`. That flips
-      *    `progress.stopped` (use_theories unwinds via cancel_result +
-      *    unload_theories, un-scheduling not-yet-dispatched tail commands);
-      *    the `finally`'s `cancelViaEdit` then interrupts any tail command
-      *    already forked.
+      *    once the target command reaches `is_terminated`. That sets the stop flag
+      *    (`evaluate` returns as `shouldStop` goes true); step C (Check_Engine.stop)
+      *    then un-requires the target — un-scheduling not-yet-dispatched tail
+      *    commands — and reclaims any tail command already forked via a
+      *    text-changing tail remint.
       *
       * This can OVERSHOOT slightly: with parallel proofs enabled, commands
       * after the target line may already have been dispatched (forked) by the
@@ -610,24 +617,16 @@ object Check {
       * the SUCCESS outcome; a real first-error or other interrupt still
       * surfaces as failure.
       *
-      * A partial check always ends by cancelling the tail, so its `finally`
-      * runs `cancelViaEdit` (mechanism (b)): the text-changing tail edit both
-      * interrupts any still-forked tail command and re-mints the abandoned tail
-      * — otherwise a later check of this theory would hang on it. */
+      * A partial check always ends by cancelling the tail, so step C
+      * (Check_Engine.stop, run in runEngine's finally) does the real work: its
+      * text-changing tail remint both interrupts any still-forked tail command and
+      * re-mints the abandoned tail — otherwise a later check would hang on it. */
     private def partial_body(p: Mode.Partial): Runnable = new Runnable {
       def run(): Unit = {
         val out =
           try {
             arm_target_resolver(p)
-            val result: Exn.Result[IC2_Use_Theories.Result] =
-              try Exn.Res(IC2_Use_Theories.use_theories(session,
-                resources.getOrElse(error("partial check job missing Headless.Resources")), List(p.targetTheory),
-                qualifier = Sessions.DRAFT, master_dir = "",
-                check_delay = Time.seconds(0.2), check_limit = session.default_check_limit,
-                watchdog_timeout = Time.seconds(0),
-                nodes_status_delay = Time.seconds(0.2), progress = progress))
-              catch { case e: Throwable => Exn.Exn(e) }
-            classify_partial(result)
+            classify_partial(runEngine())
           }
           catch {
             case exn: Throwable if Exn.is_interrupt(exn) =>
@@ -639,22 +638,16 @@ object Check {
           finally {
             progress.stop_ticker()
             progress.flush_final()
-            // A partial check always ends by cancelling the tail (line-reached
-            // fires cancel). The text-changing tail edit interrupts any tail
-            // command still forked AND re-mints the tail's exec_ids, so a later
-            // check of this theory resumes and evaluates the remainder instead
-            // of hanging on the abandoned (never-consolidated) tail.
-            cancelViaEdit()
           }
         settle(out)
       }
     }
 
     /** Background poller: wait (bounded) for the target node's commands to
-      * appear (use_theories' change_parser is async), resolve `line N` to a
-      * Command, install it as the watchdog target on Job_Progress. If it
-      * can't resolve (theory shorter than N, parse error), cancel with a
-      * clear reason so the outcome is reported cleanly rather than hanging. */
+      * appear (updateModel's parse is async), resolve `line N` to a Command,
+      * install it as the watchdog target on Job_Progress. If it can't resolve
+      * (theory shorter than N, parse error), cancel with a clear reason so the
+      * outcome is reported cleanly rather than hanging. */
     private def arm_target_resolver(p: Mode.Partial): Unit = {
       val t = new Thread(new Runnable {
         def run(): Unit = {
@@ -681,10 +674,12 @@ object Check {
       * SUCCESS — the target was reached, the tail was intentionally
       * abandoned. Everything else (first-error stop, other cancel reasons,
       * genuine interrupts) surfaces as failure, matching Full mode. */
-    private def classify_partial(result: Exn.Result[IC2_Use_Theories.Result]): Outcome =
+    private def classify_partial(result: Exn.Result[Check_Engine.Result]): Outcome =
       result match {
         case Exn.Res(r) =>
-          if (progress.error_emitted) Outcome.Failed("first-error stop")
+          // A failure in the evaluated prefix (live-detected or in the settled
+          // result) is "errors" and wins over the line-reached success signal.
+          if (progress.error_emitted) Outcome.Failed("errors")
           else if (cancelReason.contains("line-reached")) Outcome.Ok
           else if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
           else if (r.ok) Outcome.Ok
@@ -692,8 +687,9 @@ object Check {
         case Exn.Exn(exn) if Exn.is_interrupt(exn) =>
           if (cancelReason.contains("line-reached")) Outcome.Ok
           else if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
-          else if (progress.error_emitted) Outcome.Failed("first-error stop")
+          else if (progress.error_emitted) Outcome.Failed("errors")
           else Outcome.Failed("interrupted")
+        case Exn.Exn(ERROR(msg)) => Outcome.Failed(msg)
         case Exn.Exn(e) => Outcome.Failed("exception: " + e.getMessage)
       }
 
@@ -710,8 +706,8 @@ object Check {
       (if (endMs > 0) endMs else System.currentTimeMillis()) - startMs
 
     /** The settled per-theory status, sorted — for a final progress snapshot.
-      * Prefers use_theories' result (the reliable consolidated state); falls
-      * back to the live-recorded status if the worker hasn't returned. */
+      * Prefers the engine result (the reliable consolidated state); falls back to
+      * the live-recorded status if the worker hasn't returned. */
     def finalNodes: List[(Document.Node.Name, Document_Status.Node_Status)] =
       if (finalStatus.nonEmpty) finalStatus
       else progress.snapshot_status.toList.sortBy(_._1.theory)
@@ -735,7 +731,7 @@ object Check {
   }
 
   /** The single in-flight check slot. At most one check runs at a time
-    * (use_theories is not concurrency-safe on one session), so there is no
+    * (the check engine is not concurrency-safe on one session), so there is no
     * registry — just the current/last job. One daemon process per server, so a
     * single slot is correct. */
   private val slot = new AtomicReference[Option[Job]](None)
@@ -761,7 +757,7 @@ object Check {
       val job = new Job(resolved.map(_._1.theory), resolved.map(_._1), session,
         resources = Some(resources))
       slot.set(Some(job))
-      job.start(resolved.map(_._2))
+      job.start()
       job
     }
   }
@@ -785,12 +781,12 @@ object Check {
       Left("partial check (--line) requires exactly one FILE, got " + files.length)
     else if (line <= 0) Left("line must be >= 1, got " + line)
     else resolveTargets(resources, files).map { resolved =>
-      val (name, theoryStr) = resolved.head
-      val mode = Mode.Partial(name, theoryStr, line = line)
+      val (name, _) = resolved.head
+      val mode = Mode.Partial(name, line = line)
       val job = new Job(List(name.theory), List(name), session,
         mode = mode, resources = Some(resources))
       slot.set(Some(job))
-      job.start(Nil)   // Partial worker ignores theoryStrings
+      job.start()
       job
     }
   }
