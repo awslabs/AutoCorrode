@@ -190,31 +190,36 @@ object SessionTools {
   /* ---- exec cancellation via text-neutral tail edit ---- */
 
   /** Source offset from which node `name`'s tail must be re-split to cancel any
-    * in-flight execution: the start of its earliest not-finished command, but
+    * in-flight execution: the start of its earliest not-yet-settled command, but
     * only if the node has something actually executing (a running command or a
     * live fork). `None` otherwise — absent/headerless node, a consolidated node,
     * or one parsed-but-idle (no forks to reclaim, so don't edit it).
     *
-    * A running/forked command is by definition not finished
-    * (`is_finished = touched && forks==0 && runs==0 && !failed`), so the first
-    * such command's frontier is already pinned when we reach it: return then.
-    * We cut from the earliest UNFINISHED (not merely running) command so that
-    * every running/forked command sits at or after the cut and thus lands in the
-    * next version's `removed_execs`. */
+    * "Settled" means `touched && forks == 0 && runs == 0` — a command that has
+    * been touched and has no outstanding work, regardless of whether it failed.
+    * This deliberately preserves failed commands in the document so their error
+    * diagnostics remain queryable via `document-info`/`query diagnostics` after
+    * the check concludes. The previous definition used `is_finished` (which
+    * excludes failed commands: `!failed && touched && forks==0 && runs==0`),
+    * causing failed commands to be edited away and their diagnostics lost.
+    *
+    * We cut from the earliest UNSETTLED command so that every running/forked
+    * command sits at or after the cut and thus lands in the next version's
+    * `removed_execs`. */
   def cancelFrontier(session: Session, name: Document.Node.Name): Option[Int] = {
     val snapshot = session.snapshot(node_name = name)
     val node = snapshot.get_node(name)
     if (node == null || !node.has_header) return None
     val version = snapshot.version
-    var firstUnfinished: Option[Int] = None
+    var firstUnsettled: Option[Int] = None
     val it = node.commands.iterator
     while (it.hasNext) {
       val cmd = it.next()
       val st = snapshot.state.command_status(version, cmd)
-      if (firstUnfinished.isEmpty && !st.is_finished)
-        firstUnfinished = node.command_start(cmd)
+      if (firstUnsettled.isEmpty && !st.maybe_consolidated)
+        firstUnsettled = node.command_start(cmd)
       if (st.is_running || st.forks > 0)
-        return firstUnfinished   // running ⟹ unfinished ⟹ already pinned; cut here
+        return firstUnsettled   // running ⟹ unsettled ⟹ already pinned; cut here
     }
     None   // scanned to end, nothing executing ⇒ nothing to cancel
   }
