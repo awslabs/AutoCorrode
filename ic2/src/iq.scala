@@ -449,14 +449,31 @@ object Check {
     // terminal state (the last live status callback lags consolidation),
     // used for the final progress snapshot. Empty until the worker returns.
     @volatile private var finalStatus: List[(Document.Node.Name, Document_Status.Node_Status)] = Nil
+    // The first error's location and message, RETAINED on the Job so a later
+    // `check status` (or any status query) can report where and why the check
+    // failed — independent of whether anyone was subscribed when the error fired.
+    // The live Event.Error channel is best-effort and non-replaying; this is the
+    // durable record. Latched from the first Event.Error that fans out.
+    @volatile private var firstError: Option[Event.Error] = None
     private val latch = new java.util.concurrent.CountDownLatch(1)
     private val subscribers = new java.util.concurrent.CopyOnWriteArrayList[Event => Unit]()
     private val progress = new Job_Progress(this, session)
     @volatile private var worker: Thread = null
 
-    /** Deliver an event to every current subscriber (best-effort per sink). */
-    private[Check] def fan(e: Event): Unit =
+    /** Deliver an event to every current subscriber (best-effort per sink). Also
+      * durably latches the first Error event, so `statusJson` can report the
+      * failure's location and message regardless of subscribers. */
+    private[Check] def fan(e: Event): Unit = {
+      e match {
+        case err: Event.Error => if (firstError.isEmpty) firstError = Some(err)
+        case _ =>
+      }
       subscribers.forEach(s => try s(e) catch { case _: Throwable => })
+    }
+
+    /** The retained first-error (location + message), if the check failed with
+      * a diagnosable error. None while running / on success / on a bare cancel. */
+    def firstErrorInfo: Option[Event.Error] = firstError
 
     /** Subscribe to live events. Returns an unsubscribe thunk. Late subscribers
       * (job already finished) still get nothing replayed here — callers use
@@ -685,7 +702,16 @@ object Check {
         "elapsed_ms" -> elapsedMs,
         "nodes" -> progress.snapshot_status.toList.sortBy(_._1.theory)
           .map { case (n, s) => nodeStatusJson(n, s, Nil, progress.updateSeqOf(n)) }) ++
-      (st match { case Outcome.Failed(r) if r.nonEmpty => JSON.Object("reason" -> r); case _ => JSON.Object() })
+      (st match { case Outcome.Failed(r) if r.nonEmpty => JSON.Object("reason" -> r); case _ => JSON.Object() }) ++
+      // The retained first error's location + message, so a detached `check
+      // status` sees WHERE and WHY it failed (not just reason=errors). Omitted
+      // when there is no diagnosable error (running / ok / bare cancel).
+      firstError.map { err =>
+        JSON.Object("error" ->
+          (JSON.Object("theory" -> err.theory, "message" -> err.message) ++
+           err.file.map(f => JSON.Object("file" -> f)).getOrElse(JSON.Object()) ++
+           err.line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object())))
+      }.getOrElse(JSON.Object())
     }
   }
 

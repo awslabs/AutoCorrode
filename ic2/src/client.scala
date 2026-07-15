@@ -390,6 +390,18 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
     // (a finished/idle check has nothing in flight to draw).
     if (state == "running" && nodes.nonEmpty)
       render_progress_frame(nodes, bars).foreach(Output.writeln(_))
+    // Retained first error: WHERE (theory + file:line) and WHY (message), so a
+    // detached poll sees the failure without needing to have been subscribed.
+    JSON.value(reply, "error").flatMap(JSON.Object.unapply).foreach { err =>
+      val thy = JSON.string(err, "theory").getOrElse("?")
+      val loc = JSON.string(err, "file") match {
+        case Some(f) => f + JSON.int(err, "line").map(":" + _).getOrElse("")
+        case None => thy
+      }
+      val msg = JSON.string(err, "message").getOrElse("(no message)")
+      Output.writeln("error: " + loc)
+      msg.linesIterator.foreach(l => Output.writeln("  " + l))
+    }
     sys.exit(0)
   }
 
