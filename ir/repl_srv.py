@@ -82,6 +82,10 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True)
 import time
 
+from win_compat import (
+    IS_WINDOWS, isabelle_argv, SPAWN_KW, terminate_tree, from_cygwin_path,
+    restrict_file_to_user)
+
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.completion import Completer, Completion
@@ -349,12 +353,12 @@ def _extract_repl_id(command):
 
 def _load_symbols(isabelle_bin):
     """Load unicode-to-Isabelle-ASCII mapping from $ISABELLE_HOME/etc/symbols."""
-    isabelle_home = subprocess.check_output(
-        [isabelle_bin, "getenv", "-b", "ISABELLE_HOME"],
-        text=True, timeout=10).strip()
+    isabelle_home = from_cygwin_path(subprocess.check_output(
+        isabelle_argv(isabelle_bin, ["getenv", "-b", "ISABELLE_HOME"]),
+        text=True, timeout=10).strip())
     symbols_path = os.path.join(isabelle_home, "etc", "symbols")
     unicode_to_ascii = {}
-    with open(symbols_path, "r") as f:
+    with open(symbols_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -574,15 +578,15 @@ class BashServer:
     """Starts an Isabelle Bash.Server for external tool support (e.g. Sledgehammer)."""
 
     def __init__(self, isabelle, quiet=False):
-        cmd = [isabelle, "scala", "-e",
+        cmd = isabelle_argv(isabelle, ["scala", "-e",
                '{ val server = isabelle.Bash.Server.start(debugging = false); '
                'println("BASH_SERVER_ADDRESS=" + server.address); '
                'println("BASH_SERVER_PASSWORD=" + server.password); '
-               'Thread.sleep(Long.MaxValue) }']
+               'Thread.sleep(Long.MaxValue) }'])
         self.proc = subprocess.Popen(
             cmd, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            start_new_session=True)
+            **SPAWN_KW)
         self.address = None
         self.password = None
         if quiet:
@@ -607,11 +611,14 @@ class BashServer:
 
     def close(self):
         if self.proc.poll() is None:
-            os.killpg(self.proc.pid, signal.SIGTERM)
+            terminate_tree(self.proc)
             try:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                os.killpg(self.proc.pid, signal.SIGKILL)
+                if IS_WINDOWS:
+                    terminate_tree(self.proc)   # taskkill /F already forceful
+                else:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
 
 
 def spinner(label, done_event):
@@ -639,13 +646,23 @@ class PolyMLProcess:
         self.cmd = self._build_cmd(isabelle, session, directory, ml_dir, port,
                                    bash_server=bash_server, redirect=redirect)
         self.startup_output = []
+        env = None
+        if IS_WINDOWS and not os.environ.get("IR_REPL_AUTH_TOKEN", "").strip():
+            # Native Poly/ML on Windows cannot open Cygwin's /dev/urandom, so
+            # Tcp_Handler.generate_token would fall back to a predictable
+            # time-derived token.  Python can reach the OS CSPRNG, so mint the
+            # token here and hand it over; generate_token prefers this variable.
+            # POSIX is left untouched -- /dev/urandom works there.
+            env = dict(os.environ)
+            env["IR_REPL_AUTH_TOKEN"] = secrets.token_hex(24)
         self.proc = subprocess.Popen(
             self.cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
-            start_new_session=True,
+            env=env,
+            **SPAWN_KW,
         )
 
     def read_actual_port(self, timeout=60):
@@ -677,25 +694,25 @@ class PolyMLProcess:
     @staticmethod
     def _build_cmd(isabelle, session, directory, ml_dir, port,
                    bash_server=None, redirect=False):
-        cmd = [isabelle, "ML_process"]
+        isa_args = ["ML_process"]
         if directory:
-            cmd += ["-d", directory]
-        cmd += ["-l", session]
+            isa_args += ["-d", directory]
+        isa_args += ["-l", session]
         if bash_server:
-            cmd += ["-o", f"bash_process_address={bash_server.address}",
+            isa_args += ["-o", f"bash_process_address={bash_server.address}",
                     "-o", f"bash_process_password={bash_server.password}"]
         if redirect:
-            cmd.append("-r")
+            isa_args.append("-r")
         # Forward ISABELLE_REMOTE options (e.g. process_policy for I/P remote execution)
         isabelle_remote = os.environ.get("ISABELLE_REMOTE", "")
         if isabelle_remote:
-            cmd += shlex.split(isabelle_remote)
+            isa_args += shlex.split(isabelle_remote)
         # Load order: tcp_handler, ir, ml_repl (ml_repl wires them together)
-        cmd += ["-f", os.path.join(ml_dir, "tcp_handler.ML"),
+        isa_args += ["-f", os.path.join(ml_dir, "tcp_handler.ML"),
                 "-f", os.path.join(ml_dir, "ir.ML"),
                 "-f", os.path.join(ml_dir, "ml_repl.ML"),
                 "-e", f"case ML_Repl.start {port} of SOME (_, t) => Isabelle_Thread.join t | NONE => ();"]
-        return cmd
+        return isabelle_argv(isabelle, isa_args)
 
     def alive(self):
         return self.proc.poll() is None
@@ -715,16 +732,14 @@ class PolyMLProcess:
                 self.proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        # Step 2: SIGTERM to process group (catchable — lets ml_proxy cleanup run)
+        # Step 2: terminate the process tree (catchable SIGTERM on POSIX lets
+        # ml_proxy cleanup run; taskkill /T on Windows).
         if self.proc.poll() is None:
-            try:
-                os.killpg(self.proc.pid, signal.SIGTERM)
-            except OSError:
-                self.proc.terminate()
+            terminate_tree(self.proc)
             try:
                 self.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                print("WARNING: Poly/ML process did not exit after SIGTERM",
+                print("WARNING: Poly/ML process did not exit after termination",
                       flush=True)
 
 
@@ -978,7 +993,12 @@ class Server:
         # loop by retrying acquire on subsequent commands.
         self.pool_acquire_timeout = float(pool_acquire_timeout)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Not on Windows: there SO_REUSEADDR also permits binding a port another
+        # process is actively listening on, so a second daemon would silently
+        # announce a port it does not own and clients would reach the first one.
+        # (Same trap as in tcp_handler.ML; Windows rebinds TIME_WAIT anyway.)
+        if not IS_WINDOWS:
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if port == 0:
             # Try default port first; fall back to OS-assigned.
             try:
@@ -1516,7 +1536,12 @@ class Server:
                     return
                 auth_buf += chunk
             auth_line, buf = auth_buf.split(b"\n", 1)
-            received_token = auth_line.decode("utf-8", errors="replace")
+            # Tolerate CRLF.  Java's PrintWriter.println() uses the platform
+            # line separator, so I/Q's IRClient sends "<token>\r\n" on Windows;
+            # without this the compare below always fails and every repl_* tool
+            # reports "REPL authentication failed" while repl_connect (which
+            # never authenticates) still looks fine.
+            received_token = auth_line.decode("utf-8", errors="replace").rstrip("\r")
             if not hmac.compare_digest(received_token, self.token):
                 client.sendall(b"ERR: authentication failed\n")
                 disconnect_reason = "authentication failed"
@@ -1537,7 +1562,7 @@ class Server:
                         self.clients[client]["bytes_in"] += len(chunk)
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    text = line.decode("utf-8")
+                    text = line.decode("utf-8").rstrip("\r")   # CRLF-tolerant
                     # Intercept /-commands before command accumulation
                     if not cmd_lines and text.strip().startswith("/"):
                         local_result = self._handle_local_command(text)
@@ -2059,11 +2084,88 @@ def discover_mgmt_sockets():
     return results
 
 
+# --- Management-console transport -------------------------------------------
+#
+# POSIX uses an AF_UNIX socket at sock_path, with mode 0600 keeping other local
+# users out (see the README threat model).  Windows CPython does not expose
+# AF_UNIX at all, so there we listen on an ephemeral 127.0.0.1 TCP port and use
+# sock_path as a *rendezvous file* holding "<port>\n<token>\n".  Since a
+# localhost port is reachable by every local user, the token restores the
+# same-user restriction that 0600 gave us; the file itself is ACL'd to the
+# current user so only they can read the token.
+#
+# Keeping the rendezvous file at exactly the path the socket would have used
+# means mgmt_socket_path()/discover_mgmt_sockets() and every os.path.exists /
+# os.unlink call around them work identically on both platforms.
+
+def mgmt_listen(sock_path):
+    """Bind the management-console listener.  Returns ``(sock, token)``.
+
+    ``token`` is None on POSIX (filesystem permissions are the access control)
+    and a random string on Windows, which clients must send as their first
+    line.  Removes any stale socket/rendezvous file at *sock_path* first.
+    """
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
+    if not IS_WINDOWS:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.bind(sock_path)
+        restrict_file_to_user(sock_path)
+        sock.listen(4)
+        return sock, None
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(4)
+    token = secrets.token_urlsafe(24)
+    # Create the file before writing, so the ACL is tightened while it is still
+    # empty and the token is never briefly world-readable.
+    fd = os.open(sock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    os.close(fd)
+    if not restrict_file_to_user(sock_path):
+        print(f"{YELLOW}WARNING: could not restrict permissions on "
+              f"{sock_path}; the management token may be readable by other "
+              f"local users.{RST}", file=sys.stderr, flush=True)
+    with open(sock_path, "w", encoding="utf-8") as f:
+        f.write(f"{sock.getsockname()[1]}\n{token}\n")
+    return sock, token
+
+
+def mgmt_connect(sock_path):
+    """Connect to a daemon's management console.  Returns a connected socket.
+
+    Raises OSError if the daemon is unreachable, or the rendezvous file is
+    malformed, or (Windows) the token is rejected.
+    """
+    if not IS_WINDOWS:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.connect(sock_path)
+        return sock
+    with open(sock_path, encoding="utf-8") as f:
+        parts = f.read().split("\n")
+    if len(parts) < 2 or not parts[0].strip().isdigit():
+        raise OSError(f"malformed management rendezvous file {sock_path}")
+    sock = socket.create_connection(("127.0.0.1", int(parts[0].strip())))
+    sock.sendall((parts[1] + "\n").encode("utf-8"))
+    reply = b""
+    while b"\n" not in reply:
+        chunk = sock.recv(4096)
+        if not chunk:
+            sock.close()
+            raise OSError("management console closed during authentication")
+        reply += chunk
+    if not reply.startswith(b"OK"):
+        sock.close()
+        raise OSError(reply.split(b"\n", 1)[0].decode("utf-8", "replace"))
+    return sock
+
+
 class MgmtSocketServer:
-    """Unix socket server for the management console in daemon mode.
+    """Socket server for the management console in daemon mode.
 
     Accepts multiple connections. Output is broadcast to all connected
     clients. Input from any client is fed to process_mgmt_console_input.
+    Transport is AF_UNIX on POSIX and token-authenticated localhost TCP on
+    Windows -- see mgmt_listen().
     """
 
     def __init__(self, server, sock_path, completer=None):
@@ -2074,12 +2176,7 @@ class MgmtSocketServer:
         self.clients_lock = threading.Lock()
         # Wire server output to broadcast
         server.mgmt_output = self.broadcast
-        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        if os.path.exists(sock_path):
-            os.unlink(sock_path)
-        self.sock.bind(sock_path)
-        os.chmod(sock_path, 0o600)
-        self.sock.listen(4)
+        self.sock, self.token = mgmt_listen(sock_path)
         self.running = True
 
     def broadcast(self, msg):
@@ -2108,16 +2205,74 @@ class MgmtSocketServer:
                 continue
             except OSError:
                 break
-            with self.clients_lock:
-                self.clients.append(client)
-            print("Management console attached", flush=True)
+            # Registration happens in _handle_client, after authentication, so
+            # an unauthenticated peer never receives broadcast output.
             threading.Thread(target=self._handle_client, args=(client,),
                              daemon=True).start()
 
-    def _handle_client(self, client):
-        cmd_lines = []
+    def _authenticate(self, client):
+        """Consume the token line on Windows.  Returns (ok, leftover_bytes).
+
+        On POSIX there is no token -- AF_UNIX file permissions already limit
+        this to the same user -- so nothing is consumed.
+        """
+        if self.token is None:
+            return True, b""
+        # Bounded wait so a peer that connects and stays silent cannot pin a
+        # thread (or an accept slot) indefinitely.
+        client.settimeout(10.0)
         buf = b""
         try:
+            while b"\n" not in buf:
+                chunk = client.recv(4096)
+                if not chunk:
+                    return False, b""
+                buf += chunk
+                if len(buf) > 4096:
+                    return False, b""
+        except (OSError, socket.timeout):
+            return False, b""
+        finally:
+            client.settimeout(None)
+        line, rest = buf.split(b"\n", 1)
+        # CRLF-tolerant, same reasoning as Server._handle_client.
+        if not hmac.compare_digest(
+                line.decode("utf-8", errors="replace").rstrip("\r"),
+                self.token):
+            try:
+                client.sendall(b"ERR: authentication failed\n")
+            except OSError:
+                pass
+            return False, b""
+        try:
+            client.sendall(b"OK\n")
+        except OSError:
+            return False, b""
+        return True, rest
+
+    def _handle_client(self, client):
+        cmd_lines = []
+        ok, buf = self._authenticate(client)
+        if not ok:
+            try:
+                client.close()
+            except OSError:
+                pass
+            return
+        with self.clients_lock:
+            self.clients.append(client)
+        print("Management console attached", flush=True)
+        try:
+            # Any bytes that arrived in the same packet as the token still
+            # need processing before we read more.
+            while b"\n" in buf:
+                line_bytes, buf = buf.split(b"\n", 1)
+                line = line_bytes.decode("utf-8", errors="replace").rstrip("\r")
+                if process_mgmt_console_input(line, self.server, cmd_lines,
+                                              output_fn=self.broadcast,
+                                              completer=self.completer):
+                    self.server.running = False
+                    return
             while self.running and self.server.running:
                 chunk = client.recv(4096)
                 if not chunk:
@@ -2125,7 +2280,7 @@ class MgmtSocketServer:
                 buf += chunk
                 while b"\n" in buf:
                     line_bytes, buf = buf.split(b"\n", 1)
-                    line = line_bytes.decode("utf-8", errors="replace")
+                    line = line_bytes.decode("utf-8", errors="replace").rstrip("\r")
                     if process_mgmt_console_input(line, self.server, cmd_lines,
                                                   output_fn=self.broadcast,
                                                   completer=self.completer):
@@ -2195,10 +2350,9 @@ def attach_mode(sock_path):
         print(f"{DIM}Start with: repl.py --daemon{RST}", file=sys.stderr)
         sys.exit(1)
 
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sock.connect(sock_path)
-    except (ConnectionRefusedError, OSError) as e:
+        sock = mgmt_connect(sock_path)
+    except OSError as e:
         print(f"{RED}Cannot connect to {sock_path}: {e}{RST}", file=sys.stderr)
         sys.exit(1)
 
@@ -2277,7 +2431,11 @@ def find_isabelle_installation(isabelle_arg):
     candidates = []
 
     if isabelle_arg:
-        expanded = os.path.expanduser(isabelle_arg)
+        # The I/Q plugin passes --isabelle Isabelle_System.getenv("ISABELLE_HOME"),
+        # which on Windows is a Cygwin path (/cygdrive/c/...) that native Python
+        # cannot stat.  Convert it back before looking anything up; this is a
+        # no-op on POSIX and for paths already in Windows form.
+        expanded = os.path.expanduser(from_cygwin_path(isabelle_arg))
         # If it's a directory, try common binary locations
         if os.path.isdir(expanded):
             candidates.extend([
@@ -2292,6 +2450,14 @@ def find_isabelle_installation(isabelle_arg):
             candidates.extend([
                 "/Applications/Isabelle2025-2.app/bin/isabelle",
                 os.path.expanduser("~/Isabelle2025-2.app/bin/isabelle"),
+            ])
+        elif os.name == "nt":
+            # Windows: try common install locations (the bash script under bin/;
+            # it is invoked via Cygwin bash by win_compat.isabelle_argv).
+            candidates.extend([
+                os.path.expanduser("~/Isabelle2025-2/bin/isabelle"),
+                os.path.expanduser("~/Documents/Isabelle2025-2/bin/isabelle"),
+                r"C:\Isabelle2025-2\bin\isabelle",
             ])
         else:
             # Linux: try home directory
@@ -2355,7 +2521,8 @@ def main():
     p.add_argument("--kill-daemon", action="store_true",
                    help="Kill a running daemon and exit")
     p.add_argument("--mgmt-socket", default=None,
-                   help="Unix socket path for --daemon/--attach "
+                   help="Management console socket path for --daemon/--attach "
+                        "(Windows: rendezvous file for the mgmt TCP port) "
                         "(default: auto-derived from TCP port)")
     p.add_argument("--pool-size", type=int, default=5,
                    help="Number of persistent ML connections (default: 5, "
@@ -2397,8 +2564,7 @@ def main():
             print(f"{DIM}No daemon running (no socket at {sock_path}){RST}")
             sys.exit(0)
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(sock_path)
+            sock = mgmt_connect(sock_path)
             sock.sendall(b"/quit\n")
             sock.close()
             # Wait for socket file to disappear
@@ -2634,7 +2800,7 @@ def main():
             # because the ML process only knows the remote platform name.
             # Local case: ML_System.platform is correct.
             ml_system = subprocess.check_output(
-                [args.isabelle, "getenv", "-b", "ML_SYSTEM"],
+                isabelle_argv(args.isabelle, ["getenv", "-b", "ML_SYSTEM"]),
                 text=True, timeout=10).strip()
             isa_remote = os.environ.get("ISABELLE_REMOTE", "")
             m = re.search(r'-o\s+ML_platform=(\S+)', isa_remote)
@@ -2711,7 +2877,8 @@ def main():
             heap_info.close()
         sys.exit(128 + signum)
     signal.signal(signal.SIGTERM, _signal_cleanup)
-    signal.signal(signal.SIGHUP, _signal_cleanup)
+    if hasattr(signal, "SIGHUP"):   # SIGHUP does not exist on Windows
+        signal.signal(signal.SIGHUP, _signal_cleanup)
 
     pool_size = args.pool_size
     if poly and poly.max_connections is not None:
