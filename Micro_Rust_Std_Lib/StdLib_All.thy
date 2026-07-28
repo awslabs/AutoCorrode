@@ -5,7 +5,6 @@ theory StdLib_All
   imports
     StdLib_Arithmetic
     StdLib_Contracts
-    StdLib_Exception
     StdLib_Iterators
     StdLib_Logging
     StdLib_Option
