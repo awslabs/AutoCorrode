@@ -9,6 +9,7 @@ session Misc = HOL +
   theories
     Array
     Bitfields
+    Case_for_Typedefs
     Debug_Logging
     ListAdditional
     MultisetAdditional
@@ -16,6 +17,7 @@ session Misc = HOL +
     Remove_Enum_Discriminate_Elims
     Result
     SetAdditional
+    Simple_Word_Enums
     Undefined
     Vector
     Word_Cast_Simplifier
