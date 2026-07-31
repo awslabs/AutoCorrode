@@ -147,6 +147,10 @@ jobs:
           make install ISABELLE_HOME=$ISABELLE_HOME
 
   ip-test:
+    # Temporarily disabled, see issue #263: the `Configure I/P remote` step
+    # fails because the Isabelle download seems to be blocked for GitHub runners.
+    # Set to `true` (or delete this line) to re-enable.
+    if: false
     runs-on: ubuntu-latest
     container:
       image: makarius/isabelle:Isabelle2025-2
