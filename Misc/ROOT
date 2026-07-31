@@ -12,6 +12,7 @@ session Misc = HOL +
     Debug_Logging
     ListAdditional
     MultisetAdditional
+    Num_Case_Expression
     Remove_Enum_Discriminate_Elims
     Result
     SetAdditional
