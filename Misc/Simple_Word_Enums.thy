@@ -5,6 +5,7 @@ theory Simple_Word_Enums
     Misc.SetAdditional
     Misc.ListAdditional
     Misc.Result
+    Misc.Debug_Logging
   keywords "simple_word_enum" :: thy_decl
     and "simple_word_enum_benchmark" :: thy_decl
 begin
@@ -1057,5 +1058,316 @@ uniform rather than by cases, and costs ~9ms at 64 variants. What dominates inst
 past that: 33ms at 128 and 49ms at 256.\<close>
 
 simple_word_enum_benchmark (32) sizes: 4 16 32 64 (* 128 should take about 2s*)
+
+subsection\<open>The \<^verbatim>\<open>generate_debug\<close> plugin\<close>
+
+text\<open>Generates the \<^class>\<open>generate_debug\<close> instance for the enum, rendering each variant as its
+own name:
+
+\<^verbatim>\<open>generate_debug Leet = [str ''Leet'']\<close>
+
+Concretely, for the type \<^verbatim>\<open>T\<close> with variants \<^verbatim>\<open>C1, ..., Cn\<close> the plugin emits what a hand-written
+
+\<^verbatim>\<open>instantiation T :: generate_debug
+begin
+  definition generate_debug_T :: \<open>T \<Rightarrow> log_data\<close> where
+    \<open>generate_debug_T e \<equiv> [str (case e of C1 \<Rightarrow> ''C1'' | ... | Cn \<Rightarrow> ''Cn'')]\<close>
+  instance ..
+end\<close>
+
+would. The \<^verbatim>\<open>case\<close> arms carry the names rather than whole \<^verbatim>\<open>log_data\<close> lists, so that the term
+holds one \<^const>\<open>str\<close> application instead of \<^verbatim>\<open>n\<close> of them. No per-variant equations are
+generated: \<^verbatim>\<open>generate_debug_T_def\<close> plus the case simproc reduces a concrete variant in a fixed
+number of rewrites, so a fact per variant would buy nothing.
+
+The instance is added to the \<^emph>\<open>background\<close> theory: type classes are global, so the instance
+must be, even when the declaration itself sits in a local target such as an \<^verbatim>\<open>experiment\<close>.
+
+The plugin is registered under the name \<^verbatim>\<open>generate_debug\<close> and runs by default; suppress it
+with \<^verbatim>\<open>simple_word_enum (plugins del: generate_debug) ...\<close>.\<close>
+
+ML \<open>
+local
+
+val log_entryT = \<^typ>\<open>log_entry\<close>
+val log_dataT = HOLogic.listT log_entryT
+val str_const = Const (\<^const_name>\<open>str\<close>, HOLogic.stringT --> log_entryT)
+
+fun generate_generate_debug (info: Simple_Word_Enum.enum_info) lthy =
+  let
+    val { absT, variant_bindings, case_result, timer, ... } = info
+    fun phase name f = Simple_Word_Enum.phase timer name f
+    val names = map Binding.name_of variant_bindings
+    val n = length names
+    val tyco = dest_Type_name absT
+    (* `generate_debug_T`, the name the class gives the parameter at this type. *)
+    val def_name = "generate_debug_" ^ Long_Name.base_name tyco
+
+    (* [str (case_T ''C1'' ... ''Cn'' e)]. case_T arrives on the record already at the right
+       name; only its schematic result type needs instantiating, here to `char list`. *)
+    val e = Free ("e", absT)
+    val case_const = Const (dest_Const_name (#case_const case_result),
+      funpow n (fn T => HOLogic.stringT --> T) (absT --> HOLogic.stringT))
+    val body = HOLogic.mk_list log_entryT
+      [str_const $ list_comb (case_const, map HOLogic.mk_string names @ [e])]
+
+    (* The LHS is written with the overloaded constant; `Syntax.check_term` inside the
+       instantiation rewrites it to the local parameter, so the mangled name never has to be
+       spelled out here (the Class.instantiation idiom, cf. code_evaluation.ML). *)
+    val raw_eq = Logic.mk_equals
+      (Const (\<^const_name>\<open>generate_debug\<close>, absT --> log_dataT) $ e, body)
+
+    val lthy = phase "generate_debug_instance" (fn () =>
+      let
+        (* The instance goes into the background theory, so the fact it declares there is not
+           reliably reachable from the target the declaration appeared in --- and which
+           namespace it lands in differs between a fresh declaration and the retro-application
+           the plugin mechanism performs on already-declared enums when this plugin is
+           registered. So the background fact gets a concealed name of its own, and the
+           exported theorem is noted into the local target below, the way the other plugins
+           note theirs. *)
+        val (def_thm, lthy) = Local_Theory.background_theory_result (fn thy =>
+          thy
+          |> Class.instantiation ([tyco], [], \<^sort>\<open>generate_debug\<close>)
+          |> (fn ilthy =>
+                Specification.definition NONE [] []
+                  ((Binding.concealed (Binding.name (def_name ^ "_raw_def")), []),
+                   Syntax.check_term ilthy raw_eq) ilthy
+                |> apfst (snd o snd))
+          |-> Class.prove_instantiation_exit_result Morphism.thm
+                (fn ctxt => fn _ => Class.intro_classes_tac ctxt [])) lthy
+      in
+        snd (Local_Theory.note ((Binding.name (def_name ^ "_def"), []), [def_thm]) lthy)
+      end)
+
+    val _ = if not (#report info) then () else
+      writeln ("  plugin generate_debug:\n" ^ cat_lines (map (prefix "    ")
+        ["instance    " ^ Long_Name.base_name tyco ^ " :: generate_debug",
+         "definition  " ^ def_name,
+         "lemma       " ^ def_name ^ "_def"]))
+  in lthy end
+
+in
+
+val generate_debug_plugin = Plugin_Name.declare_setup \<^binding>\<open>generate_debug\<close>
+
+val _ = Theory.setup
+  (Simple_Word_Enum.interpretation generate_debug_plugin generate_generate_debug)
+
+end
+\<close>
+
+subsection\<open>Tests for the \<^verbatim>\<open>generate_debug\<close> plugin\<close>
+
+experiment
+begin
+
+simple_word_enum (16) colour =
+    Red   = 1
+  | Green = 2
+  | Blue  = \<open>0xbee\<close>
+
+text\<open>The instance is there, and each variant renders as its own name --- unfolding the
+definition leaves a \<^verbatim>\<open>case\<close> on a concrete variant, which the case simproc reduces.\<close>
+
+lemma
+  shows \<open>generate_debug Red = [str ''Red'']\<close>
+    and \<open>generate_debug Green = [str ''Green'']\<close>
+    and \<open>generate_debug Blue = [str ''Blue'']\<close>
+  by (simp_all add: generate_debug_colour_def)
+
+text\<open>Being a \<^class>\<open>generate_debug\<close> instance, the type composes with the other instances.\<close>
+
+lemma
+  shows \<open>generate_debug [Red, Blue] =
+           [str ''['', str ''Red'', str '', '', str ''Blue'', str '']'']\<close>
+  by (simp add: generate_debug_list_def generate_debug_colour_def)
+
+lemma
+  shows \<open>generate_debug (Green, True) =
+           [str ''('', str ''Green'', str '', '', LogBool True, str '')'']\<close>
+  by (simp add: generate_debug_prod_def generate_debug_bool_def
+        generate_debug_colour_def)
+
+text\<open>\<^verbatim>\<open>plugins del:\<close> suppresses just this plugin, leaving \<^verbatim>\<open>word_conversion\<close> in place.\<close>
+
+simple_word_enum (plugins del: generate_debug) (16) quiet_colour =
+    QRed = 1 | QBlue = 2
+
+lemma
+  shows \<open>quiet_colour_try_from_u16_pure 1 = Ok QRed\<close>
+  by (simp add: quiet_colour_try_from_u16_pure_alt quiet_colour_variants_def
+        quiet_colour_defs)
+
+end
+
+subsection\<open>The \<^verbatim>\<open>variant_equality\<close> plugin\<close>
+
+text\<open>Registers a simproc deciding \<^verbatim>\<open>Ci = Cj\<close> on concrete variants: \<^verbatim>\<open>True\<close> when they are the
+same variant, \<^verbatim>\<open>False\<close> when they differ. Without it, \<^verbatim>\<open>Red = Blue\<close> is not something \<^verbatim>\<open>simp\<close> can
+settle --- the generated \<^verbatim>\<open>T_all_distinct\<close> says the variants are pairwise distinct, but getting
+from that to a particular pair takes the \<^verbatim>\<open>T_index\<close> detour spelled out by hand in the tests
+above.
+
+The decision procedure is the same trick that detour uses, and the simproc is built the way
+the \<^verbatim>\<open>case_T\<close> one in \<^theory>\<open>Misc.Case_for_Typedefs\<close> is: a fixed chain of \<^ML>\<open>Conv.rewr_conv\<close>
+steps rather than a recursive simplifier call. \<^verbatim>\<open>T_index\<close> is injective on variants, so applying
+it to both sides of \<^verbatim>\<open>Ci = Cj\<close> and reducing by \<^verbatim>\<open>T_indices_concrete\<close> leaves \<^verbatim>\<open>i = j\<close> on
+numerals, which decides itself. Cost is independent of the variant count: two index lookups and
+one numeral comparison, no search over the \<^verbatim>\<open>n\<close> variants and no \<^verbatim>\<open>n\<^sup>2\<close> distinctness facts.
+
+The plugin is registered under the name \<^verbatim>\<open>variant_equality\<close> and runs by default; suppress it
+with \<^verbatim>\<open>simple_word_enum (plugins del: variant_equality) ...\<close>.\<close>
+
+ML \<open>
+local
+
+fun mk_variant_eq_simproc absT type_name (info: Simple_Word_Enum.enum_info) =
+  let
+    (* The `T_index` constant, taken off the index definition rather than resolved by name. *)
+    val index_const = #index_def (#case_result info)
+      |> Thm.prop_of |> Logic.dest_equals |> fst |> head_of
+    val indices_name = type_name ^ "_indices_concrete"
+    (* `arg_cong` with its function fixed to `T_index`: from `Ci = Cj` derive
+       `T_index Ci = T_index Cj`. arg_cong's schematics are (x, y, f) in order, so only the
+       third is instantiated. *)
+    fun arg_cong_index ctxt =
+      Drule.infer_instantiate' ctxt [NONE, NONE, SOME (Thm.cterm_of ctxt index_const)]
+        @{thm arg_cong}
+    (* Pattern for the simplifier's term net: ?x = ?y at the enum type. *)
+    val lhs_pattern = HOLogic.mk_eq (Var (("x", 0), absT), Var (("y", 0), absT))
+  in
+    {passive = false, name = Binding.name (type_name ^ "_eq_simproc"),
+     kind = Simplifier.Simproc,
+     lhss = [lhs_pattern],
+     proc = fn _ => fn ctxt => fn ct =>
+       let
+         val (lhs, rhs) = HOLogic.dest_eq (Thm.term_of ct)
+       in
+         (* Only fire on two concrete variant constants of this type: on a variable the
+            equality has to stay as it is. *)
+         (case (lhs, rhs) of
+           (Const (_, T1), Const (_, T2)) =>
+             if T1 <> absT orelse T2 <> absT then NONE
+             else if lhs aconv rhs then
+               (* Same variant: reflexivity, no index reasoning needed. *)
+               SOME (Thm.instantiate' [SOME (Thm.ctyp_of ctxt absT)]
+                 [SOME (Thm.cterm_of ctxt lhs)] @{thm HOL.refl}
+                 RS @{thm Eq_TrueI})
+             else
+               let
+                 val idx_thms = Proof_Context.get_thms ctxt indices_name
+                 (* `Ci \<noteq> Cj` the way the by-hand tests prove it: push T_index through the
+                    (assumed) equation, reduce both sides by T_indices_concrete, and the
+                    resulting `i = j` on numerals is false. Constant work per firing bar the
+                    single simp over the index facts. *)
+                 val neq = Goal.prove ctxt [] []
+                   (HOLogic.mk_Trueprop (HOLogic.mk_not (HOLogic.mk_eq (lhs, rhs))))
+                   (fn { context = c, ... } =>
+                      resolve_tac c @{thms notI} 1
+                      THEN dresolve_tac c [arg_cong_index c] 1
+                      THEN asm_full_simp_tac (clear_simpset c addsimps
+                        (idx_thms @ @{thms eq_numeral_simps rel_simps simp_thms})) 1)
+               in SOME (neq RS @{thm Eq_FalseI}) end
+         | _ => NONE)
+         handle TERM _ => NONE | THM _ => NONE | CTERM _ => NONE
+             | ERROR _ => NONE
+       end,
+     identifier = []}
+     : (term, Morphism.morphism -> Proof.context -> cterm -> thm option, thm list)
+       Simplifier.simproc_spec
+  end
+
+fun generate_variant_equality (info: Simple_Word_Enum.enum_info) lthy =
+  let
+    val { absT, type_name, timer, ... } = info
+    fun phase name f = Simple_Word_Enum.phase timer name f
+
+    val lthy = phase "variant_equality_simproc" (fn () =>
+      snd (Simplifier.define_simproc (mk_variant_eq_simproc absT type_name info) lthy))
+
+    val _ = if not (#report info) then () else
+      writeln ("  plugin variant_equality:\n" ^ cat_lines (map (prefix "    ")
+        ["simproc     " ^ type_name ^ "_eq_simproc [active]"]))
+  in lthy end
+
+in
+
+val variant_equality_plugin = Plugin_Name.declare_setup \<^binding>\<open>variant_equality\<close>
+
+val _ = Theory.setup
+  (Simple_Word_Enum.interpretation variant_equality_plugin generate_variant_equality)
+
+end
+\<close>
+
+subsection\<open>Tests for the \<^verbatim>\<open>variant_equality\<close> plugin\<close>
+
+experiment
+begin
+
+simple_word_enum (16) fruit =
+    Apple  = 1
+  | Pear   = 2
+  | Cherry = \<open>0xf00\<close>
+
+text\<open>Equalities and disequalities between concrete variants are decided by \<^verbatim>\<open>simp\<close> alone ---
+compare the \<^verbatim>\<open>big_enum\<close> test above, which had to go through \<^verbatim>\<open>big_enum_index\<close> by hand.\<close>
+
+lemma
+  shows \<open>Apple \<noteq> Pear\<close> and \<open>Pear \<noteq> Cherry\<close> and \<open>Apple \<noteq> Cherry\<close>
+    and \<open>Apple = Apple\<close> and \<open>Cherry = Cherry\<close>
+  by simp_all
+
+text\<open>Both orientations, and under a negation.\<close>
+
+lemma
+  shows \<open>(Cherry = Apple) = False\<close> and \<open>\<not> (Pear = Apple)\<close>
+    and \<open>(Apple = Pear \<or> Pear = Pear)\<close>
+  by simp_all
+
+text\<open>An equality on a \<^emph>\<open>variable\<close> is left alone --- the simproc only fires on two concrete
+variants, so nothing is decided prematurely.\<close>
+
+lemma
+  assumes \<open>e = Apple\<close>
+  shows \<open>e \<noteq> Pear\<close>
+  using assms by simp
+
+lemma
+  assumes \<open>e \<noteq> Apple\<close>
+  shows \<open>\<not> (e = Apple)\<close>
+  using assms by simp
+
+text\<open>It composes: deciding variant equality makes \<^const>\<open>distinct\<close> and list membership on
+literal variant lists go through by \<^verbatim>\<open>simp\<close> too.\<close>
+
+lemma
+  shows \<open>distinct [Apple, Pear, Cherry]\<close>
+    and \<open>Pear \<in> set [Apple, Pear]\<close>
+    and \<open>Cherry \<notin> set [Apple, Pear]\<close>
+  by simp_all
+
+text\<open>\<^verbatim>\<open>plugins del:\<close> suppresses just this plugin. Without it the disequality is not decided by
+\<^verbatim>\<open>simp\<close>, and the \<^verbatim>\<open>T_index\<close> detour is needed --- which is exactly what the plugin automates.\<close>
+
+simple_word_enum (plugins del: variant_equality) (16) plain_fruit =
+    PApple = 1 | PPear = 2
+
+lemma
+  shows \<open>PApple \<noteq> PPear\<close>
+  by (rule notI, drule arg_cong[where f=plain_fruit_index])
+     (simp add: plain_fruit_indices_concrete)
+
+end
+
+text\<open>All three plugins are registered by the time we get here, so this run --- unlike the one
+above, which predates them --- covers the full set. \<^verbatim>\<open>generate_debug\<close> is a single
+\<^verbatim>\<open>instantiation\<close> per enum, but its defining term carries one \<^verbatim>\<open>case\<close> arm per variant, so it comes
+out linear at roughly 6ms/variant (29ms at 4 variants, 389ms at 64) --- enough to make
+\<^verbatim>\<open>plugins\<close> the largest phase on a small enum. \<^verbatim>\<open>variant_equality\<close> only registers a simproc, so it
+is genuinely constant.\<close>
+
+simple_word_enum_benchmark (32) sizes: 4 16 32 64
 
 end
