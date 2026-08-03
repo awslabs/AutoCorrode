@@ -374,13 +374,23 @@ fun note_thm name attrs thm lthy =
 
 (* Define a constant \<^verbatim>\<open>name \<equiv> rhs\<close>, returning the constant and its definitional theorem
    already transported along the target morphism, so that both are usable in the proofs
-   that follow even when the command runs inside a local target. *)
+   that follow even when the command runs inside a local target.
+
+   Uses \<^verbatim>\<open>Specification.definition\<close> rather than the lower-level \<^verbatim>\<open>Local_Theory.define\<close>: the former
+   attaches a \<^emph>\<open>default\<close> code equation to the \<^verbatim>\<open>_def\<close> fact it notes, which is what makes the
+   generated constants code-exportable without any \<^verbatim>\<open>[code]\<close> declarations. Being a default, it is
+   superseded by an explicit \<^verbatim>\<open>[code]\<close> elsewhere --- so \<^verbatim>\<open>T_all\<close>, whose definition goes through
+   \<^verbatim>\<open>Abs\<close>/\<^verbatim>\<open>unat\<close>, still generates from \<^verbatim>\<open>T_all_concrete\<close>'s literal list. *)
 fun define_const name rhs lthy =
   let
-    val ((const, (_, def_thm)), lthy) = Local_Theory.define
-      ((Binding.name name, NoSyn), ((Binding.name (name ^ "_def"), []), rhs)) lthy
+    val binding = Binding.name name
+    val ((_, (_, def_thm)), lthy) = Specification.definition
+      (SOME (binding, NONE, NoSyn)) [] []
+      ((Binding.name (name ^ "_def"), []), Logic.mk_equals (Free (name, fastype_of rhs), rhs))
+      lthy
+    val const = Const (Local_Theory.full_name lthy binding, fastype_of rhs)
     val phi = Local_Theory.target_morphism lthy
-  in ((Morphism.term phi const, Morphism.thm phi def_thm), lthy) end
+  in ((const, Morphism.thm phi def_thm), lthy) end
 
 (* Simp set for the small membership goals discharged along the way. Deliberately a
    [simp only:]-style set: the variants are word numerals, and letting the default simp set
@@ -767,12 +777,18 @@ fun generate_word_conversion (info: Simple_Word_Enum.enum_info) lthy =
     val to_name = type_name ^ "_to_" ^ uN ^ "_pure"
     val from_name = type_name ^ "_try_from_" ^ uN ^ "_pure"
 
+    (* Specification.definition, as in define_const above, so that these conversions come out
+       code-exportable without needing [code]. *)
     fun define name rhs lthy =
       let
-        val ((const, (_, def_thm)), lthy) = Local_Theory.define
-          ((Binding.name name, NoSyn), ((Binding.name (name ^ "_def"), []), rhs)) lthy
+        val binding = Binding.name name
+        val ((_, (_, def_thm)), lthy) = Specification.definition
+          (SOME (binding, NONE, NoSyn)) [] []
+          ((Binding.name (name ^ "_def"), []),
+           Logic.mk_equals (Free (name, fastype_of rhs), rhs)) lthy
+        val const = Const (Local_Theory.full_name lthy binding, fastype_of rhs)
         val phi = Local_Theory.target_morphism lthy
-      in ((Morphism.term phi const, Morphism.thm phi def_thm), lthy) end
+      in ((const, Morphism.thm phi def_thm), lthy) end
     fun note name thm lthy =
       Local_Theory.note ((Binding.name name, []), [thm]) lthy |> apfst (the_single o snd)
 
@@ -1408,12 +1424,191 @@ lemma
 
 end
 
-text\<open>All three plugins are registered by the time we get here, so this run --- unlike the one
-above, which predates them --- covers the full set. \<^verbatim>\<open>generate_debug\<close> is a single
-\<^verbatim>\<open>instantiation\<close> per enum, but its defining term carries one \<^verbatim>\<open>case\<close> arm per variant, so it comes
-out linear at roughly 6ms/variant (29ms at 4 variants, 389ms at 64) --- enough to make
-\<^verbatim>\<open>plugins\<close> the largest phase on a small enum. \<^verbatim>\<open>variant_equality\<close> only registers a simproc, so it
-is genuinely constant.\<close>
+subsection\<open>The \<^verbatim>\<open>equal_instance\<close> plugin\<close>
+
+text\<open>Emits the \<^class>\<open>equal\<close> instance for the enum, defined through the representation:
+
+\<^verbatim>\<open>equal_T x y \<equiv> Rep_T x = Rep_T y\<close>
+
+which is correct by \<^verbatim>\<open>Rep_T_inject\<close>, so the \<^verbatim>\<open>instance\<close> proof is a fixed two steps regardless of
+the variant count.
+
+This is what makes \<^verbatim>\<open>case\<close> expressions on the type \<^emph>\<open>code-exportable\<close>. \<^verbatim>\<open>case_T\<close> reduces through
+\<^verbatim>\<open>match_T\<close> to \<^const>\<open>find_index\<close>, which needs equality on \<^verbatim>\<open>T\<close>; without an instance,
+\<^verbatim>\<open>export_code\<close> on any function containing such a \<^verbatim>\<open>case\<close> fails with
+
+\<^verbatim>\<open>Wellsortedness error (in code equation T_index ?x \<equiv> find_index T_all ?x,
+ with dependency "f" -> "case_T" -> "match_T" -> "T_index"):
+ Type T not of sort equal\<close>
+
+Note what that message shows: the code generator already has equations for \<^verbatim>\<open>case_T\<close>, \<^verbatim>\<open>match_T\<close>
+and \<^verbatim>\<open>T_index\<close> --- \<^verbatim>\<open>Specification.definition\<close> attaches a default code equation to every \<^verbatim>\<open>_def\<close>
+fact it notes (\<^verbatim>\<open>Code.singleton_default_equation_attrib\<close>, specification.ML), and
+\<^verbatim>\<open>setup_case_for_typedef\<close> defines all three that way. So no \<^verbatim>\<open>[code]\<close> declarations are needed for
+them; the missing \<^class>\<open>equal\<close> instance is the only obstacle. (By contrast \<^verbatim>\<open>T_all_concrete\<close> does
+carry an explicit \<^verbatim>\<open>[code]\<close>: it is a \<^verbatim>\<open>lemma\<close>, not a definition.)
+
+This is a plugin rather than part of \<^verbatim>\<open>setup_case_for_typedef\<close> because that command runs on an
+\<^emph>\<open>existing\<close> \<^verbatim>\<open>typedef\<close>, which may well already be a \<^class>\<open>equal\<close> instance --- and a class instance
+is global and unconditional, so emitting one there would hard-fail on such a type.
+\<^verbatim>\<open>simple_word_enum\<close> creates the \<^verbatim>\<open>typedef\<close> itself, so it knows the slot is free. Suppress with
+\<^verbatim>\<open>simple_word_enum (plugins del: equal_instance) ...\<close> for a type that wants a different
+equality.\<close>
+
+ML \<open>
+local
+
+fun generate_equal_instance (info: Simple_Word_Enum.enum_info) lthy =
+  let
+    val { absT, Rep_name, type_definition, timer, ... } = info
+    fun phase name f = Simple_Word_Enum.phase timer name f
+    val tyco = dest_Type_name absT
+    val def_name = "equal_" ^ Long_Name.base_name tyco
+
+    (* equal x y \<equiv> Rep_T x = Rep_T y. As in the generate_debug plugin, the LHS is written with
+       the overloaded constant and `Syntax.check_term` inside the instantiation rewrites it to
+       the local parameter, so the mangled name is never spelled out here. *)
+    val rep = Const (Rep_name, absT --> HOLogic.natT)
+    val x = Free ("x", absT)
+    val y = Free ("y", absT)
+    (* The class parameter is `equal_class.equal`; \<^const_name>\<open>equal\<close> does not resolve from
+       here, as the class's own namespace is not open in this theory. *)
+    val equal_const = Const ("HOL.equal_class.equal", absT --> absT --> HOLogic.boolT)
+    val raw_eq = Logic.mk_equals (equal_const $ x $ y, HOLogic.mk_eq (rep $ x, rep $ y))
+
+    val lthy = phase "equal_instance" (fn () =>
+      let
+        (* Class instances are global, so this goes into the background theory; the fact it
+           declares there is not reliably reachable from the declaration's target, so it gets a
+           concealed name and the exported theorem is noted below. Same reasoning as the
+           generate_debug plugin --- see the comment there. *)
+        val (def_thm, lthy) = Local_Theory.background_theory_result (fn thy =>
+          thy
+          |> Class.instantiation ([tyco], [], \<^sort>\<open>equal\<close>)
+          |> (fn ilthy =>
+                Specification.definition NONE [] []
+                  ((Binding.concealed (Binding.name (def_name ^ "_raw_def")), []),
+                   Syntax.check_term ilthy raw_eq) ilthy
+                |> apfst (snd o snd))
+          |-> (fn def_thm =>
+                Class.prove_instantiation_exit_result Morphism.thm
+                  (* equal_eq: equal x y \<longleftrightarrow> x = y. Unfold the definition and close by
+                     Rep_T_inject, which the typedef provides. *)
+                  (fn ctxt => fn def_thm =>
+                     Class.intro_classes_tac ctxt []
+                     THEN ALLGOALS (simp_tac (clear_simpset ctxt addsimps
+                       [def_thm, type_definition RS @{thm type_definition.Rep_inject}])))
+                  def_thm)) lthy
+      in
+        snd (Local_Theory.note ((Binding.name (def_name ^ "_def"), []), [def_thm]) lthy)
+      end)
+
+    val _ = if not (#report info) then () else
+      writeln ("  plugin equal_instance:\n" ^ cat_lines (map (prefix "    ")
+        ["instance    " ^ Long_Name.base_name tyco ^ " :: equal",
+         "definition  " ^ def_name,
+         "lemma       " ^ def_name ^ "_def"]))
+  in lthy end
+
+in
+
+val equal_instance_plugin = Plugin_Name.declare_setup \<^binding>\<open>equal_instance\<close>
+
+val _ = Theory.setup
+  (Simple_Word_Enum.interpretation equal_instance_plugin generate_equal_instance)
+
+end
+\<close>
+
+subsection\<open>Tests for the \<^verbatim>\<open>equal_instance\<close> plugin\<close>
+
+text\<open>Kept global rather than in an \<^verbatim>\<open>experiment\<close>: code generation needs the constants to be
+global, and a class instance is global anyway.\<close>
+
+simple_word_enum (8) light = Red = 0 | Amber = 1 | Green = 2
+
+text\<open>The instance is there and decides equality by evaluation, not just by the simproc.\<close>
+
+lemma
+  shows \<open>equal_class.equal Red Red\<close> and \<open>\<not> equal_class.equal Red Green\<close>
+  by (simp_all add: equal_light_def light_rep_defs)
+
+value \<open>Red = Red\<close>
+value \<open>Red = Green\<close>
+
+text\<open>The payoff: a \<^verbatim>\<open>case\<close> on the type is now code-exportable. Without the instance this fails
+with the wellsortedness error quoted above.\<close>
+
+definition light_delay :: \<open>light \<Rightarrow> nat\<close> where
+  \<open>light_delay l \<equiv> case l of Red \<Rightarrow> 30 | Amber \<Rightarrow> 3 | Green \<Rightarrow> 25\<close>
+
+value \<open>light_delay Red\<close>
+value \<open>light_delay Amber\<close>
+value \<open>light_delay Green\<close>
+
+export_code light_delay in OCaml module_name Light
+export_code light_delay in SML module_name Light
+
+text\<open>The other generated constants are exportable too, without any \<^verbatim>\<open>[code]\<close> declaration in the
+command: they are defined via \<^verbatim>\<open>Specification.definition\<close>, which attaches a default code
+equation.\<close>
+
+export_code light_variants light_all light_to_u8_pure light_try_from_u8_pure
+  in OCaml module_name LightAll
+
+value \<open>light_to_u8_pure Amber\<close>
+value \<open>light_try_from_u8_pure 2\<close>
+value \<open>light_try_from_u8_pure 9\<close>
+
+text\<open>\<^verbatim>\<open>T_all\<close> generates from \<^verbatim>\<open>T_all_concrete\<close>'s literal list, \<^emph>\<open>not\<close> from its own definition: the
+default equation \<^verbatim>\<open>Specification.definition\<close> attached would go through \<^const>\<open>Abs_light\<close> and
+\<^const>\<open>unat\<close>, and the explicit \<^verbatim>\<open>[code]\<close> supersedes it. \<^verbatim>\<open>T_variants\<close>, which has no better
+equation, keeps its default one.\<close>
+
+ML \<open>
+  let
+    fun eqns_of c =
+      Code.equations_of_cert @{theory} (Code.get_cert @{context} [] c)
+      |> snd |> the_default []
+      |> map (fn ((_, (_, rhs)), _) => Syntax.string_of_term @{context} rhs)
+    val all_eqns = eqns_of \<^const_name>\<open>light_all\<close>
+    val variants_eqns = eqns_of \<^const_name>\<open>light_variants\<close>
+  in
+    writeln ("light_all: " ^ commas all_eqns);
+    writeln ("light_variants: " ^ commas variants_eqns);
+    (* T_all_concrete won: no Abs_light / unat in the equation actually used. *)
+    @{assert} (not (exists (String.isSubstring "Abs_light") all_eqns));
+    @{assert} (not (exists (String.isSubstring "light_variants") all_eqns));
+    writeln "CONFIRMED: T_all_concrete [code] superseded the default equation"
+  end
+\<close>
+
+text\<open>\<^verbatim>\<open>plugins del: equal_instance\<close> suppresses it, for a type that wants a different equality.
+Such a type keeps everything else, but a \<^verbatim>\<open>case\<close> on it is then not exportable.\<close>
+
+simple_word_enum (plugins del: equal_instance) (8) unequal_light =
+    UL_Red = 0 | UL_Green = 1
+
+ML \<open>
+  let
+    val has_instance = Sorts.has_instance (Sign.classes_of @{theory})
+      \<^type_name>\<open>unequal_light\<close> \<^sort>\<open>equal\<close>
+  in
+    @{assert} (not has_instance);
+    writeln "plugins del: equal_instance --- no equal instance emitted"
+  end
+\<close>
+
+lemma
+  shows \<open>UL_Red \<noteq> UL_Green\<close>
+  by simp
+
+text\<open>All plugins are registered by the time we get here, so this run --- unlike the one above,
+which predates them --- covers the full set. \<^verbatim>\<open>generate_debug\<close> is a single \<^verbatim>\<open>instantiation\<close> per
+enum, but its defining term carries one \<^verbatim>\<open>case\<close> arm per variant, so it comes out linear at roughly
+6ms/variant (29ms at 4 variants, 389ms at 64) --- enough to make \<^verbatim>\<open>plugins\<close> the largest phase on a
+small enum. \<^verbatim>\<open>variant_equality\<close> only registers a simproc and \<^verbatim>\<open>equal_instance\<close> is one
+\<^verbatim>\<open>instantiation\<close> whose defining term does not mention the variants, so both are constant.\<close>
 
 simple_word_enum_benchmark (32) sizes: 4 16 32 64
 

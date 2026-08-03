@@ -211,15 +211,21 @@ fun generate_urust_conversion (info: Simple_Word_Enum.enum_info) lthy =
 
         (* `definition T_to_uN: T_to_uN \<equiv> lift_fun1 T_to_uN_pure`, and the same for try_from.
            Deliberately *not* tagged [micro_rust_simps]: whether these unfold during uRust
-           reasoning is the caller's choice, so the `_def` facts are plain and have to be
-           named explicitly (or declared [micro_rust_simps] downstream) to fire. *)
+           reasoning is the caller's choice, so the `_def` facts have to be named explicitly
+           (or declared [micro_rust_simps] downstream) to fire.
+
+           They are defined via Specification.definition, which attaches a default code
+           equation --- orthogonal to the simp bundle, and what makes them code-exportable. *)
         fun define base rhs lthy =
           let
             val name = type_name ^ "_" ^ base
-            val ((const, (_, _)), lthy) = Local_Theory.define
-              ((Binding.name name, NoSyn),
-               ((Binding.name (name ^ "_def"), []), rhs)) lthy
-          in ((name, Morphism.term (Local_Theory.target_morphism lthy) const), lthy) end
+            val binding = Binding.name name
+            val (_, lthy) = Specification.definition
+              (SOME (binding, NONE, NoSyn)) [] []
+              ((Binding.name (name ^ "_def"), []),
+               Logic.mk_equals (Free (name, fastype_of rhs), rhs)) lthy
+            val const = Const (Local_Theory.full_name lthy binding, fastype_of rhs)
+          in ((name, const), lthy) end
 
         val ((to_name, to_const), lthy) = phase "urust_to_fun" (fn () =>
           define ("to_" ^ uN) (lift to_pure) lthy)
@@ -302,6 +308,24 @@ lemma
   shows \<open>message_kind_to_u32 = lift_fun1 message_kind_to_u32_pure\<close>
     and \<open>message_kind_try_from_u32 = lift_fun1 message_kind_try_from_u32_pure\<close>
   by (simp_all add: message_kind_to_u32_def message_kind_try_from_u32_def)
+
+text\<open>They are code-exportable, along with the pure functions they lift. This comes from
+\<^verbatim>\<open>Specification.definition\<close>'s default code equation --- the plugin adds no \<^verbatim>\<open>[code]\<close> of its own,
+and \<^verbatim>\<open>Local_Theory.define\<close> (which the plugin used at first) would have attached none, leaving
+\<^verbatim>\<open>export_code\<close> to fail with "No code equations".\<close>
+
+export_code message_kind_to_u32_pure message_kind_try_from_u32_pure
+  in OCaml module_name MessageKindPure
+
+export_code message_kind_to_u32 message_kind_try_from_u32
+  in OCaml module_name MessageKindFun
+
+export_code message_kind_to_u32 message_kind_try_from_u32
+  in SML module_name MessageKindFun
+
+value \<open>message_kind_to_u32_pure MK_Data\<close>
+value \<open>message_kind_try_from_u32_pure 2\<close>
+value \<open>message_kind_try_from_u32_pure 7\<close>
 
 text\<open>Their \<open>\<mu>Rust\<close> paths resolve as function calls --- these type-check, which is the point: an
 unregistered path would leave a free variable and fail to elaborate at the \<^const>\<open>function_body\<close>
