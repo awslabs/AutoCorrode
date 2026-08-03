@@ -28,6 +28,16 @@ where \<^verbatim>\<open>(32)\<close> is the width of the representing word type
 may be any expression of that type; note that hexadecimal literals must be given in a cartouche,
 as the outer syntax lexes \<^verbatim>\<open>0x42\<close> as two tokens. Plain decimal numerals need no cartouche.
 
+An optional \<^verbatim>\<open>urust: "Name"\<close> clause may follow the type name:
+
+\<^verbatim>\<open>simple_word_enum (32) my_enum urust: "MyEnum" = Answer = \<open>0x42\<close> | ...\<close>
+
+This theory does \<^emph>\<open>nothing\<close> with that name --- it is recorded on the \<^verbatim>\<open>enum_info\<close> handed to
+plugins, for a plugin to act on. The \<^verbatim>\<open>urust_notation\<close> plugin in
+\<^verbatim>\<open>Shallow_Micro_Rust.Simple_Word_Enum_uRust\<close> uses it to register \<^verbatim>\<open>MyEnum::Answer\<close> as \<open>\<mu>Rust\<close>
+notation for \<^verbatim>\<open>Answer\<close>; that plugin cannot live here, since \<^verbatim>\<open>micro_rust_notation\<close> belongs to a
+session depending on this one.
+
 The command generates, for the type \<^verbatim>\<open>T = my_enum\<close> and each variant \<^verbatim>\<open>Ci\<close>:
 
   \<^item> \<^verbatim>\<open>T_variants :: 32 word list\<close> --- the underlying word list, and
@@ -36,7 +46,8 @@ The command generates, for the type \<^verbatim>\<open>T = my_enum\<close> and e
     \<^verbatim>\<open>setup_lifting\<close> applied;
   \<^item> one constant \<^verbatim>\<open>Ci :: T\<close> per variant, by \<^verbatim>\<open>lift_definition\<close>, with the transfer rules
     collected in the named theorem bundles \<^verbatim>\<open>T_rep_defs\<close> (the \<^verbatim>\<open>rep_eq\<close>s) and \<^verbatim>\<open>T_defs\<close>
-    (the \<^verbatim>\<open>abs_eq\<close>s);
+    (the \<^verbatim>\<open>abs_eq\<close>s). Each is aliased under \<^verbatim>\<open>T.Ci\<close> as well, so variants can be named either
+    bare or type-qualified, as \<^verbatim>\<open>datatype\<close> constructors can;
   \<^item> \<^verbatim>\<open>T_all :: T list\<close>, the list of all inhabitants, together with \<^verbatim>\<open>T_all_concrete\<close> (a
     \<^verbatim>\<open>[code]\<close> equation presenting it as the literal list \<^verbatim>\<open>[C1, ..., Cn]\<close>),
     \<^verbatim>\<open>T_all_distinct\<close> and \<^verbatim>\<open>T_all_total\<close>;
@@ -214,6 +225,12 @@ sig
      transported along the target morphism, so they are usable as they stand. *)
   type enum_info = {
     type_name: string,                 (* base name, e.g. "my_enum" *)
+    (* The optional \<^verbatim>\<open>urust: "Name"\<close> given at declaration time. The command itself does
+       nothing with this --- it is carried here purely so that a plugin can pick it up; see
+       the \<^verbatim>\<open>urust_notation\<close> plugin in \<^theory>\<open>Shallow_Micro_Rust.Simple_Word_Enum_uRust\<close>,
+       which cannot live in this theory because the \<^verbatim>\<open>micro_rust_notation\<close> command sits in a
+       session that depends on this one. *)
+    urust_name: string option,
     absT: typ,                         (* the enum type *)
     wordT: typ,                        (* representation word type *)
     width: int,                        (* its bit width *)
@@ -245,12 +262,14 @@ sig
 
   (* The command's implementation, minus outer syntax. `timer` records the phase breakdown;
      `report` prints the human-readable summary of generated items. The tuple is
-     (plugin filter, word width, type binding, (variant binding, value term string) list),
-     where the filter is the still-unevaluated form Plugin_Name.parse_filter yields. The
-     benchmark command reuses this to drive many enums under one timer. *)
+     (plugin filter, word width, type binding, optional uRust name,
+      (variant binding, value term string) list), where the filter is the still-unevaluated
+     form Plugin_Name.parse_filter yields. The benchmark command reuses this to drive many
+     enums under one timer. *)
   val simple_word_enum_core:
     { timer: timer, report: bool } ->
-    (Proof.context -> Plugin_Name.filter) * int * binding * (binding * string) list ->
+    (Proof.context -> Plugin_Name.filter) * int * binding * string option *
+      (binding * string) list ->
     local_theory -> local_theory
 end
 
@@ -301,6 +320,7 @@ fun format_timer_report (title: string) (timer: timer) =
 
 type enum_info = {
   type_name: string,
+  urust_name: string option,
   absT: typ,
   wordT: typ,
   width: int,
@@ -411,7 +431,7 @@ fun define_typedef type_binding mapped_variants variants_def lthy =
   in ((typ_info, typedef_info), lthy) end
 
 (* Step 3: one lift_definition per variant, tagging rep_eq/abs_eq into the two bundles. *)
-fun define_variant_consts absT variants_def (rep_defs, defs) variant_specs lthy =
+fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_specs lthy =
   let
     fun define (binding, word) lthy =
       let
@@ -429,7 +449,14 @@ fun define_variant_consts absT variants_def (rep_defs, defs) variant_specs lthy 
           |> (case Lifting_Def.rep_eq_of_lift_def ld of
                 SOME rep_eq => add_to rep_defs rep_eq
               | NONE => I)
-      in (Lifting_Def.lift_const_of_lift_def ld, lthy) end
+        (* Also reachable as `T.Ci`, the way datatype constructors are: alias the constant
+           under the type-qualified name. Non-mandatory qualification, so the bare `Ci` keeps
+           working and `T.Ci` becomes available for disambiguation --- exactly what
+           `Binding.qualify false` gives datatype's constructors (ctr_sugar.ML). *)
+        val c = Lifting_Def.lift_const_of_lift_def ld
+        val lthy = Local_Theory.const_alias
+          (Binding.qualify false type_name binding) (dest_Const_name c) lthy
+      in (c, lthy) end
     val (consts, lthy) = fold_map define variant_specs lthy
     (* The constants come back as they were at definition time; re-resolve against the
        target so that later steps see proper Consts rather than Frees. *)
@@ -497,8 +524,8 @@ fun define_all type_name wordT absT Abs_name Rep_name defs variants_const varian
 (* The core of the command, parameterised by a timer so the benchmark command can reuse it.
    Each generation step is wrapped in `phase`; `report` controls whether the human-readable
    summary of what was generated is printed (the benchmark prints its own tables instead). *)
-fun simple_word_enum_core { timer, report } (raw_filter, width, type_binding, variant_specs)
-      lthy =
+fun simple_word_enum_core { timer, report }
+      (raw_filter, width, type_binding, urust_name, variant_specs) lthy =
   let
     val type_name = Binding.name_of type_binding
     val n = length variant_specs
@@ -539,7 +566,8 @@ fun simple_word_enum_core { timer, report } (raw_filter, width, type_binding, va
 
     val (variant_consts, lthy) =
       phase timer "variant_consts" (fn () =>
-        define_variant_consts absT variants_def (rep_defs, defs) (bindings ~~ words) lthy)
+        define_variant_consts type_name absT variants_def (rep_defs, defs)
+          (bindings ~~ words) lthy)
 
     val ((all_const, all_def, concrete_thm, distinct_thm, total_thm, variants_alt_thm), lthy) =
       phase timer "all" (fn () =>
@@ -554,7 +582,8 @@ fun simple_word_enum_core { timer, report } (raw_filter, width, type_binding, va
     (* Hand the finished enum to whichever plugins the declaration admits. Any definitions
        and theorems they add are reported by the plugins themselves. *)
     val info : enum_info = {
-      type_name = type_name, absT = absT, wordT = wordT, width = width,
+      type_name = type_name, urust_name = urust_name,
+      absT = absT, wordT = wordT, width = width,
       variant_bindings = bindings, variant_consts = variant_consts, words = words,
       variants_const = variants_const, variants_def = variants_def,
       variants_distinct = variants_distinct, variants_alt = variants_alt_thm,
@@ -580,11 +609,12 @@ fun simple_word_enum_core { timer, report } (raw_filter, width, type_binding, va
          @ Case_For_Typedef.generated_summary type_name n)))
   in lthy end
 
-fun simple_word_enum_cmd ((((raw_filter, width), type_binding), variant_specs)) lthy =
+fun simple_word_enum_cmd (((((raw_filter, width), type_binding), urust_name), variant_specs))
+      lthy =
   let
     val timer = new_timer (Config.get lthy timing_enabled)
     val lthy = simple_word_enum_core { timer = timer, report = true }
-      (raw_filter, width, type_binding, variant_specs) lthy
+      (raw_filter, width, type_binding, urust_name, variant_specs) lthy
     val _ = if not (Config.get lthy timing_enabled) then () else
       writeln (format_timer_report
         ("simple_word_enum " ^ Binding.name_of type_binding ^ " timings ("
@@ -602,12 +632,17 @@ val parse_plugins =
       (Parse.$$$ "(" |-- Plugin_Name.parse_filter --| Parse.$$$ ")"))
     (K Plugin_Name.default_filter)
 
+(* The optional `urust: "Name"` clause, between the type name and the `=`. Purely recorded
+   on enum_info; this theory never acts on it. *)
+val parse_urust_name =
+  Scan.option (Parse.reserved "urust" |-- Parse.$$$ ":" |-- Parse.string)
+
 val _ =
   Outer_Syntax.local_theory \<^command_keyword>\<open>simple_word_enum\<close>
     "define a type whose inhabitants are a fixed list of distinct machine words"
     (parse_plugins --
       (Parse.$$$ "(" |-- Parse.nat --| Parse.$$$ ")") --
-      Parse.binding --| Parse.$$$ "=" --
+      Parse.binding -- parse_urust_name --| Parse.$$$ "=" --
       Parse.enum1 "|" (Parse.binding --| Parse.$$$ "=" -- Parse.term)
      >> simple_word_enum_cmd)
 
@@ -667,6 +702,15 @@ lemma
 lemma
   shows \<open>Rep_my_enum Leet = unat (0x1337 :: 32 word)\<close>
   by (simp add: my_enum_rep_defs)
+
+text\<open>Variants are reachable both bare and type-qualified, as \<^verbatim>\<open>datatype\<close> constructors are.\<close>
+
+lemma
+  shows \<open>my_enum.Answer = Answer\<close> and \<open>my_enum.Leet = Leet\<close>
+  by (rule refl)+
+
+definition my_enum_qualified_use :: \<open>my_enum\<close> where
+  \<open>my_enum_qualified_use \<equiv> my_enum.Best\<close>
 
 end
 
@@ -997,8 +1041,11 @@ fun benchmark_cmd ((raw_filter, width), sizes) lthy =
       let
         val timer = Simple_Word_Enum.new_timer true
         val (type_binding, variants) = bench_spec width n
+        (* No uRust name: the benchmark enums are throwaway, and a notation registration
+           would be a global side effect surviving the discarded local theory. *)
         val _ = Simple_Word_Enum.simple_word_enum_core
-          { timer = timer, report = false } (raw_filter, width, type_binding, variants) lthy
+          { timer = timer, report = false }
+          (raw_filter, width, type_binding, NONE, variants) lthy
       in (n, timer) end
     val results = map run_size sizes
 

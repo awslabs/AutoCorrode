@@ -21,6 +21,7 @@ session Shallow_Micro_Rust = HOL +
     Micro_Rust_Notations
     Micro_Rust_Shallow_Embedding
     Micro_Rust_Notations_Test
+    Simple_Word_Enum_uRust
     Micro_Rust_Shallow_Embedding_Tests
     Micro_Rust
     Prompts_And_Responses
