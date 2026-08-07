@@ -11,6 +11,7 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 import scala.annotation.unused
 
+import isabelle.IRLauncher
 import isabelle.jedit.PIDE
 
 import org.gjt.sp.jedit.View

@@ -6,7 +6,8 @@
    registration, and dispatch in isolation, driving the server through
    processRequestForTest (no sockets). */
 
-import isabelle.JSON
+// McpServer/McpProtocol/McpTool/ErrorCodes now live in `package isabelle`.
+import isabelle._
 
 object McpServerTest {
   private def assertThat(cond: Boolean, msg: String): Unit =
@@ -237,6 +238,59 @@ object McpServerTest {
     assertThat(r.isEmpty, s"notification must produce no response: $r")
   }
 
+  /* ---- progress notifications ---- */
+
+  /** A progress-aware tool that emits two progress dicts before returning. */
+  private def progressTool(name: String): McpTool =
+    McpTool(name, s"progress $name", Map("type" -> "object"),
+      (_: McpToolParams, sink: McpProgress.Sink) => {
+        sink(JSON.Object("progress" -> 1, "total" -> 2, "message" -> "half"))
+        sink(JSON.Object("progress" -> 2, "total" -> 2, "message" -> "done"))
+        Right(McpToolResult.fromMap(Map("text" -> "ok")))
+      })
+
+  private def testProgressEmittedWhenTokenPresent(): Unit = {
+    val s = server(List(progressTool("prog")))
+    val (sent, resp) = s.processRequestForTestCapturing(
+      """{"jsonrpc":"2.0","id":"7","method":"tools/call",""" +
+      """"params":{"name":"prog","arguments":{},"_meta":{"progressToken":"pt-7"}}}""")
+    // Two progress notifications, each carrying the injected token and our dict.
+    assertThat(sent.length == 2, s"expected 2 progress notifications, got ${sent.length}: $sent")
+    assertThat(sent.forall(_.contains("notifications/progress")), s"wrong method: $sent")
+    assertThat(sent.forall(_.contains("\"progressToken\"")), s"token not injected: $sent")
+    assertThat(sent.forall(_.contains("pt-7")), s"token value wrong: $sent")
+    assertThat(sent(0).contains("\"message\"") && sent(0).contains("half"), s"dict not passed through: ${sent(0)}")
+    assertThat(sent(1).contains("done"), s"second dict not passed through: ${sent(1)}")
+    // The final result is still returned normally, after the notifications.
+    assertThat(resp.exists(r => r.contains("\"id\"") && r.contains("ok")), s"final result missing: $resp")
+  }
+
+  private def testNoProgressWithoutToken(): Unit = {
+    val s = server(List(progressTool("prog")))
+    // Same tool, but no _meta.progressToken: the sink is a no-op, so nothing is
+    // pushed — only the final result comes back.
+    val (sent, resp) = s.processRequestForTestCapturing(
+      """{"jsonrpc":"2.0","id":"8","method":"tools/call","params":{"name":"prog","arguments":{}}}""")
+    assertThat(sent.isEmpty, s"no progress expected without a token, got: $sent")
+    assertThat(resp.exists(_.contains("ok")), s"final result missing: $resp")
+  }
+
+  private def testProgressTokenInjectionOverridesHostKey(): Unit = {
+    // A tool that puts its own bogus progressToken in the dict — the wire token
+    // must win (the server injects the canonical one last).
+    val tool = McpTool("ptok", "d", Map("type" -> "object"),
+      (_: McpToolParams, sink: McpProgress.Sink) => {
+        sink(JSON.Object("progress" -> 1, "progressToken" -> "BOGUS"))
+        Right(McpToolResult.fromMap(Map("text" -> "ok")))
+      })
+    val (sent, _) = server(List(tool)).processRequestForTestCapturing(
+      """{"jsonrpc":"2.0","id":"9","method":"tools/call",""" +
+      """"params":{"name":"ptok","arguments":{},"_meta":{"progressToken":42}}}""")
+    assertThat(sent.length == 1, s"expected 1 notification: $sent")
+    assertThat(sent.head.contains("42") && !sent.head.contains("BOGUS"),
+      s"wire token must override host key: ${sent.head}")
+  }
+
   def main(args: Array[String]): Unit = {
     testRegistryRegisterAndGet()
     testRegistryRejectsDuplicate()
@@ -262,6 +316,9 @@ object McpServerTest {
     testInvalidMethodType()
     testParamTransformApplied()
     testNotificationNoResponse()
+    testProgressEmittedWhenTokenPresent()
+    testNoProgressWithoutToken()
+    testProgressTokenInjectionOverridesHostKey()
     println("McpServerTest: all tests passed")
   }
 }

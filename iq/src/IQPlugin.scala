@@ -14,7 +14,6 @@ object IQPlugin {
   val AUTH_TOKEN_PROPERTY = "iq.mcp.auth.token"
 
   private val DEFAULT_PORT = 8765
-  private val MAX_PORT_SCAN = 100
 
   @volatile private var instance: Option[IQPlugin] = None
 
@@ -92,34 +91,35 @@ class IQPlugin extends EBPlugin {
 
   private def startServer(): Unit = {
     val securityConfig = buildSecurityConfig()
-    var tryPort = IQPlugin.DEFAULT_PORT
-    val maxPort = tryPort + IQPlugin.MAX_PORT_SCAN
-    var started = false
-    while (!started && tryPort < maxPort) {
-      try {
-        iqServer = Some(new IQServer(port = tryPort, securityConfig = securityConfig))
-        iqServer.foreach(_.start())
-        System.setProperty(IQPlugin.PORT_PROPERTY, tryPort.toString)
-        System.setProperty(IQPlugin.AUTH_TOKEN_PROPERTY, securityConfig.authToken)
-        started = true
-        IQPlugin.mcpPort = Some(tryPort)
-        Output.writeln(s"Isabelle/Q Server started successfully on port $tryPort")
-        IQPlugin.activateWidget("iq-mcp-status")
-      } catch {
-        case _: java.net.BindException =>
+    // The port scan (DEFAULT_PORT upward for the first free port) lives in the
+    // generic McpServer now: IQServer binds from basePort over IQServer.PortScanSpan
+    // and reports the chosen port via `port`. We just start it and read it back.
+    val maxPort = IQPlugin.DEFAULT_PORT + IQServer.PortScanSpan - 1
+    try {
+      val server = new IQServer(basePort = IQPlugin.DEFAULT_PORT, securityConfig = securityConfig)
+      iqServer = Some(server)
+      server.start()
+      server.port match {
+        case Some(boundPort) =>
+          System.setProperty(IQPlugin.PORT_PROPERTY, boundPort.toString)
+          System.setProperty(IQPlugin.AUTH_TOKEN_PROPERTY, securityConfig.authToken)
+          IQPlugin.mcpPort = Some(boundPort)
+          Output.writeln(s"Isabelle/Q Server started successfully on port $boundPort")
+          IQPlugin.activateWidget("iq-mcp-status")
+        case None =>
           iqServer = None
-          tryPort += 1
-        case ex: Exception =>
-          iqServer = None
-          Output.writeln(s"Failed to start Isabelle/Q Server: ${ex.getMessage}")
-          ex.printStackTrace()
-          return
+          Output.writeln("Failed to start Isabelle/Q Server: server reported no bound port")
       }
-    }
-    if (!started) {
-      Output.writeln(
-        s"Failed to start Isabelle/Q Server: no free port in range ${IQPlugin.DEFAULT_PORT}–${maxPort - 1}"
-      )
+    } catch {
+      case _: java.net.BindException =>
+        iqServer = None
+        Output.writeln(
+          s"Failed to start Isabelle/Q Server: no free port in range ${IQPlugin.DEFAULT_PORT}–$maxPort"
+        )
+      case ex: Exception =>
+        iqServer = None
+        Output.writeln(s"Failed to start Isabelle/Q Server: ${ex.getMessage}")
+        ex.printStackTrace()
     }
   }
 

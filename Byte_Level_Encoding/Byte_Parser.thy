@@ -3,8 +3,8 @@
 
 (*<*)
 theory Byte_Parser
-  imports Lenses_And_Other_Optics.Lenses_And_Other_Optics Byte_Encoding_Word_Nat Focus_Parser
-    "Word_Lib.Hex_Words" "HOL-Library.Datatype_Records"
+  imports Lenses_And_Other_Optics.Lenses_And_Other_Optics Byte_Encoding_Word_Nat Byte_Encoding_Bool
+    Byte_Encoding_Array Focus_Parser "Word_Lib.Hex_Words" "HOL-Library.Datatype_Records"
 begin
 (*>*)
 
@@ -19,11 +19,66 @@ begin
 text\<open>Read a word\<close>
 
 definition \<open>parse_byte \<equiv> parse_single :: byte byte_parser\<close>
+definition \<open>parse_bool \<equiv> parse_byte >>\<^sub>\<integral> bool_byte_focus\<close>
 definition \<open>parse_word16 \<equiv> parse_array2 >>\<^sub>\<integral> word16_byte_array_focus_le\<close>
 definition \<open>parse_word32 \<equiv> parse_array4 >>\<^sub>\<integral> word32_byte_array_focus_le\<close>
 definition \<open>parse_word64 \<equiv> parse_array8 >>\<^sub>\<integral> word64_byte_array_focus_le\<close>
+definition \<open>parse_word128 \<equiv> parse_array16 >>\<^sub>\<integral> word128_byte_array_focus_le\<close>
 
-end 
+end
+
+subsection\<open>Parsing a fixed-length word array\<close>
+
+text\<open>A word array \<^verbatim>\<open>[uW; N]\<close> parser, sibling to the word parsers above: for an
+element prism \<^term>\<open>p\<close> of fixed width \<^term>\<open>w\<close> it peels \<^term>\<open>w * N\<close> bytes off the
+front and decodes them into a length-\<^term>\<open>N\<close> array, handing the rest back.  A
+parser needs a proper (typedef) focus, which only \<^verbatim>\<open>lift_definition\<close> can build;
+\<^verbatim>\<open>lift_definition\<close> in turn requires the lifted raw focus to be valid for \<^emph>\<open>all\<close>
+\<^term>\<open>w\<close>/\<^term>\<open>p\<close>.  The array focus is valid only when the element prism is
+fixed-width, so we lift a \<^emph>\<open>guarded\<close> raw focus: the real focus when the element
+is fixed-width, and the always-valid \<^const>\<open>dummy_focus\<close> otherwise.  Real call
+sites always supply a fixed-width element prism, so the dummy branch is never
+taken; \<^verbatim>\<open>array_parser_valid\<close> records the round-trip law under that assumption.\<close>
+
+lift_definition array_focus ::
+    \<open>nat \<Rightarrow> (byte list, 'e) prism \<Rightarrow> (byte list, ('e, 'l::len) array \<times> byte list) focus\<close> is
+  \<open>\<lambda>w p. if fixed_width_prism w p
+         then prism_to_focus_raw (array_split_prism w p :: (byte list, ('e, 'l) array \<times> byte list) prism)
+         else dummy_focus\<close>
+  by (simp add: dummy_focus_is_valid prism_to_focus_raw_valid array_split_prism_valid)
+
+definition array_parser ::
+    \<open>nat \<Rightarrow> (byte list, 'e) prism \<Rightarrow> (byte list, ('e, 'l::len) array) focus_parser\<close> where
+  \<open>array_parser w p \<equiv> FocusParser (array_focus w p)\<close>
+
+lemma array_parser_valid:
+  assumes \<open>fixed_width_prism w p\<close>
+    shows \<open>is_valid_focus (Rep_focus
+             (array_focus w p :: (byte list, ('e, 'l::len) array \<times> byte list) focus))\<close>
+  using assms by (simp add: array_focus.rep_eq array_split_prism_valid prism_to_focus_raw_valid)
+
+subsection\<open>Relabelling a parsed tuple as a named record\<close>
+
+text\<open>A record parser is the \<open>--\<^sub>\<integral>\<close> chain of its field parsers, which produces a
+nested tuple, followed by a relabelling of that tuple as the named record.  The
+relabelling is an isomorphism \<^term>\<open>f\<close> / \<^term>\<open>g\<close> (tuple to record and back).
+As a focus it needs \<^verbatim>\<open>lift_definition\<close> (a typedef focus), which requires validity
+for \<^emph>\<open>all\<close> \<^term>\<open>f\<close> / \<^term>\<open>g\<close>; the iso focus is valid only when the two are
+mutually inverse.  As with the array and enum foci, we lift a \<^emph>\<open>guarded\<close> raw
+focus: the real iso when \<^term>\<open>f\<close> / \<^term>\<open>g\<close> are inverse, and the always-valid
+\<^const>\<open>dummy_focus\<close> otherwise.  One generic definition then serves every record,
+so the record command needs only a plain definition per record, not a
+per-record \<^verbatim>\<open>lift_definition\<close>.\<close>
+
+lift_definition iso_focus :: \<open>('a \<Rightarrow> 'b) \<Rightarrow> ('b \<Rightarrow> 'a) \<Rightarrow> ('a, 'b) focus\<close> is
+  \<open>\<lambda>f g. if (\<forall>x. g (f x) = x) \<and> (\<forall>y. f (g y) = y) then iso\<^sub>\<integral> f g else dummy_focus\<close>
+  by (auto simp add: dummy_focus_is_valid iso_focus_raw_valid)
+
+lemma iso_focus_valid:
+  assumes \<open>\<And>x. g (f x) = x\<close>
+      and \<open>\<And>y. f (g y) = y\<close>
+    shows \<open>is_valid_focus (Rep_focus (iso_focus f g))\<close>
+  using assms by (simp add: iso_focus.rep_eq iso_focus_raw_valid)
 
 subsection\<open>Examples\<close>
 

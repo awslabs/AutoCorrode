@@ -156,6 +156,13 @@ lemma wp_consequence:
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<psi> \<rho> \<theta>\<close>
   using assms sstriple_consequence wp_is_weakest_precondition wp_to_sstriple by metis
 
+lemma wp_weaken_crule:
+  assumes \<open>\<And>x. \<alpha> x \<longlongrightarrow> \<alpha>' x\<close>
+      and \<open>\<And>x. \<beta> x \<longlongrightarrow> \<beta>' x\<close>
+      and \<open>\<And>x. \<gamma> x \<longlongrightarrow> \<gamma>' x\<close>
+    shows \<open>\<W>\<P> \<Gamma> e \<alpha> \<beta> \<gamma> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<alpha>' \<beta>' \<gamma>'\<close>
+  using assms by (meson aentails_refl_eq wp_consequence)
+
 text\<open>Using \<^term>\<open>wp_striple_iff\<close>, we can transport some frame rules into the weakest precondition setting:\<close>
 
 theorem wp_frame_ruleI:

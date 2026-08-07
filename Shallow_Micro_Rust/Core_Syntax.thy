@@ -4,7 +4,7 @@
 (*<*)
 theory Core_Syntax
   imports Core_Expression Rust_Iterator Result_Type Numeric_Types Option_Type
-    Range_Type Bool_Type Global_Store Num_Case_Expression Basic_Case_Expression
+    Range_Type Bool_Type Global_Store Misc.Num_Case_Expression Basic_Case_Expression
 begin
 (*>*)
 

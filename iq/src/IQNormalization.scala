@@ -12,7 +12,9 @@
  * Only depends on isabelle._ (Symbol, from isabelle.jar). No jEdit or PIDE dependency.
  */
 
-import isabelle._
+// `package isabelle` (as Extended_Query_Operation.scala): shares this with
+// `package isabelle.ic2`. Symbol et al. are then in scope unqualified.
+package isabelle
 
 object IQNormalization {
 

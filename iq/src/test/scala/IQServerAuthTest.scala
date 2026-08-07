@@ -1,6 +1,9 @@
 /* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT */
 
+// McpServer/McpTool/McpToolRegistry/ErrorCodes now live in `package isabelle`.
+import isabelle._
+
 import java.nio.file.Files
 
 object IQServerAuthTest {
@@ -44,7 +47,7 @@ object IQServerAuthTest {
       maxClientThreads = 2
     )
     new IQServer(
-      port = 0,
+      basePort = 0,
       securityConfig = config,
       registryOverride = registry
     )

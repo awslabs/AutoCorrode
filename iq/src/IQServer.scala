@@ -308,10 +308,16 @@ object IQArgumentUtils {
  * It handles client connections, processes requests, and returns responses according to
  * the MCP specification.
  *
- * @param port The port number to listen on (default: 8765)
+ * @param basePort The lowest port to bind; the server scans upward from here
+ *                 for the first free one (default base: 8765).
  */
+object IQServer {
+  /** How many consecutive ports to scan from basePort for a free one. */
+  val PortScanSpan: Int = 100
+}
+
 class IQServer(
-  port: Int = 8765,
+  basePort: Int = 8765,
   securityConfig: IQServerSecurityConfig = IQSecurity.fromEnvironment(),
   registryOverride: Option[McpToolRegistry] = None
 ) {
@@ -519,7 +525,11 @@ class IQServer(
    * by McpServer. */
 
   private val mcpConfig = McpServerConfig(
-    port = port,
+    port = basePort,
+    // Scan up to 100 ports from basePort for the first free one (McpServer.start
+    // binds it; read it back via `port`). Previously this loop lived in
+    // IQPlugin.startServer; it is now the generic McpServer behavior.
+    portSpan = IQServer.PortScanSpan,
     authToken = securityConfig.authToken,
     maxClientThreads = securityConfig.maxClientThreads,
     logName = "I/Q Server",
@@ -527,7 +537,9 @@ class IQServer(
     authToolDescription =
       "Authenticate with the I/Q MCP server. Must be called before any other tool. " +
       "If the token is not provided to you, use the IQ_AUTH_TOKEN environment variable if set.",
-    redact = IQSecurity.redactAuthToken
+    // Compose the generic token masking (the authenticate call's "token" field)
+    // with I/Q's own "auth_token" redaction.
+    redact = line => IQSecurity.redactAuthToken(McpServerConfig.redactTokens(line))
   )
 
   private val mcpJson: McpJsonCodec = new McpJsonCodec {
@@ -538,6 +550,9 @@ class IQServer(
   private val mcpLogger: McpLogger = new McpLogger {
     def info(message: String): Unit = safeOutput(message)
     def security(message: String): Unit = safeOutput(s"I/Q Server [SECURITY]: $message")
+    // Per-request trace: dropped by default so the dockable log stays readable
+    // (matches ic2 without -v). Route to safeOutput here to debug the protocol.
+    override def debug(message: String): Unit = ()
   }
 
   private val mcpComm: McpCommLogger = new McpCommLogger {
@@ -558,6 +573,9 @@ class IQServer(
 
   def start(): Unit = mcpServer.start()
   def stop(): Unit = mcpServer.stop()
+
+  /** The actual bound port after start() — the first free port from basePort. */
+  def port: Option[Int] = mcpServer.port
   def getActiveClientCount: Int = mcpServer.getActiveClientCount
   def getAuthenticatedClientCount: Int = mcpServer.getAuthenticatedClientCount
 
@@ -1194,17 +1212,18 @@ class IQServer(
       ),
       Map(
         "name" -> "explore",
-        "description" -> "I/Q explore. Run a query for non-invasive proof exploration: Try Isar proof scripts, find theorems, run sledgehammer, at any point in a document.",
+        "description" -> "I/Q explore. Run a query for non-invasive proof exploration: inspect the proof state, try Isar proof scripts, find theorems, run sledgehammer, at any point in a document.",
         "inputSchema" -> Map(
           "type" -> "object",
           "properties" -> Map(
             "query" -> Map(
               "type" -> "string",
               "description" -> ("Query type: " +
+                "'state' reports the proof state (goal + context) at the selected command — works even for commands not currently in view. " +
                 "'proof' executes an Isar method/script candidate (requires Isar_Explore.thy imported). " +
                 "'sledgehammer' runs sledgehammer. " +
                 "'find_theorems' runs find_theorems."),
-              "enum" -> List("proof", "sledgehammer", "find_theorems")
+              "enum" -> List("state", "proof", "sledgehammer", "find_theorems")
             ),
             "command_selection" -> Map(
               "type" -> "string",
@@ -1226,6 +1245,7 @@ class IQServer(
             "arguments" -> Map(
               "type" -> "string",
               "description" -> ("Query arguments, interpreted by query type. " +
+                "For query='state': IGNORED (proof state takes no arguments). " +
                 "For query='proof': REQUIRED Isar method/script text (examples: 'by simp', 'apply blast'). " +
                 "For query='sledgehammer': OPTIONAL prover list; empty means tool defaults. " +
                 "For query='find_theorems': REQUIRED query string passed to find_theorems (examples: 'name:map', '\\<open>(_ :: unat) = (_ :: unat)\\<close>').")
@@ -1970,12 +1990,20 @@ class IQServer(
       val rangeInfo = getCommandRangeInfo(content, command, commandStart)
       val commandStatus = getCommandStatus(command, snapshot)
 
+      // Augment results_text with the proof state at this command, obtained via a
+      // print_state query (robust for commands processed but never made visible,
+      // which a passive command_results read misses). Appended, de-duplicated
+      // against what the passive read already surfaced. Best-effort: None on
+      // timeout/failure leaves results_text as the passive read gave it.
+      val stateLines = queryProofState(command).getOrElse(Nil)
+      val mergedResultsText = (resultsText ++ stateLines.filterNot(resultsText.contains)).distinct
+
       CommandInfo(
         file_path = node_name.toString,
         command_source = command.source,
         command_type = commandType,
         results_xml = resultsXml,
-        results_text = resultsText,
+        results_text = mergedResultsText,
         range = rangeInfo,
         status = commandStatus
       )
@@ -4439,6 +4467,15 @@ end"""
       }
     }
 
+    /** The collected results as raw content lines (no sledgehammer filtering / no
+      * joining). Used by callers that want the state text as a list, e.g. to feed
+      * a command's results_text. */
+    def getResultLines(): List[String] =
+      xmlResults.flatMap { tree =>
+        val content = XML.content(tree).trim
+        if (content.nonEmpty) List(content) else Nil
+      }
+
     def awaitCompletion(timeoutMs: Long): Boolean =
       completionLatch.await(timeoutMs, TimeUnit.MILLISECONDS)
 
@@ -4500,8 +4537,8 @@ end"""
           )
 
           val op = new Extended_Query_Operation(
-            PIDE.editor,
-            activeView,
+            PIDE.session,
+            IQ_Editor_Host,
             internalQuery,
             collector.statusCallback,
             collector.outputCallback,
@@ -4593,6 +4630,46 @@ end"""
           "results" -> "",
           "message" -> s"Failed to execute exploration due to linkage error: ${throwableMessage(err)}"
         )
+    }
+  }
+
+  /**
+   * Proof state at a single command via a `print_state` Extended_Query_Operation.
+   *
+   * Unlike a passive `command_results` read (which only sees a STATE message if
+   * one was produced — i.e. the command was visible while editor_output_state was
+   * on), this fires the core `print_state_query` print function AT the command:
+   * inserting the overlay makes the command visible, so the print function runs
+   * and renders `Toplevel.pretty_state` even for a command that was processed but
+   * never scrolled into view. Returns the rendered state lines (possibly empty for
+   * a non-proof command, which has no goal to show), or None on timeout/failure.
+   *
+   * Synchronous: fires the query on the GUI thread and blocks (bounded) for the
+   * instance-tagged result. Best-effort — any failure yields None so the caller
+   * falls back to whatever the passive read gave.
+   */
+  private def queryProofState(command: Command, timeoutMs: Long = 10000L): Option[List[String]] = {
+    val collector = new ExploreResultCollector("print_state")
+    var operation: Extended_Query_Operation = null
+    try {
+      operation = GUI_Thread.now {
+        val op = new Extended_Query_Operation(
+          PIDE.session, IQ_Editor_Host, "print_state",
+          collector.statusCallback, collector.outputCallback)
+        op.activate()
+        op.apply_query_at_command(command, Nil)
+        op
+      }
+      if (!collector.awaitCompletion(timeoutMs)) None
+      else if (!collector.wasSuccessful()) None
+      else Some(collector.getResultLines())
+    } catch {
+      case _: Throwable => None
+    } finally {
+      if (operation != null) {
+        try { GUI_Thread.now { operation.deactivate() } }
+        catch { case _: Throwable => () }
+      }
     }
   }
 
@@ -4964,4 +5041,13 @@ final class JEditIRConnection extends IRConnection {
   }
 
   def client: Option[IRClient] = IQExploreDockable.ir
+
+  def session: Session = PIDE.session
+
+  /** Complete the file against jEdit's open/tracked files and read the live
+    * (possibly unsaved) buffer text — the source the prover is working from. */
+  def resolveFile(file: String): Either[String, (String, String)] =
+    IQUtils.autoCompleteFilePath(file).flatMap { path =>
+      IQUtils.getFileContent(path).map(content => (path, content))
+    }
 }

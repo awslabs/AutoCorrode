@@ -15,10 +15,12 @@
    `authenticate` is a built-in (matched in handleClient before the registered
    tools, and prepended to tools/list); it cannot be registered or shadowed.
 
-   The JSON-RPC decode lives in McpProtocol, which imports isabelle.JSON
-   directly — the only Isabelle coupling of this layer. */
+   The JSON-RPC decode lives in McpProtocol; isabelle.JSON is the only Isabelle
+   coupling of this layer. */
 
-import isabelle.JSON
+// `package isabelle` (as Extended_Query_Operation.scala): shares the generic MCP
+// layer with `package isabelle.ic2`. JSON et al. are then in scope unqualified.
+package isabelle
 
 import java.io.{BufferedReader, InputStreamReader, PrintWriter, BufferedWriter, OutputStreamWriter}
 import java.net.{InetAddress, ServerSocket, Socket}
@@ -28,18 +30,44 @@ import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 
+/** A sink for in-flight progress: the host hands a JSON object that is fed
+  * VERBATIM into a `notifications/progress` message's params (the server only
+  * injects the client's `progressToken`). A no-op when the client didn't opt
+  * in. Thread-safe to call from any thread (it serializes on the connection
+  * writer), so a handler may report from a worker/ticker thread. */
+object McpProgress {
+  type Sink = JSON.Object.T => Unit
+  val noop: Sink = _ => ()
+}
+
 /** A self-describing MCP tool: its wire name, human description, JSON-schema
-  * for inputs, and the handler. `handler` returns Right(result-fields) for a
-  * success, or Left(message) for a validation error surfaced to the caller as
-  * an isError tool result. Exceptions thrown by the handler are NOT caught here
-  * — they propagate to McpServer.handleToolCall and become a JSON-RPC
-  * INTERNAL_ERROR with the original message (id preserved). */
+  * for inputs, and the handler. `handler` receives the params and a progress
+  * Sink (no-op unless the caller supplied a progressToken); it returns
+  * Right(result-fields) for success, or Left(message) for a validation error
+  * surfaced as an isError tool result. Exceptions thrown by the handler are NOT
+  * caught here — they propagate to McpServer.handleToolCall and become a
+  * JSON-RPC INTERNAL_ERROR with the original message (id preserved). */
 final case class McpTool(
   name: String,
   description: String,
   inputSchema: Map[String, Any],
-  handler: McpToolParams => Either[String, McpToolResult]
-)
+  handlerP: (McpToolParams, McpProgress.Sink) => Either[String, McpToolResult]
+) {
+  /** Invoke ignoring progress (used by the non-progress dispatch path). */
+  def handler(params: McpToolParams): Either[String, McpToolResult] =
+    handlerP(params, McpProgress.noop)
+}
+
+object McpTool {
+  /** Construct from a progress-unaware handler (the common case): the Sink is
+    * ignored. Keeps existing `McpTool(name, desc, schema, params => ...)` calls
+    * working unchanged. */
+  def apply(
+    name: String, description: String, inputSchema: Map[String, Any],
+    handler: McpToolParams => Either[String, McpToolResult]
+  ): McpTool =
+    McpTool(name, description, inputSchema, (p: McpToolParams, _: McpProgress.Sink) => handler(p))
+}
 
 
 /** Tool-call parameters: a normalized Map[String, Any] of arguments. */
@@ -80,10 +108,19 @@ object McpInvocationError {
 }
 
 
-/** Console-diagnostics seam (replaces direct isabelle.Output.writeln). */
+/** Console-diagnostics seam (replaces direct isabelle.Output.writeln).
+  *
+  *   - info: high-level lifecycle and errors (server start/stop, client
+  *     connect/disconnect, parse/processing failures) — shown by default;
+  *   - debug: routine per-request / per-connection trace (parsed method,
+  *     processing request, extracted tool, notifications) — only useful when
+  *     debugging, so a host gates it behind its verbose flag. Defaults to
+  *     dropping, so a non-verbose host need not override it;
+  *   - security: ALLOW/DENY auth-decision audit lines. */
 trait McpLogger {
   def info(message: String): Unit
   def security(message: String): Unit
+  def debug(message: String): Unit = ()
 }
 object McpLogger {
   val noop: McpLogger = new McpLogger {
@@ -117,24 +154,42 @@ trait McpJsonCodec {
 /** Framework-neutral server configuration. The host fills these in; all fields
   * are defaulted so a host need not set any of them.
   *
+  *   - port: the lowest loopback port to bind;
+  *   - portSpan: how many consecutive ports to try from `port` upward before
+  *     giving up — start() binds the first free one and reports it via the
+  *     server's `port` accessor. Defaults to 1 (bind exactly `port`); a host wanting a
+  *     predictable-but-shareable port (e.g. several servers coexisting) raises
+  *     it, as I/Q does when scanning from 8765;
   *   - serverName: the wire identity returned by `initialize`;
   *   - logName: the prefix on console diagnostics;
   *   - threadPrefix: the prefix on the worker / accept-loop thread names;
   *   - authToolDescription: the `description` of the built-in authenticate tool
   *     shown in tools/list — a client-facing hint a host can specialize (e.g.
   *     naming its own auth-token environment variable);
-  *   - redact: applied to logged wire traffic (defaults to identity). */
+  *   - redact: applied to logged wire traffic. Defaults to McpServerConfig.redactTokens,
+  *     which masks the "token"/"auth_token" JSON fields so the authenticate
+  *     call's secret never reaches a log; a host may compose extra redaction. */
 final case class McpServerConfig(
   port: Int,
   authToken: String,
   maxClientThreads: Int,
+  portSpan: Int = 1,
   serverName: String = "isabelle-mcp-server",
   logName: String = "MCP Server",
   threadPrefix: String = "mcp",
   authToolDescription: String =
     "Authenticate with the MCP server through an authentication token.",
-  redact: String => String = identity
+  redact: String => String = McpServerConfig.redactTokens
 )
+
+object McpServerConfig {
+  /** Mask auth-token JSON string fields ("token" / "auth_token") in a wire line
+    * before it is logged. The MCP `authenticate` tool carries the secret in a
+    * "token" argument, so this keeps it out of any log the diagnostics seam
+    * writes to (stdout, a daemon log file, the I/Q dockable, …). */
+  def redactTokens(line: String): String =
+    line.replaceAll("\"(auth_token|token)\"\\s*:\\s*\"[^\"]*\"", "\"$1\":\"***\"")
+}
 
 
 /** Runtime-mutable, thread-safe, registration-order-preserving tool registry.
@@ -183,12 +238,13 @@ final class McpToolRegistry {
     }
   }
 
-  /** Dispatch a tool call. UnknownTool when the name isn't registered. Does NOT
-    * catch handler exceptions (they propagate to McpServer.handleToolCall). */
-  def invoke(name: String, params: McpToolParams)
+  /** Dispatch a tool call, passing a progress sink (no-op unless the client
+    * opted in). UnknownTool when the name isn't registered. Does NOT catch
+    * handler exceptions (they propagate to McpServer.handleToolCall). */
+  def invoke(name: String, params: McpToolParams, progress: McpProgress.Sink = McpProgress.noop)
       : Either[McpInvocationError, McpToolResult] =
     get(name) match {
-      case Some(t) => t.handler(params).left.map(McpInvocationError.InvalidParams.apply)
+      case Some(t) => t.handlerP(params, progress).left.map(McpInvocationError.InvalidParams.apply)
       case None => Left(McpInvocationError.UnknownTool(name))
     }
 }
@@ -242,6 +298,12 @@ final class McpServer(
   def getActiveClientCount: Int = activeClientCount.get()
   def getAuthenticatedClientCount: Int = authenticatedClientCount.get()
 
+  /** The actual listening port after start(): the first free port in
+    * [config.port, config.port + portSpan), or the OS-assigned port when
+    * config.port was 0. None before start() / after stop(). Lets a host
+    * advertise the real port chosen by the scan / ephemeral bind. */
+  def port: Option[Int] = serverSocket.map(_.getLocalPort)
+
   private def getTimestamp(): String = LocalTime.now().format(timeFormatter)
 
   /** Remote address of the client whose request the current thread is handling,
@@ -263,11 +325,28 @@ final class McpServer(
       // listen address must never be sourced from the environment or CLI.
       val bindAddress = InetAddress.getByName("127.0.0.1")
 
-      serverSocket = Some(new ServerSocket(config.port, 50, bindAddress))
+      // Bind the first free port in [port, port + portSpan). With the default
+      // span of 1 this is just config.port; a larger span lets several servers
+      // coexist on a predictable base (the host reads the actual port back via
+      // the `port` accessor). A taken port raises BindException — try the next;
+      // if none in the range is free, throw a BindException naming the range.
+      val span = math.max(1, config.portSpan)
+      val socket =
+        (config.port until (config.port + span)).iterator.flatMap { p =>
+          try Some(new ServerSocket(p, 50, bindAddress))
+          catch {
+            case _: java.net.BindException =>
+              logger.info(s"$logName: port $p in use, trying next ...")
+              None
+          }
+        }.nextOption().getOrElse(
+          throw new java.net.BindException(
+            s"$logName: no free port in [${config.port}, ${config.port + span})"))
+      serverSocket = Some(socket)
       isRunning = true
 
       logger.info(
-        s"$logName starting on 127.0.0.1:${config.port} " +
+        s"$logName starting on 127.0.0.1:${socket.getLocalPort} " +
         s"(max_client_threads=${config.maxClientThreads})"
       )
 
@@ -330,7 +409,7 @@ final class McpServer(
       clientSocket.setSendBufferSize(65536)
       clientSocket.setTcpNoDelay(true)
 
-      logger.info(s"MCP Client connected with buffer size: ${clientSocket.getSendBufferSize} (no timeout)")
+      logger.debug(s"MCP Client connected with buffer size: ${clientSocket.getSendBufferSize} (no timeout)")
 
       val clientCount = activeClientCount.incrementAndGet()
       registeredClient = true
@@ -366,10 +445,14 @@ final class McpServer(
           val id = requestOpt.flatMap(_.id)
           val isNotification = id.isEmpty
 
-          // A) Public methods: always allowed, regardless of auth state.
-          if (Set("initialize", "tools/list", "ping").contains(method)
+          // A) Public methods: always allowed, regardless of auth state. The
+          // resources/* and prompts/* list methods are public so a client that
+          // probes them during the handshake (before authenticating) gets a
+          // valid empty list rather than an auth DENY that aborts the session.
+          if (Set("initialize", "tools/list", "ping",
+                  "resources/list", "resources/templates/list", "prompts/list").contains(method)
               || method.startsWith("notifications/")) {
-            processRequest(line).foreach(sendResponse)
+            processRequest(line, sendResponse).foreach(sendResponse)
 
           // B) Not yet authenticated: only accept the authenticate tool call.
           } else if (!clientAuthenticated) {
@@ -404,7 +487,7 @@ final class McpServer(
 
           // C) Authenticated: handle normally.
           } else {
-            processRequest(line).foreach(sendResponse)
+            processRequest(line, sendResponse).foreach(sendResponse)
           }
         } catch {
           case ex: Exception =>
@@ -448,10 +531,12 @@ final class McpServer(
     }
   }
 
-  private def processRequest(requestLine: String): Option[String] = {
+  private def processRequest(
+    requestLine: String, send: String => Unit = _ => ()
+  ): Option[String] = {
     var requestIdForError: Option[Any] = None
     try {
-      logger.info(s"$logName: Processing request: ${config.redact(requestLine)}")
+      logger.debug(s"$logName: Processing request: ${config.redact(requestLine)}")
 
       val jsonValue = try {
         json.parse(requestLine)
@@ -490,7 +575,7 @@ final class McpServer(
       val id = request.id
       requestIdForError = id
 
-      logger.info(s"$logName: Parsed method='$method', id=$id")
+      logger.debug(s"$logName: Parsed method='$method', id=$id")
 
       id match {
         case Some(requestId) =>
@@ -500,9 +585,14 @@ final class McpServer(
             case "tools/list" =>
               createToolsListResult().left.map(msg => (ErrorCodes.METHOD_NOT_FOUND, msg))
             case "tools/call" =>
-              handleToolCall(request)
+              handleToolCall(request, send)
             case "ping" =>
               Right(Map("status" -> "ok", "timestamp" -> System.currentTimeMillis()))
+            // We expose no resources or prompts; answer the list probes with
+            // empty collections so clients don't treat them as errors.
+            case "resources/list" => Right(Map("resources" -> List.empty[Any]))
+            case "resources/templates/list" => Right(Map("resourceTemplates" -> List.empty[Any]))
+            case "prompts/list" => Right(Map("prompts" -> List.empty[Any]))
             case _ =>
               logger.info(s"$logName: Unknown method '$method'")
               Left((ErrorCodes.METHOD_NOT_FOUND, s"Method not found: $method"))
@@ -515,11 +605,11 @@ final class McpServer(
         case None =>
           method match {
             case m if m.startsWith("notifications/") =>
-              logger.info(s"$logName: Handling notification '$method'")
+              logger.debug(s"$logName: Handling notification '$method'")
               handleNotification(method)
               None
             case _ =>
-              logger.info(s"$logName: Ignoring unknown notification '$method'")
+              logger.debug(s"$logName: Ignoring unknown notification '$method'")
               None
           }
       }
@@ -551,12 +641,21 @@ final class McpServer(
   def processRequestForTest(requestLine: String): Option[String] =
     processRequest(requestLine)
 
+  /** Testing hook: like processRequestForTest, but also captures any lines the
+    * handler pushed via the progress `send` channel (notifications/progress)
+    * during the call. Returns (capturedSends, finalResponse). */
+  def processRequestForTestCapturing(requestLine: String): (List[String], Option[String]) = {
+    val sent = scala.collection.mutable.ListBuffer.empty[String]
+    val resp = processRequest(requestLine, line => sent.synchronized { sent += line; () })
+    (sent.synchronized(sent.toList), resp)
+  }
+
   private def handleNotification(method: String): Unit = {
     method match {
       case "notifications/initialized" =>
-        logger.info(s"$logName: Client initialization complete")
+        logger.debug(s"$logName: Client initialization complete")
       case _ =>
-        logger.info(s"$logName: Unknown notification method: $method")
+        logger.debug(s"$logName: Unknown notification method: $method")
     }
   }
 
@@ -567,13 +666,26 @@ final class McpServer(
   }
 
   private def handleToolCall(
-      request: McpProtocol.JsonRpcRequest
+      request: McpProtocol.JsonRpcRequest,
+      send: String => Unit = _ => ()
   ): Either[(Int, String), Map[String, Any]] = {
     try {
       val toolCall = McpProtocol.decodeToolCall(request) match {
         case Right(value) => value
         case Left(error) => return Left((ErrorCodes.INVALID_PARAMS, error))
       }
+      // Progress sink: active only if the client supplied a progressToken. It
+      // wraps the host's dict into a notifications/progress message (injecting
+      // the token) and writes it on this connection via `send` — which is the
+      // synchronized connection writer, so notifications serialize against the
+      // eventual final response. The handler may call it from any thread.
+      val progress: McpProgress.Sink =
+        request.progressToken match {
+          case Some(token) => (dict: JSON.Object.T) =>
+            try send(formatProgressNotification(token, dict))
+            catch { case _: Throwable => /* best-effort; never fail the tool */ }
+          case None => McpProgress.noop
+        }
       // Authenticate is handled at the connection level in handleClient; this
       // branch handles it when reached via processRequestForTest or when an
       // already-authenticated client calls it again.
@@ -593,11 +705,11 @@ final class McpServer(
       }
 
       val params = McpToolParams.fromMap(paramTransform(extractArguments(toolCall.arguments)))
-      logger.info(
+      logger.debug(
         s"$logName: Extracted tool='${toolCall.toolName}', params=${params.toMap}"
       )
 
-      registry.invoke(toolCall.toolName, params) match {
+      registry.invoke(toolCall.toolName, params, progress) match {
         case Right(res) =>
           Right(wrapToolCallResult(res.toMap))
         case Left(McpInvocationError.UnknownTool(name)) =>
@@ -648,13 +760,27 @@ final class McpServer(
     json.format(responseData)
   }
 
+  /** A `notifications/progress` JSON-RPC notification (no id). The host's `dict`
+    * becomes the params, with the client's `progressToken` injected (the host's
+    * own `progressToken`, if any, is overridden — the wire token is canonical). */
+  private def formatProgressNotification(token: Any, dict: JSON.Object.T): String = {
+    val params = dict + ("progressToken" -> token)
+    json.format(Map(
+      "jsonrpc" -> "2.0",
+      "method" -> "notifications/progress",
+      "params" -> params))
+  }
+
   private def createInitializeResult(): Either[String, Map[String, Any]] = {
     val timestamp = java.time.Instant.now().toString
+    // Advertise ONLY the capabilities we actually serve: tools. Advertising
+    // `resources` here previously made compliant clients (e.g. Claude Code) call
+    // resources/list, which we don't implement — that landed in the auth gate as
+    // a DENY before the client had authenticated, failing the handshake.
     val result = Map(
       "protocolVersion" -> "2024-11-05",
       "capabilities" -> Map(
-        "tools" -> Map.empty[String, Any],
-        "resources" -> Map.empty[String, Any]
+        "tools" -> Map.empty[String, Any]
       ),
       "serverInfo" -> Map(
         "name" -> config.serverName,

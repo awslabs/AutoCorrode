@@ -5,6 +5,10 @@
  * Standalone tests for IQNormalization.
  * No jEdit or PIDE dependency — only requires isabelle.jar on the classpath.
  */
+
+// IQNormalization now lives in `package isabelle`.
+import isabelle._
+
 object IQNormalizationTest {
   private var passed = 0
   private var failed = 0

@@ -1507,6 +1507,10 @@ lemma awand_pure_true:
   shows \<open>\<langle>True\<rangle> \<Zsurj> \<psi> = \<psi>\<close>
   using assms by (subst asepconj_False_True) (rule awand_univ, auto)
 
+lemma awand_curry_drule:
+  shows \<open>(\<alpha> \<star> \<beta>) \<Zsurj> \<gamma> \<longlongrightarrow> \<alpha> \<Zsurj> (\<beta> \<Zsurj> \<gamma>)\<close>
+  by (simp add: awand_adjointI awand_curry awand_mp)
+
 lemma aentails_empty_R:
   assumes \<open>0 \<Turnstile> \<psi>\<close>
       and \<open>\<phi> \<longlongrightarrow> \<rho>\<close>

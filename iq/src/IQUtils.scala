@@ -454,6 +454,9 @@ object IQUtils {
       case "isar_explore" =>
         // isar_explore expects a single argument (the method)
         List(args)
+      case "print_state" =>
+        // print_state takes no arguments beyond the query instance
+        Nil
       case _ =>
         // Other queries expect a single argument
         List(args)

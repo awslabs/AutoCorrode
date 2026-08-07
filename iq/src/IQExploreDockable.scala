@@ -773,9 +773,10 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       // Deactivate existing operation if it exists
       exploreOperation.foreach(_.deactivate())
 
-      // Create new operation with the selected print function
+      // Create new operation with the selected print function, backed by a Host
+      // that delegates the overlay/flush/dispatch capabilities to jEdit's Editor.
       exploreOperation = Some(new Extended_Query_Operation(
-        PIDE.editor, view, printFunction,
+        PIDE.session, IQ_Editor_Host, printFunction,
         status => {
           status match {
             case Extended_Query_Operation.Status.inactive =>
@@ -807,9 +808,19 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
     // Apply query based on selected mode
     if (currentCommandRadio.isSelected) {
-      // Use the current command at cursor position
+      // Use the current command at cursor position. Resolving the caret command
+      // is editor-specific, so it lives here (hoisted out of the generic op):
+      // find it via PIDE.editor, then drive apply_query_at_command.
       appendOutput(s"Using current command at cursor position with ${queryField.getText}")
-      exploreOperation.foreach(_.apply_query(query))
+      PIDE.editor.current_node_snapshot(view) match {
+        case Some(snapshot) =>
+          PIDE.editor.current_command(view, snapshot) match {
+            case Some(command) =>
+              exploreOperation.foreach(_.apply_query_at_command(command, query))
+            case None => appendOutput("Error: No command at the current cursor position")
+          }
+        case None => appendOutput("Error: No document snapshot available")
+      }
     } else if (fileOffsetRadio.isSelected) {
       // Use file+offset to find command
       if (fileField.getText.isEmpty) {
@@ -875,7 +886,14 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   }
 
   private def locateContext(): Unit = {
-    exploreOperation.foreach(_.locate_query())
+    // Hyperlink to the queried command in the editor. Editor-specific (hoisted
+    // out of the generic op): read the op's resolved location, jump via PIDE.editor.
+    for {
+      op <- exploreOperation
+      command <- op.get_location
+      snapshot = PIDE.editor.node_snapshot(command.node_name)
+      link <- PIDE.editor.hyperlink_command(snapshot, command.id, focus = true)
+    } link.follow(view)
   }
 
   // Initialize

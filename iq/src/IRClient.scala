@@ -1,8 +1,10 @@
 /* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
    SPDX-License-Identifier: MIT */
 
-import isabelle.{Session, Prover, Value, Output, Isabelle_System,
-  Document, Document_Status, Text, Scan, Sessions, Date}
+// `package isabelle` (as Extended_Query_Operation.scala), so the session-generic
+// IRLauncher is reachable from `package isabelle.ic2` too, not just the default
+// package the rest of I/Q lives in.
+package isabelle
 
 import java.io.{BufferedReader, InputStreamReader, OutputStreamWriter, PrintWriter}
 import java.net.Socket
@@ -91,30 +93,6 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
   def initFromDocument(repl: String, node: String, commandId: Int): String =
     send(s"Ir.init_from_document ${q(repl)} ${q(node)} ${mlInt(commandId)}")
 
-  /** Create a REPL from a source location, resolving to node + command id via IQUtils. */
-  def initFromSourceLocation(
-    repl: String,
-    file: String,
-    offset: Option[Int] = None,
-    pattern: Option[String] = None
-  ): String = {
-    val resolvedPath = IQUtils.autoCompleteFilePath(file) match {
-      case Right(p) => p
-      case Left(err) => throw new IllegalArgumentException(err)
-    }
-    val (target, oOpt, pOpt) =
-      if (offset.isDefined) (CommandSelectionTarget.FileOffset, offset, None)
-      else if (pattern.isDefined) (CommandSelectionTarget.FilePattern, None, pattern)
-      else throw new IllegalArgumentException("specify either offset or pattern")
-    IQUtils.resolveCommandSelection(target, Some(resolvedPath), oOpt, pOpt) match {
-      case Right(resolved) =>
-        val node = resolved.command.node_name.node
-        val cmdId = resolved.command.id.toInt
-        initFromDocument(repl, node, cmdId)
-      case Left(err) => throw new IllegalArgumentException(err)
-    }
-  }
-
   /** Fork a new REPL from repl at the given state index. */
   def fork(repl: String, newRepl: String, stateIdx: Int): String =
     send(s"Ir.fork ${q(repl)} ${q(newRepl)} ${mlInt(stateIdx)}")
@@ -152,6 +130,12 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
 
   /** Delete REPL and all its sub-REPLs. */
   def remove(repl: String): String = send(s"Ir.remove ${q(repl)}")
+
+  /** Cooperatively interrupt a REPL busy on a step/edit/replay. Sends
+    * Isabelle_Thread.interrupt_thread to the recorded worker; the running
+    * tactic raises Interrupt at its next interruption point and the REPL
+    * becomes idle. Safe on an idle REPL (reports 'not busy'). */
+  def interrupt(repl: String): String = send(s"Ir.interrupt ${q(repl)}")
 
   /** List all REPLs with step counts and origins. */
   def repls(): String = send("Ir.repls ()")
@@ -198,12 +182,11 @@ class IRClient(host: String = "127.0.0.1", port: Int = 9147, token: String = "")
       |REPL lifecycle:
       |  init("r", List("Main"))            Create REPL importing theories
       |  initFromDocument("r", node, cid)   Create REPL from PIDE document state
-      |  initFromSourceLocation("r",        Create REPL from source location:
-      |    file="Foo.thy", offset=42)         by file + character offset, or
-      |    file="Foo.thy",                    by file + unique text pattern
-      |    pattern="lemma foo")
+      |                                     (from a source location: IRTools'
+      |                                      repl_init_from_source tool)
       |  fork("r", "s", stateIdx)           Fork new REPL from r at state index
       |  remove("r")                        Delete REPL and sub-REPLs
+      |  interrupt("r")                     Cooperatively interrupt a busy REPL
       |  repls()                            List all REPLs
       |
       |Stepping (failed steps leave REPL unchanged — don't call back() after a failure):
@@ -535,7 +518,10 @@ final class IRLauncher(
       if (line == null) { eof = true; onStatus("repl.py: EOF on stdout") }
       else {
         val clean = stripAnsi(line)
-        onStatus("repl.py: " + clean)
+        // Redact repl.py's token line before echoing: onStatus may land in a
+        // persistent log (e.g. ic2's daemon log), and the token is a secret. It
+        // is still captured below and surfaced on demand via `ic2 status`.
+        onStatus("repl.py: " + tokenPattern.replaceAllIn(clean, "IR_Repl.token: <redacted>"))
         portPattern.findFirstMatchIn(clean).foreach(m => replPort = Some(m.group(1).toInt))
         tokenPattern.findFirstMatchIn(clean).foreach(m => replToken = m.group(1))
         if (replPort.isDefined && replToken.isEmpty) extraLines += 1

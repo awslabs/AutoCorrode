@@ -23,6 +23,7 @@ theory Shallow_Micro_Rust
     Rust_Iterator
     Rust_Iterator_Lemmas
     Prompts_And_Responses
+    Simple_Word_Enum_uRust
     SSA
     Tuple
 begin

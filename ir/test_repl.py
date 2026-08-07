@@ -819,6 +819,144 @@ def main():
             assert "Loaded theory" in out, f"Expected loaded confirmation, got:\n{out}"
         run_test("load_theory_already_loaded", test_load_theory_already_loaded)
 
+        # -- `repl.py cli` one-shot client (subprocess against this server) --
+
+        def run_cli(*cli_args, want_rc=0):
+            """Run `repl.py cli VERB --port=P --token=T [ARGS...]` as a subprocess
+            against the running server, returning (stdout, stderr). Asserts rc.
+            Options go right after the verb (before any args / `--`), since `--`
+            makes everything after it literal. `--token=T` (equal-sign form) so
+            argparse doesn't try to interpret a token starting with `-` (which
+            base64url tokens from `secrets.token_urlsafe` sometimes do) as the
+            next option."""
+            verb, rest = cli_args[0], list(cli_args[1:])
+            cmd = [sys.executable, repl_py, "cli", verb,
+                   f"--port={port}", f"--token={token}", *rest]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            assert r.returncode == want_rc, (
+                f"cli {' '.join(cli_args)}: expected rc={want_rc}, got {r.returncode}\n"
+                f"stdout:\n{r.stdout}\nstderr:\n{r.stderr}")
+            return r.stdout, r.stderr
+
+        def test_cli_help():
+            # `cli help` and `cli --help` print the verb table (no server needed).
+            for variant in (["help"], ["--help"]):
+                r = subprocess.run([sys.executable, repl_py, "cli", *variant],
+                                   capture_output=True, text=True, timeout=30)
+                assert r.returncode == 0, f"cli {variant}: rc={r.returncode}"
+                assert "raw EXPR" in r.stdout and "Ir.theories ()" in r.stdout, \
+                    f"cli {variant}: verb table missing:\n{r.stdout}"
+                assert "-> Ir.step" in r.stdout, f"raw forms missing:\n{r.stdout}"
+        run_test("cli_help", test_cli_help)
+
+        def test_cli_theories():
+            out, _ = run_cli("theories")
+            assert "Main" in out, f"cli theories should list Main, got:\n{out}"
+        run_test("cli_theories", test_cli_theories)
+
+        def test_cli_typed_roundtrip():
+            # init -> step (a complete lemma) -> state -1 (negative int) -> remove,
+            # all through the CLI's typed verbs.
+            run_cli("init", "cli_r", "Main")
+            out, _ = run_cli("step", "cli_r", "lemma cli_foo: True by simp")
+            assert out.strip() != "", f"cli step produced no output:\n{out}"
+            out, _ = run_cli("state", "cli_r", "-1")   # negative int -> ML ~1
+            assert out.strip() != "", "cli state -1 produced no output"
+            run_cli("remove", "cli_r")
+        run_test("cli_typed_roundtrip", test_cli_typed_roundtrip)
+
+        def test_cli_find_theorems_autoquote():
+            # A bare (unquoted) term pattern is an outer-syntax error to
+            # find_theorems; the CLI auto-quotes it (matching the MCP tool), so
+            # `find-theorems R N '<term>'` works without the user quoting it.
+            run_cli("init", "cli_ftq", "Main")
+            # Bare term -> auto-quoted -> should find rev_rev_ident.
+            out, _ = run_cli("find-theorems", "cli_ftq", "5", "rev (rev _)")
+            assert "rev_rev_ident" in out, \
+                f"bare-term find-theorems should auto-quote and match:\n{out}"
+            assert "syntax error" not in out.lower(), \
+                f"bare-term find-theorems should not error:\n{out}"
+            # name: criterion must stay unquoted and still work.
+            out, _ = run_cli("find-theorems", "cli_ftq", "3", "name: conjI")
+            assert "conjI" in out, f"name: find-theorems broke:\n{out}"
+            # An already-quoted term is left as-is (idempotent).
+            out, _ = run_cli("find-theorems", "cli_ftq", "5", '"rev (rev _)"')
+            assert "rev_rev_ident" in out, \
+                f"already-quoted find-theorems regressed:\n{out}"
+            run_cli("remove", "cli_ftq")
+        run_test("cli_find_theorems_autoquote", test_cli_find_theorems_autoquote)
+
+        def test_cli_raw():
+            out, _ = run_cli("raw", "Ir.theories ()")
+            assert "Main" in out, f"cli raw should list Main, got:\n{out}"
+
+        run_test("cli_raw", test_cli_raw)
+
+        def test_cli_separator():
+            # `--` separates options from args; a negative IDX after it still
+            # parses (and reaches ML as ~1).
+            run_cli("init", "cli_sep", "Main")
+            run_cli("step", "cli_sep", "lemma cli_sep_l: True by simp")
+            out, _ = run_cli("state", "--", "cli_sep", "-1")
+            assert out.strip() != "", "cli state -- cli_sep -1 produced no output"
+            run_cli("remove", "cli_sep")
+        run_test("cli_separator", test_cli_separator)
+
+        def test_cli_ml_error_exit1():
+            # An ML error (operating on a non-existent REPL) -> ERR -> exit 1,
+            # with the message on stderr.
+            _, err = run_cli("step", "no_such_repl_zzz", "lemma x: True by simp",
+                             want_rc=1)
+            assert err.strip() != "", "cli ML error should print to stderr"
+        run_test("cli_ml_error_exit1", test_cli_ml_error_exit1)
+
+        def test_cli_usage_exit2():
+            # Wrong arity / unknown verb / bad int -> usage error, exit 2.
+            run_cli("state", "only_one_arg", want_rc=2)
+            run_cli("no_such_verb", want_rc=2)
+            run_cli("state", "r", "not_an_int", want_rc=2)
+        run_test("cli_usage_exit2", test_cli_usage_exit2)
+
+        def test_cli_conn_refused_exit2():
+            # A bad port -> connection failure -> exit 2 (not 1).
+            r = subprocess.run(
+                [sys.executable, repl_py, "cli", "theories", "--port", "1"],
+                capture_output=True, text=True, timeout=30)
+            assert r.returncode == 2, f"cli on dead port: expected rc=2, got {r.returncode}"
+        run_test("cli_conn_refused_exit2", test_cli_conn_refused_exit2)
+
+        # -- Benchmark: persistent TCP vs. per-call `cli` subprocess --
+        # Both fire N serialized `Ir.theories ()`. The TCP path reuses one
+        # connection (what I/Q / the MCP server do); the cli path pays a fresh
+        # python3 + connect + auth per call (what a shell loop does). This
+        # quantifies the per-invocation overhead of the one-shot CLI — it is a
+        # measurement, not a latency assertion (only basic correctness is checked).
+        def bench_tcp_vs_cli():
+            n = int(os.environ.get("IR_BENCH_ITERS", "20"))
+            # warm both paths once (JIT / connection setup) before timing.
+            assert "Main" in send_recv(sock, "Ir.theories ();")
+            run_cli("theories")
+
+            t0 = time.perf_counter()
+            for _ in range(n):
+                out = send_recv(sock, "Ir.theories ();")
+                assert "Main" in out, f"tcp theories missing Main:\n{out}"
+            tcp_s = time.perf_counter() - t0
+
+            t0 = time.perf_counter()
+            for _ in range(n):
+                out, _ = run_cli("theories")
+                assert "Main" in out, f"cli theories missing Main:\n{out}"
+            cli_s = time.perf_counter() - t0
+
+            tcp_ms, cli_ms = tcp_s / n * 1000, cli_s / n * 1000
+            ratio = (cli_ms / tcp_ms) if tcp_ms > 0 else float("inf")
+            print(f"\n    {_BOLD}I/R theories() x{n}{_RESET}  "
+                  f"persistent TCP: {_GREEN}{tcp_ms:.1f} ms/call{_RESET}   "
+                  f"cli subprocess: {_YELLOW}{cli_ms:.1f} ms/call{_RESET}   "
+                  f"({ratio:.0f}x overhead per shell call)")
+        run_test("bench_tcp_vs_cli", bench_tcp_vs_cli)
+
         sock.close()
 
         # -- Multi-client tests --
@@ -966,6 +1104,94 @@ def main():
 
         run_test("stress", test_stress)
         run_test("rude_disconnect", test_rude_disconnect)
+
+        def test_pool_exhausted():
+            """When the ML pool is saturated, a further command must return
+            a well-formed 'Pool exhausted' ERR frame within a bounded window
+            (--pool-acquire-timeout, default 30s), and the client's
+            connection must stay open so a follow-up command succeeds once
+            the pool drains.
+
+            Holds slots for 45s (> 30s default) so the probe deterministically
+            trips the timeout rather than waiting for the holders to release.
+            """
+            n_busy = 5
+            busy_duration_ms = 45_000  # must exceed --pool-acquire-timeout
+            timeout_slack_s = 10.0     # how much longer than the timeout we'll
+                                       # wait for the ERR frame before failing
+            barrier_up = threading.Event()
+            errors = []
+            lock = threading.Lock()
+
+            def hold_slot():
+                try:
+                    s = connect(port, token=token)
+                    try:
+                        barrier_up.set()  # ok if racy — first thread's fine
+                        send_recv(
+                            s,
+                            f'OS.Process.sleep (Time.fromMilliseconds '
+                            f'{busy_duration_ms});',
+                            timeout=busy_duration_ms / 1000.0 + 5.0)
+                    finally:
+                        s.close()
+                except Exception as e:
+                    with lock:
+                        errors.append(("hold_slot", repr(e)))
+
+            holders = [threading.Thread(target=hold_slot, daemon=True)
+                       for _ in range(n_busy)]
+            for h in holders:
+                h.start()
+
+            # Wait for at least the first holder to get into its send_recv
+            # (proxy for "slots are being consumed"). Then give the others a
+            # short head-start so ALL are past pool.acquire before we probe.
+            assert barrier_up.wait(timeout=5.0), \
+                "slot-holder threads did not start in time"
+            time.sleep(0.5)
+
+            # Probe: open a fresh connection and send a command that would
+            # normally take milliseconds. It should come back as an ERR frame
+            # bounded by --pool-acquire-timeout, well before the 45s hold ends.
+            probe_sock = connect(port, token=token)
+            try:
+                t0 = time.time()
+                # recv timeout must exceed the server's pool-acquire-timeout
+                # (default 30s) plus slack.
+                probe_recv_timeout = 30.0 + timeout_slack_s
+                out = send_recv(probe_sock, 'Ir.help ();',
+                                timeout=probe_recv_timeout)
+                probe_elapsed = time.time() - t0
+
+                assert "Pool exhausted" in out, (
+                    f"Expected 'Pool exhausted' in probe reply, got (in "
+                    f"{probe_elapsed:.2f}s):\n{out}")
+                # The probe must NOT have waited for holders to release (that
+                # would be ~45s). Allow up to 30s (default timeout) + slack.
+                assert probe_elapsed < 30.0 + timeout_slack_s, (
+                    f"Probe returned only after {probe_elapsed:.2f}s — that's "
+                    f"waiting for slow commands to release, not the "
+                    f"pool-acquire-timeout")
+
+                # Now wait for the busy holders to drain, then confirm the
+                # same probe connection can still be used.
+                for h in holders:
+                    h.join(timeout=busy_duration_ms / 1000.0 + 10.0)
+                    assert not h.is_alive(), \
+                        "slot-holder thread did not finish"
+                if errors:
+                    raise AssertionError(f"slot-holder errors: {errors}")
+
+                # Same connection — not a fresh connect — proves the server
+                # did not close it after the pool-exhausted reply.
+                out2 = send_recv(probe_sock, 'Ir.help ();', timeout=10.0)
+                assert "Ir.init" in out2, (
+                    f"Follow-up command on retained connection failed:\n{out2}")
+            finally:
+                probe_sock.close()
+
+        run_test("pool_exhausted", test_pool_exhausted)
 
     finally:
         if proc is not None and proc.poll() is None:

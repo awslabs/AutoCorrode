@@ -91,6 +91,7 @@ translations
   "_premise_elided z" \<leftharpoondown> "CONST Pure.imp (CONST IGNORE y) z"
   "_premise_elided z" \<leftharpoondown> "_premise_elided (_premise_elided z)"
 
+ML_file "mepo_core.ML"
 ML_file "mepo_prem.ML"
 
 subsection \<open>Various tacticals\<close>
