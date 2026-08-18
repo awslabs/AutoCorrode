@@ -141,6 +141,10 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
                         source line N (1-based). Fast partial check for
                         iterative development. Commands after line N are left
                         UNPROCESSED. Requires exactly one FILE.
+    --command-timeout SECS
+                        abort the whole check if any individual command runs
+                        longer than SECS (default 5; 0 disables). Decimal
+                        seconds are accepted.
 
   Submit a type-check of the given .thy files to the running server and return
   immediately. Track progress with `isabelle ic2 check status`; abort the
@@ -153,6 +157,7 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
   Examples:
     isabelle ic2 check src/MyThy.thy               # submit full check
     isabelle ic2 check src/MyThy.thy --line 42     # submit up to line 42
+    isabelle ic2 check src/MyThy.thy --command-timeout 15
 
   Subcommands (in place of FILE...): status | attach | cancel — see
   `isabelle ic2 --help`.
@@ -165,7 +170,8 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
     // `--line` is a long option, which Isabelle's single-letter Getopts can't
     // express; strip it ourselves first (same trick as `ic2 server start
     // --daemon`).
-    val (line_opt, rest_args) = extract_line(args)
+    val (command_timeout_opt, without_timeout) = extract_command_timeout(args)
+    val (line_opt, rest_args) = extract_line(without_timeout)
     val getopts = Getopts(check_usage_text,
       "n:" -> (a => name = Some(a)))
 
@@ -178,7 +184,7 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
       sys.exit(2)
     }
     val server = resolve_name(name)
-    do_check_detach(server, files, line_opt)
+    do_check_detach(server, files, line_opt, command_timeout_opt)
   }
 
   private def reject_removed_check_options(args: List[String]): Unit =
@@ -203,6 +209,27 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
       case Some(n) if n > 0 => (Some(n), args.take(i) ::: args.drop(i + 2))
       case _ =>
         Output.error_message("check: --line N expects a positive integer, got " + args(i + 1))
+        sys.exit(2)
+    }
+  }
+
+  /** Pull `--command-timeout SECS` from check arguments. The daemon supplies
+    * the 5s default when absent; Some(0) explicitly disables the watchdog. */
+  private def extract_command_timeout(args: List[String]): (Option[Double], List[String]) = {
+    val i = args.indexOf("--command-timeout")
+    if (i < 0) (None, args)
+    else if (i + 1 >= args.length) {
+      Output.error_message(
+        "check: --command-timeout requires a non-negative number of seconds")
+      sys.exit(2)
+    }
+    else args(i + 1).toDoubleOption match {
+      case Some(secs) if java.lang.Double.isFinite(secs) && secs >= 0 =>
+        (Some(secs), args.take(i) ::: args.drop(i + 2))
+      case _ =>
+        Output.error_message(
+          "check: --command-timeout SECS expects a finite non-negative number, got " +
+            args(i + 1))
         sys.exit(2)
     }
   }
@@ -245,15 +272,23 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
 
   /** Submit a detached check: validate locally, send `{op:check, detach:true}`,
    *  report it started, and return (the check keeps running on the server). */
-  private def do_check_detach(name: String, files: List[String], line: Option[Int] = None): Unit = {
+  private def do_check_detach(
+    name: String,
+    files: List[String],
+    line: Option[Int] = None,
+    commandTimeoutSecs: Option[Double] = None
+  ): Unit = {
     val abs_files = files.map { f =>
       if (!f.endsWith(".thy")) { Output.error_message("not a .thy file: " + f); sys.exit(1) }
       val jfile = Path.explode(f).expand.absolute_file
       if (!jfile.isFile) { Output.error_message("file not found: " + f); sys.exit(1) }
       File.standard_path(jfile)
     }
-    val reply = request(name, JSON.Object("op" -> "check", "files" -> abs_files, "detach" -> true) ++
-      line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object()))
+    val reply = request(name,
+      JSON.Object("op" -> "check", "files" -> abs_files, "detach" -> true) ++
+      line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object()) ++
+      commandTimeoutSecs.map(s => JSON.Object("command_timeout_secs" -> s))
+        .getOrElse(JSON.Object()))
     JSON.string(reply, "event") match {
       case Some("submitted") =>
         Output.writeln("submitted (" +
@@ -401,6 +436,19 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
       val msg = JSON.string(err, "message").getOrElse("(no message)")
       Output.writeln("error: " + loc)
       msg.linesIterator.foreach(l => Output.writeln("  " + l))
+    }
+    JSON.value(reply, "timeout").flatMap(JSON.Object.unapply).foreach { timeout =>
+      val theory = JSON.string(timeout, "theory").getOrElse("?")
+      val line = JSON.int(timeout, "line").getOrElse(0)
+      val loc = JSON.string(timeout, "file").getOrElse(theory) +
+        (if (line > 0) ":" + line else "")
+      val keyword = JSON.string(timeout, "keyword").getOrElse("?")
+      val limit = JSON.double(timeout, "limit_s").getOrElse(0.0)
+      val elapsed = JSON.double(timeout, "elapsed_s").getOrElse(0.0)
+      Output.writeln(
+        f"command timeout: $loc%s: $keyword%s exceeded $limit%.1fs ($elapsed%.1fs elapsed)")
+      JSON.string(timeout, "preview").filter(_.nonEmpty)
+        .foreach(preview => Output.writeln("  " + preview))
     }
     sys.exit(0)
   }

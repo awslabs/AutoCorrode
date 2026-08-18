@@ -65,6 +65,10 @@ import scala.jdk.CollectionConverters._
  *  no registry, no job ids, and no per-check bookkeeping — just `slot`. */
 object Check {
 
+  /** Default wall-clock budget for one command. A zero budget disables the
+    * per-command watchdog for checks that explicitly opt out. */
+  val Default_Command_Timeout_Secs: Double = 5.0
+
   /* Headless.Session is batch-oriented: a bare stop-flag flip leaves the ML kernel
    * running the tactic, and its liveness signals over-count forked proofs. ic2
    * needs live progress and a real stop, so it reaches below the public API in two
@@ -187,6 +191,27 @@ object Check {
     * proofs apart without hunting for the line. */
   final case class RunningCommand(
     keyword: String, line: Int, elapsedSecs: Double, preview: String = "")
+
+  /** Durable description of the command that tripped a Job's watchdog. */
+  final case class Command_Timeout(
+    limitSecs: Double,
+    theory: String,
+    file: String,
+    line: Int,
+    keyword: String,
+    preview: String,
+    elapsedSecs: Double
+  ) {
+    def json: JSON.Object.T =
+      JSON.Object(
+        "limit_s" -> limitSecs,
+        "theory" -> theory,
+        "file" -> file,
+        "line" -> line,
+        "keyword" -> keyword,
+        "elapsed_s" -> elapsedSecs) ++
+      (if (preview.isEmpty) JSON.Object() else JSON.Object("preview" -> preview))
+  }
 
   /** A node's live status as a plain map (the shape used in progress/status).
     * If any commands in the node are currently running, they are attached as a
@@ -315,8 +340,24 @@ object Check {
               val cur = per_theory.value
               if (cur.nonEmpty) {
                 val running = snapshotRunning(cur)
-                if (running.nonEmpty)
+                if (running.nonEmpty) {
                   job.fan(Event.Progress(cur.toList.sortBy(_._1.theory), running, update_seq.value))
+                  if (job.commandTimeoutSecs > 0) {
+                    running.iterator
+                      .flatMap { case (name, commands) => commands.map(name -> _) }
+                      .filter { case (_, command) =>
+                        command.elapsedSecs >= job.commandTimeoutSecs
+                      }
+                      .toList
+                      .sortBy { case (name, command) =>
+                        (-command.elapsedSecs, name.theory, command.line, command.keyword)
+                      }
+                      .headOption
+                      .foreach { case (name, command) =>
+                        job.commandTimedOut(name, command)
+                      }
+                  }
+                }
               }
             } catch { case _: Throwable => }
             try Thread.sleep(tick_interval_ms) catch { case _: InterruptedException => return }
@@ -436,7 +477,8 @@ object Check {
     val nodeNames: List[Document.Node.Name],
     session: Headless.Session,
     val mode: Mode = Mode.Full,
-    resources: Option[Headless.Resources] = None
+    resources: Option[Headless.Resources] = None,
+    val commandTimeoutSecs: Double = Default_Command_Timeout_Secs
   ) {
     @volatile private var state: Outcome = Outcome.Running
     @volatile private var startMs: Long = 0L
@@ -455,6 +497,9 @@ object Check {
     // The live Event.Error channel is best-effort and non-replaying; this is the
     // durable record. Latched from the first Event.Error that fans out.
     @volatile private var firstError: Option[Event.Error] = None
+    // Retained watchdog culprit. It remains available to check_status after
+    // teardown has removed the timed-out command from the document.
+    @volatile private var commandTimeout: Option[Command_Timeout] = None
     private val latch = new java.util.concurrent.CountDownLatch(1)
     private val subscribers = new java.util.concurrent.CopyOnWriteArrayList[Event => Unit]()
     private val progress = new Job_Progress(this, session)
@@ -490,10 +535,34 @@ object Check {
       * fork via a text-changing tail remint — is step C (Check_Engine.stop), run in
       * runEngine's `finally`; the flip here does not itself interrupt a running ML
       * tactic. */
-    def cancel(reason: String = "cancelled"): Unit = {
-      if (cancelReason.isEmpty) cancelReason = Some(reason)
-      progress.stop()
+    def cancel(reason: String = "cancelled"): Unit = synchronized {
+      if (cancelReason.isEmpty && isRunning) {
+        cancelReason = Some(reason)
+        progress.stop()
+      }
     }
+
+    /** Latch the first watchdog culprit and cancel the whole check. This shares
+      * the Job monitor with cancel(), so whichever cancellation request arrives
+      * first determines the terminal reason. */
+    private[Check] def commandTimedOut(
+      name: Document.Node.Name, command: RunningCommand
+    ): Unit = synchronized {
+      if (cancelReason.isEmpty && isRunning) {
+        commandTimeout = Some(Command_Timeout(
+          commandTimeoutSecs,
+          name.theory,
+          name.path.expand.implode,
+          command.line,
+          command.keyword,
+          command.preview,
+          command.elapsedSecs))
+        cancelReason = Some("command_timeout")
+        progress.stop()
+      }
+    }
+
+    def commandTimeoutInfo: Option[Command_Timeout] = commandTimeout
 
     def await(): Outcome = { latch.await(); state }
     /** Bounded await; returns true if it reached a terminal state in time. */
@@ -671,7 +740,14 @@ object Check {
 
     /** Common finalize: record end time, set state, fan Finished, count down.
       * Both Full and Partial workers end here. */
-    private def settle(out: Outcome): Unit = {
+    private def settle(classified: Outcome): Unit = synchronized {
+      // Close the narrow race where classification produced Ok just before a
+      // synchronized cancel/timeout request won the Job monitor.
+      val out =
+        classified match {
+          case Outcome.Ok if cancelReason.isDefined => Outcome.Failed(cancelReason.get)
+          case _ => classified
+        }
       endMs = System.currentTimeMillis()
       state = out
       fan(Event.Finished(out.ok, out.reason))
@@ -702,6 +778,7 @@ object Check {
         "ok" -> st.ok,
         "theories" -> theories,
         "elapsed_ms" -> elapsedMs,
+        "command_timeout_secs" -> commandTimeoutSecs,
         "nodes" -> progress.snapshot_status.toList.sortBy(_._1.theory)
           .map { case (n, s) =>
             val running = if (st == Outcome.Running) runningCommandsFor(session, n) else Nil
@@ -716,7 +793,9 @@ object Check {
           (JSON.Object("theory" -> err.theory, "message" -> err.message) ++
            err.file.map(f => JSON.Object("file" -> f)).getOrElse(JSON.Object()) ++
            err.line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object())))
-      }.getOrElse(JSON.Object())
+      }.getOrElse(JSON.Object()) ++
+      commandTimeout.map(timeout => JSON.Object("timeout" -> timeout.json))
+        .getOrElse(JSON.Object())
     }
   }
 
@@ -739,13 +818,16 @@ object Check {
     * error or an empty file list. Synchronized so two concurrent submits (e.g.
     * two MCP clients) can't both pass the busy check and race on the slot. */
   def submit(
-    session: Headless.Session, resources: Headless.Resources, files: List[String]
+    session: Headless.Session, resources: Headless.Resources, files: List[String],
+    commandTimeoutSecs: Double = Default_Command_Timeout_Secs
   ): Either[String, Job] = slot.synchronized {
     if (busy) Left("a check is already in flight; cancel it before submitting another")
+    else if (!java.lang.Double.isFinite(commandTimeoutSecs) || commandTimeoutSecs < 0)
+      Left("command timeout must be a finite number >= 0 (0 = unlimited)")
     else if (files.isEmpty) Left("empty files list")
     else resolveTargets(resources, files).map { resolved =>
       val job = new Job(resolved.map(_._1.theory), resolved.map(_._1), session,
-        resources = Some(resources))
+        resources = Some(resources), commandTimeoutSecs = commandTimeoutSecs)
       slot.set(Some(job))
       job.start()
       job
@@ -764,9 +846,12 @@ object Check {
     * files + a single line is meaningless). */
   def submitPartial(
     session: Headless.Session, resources: Headless.Resources,
-    files: List[String], line: Int
+    files: List[String], line: Int,
+    commandTimeoutSecs: Double = Default_Command_Timeout_Secs
   ): Either[String, Job] = slot.synchronized {
     if (busy) Left("a check is already in flight; cancel it before submitting another")
+    else if (!java.lang.Double.isFinite(commandTimeoutSecs) || commandTimeoutSecs < 0)
+      Left("command timeout must be a finite number >= 0 (0 = unlimited)")
     else if (files.length != 1)
       Left("partial check (--line) requires exactly one FILE, got " + files.length)
     else if (line <= 0) Left("line must be >= 1, got " + line)
@@ -774,7 +859,7 @@ object Check {
       val (name, _) = resolved.head
       val mode = Mode.Partial(name, line = line)
       val job = new Job(List(name.theory), List(name), session,
-        mode = mode, resources = Some(resources))
+        mode = mode, resources = Some(resources), commandTimeoutSecs = commandTimeoutSecs)
       slot.set(Some(job))
       job.start()
       job
@@ -1109,7 +1194,9 @@ object IQ {
         "non-blocking submit, use `check_async`. With `line`, check only the " +
         "prefix of the (single) file up to and including the command that ends " +
         "on or before that source line — same UI, same cancel semantics, but " +
-        "later commands are left unprocessed. Useful for iterative development.",
+        "later commands are left unprocessed. Each command has a separate " +
+        "`command_timeout_secs` budget (default 5; 0 = unlimited); exceeding it " +
+        "aborts the whole check with reason \"command_timeout\".",
       inputSchema = Map(
         "type" -> "object",
         "properties" -> Map(
@@ -1120,28 +1207,42 @@ object IQ {
               "file up to line N (1-based). files must contain exactly one path.")),
           "timeout_secs" -> Map("type" -> "integer",
             "description" -> ("Abort the check after this many seconds " +
-              "(default 600; 0 = unlimited)."))),
+              "(default 600; 0 = unlimited).")),
+          "command_timeout_secs" -> Map("type" -> "number", "minimum" -> 0,
+            "description" -> ("Abort the whole check when any individual command " +
+              "exceeds this many seconds (default 5; 0 = unlimited)."))),
         "required" -> List("files"),
         "additionalProperties" -> false),
       handlerP = (params, progress) => {
         val (files, timeoutSecs, line) =
           (checkFiles(params), checkTimeoutSecs(params), checkLine(params))
         if (timeoutSecs < 0) Left("check: 'timeout_secs' must be >= 0 (0 = unlimited)")
-        else submit_by_mode_mcp(session, resources, files, line) match {
+        else checkCommandTimeoutSecs(params) match {
           case Left(msg) => Left("check: " + msg)
-          case Right(job) =>
-            Check.logStart(log, "mcp", job.theories)
-            val unsubscribe = subscribeMcpProgress(job, progress)
-            try {
-              val timeoutMs = timeoutSecs.toLong * 1000L
-              if (timeoutMs > 0 && !job.await(timeoutMs) && job.isRunning)
-                job.cancel("timeout")
-              val out = job.await()
-              Check.logFinish(log, "mcp", job.elapsedMs, out.ok, out.reason)
-              val base = Map[String, Any]("ok" -> out.ok, "theories" -> job.theories)
-              Right(McpToolResult.fromMap(
-                if (out.ok) base else base + ("reason" -> out.reason)))
-            } finally unsubscribe()
+          case Right(commandTimeoutSecs) =>
+            submit_by_mode_mcp(session, resources, files, line, commandTimeoutSecs) match {
+              case Left(msg) => Left("check: " + msg)
+              case Right(job) =>
+                Check.logStart(log, "mcp", job.theories)
+                val unsubscribe = subscribeMcpProgress(job, progress)
+                try {
+                  val timeoutMs = timeoutSecs.toLong * 1000L
+                  if (timeoutMs > 0 && !job.await(timeoutMs) && job.isRunning)
+                    job.cancel("timeout")
+                  val out = job.await()
+                  Check.logFinish(log, "mcp", job.elapsedMs, out.ok, out.reason)
+                  val base = Map[String, Any](
+                    "ok" -> out.ok,
+                    "theories" -> job.theories,
+                    "command_timeout_secs" -> job.commandTimeoutSecs)
+                  val withReason = if (out.ok) base else base + ("reason" -> out.reason)
+                  val result = job.commandTimeoutInfo match {
+                    case Some(timeout) => withReason + ("timeout" -> timeout.json)
+                    case None => withReason
+                  }
+                  Right(McpToolResult.fromMap(result))
+                } finally unsubscribe()
+            }
         }
       })
 
@@ -1160,7 +1261,8 @@ object IQ {
         "aborts it. Only one check runs at a time: this fails if one is already " +
         "in flight (cancel it and resubmit the merged set of files). Files must " +
         "be absolute .thy paths. Use plain `check` for a blocking call. With " +
-        "`line`, check only the prefix of the (single) file up to that line.",
+        "`line`, check only the prefix of the (single) file up to that line. " +
+        "Each command has a `command_timeout_secs` budget (default 5; 0 = unlimited).",
       inputSchema = Map(
         "type" -> "object",
         "properties" -> Map(
@@ -1168,21 +1270,29 @@ object IQ {
             "description" -> "Absolute paths of .thy files to check"),
           "line" -> Map("type" -> "integer",
             "description" -> ("If set, check only the prefix of the (single) " +
-              "file up to line N (1-based). files must contain exactly one path."))),
+              "file up to line N (1-based). files must contain exactly one path.")),
+          "command_timeout_secs" -> Map("type" -> "number", "minimum" -> 0,
+            "description" -> ("Abort the whole check when any individual command " +
+              "exceeds this many seconds (default 5; 0 = unlimited)."))),
         "required" -> List("files"),
         "additionalProperties" -> false),
       handler = params =>
-        submit_by_mode_mcp(session, resources, checkFiles(params), checkLine(params)) match {
+        checkCommandTimeoutSecs(params) match {
           case Left(msg) => Left("check_async: " + msg)
-          case Right(job) =>
-            Check.logStart(log, "mcp-async", job.theories)
-            // Log the boundary when the backgrounded check finishes (no waiter).
-            val _ = job.subscribe {
-              case Check.Event.Finished(ok, reason) =>
-                Check.logFinish(log, "mcp-async", job.elapsedMs, ok, reason)
-              case _ =>
+          case Right(commandTimeoutSecs) =>
+            submit_by_mode_mcp(session, resources, checkFiles(params), checkLine(params),
+              commandTimeoutSecs) match {
+              case Left(msg) => Left("check_async: " + msg)
+              case Right(job) =>
+                Check.logStart(log, "mcp-async", job.theories)
+                // Log the boundary when the backgrounded check finishes (no waiter).
+                val _ = job.subscribe {
+                  case Check.Event.Finished(ok, reason) =>
+                    Check.logFinish(log, "mcp-async", job.elapsedMs, ok, reason)
+                  case _ =>
+                }
+                Right(McpToolResult.fromMap(job.statusJson.asInstanceOf[Map[String, Any]]))
             }
-            Right(McpToolResult.fromMap(job.statusJson.asInstanceOf[Map[String, Any]]))
         })
 
   /** `check_status`: report the current/last check's state (running/ok/failed),
@@ -1193,7 +1303,9 @@ object IQ {
       name = "check_status",
       description = "Status of the current (or last) check: state " +
         "(running/ok/failed), elapsed time, per-theory processing status, and " +
-        "the failure reason if any. No argument — at most one check runs at a time.",
+        "the failure reason if any. Running nodes include live command timing; " +
+        "a command timeout retains the culprit's source location, preview, elapsed " +
+        "time, and limit. No argument — at most one check runs at a time.",
       inputSchema = Map(
         "type" -> "object", "properties" -> Map(), "additionalProperties" -> false),
       handler = _ =>
@@ -1233,6 +1345,17 @@ object IQ {
       case Some(n: Double) => n.toInt
       case _ => 600
     }
+  private def checkCommandTimeoutSecs(params: McpToolParams): Either[String, Double] =
+    params.toMap.get("command_timeout_secs") match {
+      case None => Right(Check.Default_Command_Timeout_Secs)
+      case Some(n: java.lang.Number) =>
+        val secs = n.doubleValue()
+        if (!java.lang.Double.isFinite(secs) || secs < 0)
+          Left("'command_timeout_secs' must be a finite number >= 0 (0 = unlimited)")
+        else Right(secs)
+      case Some(_) =>
+        Left("'command_timeout_secs' must be a finite number >= 0 (0 = unlimited)")
+    }
   private def checkLine(params: McpToolParams): Option[Int] =
     params.toMap.get("line") match {
       case Some(n: Long) => Some(n.toInt)
@@ -1243,11 +1366,11 @@ object IQ {
   /** Shared full-vs-partial submit dispatcher for the MCP tools. */
   private def submit_by_mode_mcp(
     session: Headless.Session, resources: Headless.Resources,
-    files: List[String], line: Option[Int]
+    files: List[String], line: Option[Int], commandTimeoutSecs: Double
   ): Either[String, Check.Job] =
     line match {
-      case Some(l) => Check.submitPartial(session, resources, files, l)
-      case None => Check.submit(session, resources, files)
+      case Some(l) => Check.submitPartial(session, resources, files, l, commandTimeoutSecs)
+      case None => Check.submit(session, resources, files, commandTimeoutSecs)
     }
 }
 

@@ -71,6 +71,8 @@ Usage: isabelle ic2 COMMAND [ARGS...]
         --line N               check only the prefix of the (single) FILE
                                up to the command ending on or before source
                                line N; commands after N are left UNPROCESSED
+        --command-timeout SECS abort the whole check when one command exceeds
+                               SECS (default 5; 0 disables)
 
     query state-at FILE ...    Query document / proof state at a target
                                location. Location is FILE plus one of:
