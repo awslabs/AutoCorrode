@@ -688,7 +688,9 @@ object Check {
       if (finalStatus.nonEmpty) finalStatus
       else progress.snapshot_status.toList.sortBy(_._1.theory)
 
-    /** Status as a JSON object — for status replies and the submit ack. */
+    /** Status as a JSON object — for status replies and the submit ack. While
+      * running, attach the timing tracker's live commands to each node so polling
+      * clients see the same long-running-command detail as streamed progress. */
     def statusJson: JSON.Object.T = {
       val st = state
       JSON.Object(
@@ -701,7 +703,10 @@ object Check {
         "theories" -> theories,
         "elapsed_ms" -> elapsedMs,
         "nodes" -> progress.snapshot_status.toList.sortBy(_._1.theory)
-          .map { case (n, s) => nodeStatusJson(n, s, Nil, progress.updateSeqOf(n)) }) ++
+          .map { case (n, s) =>
+            val running = if (st == Outcome.Running) runningCommandsFor(session, n) else Nil
+            nodeStatusJson(n, s, running, progress.updateSeqOf(n))
+          }) ++
       (st match { case Outcome.Failed(r) if r.nonEmpty => JSON.Object("reason" -> r); case _ => JSON.Object() }) ++
       // The retained first error's location + message, so a detached `check
       // status` sees WHERE and WHY it failed (not just reason=errors). Omitted
