@@ -1816,19 +1816,22 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       if (f.endsWith(".thy")) f.dropRight(4) else f
     }
 
-    /** Witnesses two progress-display properties:
+    /** Witnesses three progress-display properties:
      *   (a) the client's rendered frame lists in-flight theories in
      *       descending-percentage order (stable, not swapping around);
      *   (b) commands that have been running for a while are surfaced under
-     *       their theory's progress bar, with the correct source line.
+     *       their theory's progress bar, with the correct source line; and
+     *   (c) one-shot `check_status` polling carries the same long-running
+     *       command data, both on the wire and in the CLI rendering.
      *
      *  (a) is verified against Client.render_progress_frame with a synthetic
      *  multi-theory list — deterministic, no timing hazards. (b) is verified
-     *  end-to-end: submit SpinTactic.thy (whose two `by (spin 30; simp)`
-     *  proofs each spin ~30s) and watch the streamed progress events for a
-     *  `long_running` payload with keyword `by` and elapsed >= 5s. Closing
-     *  the connection when the payload is seen cancels the check on
-     *  disconnect, so the ~30s spins don't drag out cleanup.
+     *  end-to-end: submit SpinTactic.thy (whose two `by (spin N; simp)`
+     *  proofs spin for 15s and 30s) and watch the streamed progress events for a
+     *  `long_running` payload with keyword `by` and elapsed >= 5s. Once seen,
+     *  query `check_status` over a fresh connection and through the CLI before
+     *  closing the original connection; that close cancels the check, so the
+     *  ~30s spins don't drag out cleanup.
      *
      *  The forked `by` is the interesting case: it exercises ic2's
      *  Timing_Tracker (a per-exec-id counter over the raw command_timing
@@ -1895,6 +1898,34 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
           error("no `progress` event carried a long_running `by` entry for " +
             "SpinTactic with elapsed >= 5s within 30s; the ~30s spinning `by` " +
             "commands should have shown up under the theory's bar.")
+
+        // (c) Polling must expose the same live command. This is the supported
+        // automation/agent path: unlike check_attach, it does not require a TTY.
+        val status = request_op(server_name, JSON.Object("op" -> "check_status"))
+        val statusHit =
+          JSON.string(status, "state") == Some("running") &&
+          JSON.array(status, "nodes").getOrElse(Nil).exists { n =>
+            JSON.string(n, "theory").map(base_name) == Some("SpinTactic") &&
+            JSON.array(n, "long_running").getOrElse(Nil).exists { rc =>
+              val elapsed =
+                JSON.double(rc, "elapsed_s")
+                  .orElse(JSON.int(rc, "elapsed_s").map(_.toDouble))
+                  .getOrElse(0.0)
+              JSON.string(rc, "keyword") == Some("by") &&
+              JSON.int(rc, "line").exists(_ > 0) &&
+              JSON.string(rc, "preview").exists(_.contains("spin")) &&
+              elapsed >= 5.0
+            }
+          }
+        if (!statusHit)
+          error("check_status did not carry the live long_running `by` command: " +
+            JSON.Format(status))
+
+        val cli = ic2("check status -n " + Bash.string(server_name))
+        val cliText = cli.out.mkString + cli.err.mkString
+        if (cli.rc != 0 || !cliText.contains("by (line ") || !cliText.contains("spin"))
+          error("check status CLI did not render the live long-running `by`: rc=" +
+            cli.rc + " output=" + cliText)
       } finally io.close()   // cancel-on-disconnect stops the spin
     }
 
