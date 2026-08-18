@@ -800,17 +800,26 @@ Usage: isabelle ic2 server start [OPTIONS]
                   val files = JSON.strings(t, "files").getOrElse(Nil)
                   val detach = JSON.bool(t, "detach").getOrElse(false)
                   val line = JSON.int(t, "line")
-                  clog("check requested: " + files.length + " file(s)" +
-                    line.map(l => " up to line " + l).getOrElse("") +
-                    (if (detach) " [detached]" else "") + ": " + files.mkString(", "))
-                  ready_session match {
-                    case Some((session, resources)) =>
-                      if (detach) start_check_detached(io, session, resources, files, line)
-                      else start_check_blocking(io, session, resources, files, line)
-                    // Not ready: fail_check emits server_error AND a terminal
-                    // `finished`, so a streaming foreground check client exits
-                    // rather than hanging waiting for events that never come.
-                    case None => fail_check(io, not_ready_msg)
+                  parse_command_timeout_secs(t) match {
+                    case Left(msg) => fail_check(io, "check: " + msg)
+                    case Right(commandTimeoutSecs) =>
+                      clog("check requested: " + files.length + " file(s)" +
+                        line.map(l => " up to line " + l).getOrElse("") +
+                        " [command timeout " + commandTimeoutSecs + "s]" +
+                        (if (detach) " [detached]" else "") + ": " + files.mkString(", "))
+                      ready_session match {
+                        case Some((session, resources)) =>
+                          if (detach)
+                            start_check_detached(io, session, resources, files, line,
+                              commandTimeoutSecs)
+                          else
+                            start_check_blocking(io, session, resources, files, line,
+                              commandTimeoutSecs)
+                        // Not ready: fail_check emits server_error AND a terminal
+                        // `finished`, so a streaming foreground check client exits
+                        // rather than hanging waiting for events that never come.
+                        case None => fail_check(io, not_ready_msg)
+                      }
                   }
                 case Some("check_status") =>
                   state.note_activity()
@@ -884,6 +893,21 @@ Usage: isabelle ic2 server start [OPTIONS]
     private def server_error(msg: String): JSON.Object.T =
       JSON.Object("event" -> "server_error", "message" -> msg)
 
+    /** Parse the daemon-owned per-command watchdog policy. The CLI submits
+      * checks asynchronously, so this value must be validated and enforced in
+      * the daemon rather than in the submitting process. */
+    private def parse_command_timeout_secs(request: JSON.T): Either[String, Double] =
+      JSON.value(request, "command_timeout_secs") match {
+        case None => Right(Check.Default_Command_Timeout_Secs)
+        case Some(_) =>
+          JSON.double(request, "command_timeout_secs") match {
+            case Some(secs) if java.lang.Double.isFinite(secs) && secs >= 0 =>
+              Right(secs)
+            case _ =>
+              Left("'command_timeout_secs' must be a finite number >= 0 (0 = unlimited)")
+          }
+      }
+
     /** Reject an invalid `check` request: tell the client what was wrong AND
      *  emit `finished` so its read loop terminates (it only stops on
      *  `finished` or EOF). */
@@ -919,11 +943,11 @@ Usage: isabelle ic2 server start [OPTIONS]
      *  flavor the Job is, because both stream the same Event set. */
     private def submit_by_mode(
       session: Headless.Session, resources: Headless.Resources,
-      files: List[String], line: Option[Int]
+      files: List[String], line: Option[Int], commandTimeoutSecs: Double
     ): Either[String, Check.Job] =
       line match {
-        case Some(l) => Check.submitPartial(session, resources, files, l)
-        case None => Check.submit(session, resources, files)
+        case Some(l) => Check.submitPartial(session, resources, files, l, commandTimeoutSecs)
+        case None => Check.submit(session, resources, files, commandTimeoutSecs)
       }
 
     /* ---- check (foreground): submit the Job, stream its events to io, and
@@ -931,8 +955,9 @@ Usage: isabelle ic2 server start [OPTIONS]
 
     private def start_check_blocking(io: JSON_IO, session: Headless.Session,
       resources: Headless.Resources, files: List[String],
-      line: Option[Int] = None): Unit =
-      submit_by_mode(session, resources, files, line) match {
+      line: Option[Int] = None,
+      commandTimeoutSecs: Double = Check.Default_Command_Timeout_Secs): Unit =
+      submit_by_mode(session, resources, files, line, commandTimeoutSecs) match {
         case Left(msg) => fail_check(io, "check: " + msg)
         case Right(job) =>
           // Remember the job so a disconnect cancels exactly it. (Check.submit
@@ -970,8 +995,9 @@ Usage: isabelle ic2 server start [OPTIONS]
 
     private def start_check_detached(io: JSON_IO, session: Headless.Session,
       resources: Headless.Resources, files: List[String],
-      line: Option[Int] = None): Unit =
-      submit_by_mode(session, resources, files, line) match {
+      line: Option[Int] = None,
+      commandTimeoutSecs: Double = Check.Default_Command_Timeout_Secs): Unit =
+      submit_by_mode(session, resources, files, line, commandTimeoutSecs) match {
         case Left(msg) => fail_check(io, "check: " + msg)
         case Right(job) =>
           Check.logStart(server_progress, "conn " + conn_id + " detached", job.theories)

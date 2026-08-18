@@ -72,11 +72,19 @@ and returns immediately. Poll with `check status`; cancel with `check cancel`.
 isabelle ic2 check Foo.thy Bar.thy      # submit both
 isabelle ic2 check status               # state + per-theory status
 isabelle ic2 check Foo.thy --line 87    # submit partial check up to line 87
+isabelle ic2 check Foo.thy --command-timeout 15
 isabelle ic2 check cancel               # abort the in-flight check
 ```
 
 `--line N` evaluates only the prefix up to line `N`, leaving the rest
 unprocessed and re-checkable — handy for iterating on the line you're editing.
+
+Every individual command has a 5-second wall-clock timeout by default. If one
+exceeds the limit, IC2 aborts the whole check with reason `command_timeout`;
+`check status` identifies the command and reports its source location, elapsed
+time, and preview. Use `--command-timeout SECS` to override the limit for one
+check (decimal seconds are accepted), or `--command-timeout 0` to disable it.
+The daemon enforces the limit, so it remains active after detached submission.
 
 Exit codes drop into scripts and editor integrations:
 
@@ -222,7 +230,9 @@ With `--mcp` (opt-in, off by default), the server also stands up a generic
     serves ic2's headless session and I/Q's live PIDE session — the `query` CLI
     routes through the same dispatch;
   * **`check` / `check_async` / `check_status` / `check_cancel`** — the MCP
-    analogue of `isabelle ic2 check` (with MCP progress notifications).
+    analogue of `isabelle ic2 check` (with MCP progress notifications). Both
+    submit tools accept `command_timeout_secs` (default 5; 0 disables);
+    blocking `check` also retains its separate whole-check `timeout_secs`.
 
 ### Connecting an MCP client
 

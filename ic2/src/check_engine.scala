@@ -19,9 +19,9 @@ The IC2 check engine, in three cleanly separated steps:
      = `all_preds required_node`), so we never mark ancestors ourselves.
 
   C) stop — the inverse of B: un-require the targets AND reclaim any still-running
-     in-flight execution (a fork left running by a cancelled / first-error / timed-
-     out check). A PAUSE, not a teardown — node text stays in the model for the next
-     incremental check.
+     in-flight execution in the import closure (a fork left running by a cancelled /
+     first-error / timed-out check). A PAUSE, not a teardown — node text stays in the
+     model for the next incremental check.
 
 This replaces the former ic2_use_theories.scala, which was a copy of
 `Headless.Session.use_theories` that fused "update the model" with "evaluate" and
@@ -298,11 +298,12 @@ object Check_Engine {
     *
     *  1. RECLAIM in-flight execution. Dropping `required` alone does NOT interrupt a
     *     tactic already running on a worker thread — the perspective flip is
-    *     text-neutral, so PIDE keeps the fork alive. For each target with a running
-    *     or forked command, a text-CHANGING tail remint (SessionTools.resetNodeTails)
-    *     re-splits [frontier, EOF) so PIDE's version-assignment diff cancels the
-    *     superseded execs AND their fork groups — the primitive that truly interrupts
-    *     the ML tactic. That remint also flips those nodes to not-required.
+    *     text-neutral, so PIDE keeps the fork alive. For each closure node with a
+    *     running or forked command, a text-CHANGING tail remint
+    *     (SessionTools.resetNodeTails) re-splits [frontier, EOF) so PIDE's
+    *     version-assignment diff cancels the superseded execs AND their fork groups —
+    *     the primitive that truly interrupts the ML tactic. That remint also flips
+    *     those nodes to not-required.
     *  2. UN-REQUIRE the rest. Targets with nothing in flight only need their
     *     `required` flag cleared — a text-neutral perspective flip. This is a PAUSE,
     *     not a teardown: node text stays in the model, so the next check's
@@ -311,13 +312,14 @@ object Check_Engine {
     * Runs on every exit path of a check (normal completion, first-error, cancel,
     * timeout, exception). Best-effort; safe to call unconditionally — a fully
     * consolidated node has no running command, so it takes the cheap un-require path
-    * (`cancelFrontier` returns None). Operates on `model.targets` only: ancestors
-    * were never explicitly required, so they go dormant once no target pulls them in. */
+    * (`cancelFrontier` returns None). Running ancestors must be considered too:
+    * although they were never explicitly required, dropping the target's requirement
+    * does not interrupt work that has already started. */
   def stop(session: Headless.Session, model: Model): Unit =
     try {
-      // Targets with something still executing: reclaim via a text-changing tail
-      // edit (which also un-requires them). No-op on a settled node.
-      val cuts = model.targets.flatMap(n => SessionTools.cancelFrontier(session, n).map(n -> _))
+      // Any closure node with something still executing: reclaim via a
+      // text-changing tail edit (which also un-requires it). No-op on settled nodes.
+      val cuts = model.closure.flatMap(n => SessionTools.cancelFrontier(session, n).map(n -> _))
       val reclaimed = cuts.map(_._1).toSet
       // The remaining targets (nothing in flight) just need `required` cleared.
       val releaseEdits = model.targets.filterNot(reclaimed).map(_ -> notRequired)

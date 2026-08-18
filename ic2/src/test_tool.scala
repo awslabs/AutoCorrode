@@ -158,6 +158,36 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       file.toAbsolutePath.toString
     }
 
+    /** A fresh target whose local import contains the expensive command. Returns
+      * (target path, dependency path, dependency theory name). */
+    private def fresh_slow_import(secs: Double = 8.0): (String, String, String) = {
+      val id = short_id()
+      val dependency = "Slow_Dep_" + id
+      val target = "Slow_Import_" + id
+      val dir = Files.createTempDirectory("ic2_slow_import")
+      val dependencyFile = dir.resolve(dependency + ".thy")
+      val targetFile = dir.resolve(target + ".thy")
+      val dependencyBody =
+        "theory " + dependency + "\n" +
+        "  imports Main\n" +
+        "begin\n\n" +
+        "lemma " + dependency + "_1: \"(n::nat) + 0 = n\" by simp\n\n" +
+        "ML ‹OS.Process.sleep (Time.fromReal " + secs + ")›\n\n" +
+        "lemma " + dependency + "_2: \"(n::nat) * 1 = n\" by simp\n\n" +
+        "end\n"
+      val targetBody =
+        "theory " + target + "\n" +
+        "  imports " + dependency + "\n" +
+        "begin\n\n" +
+        "lemma " + target + "_lemma: \"(n::nat) + 0 = n\" by simp\n\n" +
+        "end\n"
+      Files.write(dependencyFile, dependencyBody.getBytes("UTF-8"))
+      Files.write(targetFile, targetBody.getBytes("UTF-8"))
+      (targetFile.toAbsolutePath.toString,
+        dependencyFile.toAbsolutePath.toString,
+        dependency)
+    }
+
     /** Write a fresh theory whose expensive command is BEFORE a cheap marker
      *  command that tests can rewrite. Used to pin incremental re-checks: after
      *  a successful baseline check, changing only the marker must not re-run
@@ -478,6 +508,7 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         etest("check_detached_survives_disconnect") { e2e_detached_survives_disconnect(server_name, fixtures) }
         etest("check_cancel") { e2e_check_cancel(server_name, fixtures) }
         etest("recheck_after_cancel") { e2e_recheck_after_cancel(server_name, fixtures) }
+        etest("command_timeout") { e2e_command_timeout(server_name, fixtures) }
         etest("progress_display_changes") { e2e_progress_display_changes(server_name, fixtures) }
         etest("check_attach") { e2e_check_attach(server_name, fixtures) }
         etest("query_wire") { e2e_query_wire(server_name, fixtures) }
@@ -604,11 +635,15 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
 
     /** Run one check on a fresh connection; return (all events, finished). */
     private def run_check(
-      name: String, files: List[String], deadline_secs: Int = 60
+      name: String, files: List[String], deadline_secs: Int = 60,
+      command_timeout_secs: Double = 0.0
     ): (List[JSON.T], Option[JSON.T]) = {
       val io = connection(name)
       try {
-        io.write(JSON.Object("op" -> "check", "files" -> files))
+        io.write(JSON.Object(
+          "op" -> "check",
+          "files" -> files,
+          "command_timeout_secs" -> command_timeout_secs))
         collect_events(io, deadline_secs)
       } finally io.close()
     }
@@ -1221,7 +1256,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       // streaming no progress and finishing before any timeout budget bites).
       val slowAbs = fresh_slow_theory()
       val slow2Abs = fresh_slow_theory()
-      val (progress, result) = mcp.callWithProgress("check", obj("files" -> List[Any](slowAbs)), "ptok-1")
+      val (progress, result) = mcp.callWithProgress("check",
+        obj("files" -> List[Any](slowAbs), "command_timeout_secs" -> 0), "ptok-1")
       if (JSON.bool(result, "ok") != Some(true))
         error("check(Slow) with progress: ok should be true, got " + JSON.Format(result))
       if (progress.isEmpty)
@@ -1256,13 +1292,18 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       // Timeout abort: a 1s budget against the fresh Slow2.thy (~8s, not yet
       // consolidated, so the check genuinely re-runs the ML sleep) aborts the
       // check, reporting reason "timeout" — not a crash or a transport error.
-      val timeoutRes = mcp.call("check", obj("files" -> List[Any](slow2Abs), "timeout_secs" -> 1))
+      val timeoutRes = mcp.call("check", obj(
+        "files" -> List[Any](slow2Abs),
+        "timeout_secs" -> 1,
+        "command_timeout_secs" -> 0))
       if (JSON.bool(timeoutRes, "ok") != Some(false))
         error("check(Slow2, timeout_secs=1): ok should be false, got " + JSON.Format(timeoutRes))
       if (JSON.string(timeoutRes, "reason").getOrElse("") != "timeout")
         error("check(Slow2, timeout_secs=1): reason should be 'timeout', got " + JSON.Format(timeoutRes))
       // A negative budget is a usage error (isError tool result).
       val _t = mcp.call("check", obj("files" -> List[Any](slow2Abs), "timeout_secs" -> -1), expectError = true)
+      val _ct = mcp.call("check", obj(
+        "files" -> List[Any](slow2Abs), "command_timeout_secs" -> -1), expectError = true)
     }
 
     /** Non-blocking MCP surface: check_async returns immediately while running;
@@ -1274,7 +1315,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       // running when check_status polls it (a re-check would already be ok).
       val slowAbs = fresh_slow_theory()
       // Submit a slow check without blocking.
-      val sub = mcp.call("check_async", obj("files" -> List[Any](slowAbs)))
+      val sub = mcp.call("check_async",
+        obj("files" -> List[Any](slowAbs), "command_timeout_secs" -> 0))
       if (JSON.string(sub, "state") != Some("running"))
         error("check_async(Slow): should be running, got " + JSON.Format(sub))
       // The no-arg check_status reports it running.
@@ -1514,7 +1556,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
                 start.await(10, TimeUnit.SECONDS)
                 val io = connection(server_name)
                 try {
-                  io.write(JSON.Object("op" -> "check", "files" -> List(file)))
+                  io.write(JSON.Object("op" -> "check", "files" -> List(file),
+                    "command_timeout_secs" -> 0))
                   // Read until we learn accept (started) or refuse (server_error).
                   var verdict: Option[Boolean] = None
                   val deadline = System.currentTimeMillis() + 30000
@@ -1566,12 +1609,14 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       val trivial = (fixtures + Path.basic("Trivial_OK.thy")).expand.implode
       val io = connection(server_name)
       try {
-        io.write(JSON.Object("op" -> "check", "files" -> List(slow)))
+        io.write(JSON.Object("op" -> "check", "files" -> List(slow),
+          "command_timeout_secs" -> 0))
         // Wait for 'started' so the worker is registered.
         if (!await_event(io, "started", 30))
           error("never saw 'started' for the first check")
         // Fire a second check on the SAME connection.
-        io.write(JSON.Object("op" -> "check", "files" -> List(trivial)))
+        io.write(JSON.Object("op" -> "check", "files" -> List(trivial),
+          "command_timeout_secs" -> 0))
         // Expect a server_error about the in-flight check.
         var saw_reject = false
         val deadline = System.currentTimeMillis() + 10000
@@ -1628,7 +1673,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       val slow = fresh_slow_theory()
       val a = connection(server_name)
       try {
-        a.write(JSON.Object("op" -> "check", "files" -> List(slow)))
+        a.write(JSON.Object("op" -> "check", "files" -> List(slow),
+          "command_timeout_secs" -> 0))
         if (!await_event(a, "started", 30)) error("never saw 'started' for slow check")
         val t = query_status(server_name)   // opens + closes its own connection
         if (JSON.bool(t, "busy") != Some(true))
@@ -1654,7 +1700,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     private def e2e_disconnect_promptly(server_name: String, fixtures: Path): Unit = {
       val file = fresh_slow_theory()
       val io = connection(server_name)
-      io.write(JSON.Object("op" -> "check", "files" -> List(file)))
+      io.write(JSON.Object("op" -> "check", "files" -> List(file),
+        "command_timeout_secs" -> 0))
       if (!await_event(io, "started", 30)) error("never saw 'started' event")
       io.close()                 // disconnect mid-flight
       val drop_at = System.currentTimeMillis()
@@ -1686,7 +1733,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *  no-arg check_status reports the terminal `ok`. */
     private def e2e_check_detached(server_name: String, fixtures: Path): Unit = {
       val file = (fixtures + Path.basic("Trivial_OK.thy")).expand.implode
-      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(file), "detach" -> true))
+      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(file),
+        "detach" -> true, "command_timeout_secs" -> 0))
       if (JSON.string(ack, "event") != Some("submitted"))
         error("detached check should ack 'submitted', got " + JSON.Format(ack))
       if (!JSON.strings(ack, "theories").getOrElse(Nil).exists(_.endsWith("Trivial_OK")))
@@ -1716,7 +1764,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       // consolidated by an earlier test would return in ~100ms.)
       val slow = fresh_slow_theory()
       // request_op opens a connection, gets the `submitted` ack, then CLOSES it.
-      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow), "detach" -> true))
+      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow),
+        "detach" -> true, "command_timeout_secs" -> 0))
       if (JSON.string(ack, "event") != Some("submitted"))
         error("detached submit should ack 'submitted', got " + JSON.Format(ack))
       // Right after the submitting connection closed, the check must still run.
@@ -1739,7 +1788,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *  "cancelled"); with nothing running it is a no-op (cancelled:false). */
     private def e2e_check_cancel(server_name: String, fixtures: Path): Unit = {
       val slow = fresh_slow_theory()
-      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow), "detach" -> true))
+      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow),
+        "detach" -> true, "command_timeout_secs" -> 0))
       if (JSON.string(ack, "event") != Some("submitted")) error("detached submit failed: " + JSON.Format(ack))
       // Cancel the in-flight check.
       val cancelReply = request_op(server_name, JSON.Object("op" -> "check_cancel"))
@@ -1773,7 +1823,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
     private def e2e_recheck_after_cancel(server_name: String, fixtures: Path): Unit = {
       val slow = fresh_slow_theory()
       // 1) Submit detached, wait until it's actually running, then cancel.
-      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow), "detach" -> true))
+      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow),
+        "detach" -> true, "command_timeout_secs" -> 0))
       if (JSON.string(ack, "event") != Some("submitted"))
         error("detached submit failed: " + JSON.Format(ack))
       if (JSON.string(request_op(server_name, JSON.Object("op" -> "check_status")), "state") != Some("running"))
@@ -1807,6 +1858,140 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       if (JSON.int(diR, "unprocessed").getOrElse(0) != 0 || JSON.int(diR, "failed").getOrElse(0) != 0)
         error("re-check after cancel: expected 0 unprocessed / 0 failed (clean re-eval), got " +
           JSON.Format(diR))
+    }
+
+    /** Per-command watchdog:
+     *   - omitting the option uses the daemon's 5s default and retains the
+     *     exact command in check_status;
+     *   - CLI decimal overrides and 0=unlimited are honored;
+     *   - malformed CLI values are usage errors; and
+     *   - a forked terminal `by` is reclaimed promptly enough that a new check
+     *     can run on the same resident session. */
+    private def e2e_command_timeout(server_name: String, fixtures: Path): Unit = {
+      def number(t: JSON.T, key: String): Double =
+        JSON.double(t, key)
+          .orElse(JSON.long(t, key).map(_.toDouble))
+          .orElse(JSON.int(t, key).map(_.toDouble))
+          .getOrElse(error("missing numeric field " + key + " in " + JSON.Format(t)))
+
+      val n = Bash.string(server_name)
+      val (slowTarget, slowDependency, slowDependencyTheory) =
+        fresh_slow_import(8.0)
+
+      // CLI omission: the daemon must enforce its default after this detached
+      // submitting process has already exited. The expensive command is in a
+      // local import, so this also covers closure-wide observation/reclamation.
+      val defaultStart = System.currentTimeMillis()
+      val submit = ic2("check -n " + n + " " + Bash.string(slowTarget))
+      if (submit.rc != 0)
+        error("default-timeout check should submit, got rc=" + submit.rc +
+          " err=" + submit.err.mkString)
+      val timedOut = wait_check_state(server_name, Set("failed"), deadline_secs = 20)
+      val defaultElapsed = System.currentTimeMillis() - defaultStart
+      if (JSON.string(timedOut, "reason") != Some("command_timeout"))
+        error("default watchdog should fail with reason=command_timeout, got " +
+          JSON.Format(timedOut))
+      if (math.abs(number(timedOut, "command_timeout_secs") - 5.0) > 0.001)
+        error("omitted command_timeout_secs should default to 5, got " +
+          JSON.Format(timedOut))
+      if (defaultElapsed >= 12000)
+        error("5s command watchdog took " + defaultElapsed +
+          "ms to settle an 8s command; cancellation was not prompt")
+
+      val timeout = JSON.value(timedOut, "timeout").flatMap(JSON.Object.unapply)
+        .getOrElse(error("command_timeout status should retain a timeout object: " +
+          JSON.Format(timedOut)))
+      if (math.abs(number(timeout, "limit_s") - 5.0) > 0.001 ||
+          number(timeout, "elapsed_s") < 5.0)
+        error("timeout should report its 5s limit and elapsed >=5s, got " +
+          JSON.Format(timeout))
+      if (!JSON.string(timeout, "theory").exists(_.endsWith(slowDependencyTheory)) ||
+          !JSON.string(timeout, "file")
+            .exists(_.endsWith("/" + base_name_of(slowDependency) + ".thy")) ||
+          !JSON.int(timeout, "line").exists(_ > 0) ||
+          JSON.string(timeout, "keyword").forall(_.isEmpty) ||
+          !JSON.string(timeout, "preview").exists(_.contains("OS.Process.sleep")))
+        error("timeout should identify theory/file/line/keyword/preview, got " +
+          JSON.Format(timeout))
+
+      val rendered = ic2("check status -n " + n)
+      val renderedText = rendered.out.mkString + rendered.err.mkString
+      if (rendered.rc != 0 || !renderedText.contains("command timeout:") ||
+          !renderedText.contains("OS.Process.sleep"))
+        error("check status should render the retained timeout command, rc=" +
+          rendered.rc + " output=" + renderedText)
+
+      // A decimal override above the command's runtime permits the same
+      // reminted dependency to complete, proving the override reaches the
+      // daemon and dependency teardown interrupted (rather than reused) the
+      // first execution.
+      val raisedStart = System.currentTimeMillis()
+      val raised = ic2("check -n " + n + " --command-timeout 10.5 " +
+        Bash.string(slowTarget))
+      if (raised.rc != 0)
+        error("raised command timeout should submit, got rc=" + raised.rc)
+      val raisedStatus = wait_check_state(server_name, Set("ok", "failed"), deadline_secs = 20)
+      val raisedElapsed = System.currentTimeMillis() - raisedStart
+      if (JSON.string(raisedStatus, "state") != Some("ok") ||
+          math.abs(number(raisedStatus, "command_timeout_secs") - 10.5) > 0.001 ||
+          raisedElapsed < 6000)
+        error("10.5s override should allow an 8s command to finish, got " +
+          JSON.Format(raisedStatus) + " elapsed=" + raisedElapsed + "ms")
+
+      // Zero explicitly disables the watchdog for an otherwise over-default
+      // command.
+      val unlimitedSlow = fresh_slow_theory(6.0)
+      val unlimited = ic2("check -n " + n + " --command-timeout 0 " +
+        Bash.string(unlimitedSlow))
+      if (unlimited.rc != 0)
+        error("disabled command timeout should submit, got rc=" + unlimited.rc)
+      val unlimitedStatus =
+        wait_check_state(server_name, Set("ok", "failed"), deadline_secs = 15)
+      if (JSON.string(unlimitedStatus, "state") != Some("ok") ||
+          number(unlimitedStatus, "command_timeout_secs") != 0.0)
+        error("--command-timeout 0 should allow a 6s command, got " +
+          JSON.Format(unlimitedStatus))
+
+      val badArgs = List(
+        " --command-timeout",
+        " --command-timeout -1",
+        " --command-timeout nope",
+        " --command-timeout NaN")
+      for (suffix <- badArgs) {
+        val bad = ic2("check -n " + n + " " + Bash.string(slowTarget) + suffix)
+        if (bad.rc != 2)
+          error("invalid" + suffix + " should exit 2, got rc=" + bad.rc +
+            " err=" + bad.err.mkString)
+      }
+
+      // The original failure mode: a terminal `by` runs in a fork. Default
+      // enforcement must stop it well before either 15s/30s tactic finishes.
+      val spin = fixtures + Path.basic("SpinTactic.thy")
+      if (spin.is_file) {
+        val spinStart = System.currentTimeMillis()
+        val ack = request_op(server_name, JSON.Object(
+          "op" -> "check", "files" -> List(spin.expand.implode), "detach" -> true))
+        if (JSON.string(ack, "event") != Some("submitted"))
+          error("SpinTactic timeout check was not submitted: " + JSON.Format(ack))
+        val spinStatus =
+          wait_check_state(server_name, Set("failed"), deadline_secs = 20)
+        val spinElapsed = System.currentTimeMillis() - spinStart
+        val culprit = JSON.value(spinStatus, "timeout").flatMap(JSON.Object.unapply)
+          .getOrElse(error("SpinTactic timeout should retain its culprit: " +
+            JSON.Format(spinStatus)))
+        if (JSON.string(spinStatus, "reason") != Some("command_timeout") ||
+            JSON.string(culprit, "keyword") != Some("by") ||
+            !JSON.string(culprit, "preview").exists(_.contains("spin")) ||
+            spinElapsed >= 14000)
+          error("forked `by` should time out and settle before spin1 completes; elapsed=" +
+            spinElapsed + "ms status=" + JSON.Format(spinStatus))
+
+        val tiny = (fixtures + Path.basic("Trivial_OK.thy")).expand.implode
+        val (_, finished) = run_check(server_name, List(tiny), deadline_secs = 30)
+        if (finished.flatMap(JSON.bool(_, "ok")) != Some(true))
+          error("session should accept a new check after reclaiming timed-out `by`, got " +
+            finished)
+      }
     }
 
     /** Basename (no dir, no .thy) of an absolute theory path — for `query`
@@ -1867,7 +2052,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       }
       val io = connection(server_name)
       try {
-        io.write(JSON.Object("op" -> "check", "files" -> List(spin.expand.implode)))
+        io.write(JSON.Object("op" -> "check", "files" -> List(spin.expand.implode),
+          "command_timeout_secs" -> 0))
         val deadline = System.currentTimeMillis() + 30000
         var seen = false
         var closed = false
@@ -1934,7 +2120,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
      *  didn't submit. */
     private def e2e_check_attach(server_name: String, fixtures: Path): Unit = {
       val slow = fresh_slow_theory()
-      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow), "detach" -> true))
+      val ack = request_op(server_name, JSON.Object("op" -> "check", "files" -> List(slow),
+        "detach" -> true, "command_timeout_secs" -> 0))
       if (JSON.string(ack, "event") != Some("submitted")) error("detached submit failed: " + JSON.Format(ack))
       val io = connection(server_name)
       try {
@@ -2821,7 +3008,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         val io = connection(name)
         val started_ms = System.currentTimeMillis()
         try {
-          io.write(JSON.Object("op" -> "check", "files" -> List(file), "line" -> 13))
+          io.write(JSON.Object("op" -> "check", "files" -> List(file), "line" -> 13,
+            "command_timeout_secs" -> 0))
           val (events, finished) = collect_events(io, deadline_secs = 30)
           val elapsed_ms = System.currentTimeMillis() - started_ms
           if (finished.flatMap(JSON.bool(_, "ok")) != Some(true))
@@ -2916,7 +3104,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
           def elapsedOf(rc: JSON.T): Double =
             JSON.double(rc, "elapsed_s").orElse(JSON.int(rc, "elapsed_s").map(_.toDouble)).getOrElse(0.0)
           try {
-            sio.write(JSON.Object("op" -> "check", "files" -> List(spin.expand.implode), "line" -> 41))
+            sio.write(JSON.Object("op" -> "check", "files" -> List(spin.expand.implode),
+              "line" -> 41, "command_timeout_secs" -> 0))
             val deadline = System.currentTimeMillis() + 60000
             var spin1Max = 0.0
             var spin2Max = 0.0
@@ -2973,7 +3162,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
           val iio = connection(name)
           try {
             iio.write(JSON.Object("op" -> "check",
-              "files" -> List(imp.expand.implode), "line" -> 20))
+              "files" -> List(imp.expand.implode), "line" -> 20,
+              "command_timeout_secs" -> 0))
             val (events, finished) = collect_events(iio, deadline_secs = 90)
             if (finished.flatMap(JSON.bool(_, "ok")) != Some(true))
               error("check --line 20 of SpinImport (imports SpinDep) should be ok — a " +
@@ -3034,7 +3224,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
         val started_ms = System.currentTimeMillis()
         try {
           sio.write(JSON.Object("op" -> "check",
-            "files" -> List(spin.expand.implode), "line" -> 41))
+            "files" -> List(spin.expand.implode), "line" -> 41,
+            "command_timeout_secs" -> 0))
           val deadline = System.currentTimeMillis() + 60000
           var done = false
           while (!done && System.currentTimeMillis() < deadline) {
@@ -3092,7 +3283,8 @@ Usage: isabelle ic2_test [OPTIONS] MODE [DIR]
       val file = (fixtures + Path.basic("Slow.thy")).expand.implode
       val a = connection(server_name)
       try {
-        a.write(JSON.Object("op" -> "check", "files" -> List(file)))
+        a.write(JSON.Object("op" -> "check", "files" -> List(file),
+          "command_timeout_secs" -> 0))
         if (!await_event(a, "started", 30)) error("conn A never saw 'started'")
 
         val b = connection(server_name)
