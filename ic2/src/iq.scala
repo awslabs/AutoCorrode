@@ -826,7 +826,8 @@ object Check {
       Left("command timeout must be a finite number >= 0 (0 = unlimited)")
     else if (files.isEmpty) Left("empty files list")
     else resolveTargets(resources, files).map { resolved =>
-      val job = new Job(resolved.map(_._1.theory), resolved.map(_._1), session,
+      val nodes = resolved.map(_._1)
+      val job = new Job(nodes.map(_.theory), nodes, session,
         resources = Some(resources), commandTimeoutSecs = commandTimeoutSecs)
       slot.set(Some(job))
       job.start()
@@ -1196,7 +1197,10 @@ object IQ {
         "on or before that source line — same UI, same cancel semantics, but " +
         "later commands are left unprocessed. Each command has a separate " +
         "`command_timeout_secs` budget (default 5; 0 = unlimited); exceeding it " +
-        "aborts the whole check with reason \"command_timeout\".",
+        "aborts the whole check with reason \"command_timeout\". Checks a whole " +
+        "theory: to ITERATE on a proof use a REPL instead — repl_init_from_source " +
+        "at the proof, then repl_step / repl_fork / repl_sledgehammer — and check " +
+        "once, when the proof is written.",
       inputSchema = Map(
         "type" -> "object",
         "properties" -> Map(
@@ -1231,6 +1235,10 @@ object IQ {
                     job.cancel("timeout")
                   val out = job.await()
                   Check.logFinish(log, "mcp", job.elapsedMs, out.ok, out.reason)
+                  // A deliberately compact result: unlike check_async /
+                  // check_status this tool does NOT pass statusJson through,
+                  // because a blocking caller has no use for per-node progress
+                  // and every key of it lands in the client's context.
                   val base = Map[String, Any](
                     "ok" -> out.ok,
                     "theories" -> job.theories,
@@ -1262,7 +1270,10 @@ object IQ {
         "in flight (cancel it and resubmit the merged set of files). Files must " +
         "be absolute .thy paths. Use plain `check` for a blocking call. With " +
         "`line`, check only the prefix of the (single) file up to that line. " +
-        "Each command has a `command_timeout_secs` budget (default 5; 0 = unlimited).",
+        "Each command has a `command_timeout_secs` budget (default 5; 0 = unlimited). " +
+        "To ITERATE on a proof use a REPL instead (repl_init_from_source at the " +
+        "proof, then repl_step / repl_fork / repl_sledgehammer); check once, when " +
+        "the proof is written.",
       inputSchema = Map(
         "type" -> "object",
         "properties" -> Map(
