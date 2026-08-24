@@ -914,8 +914,7 @@ Usage: isabelle ic2 server start [OPTIONS]
     private def fail_check(io: JSON_IO, msg: String): Unit = {
       clog("check rejected — invalid request: " + msg)
       io.write(server_error(msg))
-      io.write(JSON.Object("event" -> "finished",
-        "ok" -> false, "reason" -> "invalid request"))
+      write_finished(io, Check.Outcome.Failed("invalid request"))
     }
 
     /** Render a job Event to this connection's wire JSON
@@ -932,10 +931,26 @@ Usage: isabelle ic2 server start [OPTIONS]
           file.map(f => JSON.Object("file" -> f)).getOrElse(JSON.Object()) ++
           line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object()) ++
           JSON.Object("message" -> message))
-      case Check.Event.Finished(ok, reason) =>
-        if (ok) io.write(JSON.Object("event" -> "finished", "ok" -> true))
-        else io.write(JSON.Object("event" -> "finished", "ok" -> false, "reason" -> reason))
+      // Dropped, not encoded: the terminal event is written by `write_finished`
+      // from the awaited outcome (which alone knows the retained timeout
+      // culprit). The subscription DOES deliver Finished on every completion —
+      // this branch is what discards it, so there is one encoder, not two.
+      case _: Check.Event.Finished => ()
     }
+
+    /** The terminal `finished` event, with the retained command-timeout culprit
+     *  attached when there is one. A polling client re-reads the job via
+     *  `check_status`, which reports the culprit; a STREAMING client never does,
+     *  so without this it would see `reason=command_timeout` and no indication of
+     *  which command tripped the watchdog. The ONLY encoder of the terminal
+     *  event — `fail_check` and both relay paths go through here. */
+    private def write_finished(
+      io: JSON_IO, out: Check.Outcome, timeout: Option[Check.Command_Timeout] = None
+    ): Unit =
+      io.write(
+        JSON.Object("event" -> "finished", "ok" -> out.ok) ++
+        (if (out.ok) JSON.Object() else JSON.Object("reason" -> out.reason)) ++
+        timeout.map(t => JSON.Object("timeout" -> t.json)).getOrElse(JSON.Object()))
 
     /** Submit either a full (`line=None`) or partial (`line=Some(N)`) check.
      *  Small dispatcher: full checks go through `Check.submit`, partial through
@@ -968,10 +983,7 @@ Usage: isabelle ic2 server start [OPTIONS]
           // Stream the job's live progress/error events. Drop the streamed
           // Finished — we emit the terminal `finished` from the awaited outcome
           // (reliable even if a fast check finished before we subscribed).
-          val unsubscribe = job.subscribe {
-            case _: Check.Event.Finished => ()
-            case e => wireEvent(io)(e)
-          }
+          val unsubscribe = job.subscribe(wireEvent(io))
           // Wait on a RELAY thread, not the connection thread: the connection
           // thread must return to its read loop so a client disconnect is
           // detected (its `finally` then cancels this job).
@@ -982,7 +994,7 @@ Usage: isabelle ic2 server start [OPTIONS]
                 // Final progress snapshot (the awaited recorded status) so the
                 // client UI ends on a settled per-theory state, then finished.
                 wireEvent(io)(Check.Event.Progress(job.finalNodes))
-                wireEvent(io)(Check.Event.Finished(out.ok, out.reason))
+                write_finished(io, out, job.commandTimeoutInfo)
                 Check.logFinish(server_progress, "conn " + conn_id, job.elapsedMs, out.ok, out.reason)
               } finally { unsubscribe(); attached.set(None) }
           }, "ic2-check-relay-" + conn_id)
@@ -1029,10 +1041,7 @@ Usage: isabelle ic2 server start [OPTIONS]
           // `finished` from the awaited record, never depending on whether the
           // live Finished arrived before or after we subscribed. await() returns
           // immediately if the job is already done.
-          val unsubscribe = job.subscribe {
-            case _: Check.Event.Finished => ()
-            case e => wireEvent(io)(e)
-          }
+          val unsubscribe = job.subscribe(wireEvent(io))
           // Paint the current per-theory state immediately (after subscribing, so
           // no live tick is missed): a check wedged inside one long-running command
           // emits no nodes_status ticks, so without this the client would sit on a
@@ -1045,7 +1054,7 @@ Usage: isabelle ic2 server start [OPTIONS]
           try {
             val out = job.await()
             wireEvent(io)(Check.Event.Progress(job.finalNodes))
-            wireEvent(io)(Check.Event.Finished(out.ok, out.reason))
+            write_finished(io, out, job.commandTimeoutInfo)
           } finally unsubscribe()
       }
 
