@@ -34,22 +34,31 @@ Usage: isabelle ic2 COMMAND [ARGS...]
 
   ============================== Typical loop ==============================
 
+  `check` runs a whole theory: each cycle costs a client JVM (one more per
+  `check status` poll), re-runs everything from the edit down, and answers with a
+  verdict. A REPL step is one prover round-trip and answers with the goal state.
+  So iterate in a REPL, and check to confirm.
+
     1) Start the daemon once, backgrounded:
 
          isabelle ic2 server start --daemon -l HOL
 
-    2) Type-check a theory against the resident session:
+    2) Check the theory once, to see where it stands:
 
-         isabelle ic2 check src/MyThy.thy
+         isabelle ic2 check /abs/path/MyThy.thy
+         isabelle ic2 check status                  # poll; reports file:line
 
-       ...or check only up to a specific source line:
+    3) Fork an I/R REPL at the proof you are working on, and iterate THERE:
 
-         isabelle ic2 check src/MyThy.thy --line 42
+         isabelle ic2 repl-create /abs/path/MyThy.thy:42 r
 
-    3) Inspect the document/proof state at any position:
+       `repl-create` prints the REPL's goal state and the exact commands to
+       drive it: step an Isar command, show the state, sledgehammer, fork a
+       sub-REPL for a subgoal, print the accumulated proof text.
 
-         isabelle ic2 query state-at src/MyThy.thy --line 42
-         isabelle ic2 query state-at src/MyThy.thy --pattern 'apply simp'
+    4) Write the finished proof back into the .thy file, and check ONCE more:
+
+         isabelle ic2 check /abs/path/MyThy.thy
 
   ============================== Commands =================================
 
@@ -62,6 +71,8 @@ Usage: isabelle ic2 COMMAND [ARGS...]
 
     check [FILE...]            Submit .thy files to be type-checked by the
                                running server; returns after submission.
+                               Once per theory, not per proof edit — see
+                               Typical loop.
       Variants (in place of FILE...):
         check status           report the current/last check's state
         check attach           stream the in-flight check to completion;
@@ -70,7 +81,10 @@ Usage: isabelle ic2 COMMAND [ARGS...]
       Options:
         --line N               check only the prefix of the (single) FILE
                                up to the command ending on or before source
-                               line N; commands after N are left UNPROCESSED
+                               line N; commands after N are left UNPROCESSED.
+                               Use it after a STRUCTURAL edit (a changed
+                               definition, a new lemma); for tactic iteration
+                               use `repl-create`.
         --command-timeout SECS abort the whole check when one command exceeds
                                SECS (default 5; 0 disables)
 
@@ -91,12 +105,13 @@ Usage: isabelle ic2 COMMAND [ARGS...]
                                  ic2 query state-at Foo.thy --pattern 'by simp'
                                Use --json for the raw payload.
 
-    repl-create FILE:LINE NAME Create a snapshot of the document / proof
-                               state for out-of-document exploration:
-                               forks an interactive I/R REPL at the given
-                               source location. Prints the exact
-                               `repl.py cli` commands to drive it
-                               (step/state/text/...).
+    repl-create FILE:LINE NAME Fork an interactive I/R REPL at that source
+                               location — step Isar commands, inspect the goal,
+                               sledgehammer, fork sub-REPLs per subgoal, print
+                               the accumulated text; one prover round-trip per
+                               step. Prints the initial goal state and the
+                               `repl.py cli` commands to drive it. FILE must be
+                               a checked node, so `check` it once first.
 
     query SUBTOOL [FILE] ...   Other read-only diagnostics over the session
                                (list-files, entities, sorry, proof-blocks,
@@ -106,10 +121,13 @@ Usage: isabelle ic2 COMMAND [ARGS...]
   ============================== Concrete flow ============================
 
     isabelle ic2 server start --daemon -l HOL
-    isabelle ic2 check src/MyThy.thy                       # submit check
-    isabelle ic2 check status                              # poll result
-    isabelle ic2 check src/MyThy.thy --line 87             # only up to 87
-    isabelle ic2 query state-at src/MyThy.thy --line 87    # inspect goal
+    isabelle ic2 check /abs/MyThy.thy                # submit check
+    isabelle ic2 check status                        # poll: fails at line 87
+    isabelle ic2 query state-at /abs/MyThy.thy --line 87    # read the goal
+    isabelle ic2 repl-create /abs/MyThy.thy:87 r     # fork a REPL at line 87
+    ...iterate in the REPL until the proof goes through...
+    <edit MyThy.thy: paste the proof from the REPL's `text`>
+    isabelle ic2 check /abs/MyThy.thy                # confirm, once
     isabelle ic2 server stop
 
   Run `isabelle ic2 COMMAND --help` for a command's own options.
