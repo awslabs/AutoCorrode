@@ -129,6 +129,33 @@ object Client {
       socket_path.expand.implode + " (server not running, or socket stale?)"))
 
 
+  /* ==================== the I/R pointer ============================
+   * A check answers with a verdict; a REPL step answers with the goal state. A
+   * located failure is where the caller decides what to do next, so that is where
+   * `check status` offers the REPL as a ready-to-run command.
+   */
+
+  /** The `repl-create` pointer, anchored at `line` of `file`. Best-effort: the
+   *  named command is normally forkable (a command that FAILED has finished
+   *  evaluating), but a check aborted while an earlier command was still forked
+   *  can leave it reminted and unevaluated, in which case `repl-create` says so
+   *  and exits 3. The REPL is named after the line, so successive laps of the
+   *  loop — and two proofs in flight at once — do not collide on one name. */
+  private def repl_hint(name: String, file: String, line: Int): List[String] =
+    List(
+      "hint: fork an I/R REPL to iterate on the proof itself — one prover",
+      "      round-trip per step, no client JVM, nothing downstream re-run:",
+      "        isabelle ic2 repl-create " + file + ":" + line + " r" + line + " -n " + name,
+      "      step / state / sledgehammer there, then `check` once, when it is written.")
+
+  /** A `file:line` anchor from the retained `error` object, when it names both. */
+  private def anchor_of(o: JSON.Object.T): Option[(String, Int)] =
+    for {
+      file <- JSON.string(o, "file")
+      line <- JSON.int(o, "line") if line > 0
+    } yield (file, line)
+
+
   /* ============================ check ============================== */
 
   private val check_usage_text: String = """
@@ -450,9 +477,10 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
     // (a finished/idle check has nothing in flight to draw).
     if (state == "running" && nodes.nonEmpty)
       render_progress_frame(nodes, bars).foreach(Output.writeln(_))
+    val error = sub_object(reply, "error")
     // Retained first error: WHERE (theory + file:line) and WHY (message), so a
     // detached poll sees the failure without needing to have been subscribed.
-    JSON.value(reply, "error").flatMap(JSON.Object.unapply).foreach { err =>
+    error.foreach { err =>
       val thy = JSON.string(err, "theory").getOrElse("?")
       val loc = JSON.string(err, "file") match {
         case Some(f) => f + JSON.int(err, "line").map(":" + _).getOrElse("")
@@ -464,6 +492,12 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
     }
     sub_object(reply, "timeout")
       .foreach(t => format_command_timeout(t).foreach(l => Output.writeln(l)))
+    // The REPL alternative, anchored at the command that FAILED. Not at a
+    // command-timeout culprit: the watchdog cancels that command mid-eval, and
+    // `repl-create` rejects a command whose eval never finished (ir.ML:
+    // "is still being evaluated").
+    error.flatMap(anchor_of)
+      .foreach { case (file, at) => repl_hint(name, file, at).foreach(l => Output.writeln(l)) }
     sys.exit(0)
   }
 
