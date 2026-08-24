@@ -85,7 +85,7 @@ fun define_byte_enum typ_binding (specs : (binding * int) list) lthy =
        rules would trigger "Ignoring duplicate rewrite rule" warnings. *)
     val encoding_simps = [to_byte_def, from_byte_def]
     val simp_ctxt =
-      fold Splitter.add_split @{thms if_split if_split_asm} (lthy4 addsimps encoding_simps)
+      fold Splitter.add_split @{thms if_split if_split_asm} (lthy4 |> Simplifier.add_simps encoding_simps)
 
     val valid_thm = Goal.prove lthy4 [] [] valid_prop
       (fn {context = ctxt, ...} =>
@@ -129,7 +129,7 @@ fun define_byte_enum typ_binding (specs : (binding * int) list) lthy =
         ("(\<forall>e. " ^ from_str ^ " (" ^ to_str ^ " e) = Some e) \<and> " ^
          "(\<forall>w e. " ^ from_str ^ " w = Some e \<longrightarrow> " ^ to_str ^ " e = w)")
     val rep_simp_ctxt =
-      fold Splitter.add_split @{thms if_split if_split_asm} (lthy7 addsimps encoding_simps)
+      fold Splitter.add_split @{thms if_split if_split_asm} (lthy7 |> Simplifier.add_simps encoding_simps)
     val guard_thm = Goal.prove lthy7 [] [] guard_prop
       (fn {context = ctxt, ...} =>
         (resolve_tac ctxt @{thms conjI} 1
@@ -144,7 +144,7 @@ fun define_byte_enum typ_binding (specs : (binding * int) list) lthy =
       (fn {context = ctxt, ...} =>
         Local_Defs.unfold_tac ctxt [focus_def]
         THEN asm_full_simp_tac
-               (lthy7 addsimps [@{thm enum_byte_focus.rep_eq}, @{thm if_P} OF [guard_thm], prism_def]) 1)
+               (lthy7 |> Simplifier.add_simps [@{thm enum_byte_focus.rep_eq}, @{thm if_P} OF [guard_thm], prism_def]) 1)
     val lthy8 = lthy7
       |> Code.declare_abstract_eqn rep_thm
   in

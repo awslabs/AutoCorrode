@@ -5,7 +5,7 @@
 # etc/build.props, but it only builds components that are *registered*, so the
 # `register` step below must run first.
 
-ISABELLE_VERSION ?= Isabelle2025-2
+ISABELLE_VERSION ?= Isabelle_25-Jul-2026
 ISABELLE_HOME ?= /Applications/$(ISABELLE_VERSION).app/bin
 ISABELLE ?= $(ISABELLE_HOME)/isabelle
 

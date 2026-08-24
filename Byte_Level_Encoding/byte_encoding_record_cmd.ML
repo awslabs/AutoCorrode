@@ -149,7 +149,8 @@ fun define_byte_record typ_binding (fields : (binding * string) list) lthy =
               (fn {context = ctxt, ...} =>
                 Local_Defs.unfold_tac ctxt [focus_def]
                 THEN EqSubst.eqsubst_tac ctxt [0] @{thms array_focus.rep_eq} 1
-                THEN asm_full_simp_tac (ctxt addsimps [elem_fw] delsimps @{thms One_nat_def}) 1)
+                THEN asm_full_simp_tac (ctxt |> Simplifier.add_simps [elem_fw]
+                       |> Simplifier.del_simps @{thms One_nat_def}) 1)
             val lthy_b = lthy_a |> Code.declare_abstract_eqn rep_thm
           in ("FocusParser " ^ focus_name, lthy_b) end
 

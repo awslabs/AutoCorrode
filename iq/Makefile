@@ -7,11 +7,12 @@ endif
 
 # Paths (configurable via environment variables)
 PLUGIN_DIR := $(shell pwd)
-ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
+ISABELLE_VERSION ?= Isabelle_25-Jul-2026
+ISABELLE_HOME ?= /Applications/$(ISABELLE_VERSION).app
 ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
 JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
-SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
+SCALA_HOME ?= $(firstword $(wildcard $(ISABELLE_HOME)/contrib/scala-3.*))
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
 SCALA ?= $(SCALA_HOME)/bin/scala
@@ -29,7 +30,7 @@ BUILD_DIR ?= $(PLUGIN_DIR)/build
 CLASSES_DIR ?= $(BUILD_DIR)/classes
 TEST_CLASSES_DIR ?= $(BUILD_DIR)/test-classes
 JAR_FILE ?= $(BUILD_DIR)/iq_plugin.jar
-INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
+INSTALL_DIR ?= $(HOME)/.isabelle/$(ISABELLE_VERSION)/jedit/jars
 
 # Source files
 SCALA_SOURCES := $(wildcard src/*.scala)

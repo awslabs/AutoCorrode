@@ -696,7 +696,7 @@ ML\<open>
              Pretty.brk 1, Pretty.str "called"] |> Pretty.block,
           [Pretty.str "Term:", Pretty.brk 1, Syntax.pretty_term ctxt (Thm.term_of ctm)] |> Pretty.block]
           |> Pretty.chunks |> Pretty.writeln
-       val ctxt' = clear_simpset ctxt
+       val ctxt' = Simplifier.clear_simpset ctxt
        val lookup_facts = (fn s => (s, Position.none)) #> Named_Theorems.check ctxt #> Named_Theorems.get ctxt
 
        (* Identify redundant operations in the body of the attribute and hoist them out *)
@@ -722,9 +722,9 @@ ML\<open>
          (commutativity_theorems_for_record rec_name, Position.none)
 
        val locality_facts = commutativity_thms |> lookup_facts
-       val ctm_reduce_eq = Simplifier.rewrite (ctxt' addsimps locality_facts) ctm
+       val ctm_reduce_eq = Simplifier.rewrite (ctxt' |> Simplifier.add_simps locality_facts) ctm
        val ctm_hoisted_reduce_eq =
-         Simplifier.rewrite (ctxt' addsimps locality_facts) ctm_hoisted RS @{thm Pure.symmetric}
+         Simplifier.rewrite (ctxt' |> Simplifier.add_simps locality_facts) ctm_hoisted RS @{thm Pure.symmetric}
 
        val _ = [ Pretty.str "Simplification original:", Pretty.brk 1,
                  Syntax.pretty_term ctxt (Thm.prop_of ctm_reduce_eq)]
@@ -745,7 +745,7 @@ ML\<open>
        val _ = "Cancellation facts:" |> tracing
        val _ = List.map (Thm.prop_of #> Syntax.pretty_term ctxt #> Pretty.writeln) cancellation_facts
        val _ = "Done" |> tracing
-       val ctm_hoisted_cancel_eq = Simplifier.rewrite (ctxt' addsimps cancellation_facts) ctm_hoisted
+       val ctm_hoisted_cancel_eq = Simplifier.rewrite (ctxt' |> Simplifier.add_simps cancellation_facts) ctm_hoisted
     in
        SOME (ctm_hoisted_cancel_eq RS (ctm_to_ctm_hoisted_eq RS @{thm Pure.transitive}))
     end end
@@ -770,7 +770,7 @@ ML\<open>
       val ptrn_str = make_locality_simproc_pattern attr_name num_args idx
       val ptrn = Syntax.read_term ctxt ptrn_str
     in
-       Simplifier.make_simproc ctxt {name = simproc_name, kind = Simproc, identifier = [], 
+       Simplifier.make_simproc ctxt {name = simproc_name, kind = Simplifier.Simproc, identifier = [],
           lhss = [ptrn], proc = K (locality_cancellation_simproc rec_name attr_name idx) }
     end
 
@@ -1204,14 +1204,14 @@ ML\<open>
       val attrs = get_attributes ctxt |> map snd
       val attr_simprocs = attrs |> List.map (#sp #> Option.valOf)
     in
-      Thm.declaration_attribute (K (Raw_Simplifier.map_ss (fn ctxt => ctxt addsimprocs attr_simprocs)))
+      Thm.declaration_attribute (K (Simplifier.map_simpset (fold Simplifier.add_proc attr_simprocs)))
     end
 
   fun locality_cancellation_simprocs_del_all ctxt : attribute =
     let
       val attr_simprocs = get_attributes ctxt |> map snd |> List.map (#sp #> Option.valOf)
     in
-      Thm.declaration_attribute (K (Raw_Simplifier.map_ss (fn ctxt => ctxt delsimprocs attr_simprocs)))
+      Thm.declaration_attribute (K (Simplifier.map_simpset (fold Simplifier.del_proc attr_simprocs)))
     end\<close>
 
 attribute_setup locality_cancel    = \<open>Args.context >> locality_cancellation_simprocs_add_all\<close>

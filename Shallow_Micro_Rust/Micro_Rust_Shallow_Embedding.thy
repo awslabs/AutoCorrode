@@ -156,7 +156,7 @@ ML\<open>
         Pretty.writeln (Pretty.chunks (map (fn s => Pretty.str ("• " ^ s)) bullets))
       end
 
-   fun make_lenses ((with_fields, rec_name), overrides) _ lthy =
+   fun make_lenses ((with_fields, rec_name), overrides) lthy =
       let val _ =
             if with_fields orelse null overrides then ()
             else error "micro_rust_record: a uRust-name mapping cannot be combined \
@@ -191,7 +191,7 @@ ML\<open>
         []
 
    val _ =
-      Outer_Syntax.local_theory' \<^command_keyword>\<open>micro_rust_record\<close> "make lenses for datatype record"
+      Outer_Syntax.local_theory \<^command_keyword>\<open>micro_rust_record\<close> "make lenses for datatype record"
        ((((Scan.optional ((Args.bracks (Args.$$$ "no_fields")) >> K false) true) -- Parse.short_ident)
             -- parse_field_overrides) >> make_lenses)
 \<close>

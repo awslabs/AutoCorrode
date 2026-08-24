@@ -473,7 +473,7 @@ object IQUtils {
     queryType match {
       case "sledgehammer" =>
         try {
-          PIDE.options.value.check_name("sledgehammer_provers").default_value
+          PIDE.options.check_name("sledgehammer_provers").default_value
         } catch {
           case _: Exception => "z3 cvc4 e spass" // Fallback default
         }
@@ -590,7 +590,7 @@ object IQUtils {
    * Block until a document model has a stable snapshot (no pending edits).
    * This is a utility function that can be used by both the server and dockable.
    *
-   * Flushes buffer edits to the session (via PIDE.editor.flush() on the EDT)
+   * Flushes buffer edits to the session (via JEdit_Editor.flush() on the EDT)
    * so that PIDE.session.snapshot() reflects pending changes, then uses an
    * event-driven wait (Session.Commands_Changed listener + CountDownLatch)
    * instead of polling, to avoid blocking the EDT.
@@ -602,7 +602,7 @@ object IQUtils {
     val node_name = model.node_name
 
     // Flush buffer edits so PIDE.session.snapshot() sees them
-    GUI_Thread.now { PIDE.editor.flush() }
+    GUI_Thread.now { JEdit_Editor.flush() }
 
     val initial_snapshot = PIDE.session.snapshot(node_name = node_name)
 

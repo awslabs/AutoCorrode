@@ -121,19 +121,19 @@ struct
   (
     type T = simpset;
     val empty = crush_base_simpset
-    val merge = merge_ss;
+    val merge = Simplifier.merge_ss;
   );
 
   fun register_contracts (cs : thm list) : Context.generic -> Context.generic =
     fn ctxt => ctxt |> (
-       curry ((op addsimps) o swap) cs
-    |> simpset_map (Context.proof_of ctxt)
+       Simplifier.add_simps cs
+    |> Simplifier.simpset_map (Context.proof_of ctxt)
     |> URustContractSimps.map)
 
   fun unregister_contracts (cs : thm list) : Context.generic -> Context.generic =
     fn ctxt => ctxt |> (
-       curry ((op delsimps) o swap) cs
-    |> simpset_map (Context.proof_of ctxt)
+       Simplifier.del_simps cs
+    |> Simplifier.simpset_map (Context.proof_of ctxt)
     |> URustContractSimps.map)
 
   fun crush_register_contract_attrib (del : bool) = Thm.declaration_attribute (fn t => fn ctxt =>
@@ -283,7 +283,7 @@ struct
        TIME "crush_branch_call_intro_with_abort" (intro_tac @{thms wp_call_with_abortI} ctxt)
 
     (* Hoisted: simpset construction and the goal-independent SOLVED' arm of the abort check. *)
-    val abort_simp_tac = safe_asm_simp_tac (ctxt addsimps @{thms Let_def})
+    val abort_simp_tac = safe_asm_simp_tac (ctxt |> Simplifier.add_simps @{thms Let_def})
     val confirm_solved_arm = SOLVED' (TRY o unfold_contract_tac THEN' abort_simp_tac)
     val time_confirm_no_abort = TIME "crush_branch_call_confirm_no_abort"
     in
@@ -641,10 +641,11 @@ struct
 
         val ctxt' = fold Raw_Simplifier.del_cong (Named_Theorems.get ctxt @{named_theorems crush_cong_default_del}) ctxt
         val ctxt' = fold Raw_Simplifier.add_cong (Named_Theorems.get ctxt @{named_theorems crush_cong}) ctxt'
-        val ctxt' = ctxt' delsimps @{thms HOL.True_implies_equals}
-                          addsimps (Named_Theorems.get ctxt @{named_theorems crush_late_simps})
-                          addsimps (Named_Theorems.get ctxt @{named_theorems focus_simps})
-                          addsimps (Named_Theorems.get ctxt @{named_theorems focus_components})
+        val ctxt' = ctxt'
+          |> Simplifier.del_simps @{thms HOL.True_implies_equals}
+          |> Simplifier.add_simps (Named_Theorems.get ctxt @{named_theorems crush_late_simps})
+          |> Simplifier.add_simps (Named_Theorems.get ctxt @{named_theorems focus_simps})
+          |> Simplifier.add_simps (Named_Theorems.get ctxt @{named_theorems focus_components})
 
         (* We use the original context where possible, for better parallelism *)
         val guards_tac' = time_and_report ctxt "crush_step_instantiation_guards" (Config.get ctxt Crush_Config.time_step_instantiation)

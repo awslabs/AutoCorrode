@@ -220,7 +220,7 @@ fun generate_urust_conversion (info: Simple_Word_Enum.enum_info) lthy =
           let
             val name = type_name ^ "_" ^ base
             val binding = Binding.name name
-            val (_, lthy) = Specification.definition
+            val (_, lthy) = Specification.definition {verbose = false}
               (SOME (binding, NONE, NoSyn)) [] []
               ((Binding.name (name ^ "_def"), []),
                Logic.mk_equals (Free (name, fastype_of rhs), rhs)) lthy

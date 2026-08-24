@@ -8,7 +8,7 @@ begin
 (*>*)
 
 definition find_index_offset :: \<open>'a list \<Rightarrow> nat \<Rightarrow> 'a \<Rightarrow> nat\<close> where
-  \<open>find_index_offset vs offset v \<equiv> (fst \<circ> the) (List.find (\<lambda> (_, r). r = v) (enumerate offset vs))\<close>
+  \<open>find_index_offset vs offset v \<equiv> (fst \<circ> the) (List.find (\<lambda> (_, r). r = v) (indexed_from offset vs))\<close>
 
 lemma find_index_offset_fst[simp]:
   shows \<open>find_index_offset (a # vs) n a = n\<close>
@@ -28,15 +28,15 @@ next
     by (simp add: find_index_offset_def)
 qed
 
-lemma in_set_enumerate_in_set:
-  assumes \<open>v \<in> set (enumerate n vs)\<close>
+lemma in_set_indexed_from_in_set:
+  assumes \<open>v \<in> set (indexed_from n vs)\<close>
   shows \<open>snd v \<in> set vs\<close>
   using assms
-  by (metis list.map(2) map_snd_enumerate not_Cons_self remdups.simps(2) remdups_map_remdups)
+  by (metis list.map(2) map_snd_indexed_from not_Cons_self remdups.simps(2) remdups_map_remdups)
 
 lemma find_index_offset_eqs:
   assumes \<open>distinct vs\<close>
-  shows \<open>list_all (\<lambda> (i, v). find_index_offset vs n v = i) (enumerate n vs)\<close>
+  shows \<open>list_all (\<lambda> (i, v). find_index_offset vs n v = i) (indexed_from n vs)\<close>
   using assms
 proof (induction vs arbitrary: n)
   case Nil
@@ -44,12 +44,12 @@ proof (induction vs arbitrary: n)
 next
   case (Cons a vs)
   moreover from calculation have 
-    \<open>list_all (\<lambda>(i, v). find_index_offset vs (Suc n) v = i) (enumerate (Suc n) vs)\<close>
+    \<open>list_all (\<lambda>(i, v). find_index_offset vs (Suc n) v = i) (indexed_from (Suc n) vs)\<close>
     by simp
   with \<open>distinct (a # vs)\<close> show ?case
     apply simp
     apply (erule list.pred_mono_strong)
-    by (force intro!: find_index_offset_not_fst dest!: in_set_enumerate_in_set
+    by (force intro!: find_index_offset_not_fst dest!: in_set_indexed_from_in_set
         split: prod.splits)
 qed
 
@@ -58,10 +58,10 @@ lemma find_index_offset_eqs_nth:
       and \<open>k < length vs\<close>
     shows \<open>find_index_offset vs n (vs ! k) = n + k\<close>
 proof -
-  note find_index_offset_eqs[OF assms(1), simplified list_all_length length_enumerate, where n=n,
+  note find_index_offset_eqs[OF assms(1), simplified list_all_length length_indexed_from, where n=n,
       THEN spec, THEN mp, OF assms(2)]
   with assms(2) show ?thesis
-    by (simp add: nth_enumerate_eq)
+    by (simp add: nth_indexed_from_eq)
 qed
 
 definition find_index :: \<open>'a list \<Rightarrow> 'a \<Rightarrow> nat\<close> where
@@ -69,7 +69,7 @@ definition find_index :: \<open>'a list \<Rightarrow> 'a \<Rightarrow> nat\<clos
 
 lemma find_index_eqs:
   assumes \<open>distinct vs\<close>
-  shows \<open>list_all (\<lambda> (i, v). find_index vs v = i) (enumerate 0 vs)\<close>
+  shows \<open>list_all (\<lambda> (i, v). find_index vs v = i) (indexed_from 0 vs)\<close>
   using find_index_offset_eqs[OF assms]
   by (simp add: find_index_def)
 
@@ -146,7 +146,7 @@ fun define_applied lthy name_str args rhs =
     val fun_type = fold_rev (fn a => fn T => fastype_of a --> T) args (fastype_of rhs)
     val lhs = list_comb (Free (name_str, fun_type), args)
     val spec = Logic.mk_equals (lhs, rhs)
-    val ((_, (_, def_thm)), lthy') = Specification.definition
+    val ((_, (_, def_thm)), lthy') = Specification.definition {verbose = false}
       (SOME (binding, NONE, NoSyn)) [] []
       ((Binding.name (name_str ^ "_def"), []), spec) lthy
     val full_name = Local_Theory.full_name lthy' binding
@@ -165,8 +165,8 @@ fun define_index lthy type_name elemT variant_list_term =
 
 (* Simp rules for reducing find_index_eqs into concrete index equalities *)
 fun indices_simp_rules variants_hol index_def =
-  @{thms enumerate_simps}
-  @ [variants_hol RS @{thm HOL.arg_cong[where f=\<open>enumerate 0\<close>]}]
+  @{thms indexed_from_simps}
+  @ [variants_hol RS @{thm HOL.arg_cong[where f=\<open>indexed_from 0\<close>]}]
   @ @{thms nth_Cons_numeral diff_numeral_Suc pred_numeral_simps
         One_nat_def[symmetric] diff_zero}
   @ @{thms Num.BitM.simps nth_Cons_0 nth_Cons_Suc list_all_Cons_iff prod.simps
@@ -178,8 +178,8 @@ fun indices_simp_rules variants_hol index_def =
 fun generate_indices lthy distinct_thm variants_hol index_def =
   Proof_Context.get_thm lthy "find_index_eqs"
   |> (fn th => th OF [distinct_thm])
-  |> Simplifier.simplify (clear_simpset lthy
-       addsimps (indices_simp_rules variants_hol index_def))
+  |> Simplifier.simplify (lthy |> Simplifier.clear_simpset
+       |> Simplifier.add_simps (indices_simp_rules variants_hol index_def))
   |> Conjunction.elim_conjunctions
 
 (* Step 2: Prove TYPE_indices_concrete and register as a fact *)

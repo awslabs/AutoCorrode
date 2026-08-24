@@ -5,11 +5,12 @@ ifndef V
 endif
 
 PLUGIN_DIR := $(shell pwd)
-ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
+ISABELLE_VERSION ?= Isabelle_25-Jul-2026
+ISABELLE_HOME ?= /Applications/$(ISABELLE_VERSION).app
 ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
 JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
-SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
+SCALA_HOME ?= $(firstword $(wildcard $(ISABELLE_HOME)/contrib/scala-3.*))
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
 # Test flags mirror the production flags except for -Wnonunit-statement:
@@ -36,7 +37,7 @@ LIB_CLASSPATH = $(shell echo $(LIB_JARS) | tr ' ' ':')
 BUILD_DIR ?= $(PLUGIN_DIR)/build
 CLASSES_DIR ?= $(BUILD_DIR)/classes
 JAR_FILE ?= $(BUILD_DIR)/isabelle_assistant.jar
-INSTALL_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/jedit/jars
+INSTALL_DIR ?= $(HOME)/.isabelle/$(ISABELLE_VERSION)/jedit/jars
 
 # I/Q Plugin (dependency for proof verification features).
 # Compilation silently failed on an obscure scalac error if neither JAR
@@ -115,7 +116,7 @@ $(CLASSES_DIR)/.resources: $(RESOURCE_FILES) $(PROMPT_FILES) | $(CLASSES_DIR)
 $(CLASSES_DIR):
 	mkdir -p $(CLASSES_DIR)
 
-ISABELLE_SETTINGS_DIR ?= $(HOME)/.isabelle/Isabelle2025-2/etc
+ISABELLE_SETTINGS_DIR ?= $(HOME)/.isabelle/$(ISABELLE_VERSION)/etc
 COMPONENT_LINE := init_component "$(PLUGIN_DIR)"
 
 install: iq-install $(JAR_FILE)

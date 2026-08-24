@@ -234,7 +234,7 @@ fun add_equal_instance typ constr_terms constr_arg_typs case_eq_thms inject_simp
           HOLogic.mk_Trueprop (HOLogic.mk_eq (mk_side @{const_name HOL.equal}, mk_side @{const_name HOL.eq}))
           |> Syntax.check_term lthy_inst
         val ((_, (_, raw_def)), lthy_inst') =
-          Specification.definition NONE [] [] (Binding.empty_atts, spec) lthy_inst
+          Specification.definition {verbose = false} NONE [] [] (Binding.empty_atts, spec) lthy_inst
         val thy_ctxt = Proof_Context.init_global (Proof_Context.theory_of lthy_inst')
         val def = singleton (Proof_Context.export lthy_inst' thy_ctxt) raw_def
       in

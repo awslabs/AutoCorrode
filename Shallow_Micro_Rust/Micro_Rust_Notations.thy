@@ -591,7 +591,7 @@ fun shadow_check ctxt kind name T pos have_backend =
       else
         let
           \<comment>\<open>Render the constant via \<^ML>\<open>Syntax.pretty_term\<close> so name-space markup
-            (\<^verbatim>\<open>Name_Space.markup\<close> + \<^verbatim>\<open>Markup.const\<close>) is attached and ctrl-click
+            (\<^verbatim>\<open>Name_Space.markups\<close> + \<^verbatim>\<open>Markup.const\<close>) is attached and ctrl-click
             jumps to the defining \<^verbatim>\<open>definition\<close>/\<^verbatim>\<open>fun\<close>/\<^verbatim>\<open>primrec\<close> command.\<close>
           val pretty_const = Syntax.pretty_term ctxt (Const (full_name, const_T))
           val msg = Pretty.string_of (Pretty.chunks
@@ -693,7 +693,7 @@ fun resolve_bound ctxt =
   have full types and can do the typed table lookup.\<close>
 \<comment>\<open>Emit use-site markup at \<open>pos\<close> for every registered backend under
   \<open>(kind, name)\<close>: an entity ref to the registration site (so ctrl-click
-  jumps back to \<open>micro_rust_notation\<close>), plus a \<^verbatim>\<open>Name_Space.markup\<close> +
+  jumps back to \<open>micro_rust_notation\<close>), plus a \<^verbatim>\<open>Name_Space.markups\<close> +
   \<^verbatim>\<open>Markup.keyword3\<close> chain when the backend itself is a bare constant
   (ctrl-click to its definition, coloured as a keyword). Called by \<open>resolve\<close>
   ONLY when a marker is actually replaced by a registered backend ---
@@ -716,8 +716,8 @@ fun emit_use_markup_at_pos ctxt kind name pos =
             forms like \<^verbatim>\<open>lift_fun1 Some\<close> still get const-styling
             (color + ctrl-click) attached at the use site, not just the
             \<open>micro_rust_notation\<close> entity ref. We use the standard
-            \<^verbatim>\<open>Name_Space.markup\<close> (an entity-style markup keyed by the
-            constant's def-site serial) for the click target, plus the
+            \<^verbatim>\<open>Name_Space.markups\<close> (entity-style markup keyed by the
+            constant's def-site serials) for the click target, plus the
             \<^verbatim>\<open>Markup.keyword3\<close> kind tag for the colour face (so
             notation-resolved constants are coloured as keywords rather than
             as ordinary constants).\<close>
@@ -729,8 +729,8 @@ fun emit_use_markup_at_pos ctxt kind name pos =
           val const_markup =
             (case head_const hol_term of
                SOME c =>
-                 [Name_Space.markup (Consts.space_of (Proof_Context.consts_of ctxt)) c,
-                  Markup.keyword3]
+                 Name_Space.markups (Consts.space_of (Proof_Context.consts_of ctxt)) c @
+                   [Markup.keyword3]
              | NONE => [])
         in
           app (Context_Position.report ctxt pos) (notation_markup @ const_markup)

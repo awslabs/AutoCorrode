@@ -7,10 +7,11 @@ import isabelle.jedit._
 import java.nio.file.Files
 import java.util.Locale
 import java.util.concurrent.{CountDownLatch, TimeUnit}
+import scala.annotation.unused
 import scala.util.Try
 import scala.util.Using
 
-import org.gjt.sp.jedit.{View, jEdit, Buffer}
+import org.gjt.sp.jedit.{View, jEdit}
 
 /**
  * Closed status vocabulary for command processing states.
@@ -403,7 +404,7 @@ class IQServer(
   private def waitForTheoryCompletion(
     model: Document_Model,
     timeout_ms: Option[Int],
-    timeoutPerCommandMs: Option[Int] = None
+    timeoutPerCommandMs: Option[Int]
   ): (Boolean, Document_Status.Node_Status) = {
 
     val startTime = System.currentTimeMillis()
@@ -1760,14 +1761,12 @@ class IQServer(
 
       if (statuses.nonEmpty && !allStatusesProcessed(statuses)) {
         val latch = new CountDownLatch(1)
-        var checkCount = 0
         var perCommandTimerStart: Option[Long] = None
 
         val consumer = Session.Consumer[Session.Commands_Changed](
           "IQServer.handleGetCommandCore"
         ) {
           case Session.Commands_Changed(_, nodes, _) if nodes.contains(node_name) =>
-            checkCount += 1
             statuses = retrieveStatuses()
 
             if (statuses.isEmpty || allStatusesProcessed(statuses)) {
@@ -2285,7 +2284,7 @@ class IQServer(
    * @param includeDetailedCommands Whether to include the detailed commands list
    * @return Map containing timing information
    */
-  private def calculateTimingInfo(model: Document_Model, text_content: String, timingThresholdMs: Int = 0, includeDetailedCommands: Boolean = true): Map[String, Any] = {
+  private def calculateTimingInfo(model: Document_Model, text_content: String, timingThresholdMs: Int = 0, includeDetailedCommands: Boolean): Map[String, Any] = {
     val node_name = model.node_name
     val snapshot = Document_Model.snapshot(model)
     val state = snapshot.state
@@ -2327,15 +2326,16 @@ class IQServer(
       Output.writeln(s"I/Q Server: calculateTimingInfo - timingThreshold=$timingThresholdMs ms")
 
       val commandTimingEntries = commands_above_threshold.toList.map {
-        case (cmd, timings) =>
-          val commandStart = node.command_start(cmd).getOrElse(0)
+        case (cmd_id, timings) =>
+          val cmd = snapshot.get_command(cmd_id)
+          val commandStart = cmd.flatMap(node.command_start).getOrElse(0)
           val start_line = offsetToLine(commandStart)
           val timingSeconds = formatDecimal(timings.sum(Date.now()).seconds)
           (
             timingSeconds,
             Map[String, Any](
               "line" -> start_line,
-              "source_preview" -> cmd.source.take(50),
+              "source_preview" -> cmd.map(_.source.take(50)).getOrElse(""),
               "timing_seconds" -> timingSeconds
             )
           )
@@ -2389,15 +2389,10 @@ class IQServer(
       // Create a Line.Document for line/column position conversion
       val line_document = Line.Document(text_content)
 
-      // Create the appropriate rendering
-      val rendering = model match {
-        case buffer_model: Buffer_Model =>
-          // For Buffer_Model, use JEdit_Rendering
-          JEdit_Rendering(snapshot, buffer_model, PIDE.options.value)
-        case _ =>
-          // For File_Model, use standard Rendering with session
-          new Rendering(snapshot, PIDE.options.value, PIDE.session)
-      }
+      // JEdit_Rendering takes any Document_Model (Buffer_Model or File_Model).
+      // Since Isabelle_25-Jul-2026 the generic Rendering is abstract (it needs a
+      // gui_style), so there is no longer a File_Model fallback to construct.
+      val rendering = JEdit_Rendering(snapshot, model, PIDE.options)
 
       val text_range = Text.Range(0, snapshot.node.source.length)
 
@@ -3032,7 +3027,7 @@ end"""
     lines: Array[String],
     startLine: Int,
     endLine: Int,
-    highlightLine: Option[Int] = None
+    highlightLine: Option[Int]
   ): String = {
     IQLineOffsetUtils.formatLinesWithNumbers(lines, startLine, endLine, highlightLine)
   }
@@ -3603,7 +3598,7 @@ end"""
         )
       } else {
         val startOffset = node.command_start(command).getOrElse(0)
-        val output = PIDE.editor.output(snapshot, startOffset)
+        val output = JEdit_Editor.output(snapshot, startOffset)
         val fallbackFreeVars = extractCommandFreeVars(snapshot, command, startOffset)
         analyzeGoalMessages(output.messages, fallbackFreeVars)
       }
@@ -4372,7 +4367,9 @@ end"""
       }
     }
 
-    def outputCallback(snapshot: Document.Snapshot, command_results: Command.Results, output: List[XML.Tree]): Unit = {
+    def outputCallback(@unused snapshot: Document.Snapshot,
+                       @unused command_results: Command.Results,
+                       output: List[XML.Tree]): Unit = {
       // Debug: log callback invocation
       Output.writeln(s"I/Q Server: outputCallback called with ${output.size} XML trees")
 
