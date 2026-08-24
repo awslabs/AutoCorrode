@@ -28,9 +28,11 @@ see where a theory stands and to confirm a finished proof, and
 
 ## Prerequisites
 
-  * **Isabelle2025-2** — IC2 is built and tested against it (the headless
-    goal-state readout relies on its `show_states` option). Set `ISABELLE_HOME`
-    to the directory containing the `isabelle` binary.
+  * **Isabelle2025-2** — IC2 is built and tested against it; the headless
+    goal-state readout uses its `print_state` query plumbing (see
+    `src/Extended_Query_Operation.scala`). The `Makefile` reads `ISABELLE_HOME`
+    as the directory containing the `isabelle` binary (not Isabelle's own
+    `ISABELLE_HOME`, which is the distribution root).
   * For the I/R / MCP integration (on by default): **`python3`** and the I/R
     Python deps — `pip install -r ../ir/requirements.txt`. Without them, I/R
     bring-up is skipped and `server status` shows `no I/R`; plain checking still
@@ -49,19 +51,20 @@ isabelle ic2 server start --daemon -l HOL
 isabelle ic2 server start --daemon -l AutoCorrode -d AutoCorrode
 
 # Wait until the session is ready, then check a file:
-isabelle ic2 server status                  # state: building → loading → ready
+isabelle ic2 server status                  # state=building → loading → ready
 isabelle ic2 check /abs/path/to/Foo.thy     # submit
 isabelle ic2 check status                   # poll result (reports file:line)
 
 # Work on the proof that failed in a REPL; paste it back, then check once more:
-isabelle ic2 repl-create /abs/path/to/Foo.thy:87 r87
+isabelle ic2 repl-create /abs/path/to/Foo.thy:87 r
 
 # Stop:
 isabelle ic2 server stop
 ```
 
 The flags mirror `isabelle jedit` (`-l` logic, `-d` session dir, `-i` include
-session, `-o` option, `-n` server name). `server start` runs in the foreground
+session, `-o` option). Two deliberately diverge: `-n` is the server name (in
+`isabelle jedit` it means no-build) and `-N` is no-build. `server start` runs in the foreground
 until Ctrl-C; `--daemon` backgrounds it and logs to
 `$ISABELLE_HOME_USER/ic2/<name>.log` (override with `-L FILE`).
 
@@ -69,13 +72,14 @@ until Ctrl-C; `--daemon` backgrounds it and logs to
 heap build can outlast its ~30 s wait, in which case it still returns 0 with a
 "still starting" note and the build continues in the background. A `check`
 submitted before the session is ready fails fast, so gate on
-`ic2 server status` reporting `state: ready` first (or `ic2 server attach` to
+`ic2 server status` reporting `state=ready` first (or `ic2 server attach` to
 watch a cold build to completion).
 
 ## `ic2 check`
 
-Submits `.thy` files (absolute paths) to be type-checked by the running server
-and returns immediately. Poll with `check status`; cancel with `check cancel`.
+Submits `.thy` files to be type-checked by the running server and returns
+immediately. Prefer absolute paths: a relative one is resolved against YOUR cwd,
+not the server's (and the `check` MCP tool rejects relative paths outright). Poll with `check status`; cancel with `check cancel`.
 
 ```bash
 isabelle ic2 check Foo.thy Bar.thy      # submit both
@@ -170,20 +174,16 @@ e.g. to develop a proof step-by-step from the goal state at that line. (The bare
 `repl.py cli` can't do this: mapping a source line to a prover command id needs
 the live document, which only the ic2 server holds.)
 
-This is where proof development belongs: `check` once to see where the theory
-stands, `repl-create` at the proof, iterate there (`step`, `state`,
-`sledgehammer`, `fork` per subgoal, `text` for the script), paste the finished
-proof into the file, `check` once to confirm.
-
 ```
 $ isabelle ic2 repl-create AutoCorrode/Misc/Word.thy:142 w
-REPL 'w' from document Misc.Word cmd 37
+Created REPL "w" from document "Misc.Word" command 37 [proof]
 <proof state at that command...>
 
-Drive this REPL with `repl.py cli`:
+Drive this REPL with `repl.py cli` (one-shot client; `cli help` lists all verbs):
   step:       IR_AUTH_TOKEN=… python3 …/ir/repl.py cli --port 59498 step w 'apply simp'
   show state: IR_AUTH_TOKEN=… python3 …/ir/repl.py cli --port 59498 state w -1
   full text:  IR_AUTH_TOKEN=… python3 …/ir/repl.py cli --port 59498 text w
+  any ML:     IR_AUTH_TOKEN=… python3 …/ir/repl.py cli --port 59498 raw  -- 'Ir.show "w"' 
 ```
 
 `repl-create` resolves `LINE` to the command spanning it, creates the REPL, and
@@ -207,18 +207,23 @@ Key flags beyond the `isabelle jedit` set: `--daemon` (background it — see
 several coexist), `-N` (no build — fail fast if the heap is missing), `--no-iq` /
 `--mcp` (see below).
 
-`status` prints a summary line — session, pid, uptime, idle/busy, checks in
-flight — plus the I/R endpoints. Without `-n` it surveys every running server;
+`status` prints a summary line — state, session, pid, uptime, idle/busy, checks
+in flight — then the options it was started with, its cwd and activity stamps,
+then the I/R endpoints. Without `-n` it surveys every running server;
 during the initial heap build it shows a live phase (building → loading →
 ready). `--full` adds per-node processing/errors.
 
 ```
 $ isabelle ic2 server status
-default: session=HOL pid=12345 up=42s idle conns=1
+default: state=ready session=HOL pid=12345 up=42s idle conns=1
+    started with: logic=HOL
+    cwd=/abs/AutoCorrode  started=2026-08-23 09:14:02  last=2026-08-23 09:14:39 (5s ago)
     I/R repl.py: port=59498 token=GSJpumMw…  (raw I/R protocol)
     I/R MCP:     port=8765  token=a1b2c3d4…  (connect MCP repl_* here)
     I/R cli:     IR_AUTH_TOKEN=GSJpumMw… python3 …/ir/repl.py cli --port 59498 raw -- 'Ir.theories ()'
-plain:   session=HOL pid=12346 up=5s idle conns=1
+plain:   state=ready session=HOL pid=12346 up=5s idle conns=1
+    started with: logic=HOL  no_iq
+    cwd=/tmp  started=2026-08-23 09:14:36  last=2026-08-23 09:14:36 (5s ago)
     no I/R
 ```
 
@@ -266,7 +271,7 @@ client config:
     "ic2": {
       "command": "python3",
       "args": ["/path/to/AutoCorrode/iq/iq_bridge.py"],
-      "env": { "IQ_MCP_BRIDGE_PORT": "8765", "IQ_AUTH_TOKEN": "…" }
+      "env": { "IQ_MCP_BRIDGE_PORT": "8765" }
     }
   }
 }
@@ -274,9 +279,12 @@ client config:
 
 Every tool except `initialize` / `tools/list` / `ping` requires auth: the client
 must first call the **`authenticate`** tool with the MCP token. That token comes
-from `IQ_AUTH_TOKEN` (the same variable I/Q uses) if set, else it is generated
-and reported by `ic2 server status` (`I/R MCP: … token=…`). Set `IQ_AUTH_TOKEN`
-in both the server's environment and the client config to fix it ahead of time.
+from the SERVER's `IQ_AUTH_TOKEN` (the same variable I/Q uses) if set, else it is
+generated and reported by `ic2 server status` (`I/R MCP: … token=…`). Set
+`IQ_AUTH_TOKEN` in the server's environment to fix it ahead of time. Note the
+bridge itself does not read it — `iq_bridge.py` reads only its own
+`IQ_MCP_BRIDGE_*` settings — so the token has to reach whatever calls
+`authenticate`.
 The in-prover `ML_Repl` is never advertised, so nothing can connect around the
 bridge to the prover.
 
@@ -342,14 +350,16 @@ src/daemon.scala    — `ic2 server start`: daemon, --daemon launch, status op
 src/iq.scala        — I/R + MCP bring-up (IRLauncher, McpServer + tools) and the
                       single-slot Check model (Job, cancel/reset, --line worker)
 src/client.scala    — check / query / server / repl-create + UIs
+src/check_engine.scala — the check engine: updateModel / evaluate / stop
 src/endpoint.scala  — socket-path discovery + the 0700 directory
 src/json_io.scala   — newline-delimited JSON over a socket channel
+src/IRClient.scala  — IRClient + IRLauncher (a COPY of iq/'s, already drifted)
 src/test_tool.scala — `isabelle ic2_test` runner
 src/tools.scala     — Isabelle_Scala_Tools registration
 
   shared from iq/ (symlinks), all in `package isabelle`:
-src/IRClient.scala      — IRClient + IRLauncher
 src/IRTools.scala       — the repl_* tool provider
+src/Extended_Query_Operation.scala — caret-free print_state queries
 src/McpServer.scala     — generic MCP server
 src/McpProtocol.scala   — JSON-RPC decode
 src/SessionTools.scala  — session-generic diagnostics
@@ -357,7 +367,8 @@ src/SessionClient.scala — their MCP registration
 src/ErrorCodes.scala, src/IQNormalization.scala
 ```
 
-For the wire protocol (newline-delimited JSON) and the internals of checking,
-cancellation, and the headless goal-state plumbing, see the comments in
-`src/daemon.scala` and `src/iq.scala`.
+For the wire protocol (newline-delimited JSON) see the comments in
+`src/daemon.scala`; for the single-slot Check model and cancellation,
+`src/iq.scala`; for the checking itself, `src/check_engine.scala`; for the
+headless goal-state plumbing, `src/Extended_Query_Operation.scala`.
 ```
