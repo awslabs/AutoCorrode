@@ -234,6 +234,26 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
     }
   }
 
+  /** A nested JSON object by key, if present. */
+  private def sub_object(t: JSON.T, key: String): Option[JSON.Object.T] =
+    JSON.value(t, key).flatMap(JSON.Object.unapply)
+
+  /** The retained command-timeout culprit as display lines: which command tripped
+   *  the watchdog, where, for how long, and its source preview. Shared by the
+   *  one-shot `check status` frame and the streaming `check attach` tail, so a
+   *  `command_timeout` outcome never arrives without naming the command. */
+  private def format_command_timeout(timeout: JSON.T): List[String] = {
+    val theory = JSON.string(timeout, "theory").getOrElse("?")
+    val line = JSON.int(timeout, "line").getOrElse(0)
+    val loc = JSON.string(timeout, "file").getOrElse(theory) +
+      (if (line > 0) ":" + line else "")
+    val keyword = JSON.string(timeout, "keyword").getOrElse("?")
+    val limit = JSON.double(timeout, "limit_s").getOrElse(0.0)
+    val elapsed = JSON.double(timeout, "elapsed_s").getOrElse(0.0)
+    f"command timeout: $loc%s: $keyword%s exceeded $limit%.1fs ($elapsed%.1fs elapsed)" ::
+      JSON.string(timeout, "preview").filter(_.nonEmpty).map("  " + _).toList
+  }
+
   /** Read the check event stream from `io`, rendering started/progress/error to
    *  `ui` and reporting the terminal `finished` via setOk/setReason. Used by
    *  `check attach`. Returns when `finished` or EOF. */
@@ -258,6 +278,11 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
             case Some("finished") =>
               val ok = JSON.bool(t, "ok").getOrElse(false)
               val reason = JSON.string(t, "reason").getOrElse("")
+              // A `command_timeout` reason on its own says nothing about WHICH
+              // command tripped the watchdog; the culprit rides along with the
+              // terminal event, so report it before the UI closes.
+              sub_object(t, "timeout")
+                .foreach(timeout => format_command_timeout(timeout).foreach(ui.note))
               setOk(ok)
               setReason(reason)
               done = true
@@ -437,19 +462,8 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
       Output.writeln("error: " + loc)
       msg.linesIterator.foreach(l => Output.writeln("  " + l))
     }
-    JSON.value(reply, "timeout").flatMap(JSON.Object.unapply).foreach { timeout =>
-      val theory = JSON.string(timeout, "theory").getOrElse("?")
-      val line = JSON.int(timeout, "line").getOrElse(0)
-      val loc = JSON.string(timeout, "file").getOrElse(theory) +
-        (if (line > 0) ":" + line else "")
-      val keyword = JSON.string(timeout, "keyword").getOrElse("?")
-      val limit = JSON.double(timeout, "limit_s").getOrElse(0.0)
-      val elapsed = JSON.double(timeout, "elapsed_s").getOrElse(0.0)
-      Output.writeln(
-        f"command timeout: $loc%s: $keyword%s exceeded $limit%.1fs ($elapsed%.1fs elapsed)")
-      JSON.string(timeout, "preview").filter(_.nonEmpty)
-        .foreach(preview => Output.writeln("  " + preview))
-    }
+    sub_object(reply, "timeout")
+      .foreach(t => format_command_timeout(t).foreach(l => Output.writeln(l)))
     sys.exit(0)
   }
 
