@@ -11,14 +11,20 @@ run side by side, with no host/port/token to configure):
 
   * **`ic2 server`** — start/stop/inspect the resident session.
   * **`ic2 check FILE...`** — submit `.thy` files for checking, then poll with
-    `check status`.
-  * **`ic2 query SUBTOOL FILE`** — read-only diagnostics over the session.
+    `check status`. Per theory, not per proof edit — see below.
   * **`ic2 repl-create FILE:LINE NAME`** — fork an interactive I/R REPL at a
-    source location.
+    source location. Where proof *development* happens.
+  * **`ic2 query SUBTOOL FILE`** — read-only diagnostics over the session.
 
 Unless `--no-iq`, the server also brings up I/R against the same session (`--mcp`
 additionally serves the `repl_*` tools over MCP), so an agent can drive Isar
 proofs without a separate Isabelle/jEdit + I/Q.
+
+**The two loops.** A check costs a client JVM (plus one per `check status` poll),
+re-runs everything below the edit, and answers with a verdict; a REPL step is one
+round-trip to the resident prover and answers with the goal state. So `check` to
+see where a theory stands and to confirm a finished proof, and
+[`repl-create`](#ic2-repl-create) for everything in between.
 
 ## Prerequisites
 
@@ -45,7 +51,10 @@ isabelle ic2 server start --daemon -l AutoCorrode -d AutoCorrode
 # Wait until the session is ready, then check a file:
 isabelle ic2 server status                  # state: building → loading → ready
 isabelle ic2 check /abs/path/to/Foo.thy     # submit
-isabelle ic2 check status                   # poll result
+isabelle ic2 check status                   # poll result (reports file:line)
+
+# Work on the proof that failed in a REPL; paste it back, then check once more:
+isabelle ic2 repl-create /abs/path/to/Foo.thy:87 r87
 
 # Stop:
 isabelle ic2 server stop
@@ -76,8 +85,11 @@ isabelle ic2 check Foo.thy --command-timeout 15
 isabelle ic2 check cancel               # abort the in-flight check
 ```
 
-`--line N` evaluates only the prefix up to line `N`, leaving the rest
-unprocessed and re-checkable — handy for iterating on the line you're editing.
+`--line N` evaluates only the prefix up to line `N`, leaving the rest unprocessed
+and re-checkable — use it after a *structural* edit (a changed definition, a new
+lemma, a moved block); for tactic iteration use
+[`repl-create`](#ic2-repl-create), which `check status` points at whenever it can
+locate the failure.
 
 Every individual command has a 5-second wall-clock timeout by default. If one
 exceeds the limit, IC2 aborts the whole check with reason `command_timeout`;
@@ -157,6 +169,11 @@ Starts an *interactive* [I/R](../ir) proof REPL anchored at a source location �
 e.g. to develop a proof step-by-step from the goal state at that line. (The bare
 `repl.py cli` can't do this: mapping a source line to a prover command id needs
 the live document, which only the ic2 server holds.)
+
+This is where proof development belongs: `check` once to see where the theory
+stands, `repl-create` at the proof, iterate there (`step`, `state`,
+`sledgehammer`, `fork` per subgoal, `text` for the script), paste the finished
+proof into the file, `check` once to confirm.
 
 ```
 $ isabelle ic2 repl-create AutoCorrode/Misc/Word.thy:142 w

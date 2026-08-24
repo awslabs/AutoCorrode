@@ -165,9 +165,11 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
     -n NAME             server name (default: the sole running server)
     --line N            check only the prefix of the (single) FILE up to
                         and including the command that ends on or before
-                        source line N (1-based). Fast partial check for
-                        iterative development. Commands after line N are left
-                        UNPROCESSED. Requires exactly one FILE.
+                        source line N (1-based). Commands after line N are
+                        left UNPROCESSED. Requires exactly one FILE.
+                        Use it after a STRUCTURAL edit (a changed definition,
+                        a new lemma, a moved block); for tactic iteration use
+                        `repl-create`.
     --command-timeout SECS
                         abort the whole check if any individual command runs
                         longer than SECS (default 5; 0 disables). Decimal
@@ -176,6 +178,14 @@ Usage: isabelle ic2 check [OPTIONS] FILE...
   Submit a type-check of the given .thy files to the running server and return
   immediately. Track progress with `isabelle ic2 check status`; abort the
   in-flight check with `isabelle ic2 check cancel`.
+
+  Check once per theory, then iterate on a proof in an I/R REPL, where a step is
+  one prover round-trip and returns the goal state (`isabelle ic2 --help`):
+
+    isabelle ic2 check status                        # -> fails at MyThy.thy:87
+    isabelle ic2 repl-create /abs/MyThy.thy:87 r     # iterate here
+    <paste the finished proof into MyThy.thy>
+    isabelle ic2 check /abs/MyThy.thy                # confirm, once
 
   Live output is only available via `isabelle ic2 check attach`, which requires
   an interactive terminal with normal terminal capabilities and is intended for
@@ -839,7 +849,9 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
    *  session + the I/R client); the bare `repl.py cli` cannot, so this is the
    *  way to start a REPL at a `.thy` position. Prints the REPL's initial state
    *  AND the exact `repl.py cli` commands to drive it. FILE must be a loaded
-   *  node — check it first. */
+   *  node — check it first. This is the entry point for working ON a proof:
+   *  anything iterative belongs here, and only the finished proof goes back into
+   *  the .thy for a single confirming `check`. */
   def repl_create(args: List[String]): Unit = {
     def usage(): Nothing = {
       Output.writeln(
@@ -848,6 +860,8 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
         "  command on LINE (1-based) of the theory FILE (a loaded/checked node).\n" +
         "  Prints the REPL's initial state and the `repl.py cli` commands to\n" +
         "  drive it (step/state/text/...).\n\n" +
+        "  Use this to work on a proof: a step is one prover round-trip and returns\n" +
+        "  the new goal state. Iterate here, then `check` the file once to confirm.\n\n" +
         "  -n SERVER   server name (default: the sole running server)\n", stdout = true)
       sys.exit(2)
     }
