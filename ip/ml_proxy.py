@@ -1551,10 +1551,20 @@ def main():
 
     local_home = os.path.expanduser("~")
 
-    # Step 1: Query all remote environment in one SSH call
+    # Step 1: Query all remote environment in one SSH call.
+    # Besides the core ISABELLE_/ML_/POLYML_ settings, forward the variables of
+    # the bundled SMT/ATP solvers and counterexample generators: availability is
+    # a pure env probe inside the ML process (e.g. getenv "Z3_SOLVER" in
+    # HOL/Tools/SMT/smt_systems.ML), so dropping them makes smt, sledgehammer
+    # and nitpick report their backends as not installed under the proxy.
+    # The values come from the remote's own settings, so no path rewriting is
+    # needed.
+    env_prefixes = ("ISABELLE_|ML_|POLYML_|Z3_|CVC[0-9]_|E_|SPASS_|VERIT_|"
+                    "VAMPIRE_|ZIPPERPOSITION_|DUMMY_SMTLIB_|KODKODI|MINISAT_|"
+                    "NUNCHAKU_|SMBC_")
     env_dump = ssh_run_stdout(host,
         target_isabelle_home + "/bin/isabelle", "env", "bash", "-c",
-        "echo __HOME__=$HOME; env | grep -E '^(ISABELLE_|ML_|POLYML_)' | sort")
+        "echo __HOME__=$HOME; env | grep -E '^(" + env_prefixes + ")' | sort")
     if not env_dump:
         logger.error("Failed to query remote environment")
         sys.exit(1)
