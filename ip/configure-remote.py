@@ -336,23 +336,31 @@ def remote_sha1(host, path):
 
 
 def detect_remote(host):
-    """Detect remote arch and OS. Returns (arch, os_id)."""
+    """Detect remote arch and OS. Returns (arch, os_id, os_version)."""
     arch = ssh_check(host, "uname", "-m")
     if not arch:
         die("Failed to detect remote architecture")
     os_id = ssh_check(host, "bash", "-c",
                        "'source /etc/os-release 2>/dev/null && echo $ID'") or "unknown"
-    return arch, os_id
+    os_version = ssh_check(host, "bash", "-c",
+                           "'source /etc/os-release 2>/dev/null && echo $VERSION_ID'") or "unknown"
+    return arch, os_id, os_version
 
 
-def pick_setup_script(arch, os_id):
+def pick_setup_script(arch, os_id, os_version):
     """Pick the right setup script for the detected system."""
     if os_id in ("ubuntu", "debian"):
         return os.path.join(SCRIPT_DIR, "setup_ubuntu.sh")
-    elif os_id in ("amzn",):
+    elif os_id == "amzn" and os_version == "2":
         return os.path.join(SCRIPT_DIR, "setup_al2.sh")
+    elif os_id == "amzn" and os_version == "2023":
+        return os.path.join(SCRIPT_DIR, "setup_al2023.sh")
+    elif os_id == "amzn":
+        die(f"Unsupported Amazon Linux version: {os_version} "
+            "(supported: 2, 2023)")
     else:
-        die(f"Unsupported OS: {os_id} (supported: Ubuntu/Debian, Amazon Linux 2)")
+        die(f"Unsupported OS: {os_id} "
+            "(supported: Ubuntu/Debian, Amazon Linux 2/2023)")
 
 
 def resolve_local_home(explicit):
@@ -487,7 +495,7 @@ def cmd_setup(args):
         info("Remote Isabelle removed. Re-run setup to reinstall.")
         return
 
-    arch, os_id = detect_remote(host)
+    arch, os_id, os_version = detect_remote(host)
 
     # Early check: if we know the platform name and it exists locally,
     # fail fast before running expensive remote setup.
@@ -511,7 +519,7 @@ def cmd_setup(args):
             step(f"Remote Isabelle already installed with Pure+HOL heaps — skipping setup")
         else:
             step(f"Remote Isabelle installed but heaps missing — rebuilding Pure+HOL")
-            setup_script = pick_setup_script(arch, os_id)
+            setup_script = pick_setup_script(arch, os_id, os_version)
             setup_args = [setup_script, host, remote_home,
                           "64" if args.use_64 else "32"]
             if args.copy_from_local:
@@ -521,7 +529,7 @@ def cmd_setup(args):
                 step_fail("Remote heap build failed")
     else:
         # Full install
-        setup_script = pick_setup_script(arch, os_id)
+        setup_script = pick_setup_script(arch, os_id, os_version)
         step(f"Setting up Isabelle on remote ({os.path.basename(setup_script)})")
         setup_args = [setup_script, host, remote_home,
                       "64" if args.use_64 else "32"]
@@ -689,9 +697,10 @@ def cmd_run(args):
     if ssh_check(host, "true", timeout=10) is None:
         step_fail(f"Cannot connect to {host}")
 
-    arch, os_id = detect_remote(host)
+    arch, os_id, os_version = detect_remote(host)
 
-    step(f"Checking remote Isabelle installation: {remote_home} ({arch} {os_id})")
+    step(f"Checking remote Isabelle installation: {remote_home} "
+         f"({arch} {os_id} {os_version})")
     if ssh_check(host, "test", "-d", remote_home) is None:
         step_fail(f"Isabelle not found at {remote_home} (run 'setup' first)")
 
