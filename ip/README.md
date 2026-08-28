@@ -90,6 +90,8 @@ I/R appears to be running locally. No user configuration is needed.
 - `setup_ubuntu.sh` — Installs Isabelle on a remote Ubuntu/Debian host (aarch64 or x86_64).
 - `setup_al2.sh` — Installs Isabelle on a remote Amazon Linux 2
    host, building Poly/ML from source (to avoid glibc versioning issue).
+- `setup_al2023.sh` — Installs Isabelle on a remote Amazon Linux 2023
+  host using the packaged Poly/ML binary after a compatibility check.
 
 ## Poly/ML Tuning
 
