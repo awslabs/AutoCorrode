@@ -22,13 +22,19 @@ Filters:
   --theory NAME          Restrict exports to a specific theory
   --grep PATTERN         Filter source/export names by regex
   --top N                Number of entries for timing lists (default: 15)
+  --timing-range SPEC    Sum commands starting in FILE:START-END
+  --annotate-source SPEC Show source commands, timings, and inferred depths
 """
 
 import argparse
+import glob
 import os
 import re
+import shutil
 import sqlite3
 import sys
+
+from isar_source import THY_GOALS, collect_keyword_kinds, infer_commands
 
 # Import shared utilities from ir/heap_info.py
 _ir_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ir")
@@ -313,18 +319,381 @@ def show_documents(conn, session):
         print(f"  {BOLD}{name}{RESET}  {DIM}{', '.join(parts)}{RESET}")
 
 
-def show_timings(conn, session, top_n, theory=None, checker=None, with_system=False):
+def read_command_timings(conn, session):
     blob = conn.execute(
         "SELECT command_timings FROM isabelle_session_info WHERE session_name=?",
         (session,)).fetchone()
     if not blob or not blob[0]:
-        return
+        return []
 
     text = decompress_blob(blob[0])
     if text is None:
-        print(f"\n  {YELLOW}Install 'zstandard' to decode command timings{RESET}")
+        return None
+    return parse_yxml_records(text)
+
+
+def elapsed_value(record):
+    try:
+        return float(record.get("elapsed", "0"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def parse_source_spec(spec, require_range=False):
+    match = re.match(r"^(.*):(\d+)(?:-(\d+))?$", spec)
+    if match:
+        source = match.group(1)
+        start = int(match.group(2))
+        stop = int(match.group(3) or match.group(2))
+        if not source or start < 1 or stop < start:
+            raise ValueError(f"Invalid source range: {spec}")
+        return source, start, stop
+    if require_range:
+        raise ValueError(
+            f"Expected FILE:START-END, got '{spec}'")
+    return spec, None, None
+
+
+def common_path_suffix(left, right):
+    left_parts = left.replace("\\", "/").rstrip("/").split("/")
+    right_parts = right.replace("\\", "/").rstrip("/").split("/")
+    score = 0
+    for a, b in zip(reversed(left_parts), reversed(right_parts)):
+        if a != b:
+            break
+        score += 1
+    return score
+
+
+def select_source(checker, query):
+    """Resolve a user file to one stored source name and verified local file."""
+    source_rows = dict(checker.rows)
+    query_path = os.path.abspath(os.path.expanduser(query))
+    query_is_file = os.path.isfile(query_path)
+
+    if query in source_rows:
+        matched = [query]
+    elif query_is_file:
+        basename = os.path.basename(query_path)
+        scored = []
+        for name in source_rows:
+            if os.path.basename(name) != basename:
+                continue
+            resolved = resolve_path(name, checker._isabelle_bin)
+            if resolved and os.path.abspath(resolved) == query_path:
+                score = 1000000
+            else:
+                score = common_path_suffix(name, query_path)
+            scored.append((score, name))
+        if not scored:
+            matched = []
+        else:
+            best = max(score for score, _ in scored)
+            matched = [name for score, name in scored if score == best]
+    else:
+        normalized = query.replace("\\", "/").lstrip("./")
+        matched = [
+            name for name in source_rows
+            if name == query or name.endswith("/" + normalized)]
+        if not matched:
+            matched = [
+                name for name in source_rows
+                if os.path.basename(name) == os.path.basename(normalized)]
+
+    if not matched:
+        raise ValueError(f"No timed source matches '{query}'")
+    if len(matched) > 1:
+        choices = "\n".join(f"    {name}" for name in sorted(matched))
+        raise ValueError(
+            f"Source '{query}' is ambiguous; use a longer path:\n{choices}")
+
+    stored = matched[0]
+    local_path = query_path if query_is_file else resolve_path(
+        stored, checker._isabelle_bin)
+    if not local_path or not os.path.isfile(local_path):
+        raise ValueError(
+            f"Source '{stored}' cannot be resolved locally; pass its current "
+            "filesystem path and set any referenced Isabelle environment variables")
+
+    expected = source_rows.get(stored)
+    actual = file_sha1(local_path)
+    if expected and actual != expected:
+        raise ValueError(
+            f"Source '{local_path}' does not match the digest stored in the heap")
+    return stored, os.path.abspath(local_path)
+
+
+def aggregate_timing_records(records):
+    timings = {}
+    for record in records:
+        file = record.get("file", "")
+        offset = record.get("offset", "")
+        name = record.get("name", "")
+        try:
+            key = (file, int(offset), name)
+        except (TypeError, ValueError):
+            continue
+        timings[key] = timings.get(key, 0.0) + elapsed_value(record)
+    return timings
+
+
+def show_timing_range(records, checker, spec):
+    query, start, stop = parse_source_spec(spec, require_range=True)
+    stored, local_path = select_source(checker, query)
+    timings = aggregate_timing_records(records)
+    selected = []
+    for (file, offset, name), elapsed in timings.items():
+        if file != stored:
+            continue
+        line = offset_to_line(local_path, offset)
+        if line is not None and start <= line <= stop:
+            selected.append((offset, line, name, elapsed))
+    selected.sort()
+
+    total = sum(item[3] for item in selected)
+    section("Timing Range")
+    print(f"  File:              {stored}")
+    print(f"  Local source:      {DIM}{local_path}{RESET}")
+    print(f"  Lines:             {start}-{stop} (command start positions)")
+    print(f"  Recorded commands: {BOLD}{len(selected)}{RESET}")
+    print(f"  Recorded elapsed:  {BOLD}{fmt_time(str(total))}{RESET}")
+
+    if selected:
+        print(f"\n  {BOLD}Commands:{RESET}\n")
+        for _, line, name, elapsed in selected:
+            print(f"    {line:6d}  {elapsed:8.3f}s  {name}")
+    else:
+        print(f"\n  {DIM}(no recorded command timings in this range){RESET}")
+
+
+def find_isabelle_tool(requested):
+    if os.path.isfile(requested):
+        return os.path.abspath(requested)
+    found = shutil.which(requested)
+    if found:
+        return found
+    applications = sorted(
+        glob.glob("/Applications/Isabelle*.app/bin/isabelle"), reverse=True)
+    return applications[0] if applications else requested
+
+
+def find_session_directory(local_path, session):
+    candidates = []
+    for start in (os.path.dirname(local_path), os.getcwd()):
+        path = os.path.abspath(start)
+        while path not in candidates:
+            candidates.append(path)
+            parent = os.path.dirname(path)
+            if parent == path:
+                break
+            path = parent
+    pattern = re.compile(
+        r"(?m)^\s*session\s+(?:\"" + re.escape(session) +
+        r"\"|" + re.escape(session) + r")\s*=")
+    session_directory = None
+    for directory in candidates:
+        root = os.path.join(directory, "ROOT")
+        try:
+            with open(root, "r", errors="replace") as stream:
+                if pattern.search(stream.read()):
+                    session_directory = directory
+                    break
+        except OSError:
+            pass
+    if session_directory is None:
+        return os.getcwd()
+
+    # A ROOT may refer to parent sessions registered by an enclosing ROOTS.
+    # Pass that registry directory to Isabelle so sibling dependencies are known.
+    directory = session_directory
+    while True:
+        if os.path.isfile(os.path.join(directory, "ROOTS")):
+            return directory
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            return session_directory
+        directory = parent
+
+
+def source_keyword_roots(local_path, session, isabelle):
+    """Source trees whose theory headers define the active command keywords."""
+    roots = []
+    project_base = os.environ.get("ISABELLE_PROJECT_BASE")
+    if project_base:
+        roots.append(project_base)
+    roots.append(find_session_directory(local_path, session))
+    isabelle_home = isabelle_getenv(
+        "ISABELLE_HOME", find_isabelle_tool(isabelle))
+    if isabelle_home:
+        roots.append(os.path.join(isabelle_home, "src"))
+    return roots
+
+
+def analyze_source(local_path, records, stored_file, keyword_kinds):
+    with open(local_path, "r", errors="replace") as stream:
+        source = stream.read()
+    timings = aggregate_timing_records(records)
+    timed_commands = {
+        (offset, name) for (file, offset, name) in timings if file == stored_file
+    }
+    theory, commands = infer_commands(source, keyword_kinds, timed_commands)
+    command_times = [
+        timings.get((stored_file, command["offset"], command["name"]), 0.0)
+        for command in commands]
+    return source, theory, commands, command_times
+
+
+def inclusive_scope_totals(commands, command_times):
+    """Map scope-opening command indexes to inclusive recorded elapsed time."""
+    opened_at = {}
+    stack = []
+    for index, command in enumerate(commands):
+        elapsed = command_times[index]
+        for scope in stack:
+            scope["elapsed"] += elapsed
+
+        pre_depth = command["pre_depth"]
+        post_depth = command["post_depth"]
+        if post_depth > pre_depth:
+            for _ in range(post_depth - pre_depth):
+                scope = {"elapsed": elapsed}
+                stack.append(scope)
+                opened_at.setdefault(index, []).append(scope)
+        elif post_depth < pre_depth:
+            del stack[post_depth:]
+    return opened_at
+
+
+def top_level_proof_totals(commands, command_times):
+    """Inclusive recorded timing for each top-level theory-goal scope."""
+    proofs = []
+    active = None
+    for index, command in enumerate(commands):
+        if (active is None and command["pre_depth"] == 0 and
+                command.get("category") in THY_GOALS):
+            active = {"start": index, "elapsed": 0.0}
+        if active is not None:
+            active["elapsed"] += command_times[index]
+            if command["post_depth"] == 0:
+                proofs.append(active)
+                active = None
+    if active is not None:
+        proofs.append(active)
+    return proofs
+
+
+def command_source_text(source, command):
+    return source[command["source_start"]:command["source_stop"]].rstrip()
+
+
+def proof_timing_rows(records, checker, session, isabelle):
+    """Return proof timing rows and source files that could not be inspected."""
+    records_by_file = {}
+    for record in records:
+        stored = record.get("file", "")
+        if stored:
+            records_by_file.setdefault(stored, []).append(record)
+
+    source_rows = dict(checker.rows)
+    keyword_kinds = None
+    result = []
+    unavailable = set()
+    for stored, file_records in records_by_file.items():
+        digest = source_rows.get(stored)
+        if digest is None:
+            unavailable.add(stored)
+            continue
+        local_path, matches = checker.check(stored, digest)
+        if not local_path or matches is not True:
+            unavailable.add(stored)
+            continue
+        if keyword_kinds is None:
+            keyword_kinds = collect_keyword_kinds(
+                source_keyword_roots(local_path, session, isabelle))
+        try:
+            source, _, commands, command_times = analyze_source(
+                local_path, file_records, stored, keyword_kinds)
+        except OSError:
+            unavailable.add(stored)
+            continue
+        for proof in top_level_proof_totals(commands, command_times):
+            if proof["elapsed"] <= 0.0:
+                continue
+            command = commands[proof["start"]]
+            text = command_source_text(source, command)
+            first_line = (text.splitlines() or [command["name"]])[0].strip()
+            label = first_line[:77] + "..." if len(first_line) > 80 else first_line
+            result.append({
+                "elapsed": proof["elapsed"],
+                "file": stored,
+                "line": offset_to_line(local_path, command["offset"]),
+                "label": label,
+            })
+    result.sort(key=lambda row: -row["elapsed"])
+    return result, unavailable
+
+
+def show_annotated_source(session, records, checker, spec, isabelle):
+    query, start, stop = parse_source_spec(spec)
+    stored, local_path = select_source(checker, query)
+    keyword_kinds = collect_keyword_kinds(
+        source_keyword_roots(local_path, session, isabelle))
+    source, theory, commands, command_times = analyze_source(
+        local_path, records, stored, keyword_kinds)
+
+    section("Time-Annotated Source")
+    print(f"  File:         {stored}")
+    print(f"  Local source: {DIM}{local_path}{RESET}")
+    if not commands:
+        print(
+            f"\n  {YELLOW}No source commands could be identified.{RESET}")
         return
-    records = parse_yxml_records(text)
+    print(f"  Theory:       {theory}")
+    print(f"  Depths:       keyword-inferred (session heap not loaded)")
+    if start is not None:
+        print(f"  Lines:        {start}-{stop}")
+
+    scopes = inclusive_scope_totals(commands, command_times)
+
+    print(
+        f"\n  {BOLD} elapsed   depth   inclusive    line  source{RESET}")
+    print(f"  {'-' * 76}")
+    for index, command in enumerate(commands):
+        line = offset_to_line(local_path, command["offset"])
+        if start is not None and (line is None or not start <= line <= stop):
+            continue
+        command_source = command_source_text(source, command)
+        source_lines = command_source.splitlines() or [command["name"]]
+        elapsed = command_times[index]
+        elapsed_text = f"{elapsed:8.3f}s" if elapsed else "       - "
+        depth_text = (
+            f"{command['pre_depth']:2d}->{command['post_depth']:<2d}")
+        opened = scopes.get(index, [])
+        scope_text = ",".join(
+            f"{scope['elapsed']:.3f}s" if scope["elapsed"] else "-"
+            for scope in opened)
+        scope_text = f"Σ {scope_text}" if scope_text else ""
+        print(
+            f"  {elapsed_text}  {depth_text:7s} {scope_text:12s} "
+            f"{line or 0:6d}  {source_lines[0]}")
+        continuation_indent = " " * 43
+        for continuation in source_lines[1:]:
+            print(f"{continuation_indent}{continuation}")
+
+    print(
+        f"\n  {DIM}'-' means no timing was stored for that command; "
+        f"scope totals sum recorded command timings inclusively. Depths are "
+        f"inferred from command keyword kinds.{RESET}")
+
+
+def show_timings(conn, session, top_n, theory=None, checker=None,
+                 with_system=False, records=None, isabelle="isabelle"):
+    if records is None:
+        records = read_command_timings(conn, session)
+    if records is None:
+        print(f"\n  {YELLOW}Install Python 'zstandard' or the 'zstd' command "
+              f"to decode command timings{RESET}")
+        return
     if not records:
         return
 
@@ -405,6 +774,51 @@ def show_timings(conn, session, top_n, theory=None, checker=None, with_system=Fa
             f = f.replace(prefix, "")
         pct = 100 * t / total_time if total_time else 0
         print(f"    {t:6.1f}s {pct:4.1f}%  {bar(t, max_ft)}  {DIM}{f}{RESET}")
+
+    if checker:
+        proof_rows, unavailable = proof_timing_rows(
+            records, checker, session, isabelle)
+        if proof_rows:
+            scoped_total = sum(row["elapsed"] for row in proof_rows)
+            print(
+                f"\n  {BOLD}Time per proof (top {top_n}, recorded scoped "
+                f"total {fmt_time(str(scoped_total))}):{RESET}\n")
+            max_pt = proof_rows[0]["elapsed"]
+            for row in proof_rows[:top_n]:
+                elapsed = row["elapsed"]
+                pct = 100 * elapsed / scoped_total if scoped_total else 0
+                f_short = row["file"]
+                for prefix in ("$ISABELLE_PROJECT_BASE/", "~~/src/"):
+                    f_short = f_short.replace(prefix, "")
+                location = (
+                    f"{f_short}:{row['line']}"
+                    if row["line"] is not None else f_short)
+                print(
+                    f"    {elapsed:6.1f}s {pct:4.1f}%  "
+                    f"{bar(elapsed, max_pt)}  {DIM}{location}{RESET}  "
+                    f"{row['label']}")
+        if unavailable:
+            elapsed_by_file = {}
+            for record in records:
+                stored = record.get("file", "")
+                if stored in unavailable:
+                    elapsed_by_file[stored] = (
+                        elapsed_by_file.get(stored, 0.0) + float(record["elapsed"]))
+            hidden = sum(elapsed_by_file.values())
+            hidden_pct = 100 * hidden / total_time if total_time else 0
+            print(
+                f"\n  {DIM}(proof aggregation unavailable for "
+                f"{len(unavailable)} source file(s), "
+                f"{fmt_time(str(hidden))} = {hidden_pct:.1f}% of recorded time; "
+                f"pass --check to see why){RESET}")
+            for stored in sorted(
+                    unavailable, key=lambda f: -elapsed_by_file.get(f, 0.0)):
+                short = stored
+                for prefix in ("$ISABELLE_PROJECT_BASE/", "~~/src/"):
+                    short = short.replace(prefix, "")
+                print(
+                    f"    {elapsed_by_file.get(stored, 0.0):6.1f}s  "
+                    f"{DIM}{short}{RESET}")
 
 
 def show_ml_stats(conn, session):
@@ -506,6 +920,15 @@ def main():
     f.add_argument("--check", action="store_true", help="Check source digests against filesystem")
     f.add_argument("--mismatches", action="store_true", help="Only show sources with mismatching digests (implies --check -s)")
     f.add_argument("--with-system-sources", action="store_true", help="Include Pure/HOL/HOL-Library sources (hidden by default)")
+    f.add_argument(
+        "--timing-range", metavar="FILE:START-END",
+        help="Sum recorded timings for commands starting in a source line range")
+    f.add_argument(
+        "--annotate-source", metavar="FILE[:START-END]",
+        help="Show source commands with timings, inferred depths, and inclusive scope totals")
+    f.add_argument(
+        "--isabelle", default=os.environ.get("ISABELLE_TOOL", "isabelle"),
+        help="Isabelle tool used for environment and keyword source lookup")
 
     args = parser.parse_args()
 
@@ -518,7 +941,8 @@ def main():
     any_section = (args.build or args.ancestry or args.sources or args.source_summary
                    or args.exports or args.export_summary or args.theories
                    or args.documents or args.checksums or args.timings
-                   or args.ml_stats or args.all)
+                   or args.ml_stats or args.all or args.timing_range
+                   or args.annotate_source)
     if not any_section:
         args.build = args.ancestry = args.source_summary = True
 
@@ -546,8 +970,10 @@ def main():
 
     # Create source checker if needed
     checker = None
-    if args.check or args.timings:
-        checker = SourceChecker(conn, session)
+    timing_requested = (
+        args.timings or args.timing_range or args.annotate_source)
+    if args.check or timing_requested:
+        checker = SourceChecker(conn, session, isabelle_bin=args.isabelle)
         # Show resolved environment variables
         if _isabelle_env_cache:
             print(f"\n  {BOLD}Environment:{RESET}")
@@ -558,10 +984,12 @@ def main():
                     print(f"    {var} = {RED}(unset){RESET}")
 
     ws = args.with_system_sources
+    timing_records = (
+        read_command_timings(conn, session) if timing_requested else None)
 
     if args.build:      show_build(conn, session)
     if args.ancestry:   show_ancestry(conn, session)
-    if checker:
+    if checker and (args.check or args.mismatches or args.all):
         # Pre-check all sources so mismatches are known
         for name, digest in checker.rows:
             checker.check(name, digest)
@@ -573,7 +1001,26 @@ def main():
                 max_name = max(len(n) for n, _ in mismatched)
                 for name, digest in mismatched:
                     print(f"  {RED}✗{RESET} {RED}{name:{max_name}s}{RESET}  {DIM}{digest}{RESET}")
-    if args.timings:    show_timings(conn, session, args.top, theory=args.theory, checker=checker, with_system=ws)
+    try:
+        if ((args.timing_range or args.annotate_source) and
+                timing_records is None):
+            raise ValueError(
+                "Install Python 'zstandard' or the 'zstd' command to "
+                "decode command timings")
+        if args.timing_range:
+            show_timing_range(timing_records, checker, args.timing_range)
+        if args.annotate_source:
+            show_annotated_source(
+                session, timing_records, checker, args.annotate_source,
+                args.isabelle)
+    except (OSError, ValueError) as ex:
+        conn.close()
+        sys.exit(f"\n{RED}Error: {ex}{RESET}")
+
+    if args.timings:
+        show_timings(
+            conn, session, args.top, theory=args.theory, checker=checker,
+            with_system=ws, records=timing_records, isabelle=args.isabelle)
     if args.ml_stats:   show_ml_stats(conn, session)
     if args.sources:    show_sources_full(conn, session, grep=args.grep, checker=checker,
                                           with_system=ws)
