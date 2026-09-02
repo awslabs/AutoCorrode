@@ -515,6 +515,14 @@ def find_session_directory(local_path, session):
         directory = parent
 
 
+def normalize_isabelle_home(isabelle_home):
+    """Accept legacy configurations that point ISABELLE_HOME at bin."""
+    normalized = os.path.normpath(isabelle_home)
+    if os.path.basename(normalized) == "bin":
+        return os.path.dirname(normalized)
+    return normalized
+
+
 def source_keyword_roots(local_path, session, isabelle):
     """Source trees whose theory headers define the active command keywords."""
     roots = []
@@ -525,6 +533,7 @@ def source_keyword_roots(local_path, session, isabelle):
     isabelle_home = isabelle_getenv(
         "ISABELLE_HOME", find_isabelle_tool(isabelle))
     if isabelle_home:
+        isabelle_home = normalize_isabelle_home(isabelle_home)
         roots.append(os.path.join(isabelle_home, "src"))
     return roots
 
