@@ -943,7 +943,7 @@ struct
 
   fun asepconj_solve_eq_tac ctxt i =
     if i = 1 then
-      simp_tac ((ctxt |> clear_simpset) addsimps @{thms asepconj_AC}) i
+      simp_tac (ctxt |> Simplifier.clear_simpset |> Simplifier.add_simps @{thms asepconj_AC}) i
     else
       all_tac
 
@@ -1087,7 +1087,7 @@ struct
   val ucincl_solve_tac : Proof.context -> int -> tactic = fn ctxt =>
      let val ucincl_intro = intro_tac (Named_Theorems.get ctxt @{named_theorems ucincl_intros}) ctxt
          val ucincl_elim  = elim_tac  (Named_Theorems.get ctxt @{named_theorems ucincl_elims}) ctxt
-         val ctxt' = ctxt addsimps @{thms Let_def}
+         val ctxt' = ctxt |> Simplifier.add_simps @{thms Let_def}
          fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_ucincl) msg
                       #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_ucincl) msg
      in Crush_Tacticals.IF' is_ucincl ( NOTE "ucincl_solve" (

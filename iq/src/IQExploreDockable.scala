@@ -140,7 +140,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   /* output area */
 
-  private val output: Output_Area = new Output_Area(view)
+  private val output: Output_Area = new Output_Area(JEdit_Editor.Context(view))
   private val uiSettings = IQUISettings.current
 
   // Store accumulated messages to preserve them when results are displayed
@@ -795,7 +795,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
               }
           }
         },
-        (snapshot, command_results, output) => {
+        (_, command_results, output) => {
           logDebug(s"I/Q Explore: Output callback called with ${output.size} XML trees")
           logDebug(s"I/Q Explore: Command results is_empty: ${command_results.is_empty}")
 
@@ -810,11 +810,11 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
     if (currentCommandRadio.isSelected) {
       // Use the current command at cursor position. Resolving the caret command
       // is editor-specific, so it lives here (hoisted out of the generic op):
-      // find it via PIDE.editor, then drive apply_query_at_command.
+      // find it via JEdit_Editor, then drive apply_query_at_command.
       appendOutput(s"Using current command at cursor position with ${queryField.getText}")
-      PIDE.editor.current_node_snapshot(view) match {
+      JEdit_Editor.current_node_snapshot(JEdit_Editor.Context(view)) match {
         case Some(snapshot) =>
-          PIDE.editor.current_command(view, snapshot) match {
+          JEdit_Editor.current_command(JEdit_Editor.Context(view), snapshot) match {
             case Some(command) =>
               exploreOperation.foreach(_.apply_query_at_command(command, query))
             case None => appendOutput("Error: No command at the current cursor position")
@@ -887,13 +887,13 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
 
   private def locateContext(): Unit = {
     // Hyperlink to the queried command in the editor. Editor-specific (hoisted
-    // out of the generic op): read the op's resolved location, jump via PIDE.editor.
+    // out of the generic op): read the op's resolved location, jump via JEdit_Editor.
     for {
       op <- exploreOperation
       command <- op.get_location
-      snapshot = PIDE.editor.node_snapshot(command.node_name)
-      link <- PIDE.editor.hyperlink_command(snapshot, command.id, focus = true)
-    } link.follow(view)
+      snapshot = JEdit_Editor.node_snapshot(command.node_name)
+      link <- JEdit_Editor.hyperlink_command(snapshot, command.id, focus = true)
+    } link.follow(JEdit_Editor.Context(view))
   }
 
   // Initialize

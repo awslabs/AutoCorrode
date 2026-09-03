@@ -111,7 +111,7 @@ definition physical_memory_write :: \<open>phys \<Rightarrow> 64 word \<Rightarr
 
 definition physical_memory_write_many :: \<open>phys \<Rightarrow> 64 word \<Rightarrow> byte list \<Rightarrow> phys\<close>
   where \<open>physical_memory_write_many s addr vs \<equiv>
-    List.foldr (\<lambda>(i,b) s. physical_memory_write s (addr + (word64_of_nat i)) b) (List.enumerate 0 vs) s\<close>
+    List.foldr (\<lambda>(i,b) s. physical_memory_write s (addr + (word64_of_nat i)) b) (List.indexed_from 0 vs) s\<close>
 
 context
 begin

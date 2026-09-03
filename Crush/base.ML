@@ -399,8 +399,8 @@ struct
     CHANGED_PROP o REPEAT_ALL_NEW (ematch_tac ctxt thms)
 
   fun reset_ctxt congs thms =
-       clear_simpset
-    #> (fn ctxt => ctxt addsimps thms)
+       Simplifier.clear_simpset
+    #> Simplifier.add_simps thms
     #> fold Raw_Simplifier.add_cong congs
 
   val safe_simp_only_tac' : Proof.context -> thm list -> thm list -> int -> tactic = 

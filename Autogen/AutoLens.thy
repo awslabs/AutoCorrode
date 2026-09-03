@@ -164,11 +164,13 @@ ML\<open>
 
    \<comment> \<open>Extends the current context with an untyped definition \<^verbatim>\<open>definition \<open>name \<equiv> expr\<close>\<close>.\<close>
    fun typeless_def attribs name expr =
-      ( #2 o Specification.definition_cmd (SOME((Binding.qualified_name name), NONE, Mixfix.NoSyn))
-                                   [] [] ((Binding.empty, attribs), name ^ " \<equiv> " ^ expr) false)
+      ( #2 o Specification.definition_cmd {verbose = false}
+                                   (SOME((Binding.qualified_name name), NONE, Mixfix.NoSyn))
+                                   [] [] ((Binding.empty, attribs), name ^ " \<equiv> " ^ expr))
 
    fun declare_attribs attribs thm =
-     #2 o Specification.theorems_cmd "" [((Binding.empty, attribs), [(Facts.named thm, [])])] [] false
+     #2 o Specification.theorems_cmd {verbose = false, kind = ""}
+            [((Binding.empty, attribs), [(Facts.named thm, [])])] []
 \<close>
 
 subsection\<open>Automatic generation of lenses and lemmas\<close>

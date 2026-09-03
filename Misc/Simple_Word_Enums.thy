@@ -384,7 +384,7 @@ fun note_thm name attrs thm lthy =
 fun define_const name rhs lthy =
   let
     val binding = Binding.name name
-    val ((_, (_, def_thm)), lthy) = Specification.definition
+    val ((_, (_, def_thm)), lthy) = Specification.definition {verbose = false}
       (SOME (binding, NONE, NoSyn)) [] []
       ((Binding.name (name ^ "_def"), []), Logic.mk_equals (Free (name, fastype_of rhs), rhs))
       lthy
@@ -396,7 +396,7 @@ fun define_const name rhs lthy =
    [simp only:]-style set: the variants are word numerals, and letting the default simp set
    loose on them is what makes the hand-written version slow for long lists. *)
 fun member_simps ctxt =
-  clear_simpset ctxt addsimps
+  ctxt |> Simplifier.clear_simpset |> Simplifier.add_simps
     @{thms eq_onp_same_args list.map comp_def snd_conv in_set_cons simp_thms}
 
 (* Step 1: define T_variants = [w1, ..., wn] and prove distinct (map unat T_variants). *)
@@ -432,7 +432,7 @@ fun define_typedef type_binding mapped_variants variants_def lthy =
               rule applications so that the cost does not grow with the variant list. *)
            (fn ctxt =>
               Local_Defs.unfold_tac ctxt [variants_def] THEN
-              simp_tac (clear_simpset ctxt addsimps @{thms list.map list.set}) 1 THEN
+              simp_tac (ctxt |> Simplifier.clear_simpset |> Simplifier.add_simps @{thms list.map list.set}) 1 THEN
               resolve_tac ctxt @{thms exI} 1 THEN
               resolve_tac ctxt @{thms insertI1} 1)
     val (_, lthy) =
@@ -492,7 +492,7 @@ fun define_all type_name wordT absT Abs_name Rep_name defs variants_const varian
       (HOLogic.mk_eq (all_const, HOLogic.mk_list absT variant_consts))
     val concrete_thm = Goal.prove lthy [] [] concrete_goal (fn { context = ctxt, ... } =>
       Local_Defs.unfold_tac ctxt [all_def, variants_def] THEN
-      simp_tac (clear_simpset ctxt addsimps
+      simp_tac (ctxt |> Simplifier.clear_simpset |> Simplifier.add_simps
         (@{thms map_simplifier_base comp_def}
          @ map (Thm.symmetric o Simpdata.mk_eq) (Named_Theorems.get ctxt defs))) 1)
     val (concrete_thm, lthy) =
@@ -782,7 +782,7 @@ fun generate_word_conversion (info: Simple_Word_Enum.enum_info) lthy =
     fun define name rhs lthy =
       let
         val binding = Binding.name name
-        val ((_, (_, def_thm)), lthy) = Specification.definition
+        val ((_, (_, def_thm)), lthy) = Specification.definition {verbose = false}
           (SOME (binding, NONE, NoSyn)) [] []
           ((Binding.name (name ^ "_def"), []),
            Logic.mk_equals (Free (name, fastype_of rhs), rhs)) lthy
@@ -821,7 +821,7 @@ fun generate_word_conversion (info: Simple_Word_Enum.enum_info) lthy =
     val (to_alt, lthy) = phase (to_name ^ "_alt") (fn () =>
       let
         val to_alt = Goal.prove lthy ["e"] [] alt_goal (fn { context = ctxt, ... } =>
-          simp_tac (ctxt addsimps [@{thm map_nth_find_index},
+          simp_tac (ctxt |> Simplifier.add_simps [@{thm map_nth_find_index},
                   (* the case rewrite chain, from setup_case_for_typedef *)
                   case_def, match_def, index_def,
                   (* fold T_variants away in favour of T_all, which all_total is about *)
@@ -852,7 +852,7 @@ fun generate_word_conversion (info: Simple_Word_Enum.enum_info) lthy =
         val from_alt = Goal.prove lthy ["w"] [] from_alt_goal (fn { context = ctxt, ... } =>
           let
             val enum_defs = Named_Theorems.get ctxt defs
-            fun only thms = simp_tac (clear_simpset ctxt addsimps thms) 1
+            fun only thms = simp_tac (ctxt |> Simplifier.clear_simpset |> Simplifier.add_simps thms) 1
           in
             only ([from_def] @ enum_defs @ @{thms into_Some_None_snoc_map into_map[of Ok]})
             THEN only ([Thm.symmetric (Simpdata.mk_eq variants_def),
@@ -874,10 +874,10 @@ fun generate_word_conversion (info: Simple_Word_Enum.enum_info) lthy =
     val (_, lthy) = phase (to_name ^ "_then_try_from") (fn () =>
       let
         val round = Goal.prove lthy ["e"] [] round_goal (fn { context = ctxt, ... } =>
-          simp_tac (ctxt addsimps [to_alt, from_alt]) 1
+          simp_tac (ctxt |> Simplifier.add_simps [to_alt, from_alt]) 1
           THEN (Method.insert_tac ctxt
                  [Thm.instantiate' [] [SOME (Thm.cterm_of ctxt e)] all_total] 1)
-          THEN clarsimp_tac (ctxt addsimps
+          THEN clarsimp_tac (ctxt |> Simplifier.add_simps
             (@{thms image_iff}
              @ [all_def, type_definition RS @{thm type_definition.Abs_inverse},
                 type_definition RS @{thm type_definition.Rep}])) 1)
@@ -1193,7 +1193,7 @@ fun generate_generate_debug (info: Simple_Word_Enum.enum_info) lthy =
           thy
           |> Class.instantiation ([tyco], [], \<^sort>\<open>generate_debug\<close>)
           |> (fn ilthy =>
-                Specification.definition NONE [] []
+                Specification.definition {verbose = false} NONE [] []
                   ((Binding.concealed (Binding.name (def_name ^ "_raw_def")), []),
                    Syntax.check_term ilthy raw_eq) ilthy
                 |> apfst (snd o snd))
@@ -1329,7 +1329,7 @@ fun mk_variant_eq_simproc absT type_name (info: Simple_Word_Enum.enum_info) =
                    (fn { context = c, ... } =>
                       resolve_tac c @{thms notI} 1
                       THEN dresolve_tac c [arg_cong_index c] 1
-                      THEN asm_full_simp_tac (clear_simpset c addsimps
+                      THEN asm_full_simp_tac (c |> Simplifier.clear_simpset |> Simplifier.add_simps
                         (idx_thms @ @{thms eq_numeral_simps rel_simps simp_thms})) 1)
                in SOME (neq RS @{thm Eq_FalseI}) end
          | _ => NONE)
@@ -1486,7 +1486,7 @@ fun generate_equal_instance (info: Simple_Word_Enum.enum_info) lthy =
           thy
           |> Class.instantiation ([tyco], [], \<^sort>\<open>equal\<close>)
           |> (fn ilthy =>
-                Specification.definition NONE [] []
+                Specification.definition {verbose = false} NONE [] []
                   ((Binding.concealed (Binding.name (def_name ^ "_raw_def")), []),
                    Syntax.check_term ilthy raw_eq) ilthy
                 |> apfst (snd o snd))
@@ -1496,7 +1496,7 @@ fun generate_equal_instance (info: Simple_Word_Enum.enum_info) lthy =
                      Rep_T_inject, which the typedef provides. *)
                   (fn ctxt => fn def_thm =>
                      Class.intro_classes_tac ctxt []
-                     THEN ALLGOALS (simp_tac (clear_simpset ctxt addsimps
+                     THEN ALLGOALS (simp_tac (ctxt |> Simplifier.clear_simpset |> Simplifier.add_simps
                        [def_thm, type_definition RS @{thm type_definition.Rep_inject}])))
                   def_thm)) lthy
       in

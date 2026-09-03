@@ -667,7 +667,7 @@ final class McpServer(
 
   private def handleToolCall(
       request: McpProtocol.JsonRpcRequest,
-      send: String => Unit = _ => ()
+      send: String => Unit
   ): Either[(Int, String), Map[String, Any]] = {
     try {
       val toolCall = McpProtocol.decodeToolCall(request) match {
