@@ -650,6 +650,87 @@ def core_tests(sock, prefix):
         send_recv(sock, f'Ir.remove {q(t)};')
     tests.append(("rebase_no_pins_is_noop", test_rebase_no_pins_is_noop))
 
+    def test_register_keyword_fails_without_header():
+        """Registering an Isar command for an undeclared keyword fails.
+
+        Isar theory headers normally declare new keywords via
+            theory T imports Main keywords "foo" begin
+        Without that, an ML step using @{command_keyword foo} to register
+        a command via Outer_Syntax.local_theory cannot succeed because
+        Ir.init has no way to extend the keyword table of the new theory.
+        Reproduces the underlying limitation that motivates a forthcoming
+        keywords-aware init."""
+        t = f"{prefix}_kw"
+        # Use a unique, otherwise-unknown identifier per test prefix to
+        # avoid collisions across concurrent runs.
+        kw = f"{prefix}_frobnicate"
+        send_recv(sock, f'Ir.init {q(t)} ["Main"];')
+        # The Isar text is: ML "val _ = Outer_Syntax.local_theory
+        #     @{command_keyword <kw>} \"stub\" (Scan.succeed I);"
+        # Wire bytes for the Ir.step argument:
+        #   "ML \"val _ = ... @{command_keyword <kw>} \\\"stub\\\" ...;\""
+        ml_body = (f'val _ = Outer_Syntax.local_theory '
+                   f'@{{command_keyword {kw}}} '
+                   f'\\\\\\"stub\\\\\\" '
+                   f'(Scan.succeed I);')
+        out = send_recv(sock, f'Ir.step {q(t)} "ML \\"{ml_body}\\"";')
+        # The failure surfaces via the protocol-level "ERR" prefix
+        # (parser-level error from @{command_keyword ...}, before the
+        # SML ERROR exception path).
+        assert "ERR" in out and kw in out and (
+            "Bad outer syntax command" in out or
+            "Undeclared outer syntax command" in out), \
+            f"Expected keyword-undeclared error mentioning {kw}, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("register_keyword_fails_without_header",
+                  test_register_keyword_fails_without_header))
+
+    def test_init_with_header_succeeds_for_keyword():
+        """Inverse of test_register_keyword_fails_without_header: when
+        the keyword is declared via init_with_header's `clauses`, the
+        same Outer_Syntax.local_theory call succeeds."""
+        t = f"{prefix}_kwh"
+        kw = f"{prefix}_frobnicateh"
+        send_recv(
+            sock,
+            f'Ir.init_with_header {q(t)} ["Main"] '
+            f'{{clauses = "keywords \\"{kw}\\" :: thy_decl"}};')
+        ml_body = (f'val _ = Outer_Syntax.local_theory '
+                   f'@{{command_keyword {kw}}} '
+                   f'\\\\\\"stub\\\\\\" '
+                   f'(Scan.succeed I);')
+        out = send_recv(sock, f'Ir.step {q(t)} "ML \\"{ml_body}\\"";')
+        assert "ERR" not in out, \
+            f"Expected step to succeed with keyword declared, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("init_with_header_succeeds_for_keyword",
+                  test_init_with_header_succeeds_for_keyword))
+
+    def test_init_with_header_empty_clauses_is_noop():
+        """Empty clauses behaves identically to plain Ir.init."""
+        t = f"{prefix}_kwe"
+        send_recv(sock, f'Ir.init_with_header {q(t)} ["Main"] {{clauses = ""}};')
+        out = send_recv(sock, f'Ir.step {q(t)} "lemma h: True by simp";')
+        assert "theorem h: True" in out, \
+            f"Expected step to succeed, got:\n{out}"
+        send_recv(sock, f'Ir.remove {q(t)};')
+    tests.append(("init_with_header_empty_clauses_is_noop",
+                  test_init_with_header_empty_clauses_is_noop))
+
+    def test_init_with_header_rejects_segment():
+        """Clauses combined with a segment spec should error."""
+        t = f"{prefix}_kws"
+        out = send_recv(
+            sock,
+            f'Ir.init_with_header {q(t)} ["HOL.HOL:0"] '
+            f'{{clauses = "keywords \\"kw\\" :: thy_decl"}} '
+            f'handle ERROR msg => writeln ("ERR: " ^ msg);')
+        assert "ERR" in out and "segment" in out, \
+            f"Expected segment-rejection error, got:\n{out}"
+
+    tests.append(("init_with_header_rejects_segment",
+                  test_init_with_header_rejects_segment))
+
     # Cleanup: remove the shared REPL
     def cleanup():
         send_recv(sock, f'Ir.remove {q(r)};')
