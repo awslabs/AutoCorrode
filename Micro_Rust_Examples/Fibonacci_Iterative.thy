@@ -1,3 +1,6 @@
+(* Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+   SPDX-License-Identifier: MIT *)
+
 theory Fibonacci_Iterative
   imports Micro_Rust_Std_Lib.StdLib_All
 begin
@@ -6,7 +9,7 @@ locale fibonacci_ctx =
     reference reference_types +
     ref_word64: reference_allocatable reference_types _ _ _ _ _ _ _ word64_prism +
     ref_nat: reference_allocatable reference_types _ _ _ _ _ _ _ nat_prism
-  for 
+  for
   reference_types :: \<open>'s::{sepalg} \<Rightarrow> 'addr \<Rightarrow> 'gv \<Rightarrow> 'abort \<Rightarrow> 'i prompt \<Rightarrow> 'o prompt_output \<Rightarrow> unit\<close>
 
   and word64_prism :: \<open>('gv, 64 word) prism\<close>
@@ -34,7 +37,7 @@ fun fib :: \<open>nat \<Rightarrow> nat\<close> where
     fib1: \<open>fib (Suc 0) = 1\<close> |
     fib2: \<open>fib (Suc (Suc n)) = fib (Suc n) + fib n\<close>
 
-lemma fib_plus_2: 
+lemma fib_plus_2:
   shows \<open>fib (n + 2) = fib (n + 1) + fib n\<close>
   by (metis Suc_eq_plus1 add_2_eq_Suc' fib.simps(3))
 
@@ -72,7 +75,7 @@ proof (crush_boot f: fib_iterative_def contract: fib_correct_contract_def, goal_
     apply crush_base
     subgoal for a_ref b_ref
     apply (ucincl_discharge\<open>
-          rule_tac 
+          rule_tac
             INV=\<open>\<lambda>_ i. \<Squnion> ga gb. a_ref \<mapsto>\<langle>\<top>\<rangle> ga\<down>(fib i) \<star> b_ref \<mapsto>\<langle>\<top>\<rangle> gb\<down>(fib (i + 1))\<close>
             and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
             and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
