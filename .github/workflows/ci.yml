@@ -192,6 +192,7 @@ jobs:
           --local-isabelle $ISABELLE_HOME \
           --remote-isabelle /root/Isabelle-remote \
           --remote-heaps /root/Isabelle-remote-heaps \
+          --remote-ml-platform x86_64_32-linux \
           --ml-platform localhost-test
 
     - name: Generate ISABELLE_REMOTE flags
@@ -200,6 +201,7 @@ jobs:
           --local-isabelle $ISABELLE_HOME \
           --remote-isabelle /root/Isabelle-remote \
           --remote-heaps /root/Isabelle-remote-heaps \
+          --remote-ml-platform x86_64_32-linux \
           --ml-platform localhost-test)
         echo "ISABELLE_REMOTE=$FLAGS" >> $GITHUB_ENV
 
