@@ -31,6 +31,9 @@ Common options (setup, run):
                            Default: /home/<user>/{ISABELLE_VERSION} (user from HOST).
   --remote-heaps PATH      Remote ISABELLE_HEAPS base directory. Defaults to
                            the remote Isabelle installation's setting.
+  --remote-ml-platform NAME
+                           Remote ML platform directory name. Defaults to the
+                           platform reported by the remote installation.
   --local-isabelle PATH    Local Isabelle installation root. Default: if
                            ISABELLE_HOME is set and points to the binary
                            directory of an existing Isabelle installation,
@@ -435,9 +438,9 @@ def remote_heap_base(host, remote_home):
     return heaps.rstrip("/") or "/"
 
 
-def remote_heap_dir(heaps, base_platform):
+def remote_heap_dir(heaps, remote_platform):
     """Platform-specific heap directory below an ISABELLE_HEAPS base."""
-    return f"{heaps.rstrip('/')}/{HEAP_PREFIX}_{base_platform}"
+    return f"{heaps.rstrip('/')}/{HEAP_PREFIX}_{remote_platform}"
 
 
 def sync_remote_heap_dir(host, source, target):
@@ -464,6 +467,15 @@ def absolute_remote_path(path):
         raise argparse.ArgumentTypeError(
             "must contain only shell-safe characters")
     return path.rstrip("/") or "/"
+
+
+def ml_platform_name(name):
+    """Validate an ML platform directory name."""
+    if (not name or name in (".", "..") or name.startswith("-")
+            or "/" in name or shlex.quote(name) != name):
+        raise argparse.ArgumentTypeError(
+            "must be a shell-safe directory name")
+    return name
 
 
 # ---------------------------------------------------------------------------
@@ -584,16 +596,26 @@ def cmd_setup(args):
     # Install AFP components
     install_afp_components(host, remote_home, args.components)
 
-    step("Identifying ML platform")
-    base_platform = query_base_platform(host, remote_home, args.use_64)
+    step("Selecting ML platforms")
+    remote_platform = (
+        args.remote_ml_platform
+        or query_base_platform(host, remote_home, args.use_64))
     platform = args.ml_platform
+    remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{remote_platform}/poly"
+    remote_poly_hash = None
+    if not args.copy_from_local or not platform:
+        remote_poly_hash = remote_sha1(host, remote_poly)
+        if not remote_poly_hash:
+            if args.copy_from_local:
+                step_fail(
+                    f"Remote ML platform {remote_platform} does not exist yet; "
+                    f"use --ml-platform to select the local source platform")
+            step_fail(
+                f"Remote ML platform {remote_platform} not found at "
+                f"{remote_poly}")
     if not platform:
-        remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}/poly"
-        rh = remote_sha1(host, remote_poly)
-        if not rh:
-            step_fail(f"Failed to hash remote poly: {remote_poly}")
-        platform = f"{base_platform}-{rh[:7]}"
-    step_detail(platform)
+        platform = f"{remote_platform}-{remote_poly_hash[:7]}"
+    step_detail(f"local={platform}, remote={remote_platform}")
 
     local_plat_dir = local_platform_dir(local_home, platform)
     local_poly = os.path.join(local_plat_dir, "poly")
@@ -601,7 +623,7 @@ def cmd_setup(args):
     platform_exists_locally = os.path.isfile(local_poly)
     configured_remote_heaps = remote_heap_base(host, remote_home)
     remote_heaps = args.remote_heaps or configured_remote_heaps
-    remote_hdir = remote_heap_dir(remote_heaps, base_platform)
+    remote_hdir = remote_heap_dir(remote_heaps, remote_platform)
 
     # Determine sync direction
     if args.force_write_local and args.copy_from_local:
@@ -609,34 +631,40 @@ def cmd_setup(args):
 
     if args.copy_from_local:
         _setup_copy_from_local(host, remote_home, local_home,
-                               platform, base_platform, local_plat_dir, local_hdir,
+                               platform, remote_platform, local_plat_dir,
+                               local_hdir,
                                remote_hdir,
                                sync_all=args.sync_all_heaps)
     else:
         configured_remote_hdir = remote_heap_dir(
-            configured_remote_heaps, base_platform)
+            configured_remote_heaps, remote_platform)
         sync_remote_heap_dir(host, configured_remote_hdir, remote_hdir)
         if platform_exists_locally and not args.force_write_local:
             step_fail(f"ML platform {platform} already exists locally at {local_plat_dir}\n"
                       f"Use --force-write-local to overwrite, or --copy-from-local to push to remote.")
         _setup_write_local(host, remote_home, local_home,
-                           platform, base_platform, local_plat_dir, local_hdir,
+                           platform, remote_platform, local_plat_dir,
+                           local_hdir,
                            remote_hdir, force=args.force_write_local)
 
     step_done()
     info(f"\n{_SYM_OK} Setup complete.")
     remote_heaps_arg = (
         f" --remote-heaps {remote_heaps}" if args.remote_heaps else "")
-    info(f"\n  Use 'configure-remote.py run {host}{remote_heaps_arg}' "
+    remote_platform_arg = (
+        f" --remote-ml-platform {remote_platform}"
+        if args.remote_ml_platform else "")
+    info(f"\n  Use 'configure-remote.py run {host}{remote_heaps_arg}"
+         f"{remote_platform_arg}' "
          f"to get Isabelle flags for remote building.")
     info(f"  See README.md for details and the isabelle-remote shell shortcut.")
 
 
 def _setup_write_local(host, remote_home, local_home,
-                       platform, base_platform, local_plat_dir, local_hdir,
+                       platform, remote_platform, local_plat_dir, local_hdir,
                        remote_hdir, force):
     """Copy poly binary and heaps from remote to local."""
-    remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}/poly"
+    remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{remote_platform}/poly"
     local_poly = os.path.join(local_plat_dir, "poly")
 
     if force and os.path.exists(local_plat_dir):
@@ -672,7 +700,7 @@ def _setup_write_local(host, remote_home, local_home,
 
 
 def _setup_copy_from_local(host, remote_home, local_home,
-                           platform, base_platform, local_plat_dir, local_hdir,
+                           platform, remote_platform, local_plat_dir, local_hdir,
                            remote_hdir,
                            sync_all=False):
     """Copy poly binary and heaps from local to remote.
@@ -683,10 +711,11 @@ def _setup_copy_from_local(host, remote_home, local_home,
     if not os.path.isfile(local_poly):
         step_fail(f"Local poly not found: {local_poly}")
 
-    remote_poly_dir = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}"
+    remote_poly_dir = f"{remote_home}/{POLYML_CONTRIB}/{remote_platform}"
     remote_poly = f"{remote_poly_dir}/poly"
 
     step("Pushing poly binary to remote")
+    ssh_check(host, "mkdir", "-p", remote_poly_dir)
     rsync(local_poly, f"{host}:{remote_poly}", check=True)
 
     if sync_all:
@@ -741,9 +770,16 @@ def cmd_run(args):
     if ssh_check(host, "test", "-d", remote_home) is None:
         step_fail(f"Isabelle not found at {remote_home} (run 'setup' first)")
 
-    base_platform = query_base_platform(host, remote_home, args.use_64)
+    remote_platform = (
+        args.remote_ml_platform
+        or query_base_platform(host, remote_home, args.use_64))
     remote_heaps = args.remote_heaps or remote_heap_base(host, remote_home)
-    remote_hdir = remote_heap_dir(remote_heaps, base_platform)
+    remote_hdir = remote_heap_dir(remote_heaps, remote_platform)
+    remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{remote_platform}/poly"
+    remote_hash = remote_sha1(host, remote_poly)
+    if not remote_hash:
+        step_fail(
+            f"Remote ML platform {remote_platform} not found at {remote_poly}")
 
     # Determine local platform
     if args.ml_platform:
@@ -752,11 +788,6 @@ def cmd_run(args):
         step_done()
     else:
         step("Identifying ML platform")
-        remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}/poly"
-        remote_hash = remote_sha1(host, remote_poly)
-        if not remote_hash:
-            step_fail(f"Failed to hash remote poly: {remote_poly}")
-
         polyml_dir = os.path.join(local_home, POLYML_CONTRIB)
         platform = None
         if os.path.isdir(polyml_dir):
@@ -772,18 +803,16 @@ def cmd_run(args):
                       f"  configure-remote.py setup {host} --ml-platform {platform} --force-write-local")
 
     # Verify poly and heap hashes match between local and remote
-    remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}/poly"
     local_poly = os.path.join(local_home, POLYML_CONTRIB, platform, "poly")
 
     step("Checking poly hash", indent=1)
     lh = sha1_file(local_poly)
     if not lh:
         step_fail(f"Local poly not found: {local_poly}")
-    rh = remote_sha1(host, remote_poly)
-    if rh and lh != rh:
+    if lh != remote_hash:
         step_fail(f"Poly binary SHA1 MISMATCH for {platform}\n"
                   f"  local:  {lh} ({local_poly[:7]})\n"
-                  f"  remote: {rh} ({remote_poly[:7]})")
+                  f"  remote: {remote_hash} ({remote_poly[:7]})")
 
     lhdir = local_heap_dir(local_home, platform)
     for heap in ("Pure", "HOL"):
@@ -871,7 +900,8 @@ def cmd_run(args):
         threads = str(min(remote_nproc, args.maxthreads))
         step_detail(f"{threads} (remote has {remote_nproc} cores, max {args.maxthreads})")
 
-    step(f"Generating jEdit flags (threads={threads}, platform={platform})")
+    step(f"Generating jEdit flags (threads={threads}, "
+         f"local={platform}, remote={remote_platform})")
     step_done()
 
     poly_overrides = ""
@@ -893,7 +923,7 @@ def cmd_run(args):
         f" -v --log /tmp/ml_proxy.log"
         f" --host {host}"
         f" --target-isabelle-home {remote_home}"
-        f" --target-ml-platform {base_platform}"
+        f" --target-ml-platform {remote_platform}"
         f"{target_heaps}"
         f"{poly_overrides} --'"
     )
@@ -1014,6 +1044,9 @@ def main():
                         help="ISABELLE_HOME on remote (default: /home/<user>/{ISABELLE_VERSION})")
         p.add_argument("--remote-heaps", type=absolute_remote_path,
                        help="Remote ISABELLE_HEAPS base directory "
+                            "(default: query remote Isabelle)")
+        p.add_argument("--remote-ml-platform", type=ml_platform_name,
+                       help="Remote ML platform directory name "
                             "(default: query remote Isabelle)")
         p.add_argument("--local-isabelle",
                         help="Local ISABELLE_HOME (default: auto-detect)")
