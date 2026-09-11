@@ -1466,6 +1466,8 @@ def main():
     proxy_parser.add_argument("--target-ml-platform", default=None,
                               help="ML platform on the target (e.g. arm64-linux). "
                                    "If unset, assumed same as local.")
+    proxy_parser.add_argument("--target-heaps", default=None,
+                              help="Override ISABELLE_HEAPS on the target")
     proxy_parser.add_argument("--host", required=True,
                               help="SSH host (user@host)")
     proxy_parser.add_argument("-v", "--verbose", action="store_true")
@@ -1604,6 +1606,8 @@ def main():
         "ML_PLATFORM": target_platform,
         "POLYML_HOME": target_polyml_home,
     })
+    if args.target_heaps:
+        target_env_vars["ISABELLE_HEAPS"] = args.target_heaps
 
     remote_components_str = target_env_vars.get("ISABELLE_COMPONENTS", "")
 

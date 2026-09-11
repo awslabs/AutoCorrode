@@ -50,6 +50,23 @@ You can override this with the `--components` flag. For example,
 To skip AFP installation entirely, pass `--components` with no arguments.
 Note: `--components` is only available on the `setup` subcommand, not `run`.
 
+## Custom remote heap location
+
+Use `--remote-heaps` to select a non-default `ISABELLE_HEAPS` base directory
+on the remote. I/P appends the platform-specific
+`polyml-5.9.2_<platform>` directory:
+
+```bash
+./configure-remote.py setup ubuntu@host \
+  --remote-heaps /mnt/isabelle-heaps
+isabelle-remote ubuntu@host --remote-heaps /mnt/isabelle-heaps
+```
+
+Pass the same path to `setup` and `run`. Without the option, I/P uses the
+remote Isabelle installation's `ISABELLE_HEAPS` setting.
+For a remote build, `setup` builds in that configured store first and then
+copies the platform heap directory to the requested location.
+
 ## Usage Modes
 
 The `$ISABELLE_REMOTE` flags set Isabelle's `process_policy` option, which wraps
