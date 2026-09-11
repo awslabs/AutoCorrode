@@ -29,6 +29,8 @@ Common options (setup, run):
   HOST                     SSH host in user@host format (positional, required).
   --remote-isabelle PATH   Remote Isabelle installation root.
                            Default: /home/<user>/{ISABELLE_VERSION} (user from HOST).
+  --remote-heaps PATH      Remote ISABELLE_HEAPS base directory. Defaults to
+                           the remote Isabelle installation's setting.
   --local-isabelle PATH    Local Isabelle installation root. Default: if
                            ISABELLE_HOME is set and points to the binary
                            directory of an existing Isabelle installation,
@@ -108,6 +110,7 @@ Shell alias:
 import argparse
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -423,13 +426,44 @@ def local_heap_dir(local_home, platform):
     return os.path.join(heaps, f"{HEAP_PREFIX}_{platform}")
 
 
-def remote_user_heap_dir(host, base_platform):
-    """Remote user heap directory: ~/.isabelle/{ISABELLE_VERSION}/heaps/<prefix>_<platform>."""
-    remote_home = ssh_check(host, "printenv", "HOME") or ""
-    return f"{remote_home}/.isabelle/{ISABELLE_VERSION}/heaps/{HEAP_PREFIX}_{base_platform}"
+def remote_heap_base(host, remote_home):
+    """Remote ISABELLE_HEAPS base directory."""
+    isabelle = f"{remote_home}/bin/isabelle"
+    heaps = ssh_check(host, isabelle, "getenv", "-b", "ISABELLE_HEAPS")
+    if not heaps:
+        die("Failed to query ISABELLE_HEAPS from remote Isabelle")
+    return heaps.rstrip("/") or "/"
 
 
+def remote_heap_dir(heaps, base_platform):
+    """Platform-specific heap directory below an ISABELLE_HEAPS base."""
+    return f"{heaps.rstrip('/')}/{HEAP_PREFIX}_{base_platform}"
 
+
+def sync_remote_heap_dir(host, source, target):
+    """Copy one remote platform heap directory to another."""
+    if source == target:
+        return
+    step(f"Copying heaps to custom remote location: {target}")
+    command = (
+        f"mkdir -p {shlex.quote(target)} && "
+        f"rsync -a -- {shlex.quote(source.rstrip('/') + '/')} "
+        f"{shlex.quote(target.rstrip('/') + '/')}"
+    )
+    rc = run_with_rolling_output(
+        ["ssh"] + _ssh_mux_flags() + [host, command])
+    if rc != 0:
+        step_fail(f"Failed to copy remote heaps from {source} to {target}")
+
+
+def absolute_remote_path(path):
+    """Validate a remote path embedded in generated proxy flags."""
+    if not path.startswith("/"):
+        raise argparse.ArgumentTypeError("must be an absolute remote path")
+    if shlex.quote(path) != path:
+        raise argparse.ArgumentTypeError(
+            "must contain only shell-safe characters")
+    return path.rstrip("/") or "/"
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +599,9 @@ def cmd_setup(args):
     local_poly = os.path.join(local_plat_dir, "poly")
     local_hdir = local_heap_dir(local_home, platform)
     platform_exists_locally = os.path.isfile(local_poly)
+    configured_remote_heaps = remote_heap_base(host, remote_home)
+    remote_heaps = args.remote_heaps or configured_remote_heaps
+    remote_hdir = remote_heap_dir(remote_heaps, base_platform)
 
     # Determine sync direction
     if args.force_write_local and args.copy_from_local:
@@ -573,28 +610,31 @@ def cmd_setup(args):
     if args.copy_from_local:
         _setup_copy_from_local(host, remote_home, local_home,
                                platform, base_platform, local_plat_dir, local_hdir,
+                               remote_hdir,
                                sync_all=args.sync_all_heaps)
-    elif args.force_write_local:
-        _setup_write_local(host, remote_home, local_home,
-                           platform, base_platform, local_plat_dir, local_hdir,
-                           force=True)
     else:
-        if platform_exists_locally:
+        configured_remote_hdir = remote_heap_dir(
+            configured_remote_heaps, base_platform)
+        sync_remote_heap_dir(host, configured_remote_hdir, remote_hdir)
+        if platform_exists_locally and not args.force_write_local:
             step_fail(f"ML platform {platform} already exists locally at {local_plat_dir}\n"
                       f"Use --force-write-local to overwrite, or --copy-from-local to push to remote.")
         _setup_write_local(host, remote_home, local_home,
                            platform, base_platform, local_plat_dir, local_hdir,
-                           force=False)
+                           remote_hdir, force=args.force_write_local)
 
     step_done()
     info(f"\n{_SYM_OK} Setup complete.")
-    info(f"\n  Use 'configure-remote.py run {host}' to get Isabelle flags for remote building.")
+    remote_heaps_arg = (
+        f" --remote-heaps {remote_heaps}" if args.remote_heaps else "")
+    info(f"\n  Use 'configure-remote.py run {host}{remote_heaps_arg}' "
+         f"to get Isabelle flags for remote building.")
     info(f"  See README.md for details and the isabelle-remote shell shortcut.")
 
 
 def _setup_write_local(host, remote_home, local_home,
                        platform, base_platform, local_plat_dir, local_hdir,
-                       force):
+                       remote_hdir, force):
     """Copy poly binary and heaps from remote to local."""
     remote_poly = f"{remote_home}/{POLYML_CONTRIB}/{base_platform}/poly"
     local_poly = os.path.join(local_plat_dir, "poly")
@@ -613,7 +653,6 @@ def _setup_write_local(host, remote_home, local_home,
     os.chmod(local_poly, 0o755)
 
     # Heaps
-    remote_hdir = remote_user_heap_dir(host, base_platform)
     os.makedirs(local_hdir, exist_ok=True)
     for heap in ("Pure", "HOL"):
         remote_path = f"{remote_hdir}/{heap}"
@@ -634,6 +673,7 @@ def _setup_write_local(host, remote_home, local_home,
 
 def _setup_copy_from_local(host, remote_home, local_home,
                            platform, base_platform, local_plat_dir, local_hdir,
+                           remote_hdir,
                            sync_all=False):
     """Copy poly binary and heaps from local to remote.
 
@@ -648,9 +688,6 @@ def _setup_copy_from_local(host, remote_home, local_home,
 
     step("Pushing poly binary to remote")
     rsync(local_poly, f"{host}:{remote_poly}", check=True)
-
-    # All heaps go to user heap dir
-    remote_hdir = remote_user_heap_dir(host, base_platform)
 
     if sync_all:
         heaps = [f for f in os.listdir(local_hdir)
@@ -705,6 +742,8 @@ def cmd_run(args):
         step_fail(f"Isabelle not found at {remote_home} (run 'setup' first)")
 
     base_platform = query_base_platform(host, remote_home, args.use_64)
+    remote_heaps = args.remote_heaps or remote_heap_base(host, remote_home)
+    remote_hdir = remote_heap_dir(remote_heaps, base_platform)
 
     # Determine local platform
     if args.ml_platform:
@@ -747,7 +786,6 @@ def cmd_run(args):
                   f"  remote: {rh} ({remote_poly[:7]})")
 
     lhdir = local_heap_dir(local_home, platform)
-    remote_hdir = remote_user_heap_dir(host, base_platform)
     for heap in ("Pure", "HOL"):
         step(f"Checking {heap} heap", indent=1)
         local_path = os.path.join(lhdir, heap)
@@ -773,7 +811,6 @@ def cmd_run(args):
         # Check which heaps actually differ from remote
         step(f"Checking {len(extra_heaps)} additional heaps against remote")
         step_done()
-        remote_hdir = remote_user_heap_dir(host, base_platform)
         stale = []
         for heap in extra_heaps:
             step(heap, indent=1)
@@ -808,7 +845,6 @@ def cmd_run(args):
     if sync:
         step("Syncing heaps to remote")
         step_done()
-        remote_hdir = remote_user_heap_dir(host, base_platform)
         heaps = [f for f in os.listdir(lhdir)
                  if os.path.isfile(os.path.join(lhdir, f))
                  and not f.startswith(".")]
@@ -846,6 +882,8 @@ def cmd_run(args):
                      ("--gcpercent", args.gcpercent)]:
         if val is not None:
             poly_overrides += f" {opt} {val}"
+    target_heaps = (
+        f" --target-heaps {remote_heaps}" if args.remote_heaps else "")
 
     flags = (
         f"-o ML_platform={platform}"
@@ -856,6 +894,7 @@ def cmd_run(args):
         f" --host {host}"
         f" --target-isabelle-home {remote_home}"
         f" --target-ml-platform {base_platform}"
+        f"{target_heaps}"
         f"{poly_overrides} --'"
     )
 
@@ -973,6 +1012,9 @@ def main():
         p.add_argument("host", help="SSH host (user@host)")
         p.add_argument("--remote-isabelle",
                         help="ISABELLE_HOME on remote (default: /home/<user>/{ISABELLE_VERSION})")
+        p.add_argument("--remote-heaps", type=absolute_remote_path,
+                       help="Remote ISABELLE_HEAPS base directory "
+                            "(default: query remote Isabelle)")
         p.add_argument("--local-isabelle",
                         help="Local ISABELLE_HOME (default: auto-detect)")
         bits = p.add_mutually_exclusive_group()
