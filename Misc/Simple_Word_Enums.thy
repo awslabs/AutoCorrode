@@ -159,6 +159,15 @@ lemma simple_word_enum_distinct_iff_distinct_adj_mergesort_int:
   using simple_word_enum_distinct_iff_distinct_adj_mergesort[of \<open>map int xs\<close>]
   by (simp add: distinct_map inj_on_def inj_def inj_of_nat)
 
+text\<open>Each lifted variant needs the corresponding backing word to occur in the image of the
+complete variant list. Proving all such facts from the list equation at once keeps the shared
+list opaque, instead of expanding and searching it separately for every variant.\<close>
+
+lemma simple_word_enum_map_members:
+  assumes \<open>xs = ys\<close>
+  shows \<open>list_all (\<lambda>y. f y \<in> set (map f xs)) ys\<close>
+  using assms by (simp add: list_all_iff)
+
 text\<open>The two facts the generated \<^verbatim>\<open>T_all_distinct\<close> and \<^verbatim>\<open>T_all_total\<close> proofs rest on, stated
 once here so that the per-enum proofs are a single \<^verbatim>\<open>rule\<close> application rather than a search.
 Both are phrased over an abstract \<^term>\<open>type_definition Rep Abs (set (list.map unat ws))\<close>, which
@@ -485,13 +494,6 @@ fun define_const name rhs lthy =
     val phi = Local_Theory.target_morphism lthy
   in ((const, Morphism.thm phi def_thm), lthy) end
 
-(* Simp set for the small membership goals discharged along the way. Deliberately a
-   [simp only:]-style set: the variants are word numerals, and letting the default simp set
-   loose on them is what makes the hand-written version slow for long lists. *)
-fun member_simps ctxt =
-  clear_simpset ctxt addsimps
-    @{thms eq_onp_same_args list.map comp_def snd_conv in_set_cons simp_thms}
-
 (* Apply HOL's built-in `eval` method to a closed generated goal. *)
 fun closed_eval_tac ctxt =
   Context_Tactic.NO_CONTEXT_TACTIC ctxt
@@ -554,14 +556,37 @@ fun define_typedef type_binding mapped_variants variants_def lthy =
 (* Step 3: one lift_definition per variant, tagging rep_eq/abs_eq into the two bundles. *)
 fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_specs lthy =
   let
-    fun define (binding, word) lthy =
+    val (variants_const, words_term) = Thm.prop_of variants_def |> Logic.dest_equals
+    val words = map snd variant_specs
+    val wordT = fastype_of (hd words)
+    val unat = Const (\<^const_name>\<open>unsigned\<close>, wordT --> HOLogic.natT)
+    val all_members =
+      @{thm simple_word_enum_map_members}
+      |> Drule.infer_instantiate lthy
+          [(("xs", 0), Thm.cterm_of lthy variants_const),
+           (("ys", 0), Thm.cterm_of lthy words_term),
+           (("f", 0), Thm.cterm_of lthy unat)]
+      |> (fn thm => thm OF [variants_def RS @{thm meta_eq_to_obj_eq}])
+    val member_thms =
+      Simplifier.simplify
+        (clear_simpset lthy addsimps
+          @{thms list_all_Cons_iff list_all_Nil_iff atomize_conj[symmetric]})
+        all_members
+      |> Conjunction.elim_conjunctions
+      |> filter_out (fn thm => Thm.prop_of thm aconv \<^prop>\<open>True\<close>)
+    val _ =
+      if length member_thms = length variant_specs then ()
+      else error "internal error: wrong number of simple-word-enum membership facts"
+
+    fun define ((binding, word), member_thm) lthy =
       let
         val rhs = Const (\<^const_name>\<open>unsigned\<close>, fastype_of word --> HOLogic.natT) $ word
         val (ld, lthy) = Lifting_Def.lift_def
           { notes = true } (binding, NoSyn) absT rhs
           (fn ctxt =>
-             Local_Defs.unfold_tac ctxt [variants_def] THEN
-             simp_tac (member_simps ctxt) 1) [] lthy
+             simp_tac
+               (clear_simpset ctxt addsimps [@{thm eq_onp_same_args}, member_thm]) 1)
+          [] lthy
         fun add_to bundle thm =
           Local_Theory.note ((Binding.empty,
             [Attrib.internal \<^here> (K (Named_Theorems.add bundle))]), [thm]) #> snd
@@ -578,7 +603,7 @@ fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_s
         val lthy = Local_Theory.const_alias
           (Binding.qualify false type_name binding) (dest_Const_name c) lthy
       in (c, lthy) end
-    val (consts, lthy) = fold_map define variant_specs lthy
+    val (consts, lthy) = fold_map define (variant_specs ~~ member_thms) lthy
     (* The constants come back as they were at definition time; re-resolve against the
        target so that later steps see proper Consts rather than Frees. *)
     val consts = map (fn c => Const (dest_Const_name c, absT)) consts
