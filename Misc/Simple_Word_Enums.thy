@@ -6,6 +6,7 @@ theory Simple_Word_Enums
     Misc.ListAdditional
     Misc.Result
     Misc.Debug_Logging
+    "HOL-Library.Sorting_Algorithms"
   keywords "simple_word_enum" :: thy_decl
     and "simple_word_enum_benchmark" :: thy_decl
 begin
@@ -24,9 +25,10 @@ For a declaration
     Answer = \<open>0x42\<close>
   | Best   = \<open>0x72\<close>\<close>
 
-where \<^verbatim>\<open>(32)\<close> is the width of the representing word type. Each value is an ordinary term, so it
-may be any expression of that type; note that hexadecimal literals must be given in a cartouche,
-as the outer syntax lexes \<^verbatim>\<open>0x42\<close> as two tokens. Plain decimal numerals need no cartouche.
+where \<^verbatim>\<open>(32)\<close> is the width of the representing word type. Each value must be a numeral
+of that type; expressions and named constants are rejected. Hexadecimal numerals must be given
+in a cartouche, as the outer syntax lexes \<^verbatim>\<open>0x42\<close> as two tokens. Plain decimal numerals
+need no cartouche.
 
 An optional \<^verbatim>\<open>urust: "Name"\<close> clause may follow the type name:
 
@@ -65,6 +67,97 @@ without invoking the full simplifier on the numerals themselves. This keeps the 
 lemmas map_simplifier_base = list.map simp_thms if_True if_False
     eq_numeral_simps one_neq_zero old.nat.distinct eq_numeral_Suc pred_numeral_simps num.distinct
     num.inject
+
+text\<open>Backing-word distinctness is checked by HOL's merge sort followed by a linear scan
+for equal neighbours. The following facts connect that executable check to
+\<^const>\<open>distinct\<close>.\<close>
+
+lemma simple_word_enum_distinct_adj_iff_distinct_if_sorted:
+  assumes \<open>List.sorted xs\<close>
+  shows \<open>distinct_adj xs \<longleftrightarrow> distinct xs\<close>
+proof -
+  have \<open>distinct_adj xs \<longleftrightarrow> sorted_wrt (<) xs\<close>
+    using assms
+    by (auto simp: distinct_adj_conv_nth sorted_wrt_iff_nth_Suc_transp
+        sorted_iff_nth_Suc iff: antisym_conv1)
+  also have \<open>\<dots> \<longleftrightarrow> List.sorted xs \<and> distinct xs\<close>
+    by (rule strict_sorted_iff)
+  also have \<open>\<dots> \<longleftrightarrow> distinct xs\<close>
+    using assms by simp
+  finally show ?thesis .
+qed
+
+lemma simple_word_enum_comparator_sorted_default_iff:
+  \<open>Sorting_Algorithms.sorted (default :: 'a::linorder comparator) xs \<longleftrightarrow>
+    List.sorted xs\<close>
+proof (induction xs)
+  case Nil
+  then show ?case by simp
+next
+  case (Cons x xs)
+  show ?case
+  proof
+    assume sorted: \<open>Sorting_Algorithms.sorted default (x # xs)\<close>
+    then have \<open>Sorting_Algorithms.sorted default xs\<close>
+      by (rule Sorting_Algorithms.sorted_Cons_imp_sorted)
+    with Cons.IH have \<open>List.sorted xs\<close>
+      by simp
+    moreover have \<open>y \<in> set xs \<Longrightarrow> x \<le> y\<close> for y
+      using Sorting_Algorithms.sorted_Cons_imp_not_less[OF sorted]
+      by (simp add: not_less)
+    ultimately show \<open>List.sorted (x # xs)\<close>
+      by simp
+  next
+    assume sorted: \<open>List.sorted (x # xs)\<close>
+    then have \<open>List.sorted xs\<close>
+      by simp
+    with Cons.IH have \<open>Sorting_Algorithms.sorted default xs\<close>
+      by simp
+    then show \<open>Sorting_Algorithms.sorted default (x # xs)\<close>
+    proof (rule Sorting_Algorithms.sorted_ConsI)
+      fix y ys
+      assume \<open>xs = y # ys\<close>
+      with sorted show \<open>compare default x y \<noteq> Greater\<close>
+        by (simp add: not_less)
+    qed
+  qed
+qed
+
+lemma simple_word_enum_mergesort_sorted:
+  \<open>List.sorted
+    (Sorting_Algorithms.mergesort
+      (default :: 'a::linorder comparator) xs)\<close>
+  apply (rule simple_word_enum_comparator_sorted_default_iff[THEN iffD1])
+  by simp
+
+lemma simple_word_enum_distinct_iff_distinct_adj_mergesort:
+  \<open>distinct xs \<longleftrightarrow>
+    distinct_adj
+      (Sorting_Algorithms.mergesort
+        (default :: 'a::linorder comparator) xs)\<close>
+proof -
+  have sorted:
+    \<open>List.sorted
+      (Sorting_Algorithms.mergesort
+        (default :: 'a comparator) xs)\<close>
+    by (rule simple_word_enum_mergesort_sorted)
+  have mset:
+    \<open>mset
+      (Sorting_Algorithms.mergesort
+        (default :: 'a comparator) xs) = mset xs\<close>
+    by simp
+  show ?thesis
+    using simple_word_enum_distinct_adj_iff_distinct_if_sorted[OF sorted]
+      mset_eq_imp_distinct_iff[OF mset]
+    by blast
+qed
+
+lemma simple_word_enum_distinct_iff_distinct_adj_mergesort_int:
+  \<open>distinct (xs :: nat list) \<longleftrightarrow>
+    distinct_adj
+      (Sorting_Algorithms.mergesort comparator_linordered_group (map int xs))\<close>
+  using simple_word_enum_distinct_iff_distinct_adj_mergesort[of \<open>map int xs\<close>]
+  by (simp add: distinct_map inj_on_def inj_def inj_of_nat)
 
 text\<open>The two facts the generated \<^verbatim>\<open>T_all_distinct\<close> and \<^verbatim>\<open>T_all_total\<close> proofs rest on, stated
 once here so that the per-enum proofs are a single \<^verbatim>\<open>rule\<close> application rather than a search.
@@ -399,6 +492,12 @@ fun member_simps ctxt =
   clear_simpset ctxt addsimps
     @{thms eq_onp_same_args list.map comp_def snd_conv in_set_cons simp_thms}
 
+(* Apply HOL's built-in `eval` method to a closed generated goal. *)
+fun closed_eval_tac ctxt =
+  Context_Tactic.NO_CONTEXT_TACTIC ctxt
+    (Method.method_cmd ctxt
+      (Token.make_src (\<^method>\<open>eval\<close>, Position.none) []) ctxt [])
+
 (* Step 1: define T_variants = [w1, ..., wn] and prove distinct (map unat T_variants). *)
 fun define_variants type_name wordT words lthy =
   let
@@ -407,17 +506,29 @@ fun define_variants type_name wordT words lthy =
 
     (* distinct (list.map unat T_variants).
 
-       This is the most expensive generated proof --- the goal is quadratic in the number of
-       variants --- and it does use the default simp set, deliberately: reducing \<^verbatim>\<open>unat\<close> of a
-       numeral needs the word simp rules, and a hand-picked [simp only:] set that discharges
-       it could not be found. \<^verbatim>\<open>code_simp\<close> is dramatically worse (it does not terminate on a
-       few dozen variants). Measured on 120 variants: ~2s. *)
+       Normalize the backing words, cast the naturals injectively to integers, then
+       evaluate HOL's merge sort followed by distinct_adj. The integer representation keeps
+       code evaluation efficient for large word values. *)
     val unatT = wordT --> HOLogic.natT
     val unat = Const (\<^const_name>\<open>unsigned\<close>, unatT)
     val mapped = \<^Const>\<open>map wordT HOLogic.natT\<close> $ unat $ const
     val goal = HOLogic.mk_Trueprop (\<^Const>\<open>distinct HOLogic.natT\<close> $ mapped)
-    val distinct_thm = Goal.prove lthy [] [] goal (fn { context = ctxt, ... } =>
-      Local_Defs.unfold_tac ctxt [def_thm] THEN simp_tac ctxt 1)
+    val distinct_thm = Goal.prove lthy [] [] goal (fn {context = ctxt, ...} =>
+      let
+        (* Keep mergesort and its efficient integer comparator opaque to simp.
+           Their code equations are used by eval after the surrounding word
+           and list expressions have been normalized. *)
+        val eval_ctxt =
+          ctxt delsimps
+            [@{thm Sorting_Algorithms.mergesort_is_sort},
+             @{thm comparator_linordered_group_def}]
+      in
+        Local_Defs.unfold_tac ctxt [def_thm] THEN
+        resolve_tac ctxt
+          [@{thm simple_word_enum_distinct_iff_distinct_adj_mergesort_int[THEN iffD2]}] 1 THEN
+        simp_tac eval_ctxt 1 THEN
+        closed_eval_tac eval_ctxt
+      end)
     val (distinct_thm, lthy) =
       note_thm (variants_distinct_name type_name) [] distinct_thm lthy
   in ((const, def_thm, distinct_thm, mapped), lthy) end
@@ -547,10 +658,18 @@ fun simple_word_enum_core { timer, report }
         (* The word type is built through the type-numeral syntax: there is no ML-level
            constructor for turning a width into the bit0/bit1/num1 tree. *)
         val wordT = Syntax.read_typ lthy (string_of_int width ^ " word")
-        val words = variant_specs |> map (fn (_, raw) =>
-          Syntax.parse_term lthy raw
-          |> Type.constraint wordT
-          |> Syntax.check_term lthy)
+        fun read_word (binding, raw) =
+          let
+            val word =
+              Syntax.parse_term lthy raw
+              |> Type.constraint wordT
+              |> Syntax.check_term lthy
+          in
+            if can HOLogic.dest_number word then word
+            else error ("simple_word_enum " ^ type_name ^ ": backing word for variant " ^
+              quote (Binding.name_of binding) ^ " must be a numeral, got " ^ quote raw)
+          end
+        val words = map read_word variant_specs
         val bindings = map fst variant_specs
         (* Syntactically equal values are rejected up front: the generated distinctness proof
            would fail on them, but with a goal that says nothing about the cause. Values that
@@ -1012,14 +1131,22 @@ The plugin filter is accepted in the same position as for \<^verbatim>\<open>sim
 \<^verbatim>\<open>simple_word_enum_benchmark (plugins del: word_conversion) (32) sizes: 10 100\<close> measures the
 command on its own.
 
-Output is a per-size phase breakdown followed by a table of totals with the per-variant cost,
-which is what shows whether a phase is linear or worse. Benchmarking is a measurement, so it
-forces timing on regardless of \<^verbatim>\<open>simple_word_enum_timing\<close>.\<close>
+Output is a per-size phase breakdown followed by a table of totals, per-variant cost,
+\<^verbatim>\<open>variants\<close>, \<^verbatim>\<open>variant_consts\<close>, and \<^verbatim>\<open>case_setup\<close>, together with the slowest phase.
+This shows which parts are linear or worse. Benchmarking is a measurement, so it forces timing
+on regardless of \<^verbatim>\<open>simple_word_enum_timing\<close>.\<close>
 
 ML \<open>
 local
 
 fun time_to_ms t = Time.toMilliseconds (#elapsed t)
+
+fun format_elapsed t =
+  let val ms = time_to_ms t
+  in
+    if ms < 1000 then string_of_int ms ^ "ms"
+    else Real.fmt (StringCvt.FIX (SOME 3)) (Real.fromInt ms / 1000.0) ^ "s"
+  end
 
 (* Right-align in a fixed column, so the table lines up. *)
 fun pad w s = if size s >= w then s else replicate_string (w - size s) " " ^ s
@@ -1071,20 +1198,33 @@ fun benchmark_cmd ((raw_filter, width), sizes) lthy =
       Simple_Word_Enum.format_timer_report
         (string_of_int n ^ " variants (" ^ Timing.message (Simple_Word_Enum.timer_total timer)
          ^ " total):") timer) results
-    val header = pad 8 "variants" ^ pad 12 "total (ms)" ^ pad 14 "per variant" ^
+    val header = pad 8 "variants" ^ pad 12 "total" ^ pad 14 "per variant" ^
+      pad 12 "variants" ^ pad 17 "variant_consts" ^ pad 14 "case_setup" ^
       "   slowest phase"
+    fun top_phase name timer =
+      (case get_first (fn (d, phase_name, t) =>
+          if d = 0 andalso phase_name = name then SOME t else NONE)
+          (Simple_Word_Enum.timer_entries timer) of
+        SOME t => format_elapsed t
+      | NONE => "-")
     fun row (n, timer) =
       let
-        val total = time_to_ms (Simple_Word_Enum.timer_total timer)
+        val total_timing = Simple_Word_Enum.timer_total timer
+        val total = time_to_ms total_timing
         val per = Real.fmt (StringCvt.FIX (SOME 2))
-          (Real.fromInt total / Real.fromInt n)
+          (Real.fromInt total / Real.fromInt n) ^ "ms"
         val slowest = Simple_Word_Enum.timer_entries timer
           |> filter (fn (d, _, _) => d = 0)
           |> sort (fn ((_, _, a), (_, _, b)) => Time.compare (#elapsed b, #elapsed a))
           |> (fn [] => "-" | (_, name, t) :: _ => name ^ " (" ^
-                string_of_int (time_to_ms t) ^ "ms)")
-      in pad 8 (string_of_int n) ^ pad 12 (string_of_int total) ^ pad 14 per ^
-         "   " ^ slowest end
+                format_elapsed t ^ ")")
+      in
+        pad 8 (string_of_int n) ^ pad 12 (format_elapsed total_timing) ^ pad 14 per ^
+        pad 12 (top_phase "variants" timer) ^
+        pad 17 (top_phase "variant_consts" timer) ^
+        pad 14 (top_phase "case_setup" timer) ^
+        "   " ^ slowest
+      end
     val _ = writeln (cat_lines
       ("simple_word_enum_benchmark (" ^ string_of_int width ^ " word), sizes " ^
          commas (map string_of_int sizes) ^ ":"
@@ -1112,15 +1252,12 @@ text\<open>To track how the cost grows with the variant count, \<^verbatim>\<ope
 one throwaway enum per size, times it, and discards it. Kept small here so the theory stays
 quick to check --- raise the sizes when actually investigating a regression.
 
-The interesting column is the per-variant cost: it should stay roughly flat. It was \<^emph>\<open>not\<close> flat
-when this was written --- 31.5ms/variant at 20 rising to 85ms at 120 --- which is how the
-quadratic behaviour in the original \<^verbatim>\<open>to_uN_pure_alt\<close> tactic was found; that proof is now
-uniform rather than by cases, and costs ~9ms at 64 variants. What dominates instead is
-\<^verbatim>\<open>variants\<close> (the \<^verbatim>\<open>distinct\<close> proof, whose goal is quadratic in the variant count) together with
-\<^verbatim>\<open>variant_consts\<close> (one \<^verbatim>\<open>lift_definition\<close> per variant). Around 25ms/variant through 64, rising
-past that: 33ms at 128 and 49ms at 256.\<close>
+The \<^verbatim>\<open>variants\<close> phase evaluates merge sort followed by an adjacent-duplicate scan,
+so its executable check takes \<^verbatim>\<open>O(n log n)\<close> time. At larger sizes the complete command is
+also affected by \<^verbatim>\<open>variant_consts\<close> (one \<^verbatim>\<open>lift_definition\<close> per variant) and
+\<^verbatim>\<open>case_setup\<close>.\<close>
 
-simple_word_enum_benchmark (32) sizes: 4 16 32 64 (* 128 should take about 2s*)
+simple_word_enum_benchmark (32) sizes: 4 16 32 64
 
 subsection\<open>The \<^verbatim>\<open>generate_debug\<close> plugin\<close>
 
