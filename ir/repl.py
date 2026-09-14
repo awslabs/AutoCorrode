@@ -32,7 +32,32 @@ Usage:
 import sys
 
 
+def _force_utf8_stdio():
+    """Make stdout/stderr UTF-8 on Windows, whatever the console codepage is.
+
+    Native Windows Python encodes stdout with the locale codepage (e.g.
+    cp1252), which cannot encode the "●" in our status lines -- that raises
+    UnicodeEncodeError and kills the process mid-startup.  PYTHONUTF8=1 avoids
+    it, but the I/Q jEdit plugin spawns `python3 repl.py` with no flags and its
+    own environment, so we cannot depend on that being set.
+
+    Deliberately inlined rather than imported from win_compat: this runs on the
+    `cli` path too, and importing win_compat (subprocess, shutil) costs ~19ms
+    on a ~16ms interpreter start -- see the module docstring on keeping `cli`
+    near the startup floor.  Mirrors win_compat.force_utf8_stdio().
+    """
+    if sys.platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
 def main():
+    _force_utf8_stdio()
+
     if len(sys.argv) >= 2 and sys.argv[1] == "cli":
         import repl_cli
         repl_cli.main(sys.argv[2:])   # always exits

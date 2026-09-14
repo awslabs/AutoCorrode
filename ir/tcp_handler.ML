@@ -89,17 +89,58 @@ fun constant_time_equal a b =
             Word8.fromInt (Char.ord (String.sub (b, i))))))
     in go 0 (Word8.fromInt 0) = Word8.fromInt 0 end;
 
-(* Generate a random hex token from /dev/urandom. *)
+(* Generate a random hex token.  Sources, in order of preference:
+
+     1. IR_REPL_AUTH_TOKEN from the environment.  repl_srv.py sets this to a
+        secrets.token_hex() value when it spawns us on Windows, where the OS
+        CSPRNG is reachable from Python but not from native Poly/ML.  (This is
+        the same variable a user sets to hand a token to --expect-ml mode, so
+        the two directions stay symmetric.)
+     2. /dev/urandom -- the CSPRNG on POSIX.  Native Poly/ML on Windows cannot
+        open Cygwin's virtual /dev/urandom, so this fails there.
+     3. A time/serial-derived token, as a last resort.
+
+   (3) is *predictable*: Time.now () barely moves between adjacent calls and
+   serial () is a plain counter, so consecutive tokens share nearly all of
+   their digits.  It does not meet the README threat model's "keep other local
+   OS users out" bar, and exists only so that start () still yields a token
+   instead of raising.  We warn loudly whenever it is reached. *)
 fun generate_token () =
   let
-    val stream = BinIO.openIn "/dev/urandom"
-    val bytes = BinIO.inputN (stream, 24)
-    val _ = BinIO.closeIn stream
     fun byte_hex b =
       let val s = Word8.fmt StringCvt.HEX b
       in if String.size s < 2 then "0" ^ s else s end
-  in String.translate (str o Char.toLower)
-       (String.concat (Word8Vector.foldr (fn (b, acc) => byte_hex b :: acc) [] bytes))
+    fun hex_of_bytes bytes =
+      String.translate (str o Char.toLower)
+        (String.concat (Word8Vector.foldr (fn (b, acc) => byte_hex b :: acc) [] bytes))
+    fun from_env () =
+      let val t = getenv "IR_REPL_AUTH_TOKEN"
+      in if size t >= 16 then SOME t else NONE end
+    fun from_urandom () =
+      let
+        val stream = BinIO.openIn "/dev/urandom"
+        val bytes = BinIO.inputN (stream, 24)
+        val _ = BinIO.closeIn stream
+      in SOME (hex_of_bytes bytes) end
+      (* Not "handle _": that would also swallow Interrupt. *)
+      handle IO.Io _ => NONE | OS.SysErr _ => NONE
+    fun fallback () =
+      let
+        fun chunk () =
+          LargeInt.fmt StringCvt.HEX (Time.toNanoseconds (Time.now ()))
+          ^ LargeInt.fmt StringCvt.HEX (LargeInt.fromInt (serial ()))
+        val raw = String.concat [chunk (), chunk (), chunk (), chunk ()]
+        val lower = String.translate (str o Char.toLower) raw
+        val _ = warning ("Tcp_Handler: no CSPRNG available; falling back to a " ^
+          "PREDICTABLE time-derived token.  Set IR_REPL_AUTH_TOKEN to a strong " ^
+          "random value to secure this listener.")
+      in
+        if String.size lower >= 48 then String.substring (lower, 0, 48) else lower
+      end
+  in
+    case from_env () of
+      SOME t => t
+    | NONE => (case from_urandom () of SOME t => t | NONE => fallback ())
   end;
 
 (* Wrap an accepted socket into BinIO streams, following Socket_IO.make_streams. *)
@@ -214,7 +255,18 @@ fun start port =
          In both cases, actual_port is read back via getSockName. *)
       val SOME me = NetHostDB.getByName "127.0.0.1"
       val ssock : Socket.passive INetSock.stream_sock = INetSock.TCP.socket ()
-      val _ = Socket.Ctl.setREUSEADDR (ssock, true)
+      (* SO_REUSEADDR means different things on the two platforms.  On POSIX it
+         only permits rebinding a port left in TIME_WAIT, which is what we want.
+         On Windows it ALSO permits binding a port another process is actively
+         listening on: bind then silently "succeeds", we announce a port we do
+         not own, and every client is delivered to the other process instead --
+         producing a hang with no diagnostic (this bites when a jEdit/I/Q
+         session already holds the default port 9146).  Windows lets us rebind
+         TIME_WAIT ports without the option, so we skip it there and let bind
+         fail loudly with EADDRINUSE instead. *)
+      val _ =
+        if getenv "ISABELLE_PLATFORM_FAMILY" = "windows" then ()
+        else Socket.Ctl.setREUSEADDR (ssock, true)
       val _ =
         if port = 0 then
           (Socket.bind (ssock, INetSock.toAddr (NetHostDB.addr me, default_port))

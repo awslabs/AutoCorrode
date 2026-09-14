@@ -11,6 +11,8 @@ import re
 import sqlite3
 import subprocess
 
+from win_compat import isabelle_argv, from_cygwin_path
+
 try:
     import zstandard
     HAS_ZSTD = True
@@ -39,12 +41,12 @@ def isabelle_getenv(var, isabelle_bin=None):
         if not val:
             try:
                 r = subprocess.run(
-                    [isabelle_bin, "getenv", "-b", var],
+                    isabelle_argv(isabelle_bin, ["getenv", "-b", var]),
                     capture_output=True, text=True, timeout=5)
                 val = r.stdout.strip()
             except Exception:
                 val = ""
-        _isabelle_env_cache[key] = val
+        _isabelle_env_cache[key] = from_cygwin_path(val)
     return _isabelle_env_cache[key]
 
 
@@ -92,7 +94,7 @@ def file_lines(path):
     """
     if path not in _file_content_cache:
         try:
-            content = open(path, "r", errors="replace").read()
+            content = open(path, "r", encoding="utf-8", errors="replace").read()
             line_starts = [0]  # symbol offset at start of each line
             sym = 0
             i = 0
@@ -279,17 +281,17 @@ class HeapInfo:
         if not heaps_dir:
             try:
                 r = subprocess.run(
-                    [isabelle_bin, "getenv", "-b", "ISABELLE_HEAPS"],
+                    isabelle_argv(isabelle_bin, ["getenv", "-b", "ISABELLE_HEAPS"]),
                     capture_output=True, text=True, timeout=10)
-                heaps_dir = r.stdout.strip()
+                heaps_dir = from_cygwin_path(r.stdout.strip())
             except Exception:
                 pass
         if not heaps_dir:
             try:
                 r = subprocess.run(
-                    [isabelle_bin, "getenv", "-b", "ISABELLE_HOME_USER"],
+                    isabelle_argv(isabelle_bin, ["getenv", "-b", "ISABELLE_HOME_USER"]),
                     capture_output=True, text=True, timeout=10)
-                home_user = r.stdout.strip()
+                home_user = from_cygwin_path(r.stdout.strip())
                 if home_user:
                     heaps_dir = os.path.join(home_user, "heaps")
             except Exception:
