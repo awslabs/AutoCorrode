@@ -48,8 +48,8 @@ The command generates, for the type \<^verbatim>\<open>T = my_enum\<close> and e
     \<^verbatim>\<open>setup_lifting\<close> applied;
   \<^item> one constant \<^verbatim>\<open>Ci :: T\<close> per variant, by \<^verbatim>\<open>lift_definition\<close>, with the transfer rules
     collected in the named theorem bundles \<^verbatim>\<open>T_rep_defs\<close> (the \<^verbatim>\<open>rep_eq\<close>s) and \<^verbatim>\<open>T_defs\<close>
-    (the \<^verbatim>\<open>abs_eq\<close>s). Each is aliased under \<^verbatim>\<open>T.Ci\<close> as well, so variants can be named either
-    bare or type-qualified, as \<^verbatim>\<open>datatype\<close> constructors can;
+    (the \<^verbatim>\<open>abs_eq\<close>s). Each uses the same non-mandatory type qualification as a
+    \<^verbatim>\<open>datatype\<close> constructor, so variants can be named either bare or as \<^verbatim>\<open>T.Ci\<close>;
   \<^item> \<^verbatim>\<open>T_all :: T list\<close>, the list of all inhabitants, together with \<^verbatim>\<open>T_all_concrete\<close> (a
     \<^verbatim>\<open>[code]\<close> equation presenting it as the literal list \<^verbatim>\<open>[C1, ..., Cn]\<close>),
     \<^verbatim>\<open>T_all_distinct\<close> and \<^verbatim>\<open>T_all_total\<close>;
@@ -581,8 +581,11 @@ fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_s
     fun define ((binding, word), member_thm) lthy =
       let
         val rhs = Const (\<^const_name>\<open>unsigned\<close>, fastype_of word --> HOLogic.natT) $ word
+        (* Non-mandatory qualification gives the constant both the short access \<^verbatim>\<open>Ci\<close>
+           and the datatype-style access \<^verbatim>\<open>T.Ci\<close> from a single namespace declaration. *)
+        val qualified_binding = Binding.qualify false type_name binding
         val (ld, lthy) = Lifting_Def.lift_def
-          { notes = true } (binding, NoSyn) absT rhs
+          { notes = true } (qualified_binding, NoSyn) absT rhs
           (fn ctxt =>
              simp_tac
                (clear_simpset ctxt addsimps [@{thm eq_onp_same_args}, member_thm]) 1)
@@ -595,13 +598,7 @@ fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_s
           |> (case Lifting_Def.rep_eq_of_lift_def ld of
                 SOME rep_eq => add_to rep_defs rep_eq
               | NONE => I)
-        (* Also reachable as `T.Ci`, the way datatype constructors are: alias the constant
-           under the type-qualified name. Non-mandatory qualification, so the bare `Ci` keeps
-           working and `T.Ci` becomes available for disambiguation --- exactly what
-           `Binding.qualify false` gives datatype's constructors (ctr_sugar.ML). *)
         val c = Lifting_Def.lift_const_of_lift_def ld
-        val lthy = Local_Theory.const_alias
-          (Binding.qualify false type_name binding) (dest_Const_name c) lthy
       in (c, lthy) end
     val (consts, lthy) = fold_map define (variant_specs ~~ member_thms) lthy
     (* The constants come back as they were at definition time; re-resolve against the
