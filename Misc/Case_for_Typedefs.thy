@@ -139,23 +139,35 @@ fun dest_variants_thm thm =
   in (lhs, ctrs, elemT) end
 
 (* Define a constant in fully-applied form: name args = rhs.
-   Returns the constant, its definitional theorem, and the updated context. *)
+
+   The primitive definition uses the lambda-abstracted RHS. Its fully-applied equation is
+   then obtained by kernel congruence and beta-eta conversion, and registered as the public
+   definition theorem and default code equation. This avoids passing an equation with one
+   free argument per constructor through the general specification machinery. *)
 fun define_applied lthy name_str args rhs =
   let
     val binding = Binding.name name_str
+    val def_binding = Binding.name (name_str ^ "_def")
     val fun_type = fold_rev (fn a => fn T => fastype_of a --> T) args (fastype_of rhs)
-    val lhs = list_comb (Free (name_str, fun_type), args)
-    val spec = Logic.mk_equals (lhs, rhs)
-    val ((_, (_, def_thm)), lthy') = Specification.definition
-      (SOME (binding, NONE, NoSyn)) [] []
-      ((Binding.name (name_str ^ "_def"), []), spec) lthy
-    val full_name = Local_Theory.full_name lthy' binding
+    val abs_rhs = fold_rev lambda args rhs
+    val ((lhs, (_, raw_def)), lthy') = Local_Theory.define_internal
+      ((binding, NoSyn), ((Binding.suffix_name "_raw" def_binding, []), abs_rhs)) lthy
+    val applied_def =
+      fold (fn arg => fn th =>
+          Drule.fun_cong_rule th (Thm.cterm_of lthy' arg))
+        args raw_def
+      |> (fn th => Thm.transitive th (Drule.beta_eta_conversion (Thm.rhs_of th)))
+      |> Drule.generalize
+           (Names.empty, Names.build (fold (Names.add_set o #1 o dest_Free) args))
+    val ((_, [def_thm]), lthy'') =
+      Local_Theory.note
+        ((def_binding, [Code.singleton_default_equation_attrib]), [applied_def]) lthy'
+    val lthy'' =
+      Spec_Rules.add def_binding Spec_Rules.equational [lhs] [def_thm] lthy''
+    val full_name = Local_Theory.full_name lthy'' binding
     val const = Const (full_name, fun_type)
-    (* Transport the definitional theorem to the target, so that its LHS mentions the
-       constant under the name it actually has there. Without this it still refers to the
-       pre-export Free, and callers outside this function cannot rewrite with it. *)
-    val def_thm = Morphism.thm (Local_Theory.target_morphism lthy') def_thm
-  in (const, def_thm, lthy') end
+    val def_thm = Morphism.thm (Local_Theory.target_morphism lthy'') def_thm
+  in (const, def_thm, lthy'') end
 
 (* Step 1: Define TYPE_index x = find_index variant_list x *)
 fun define_index lthy type_name elemT variant_list_term =
