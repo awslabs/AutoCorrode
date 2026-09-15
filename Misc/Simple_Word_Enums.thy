@@ -46,10 +46,14 @@ The command generates, for the type \<^verbatim>\<open>T = my_enum\<close> and e
     \<^verbatim>\<open>T_variants_distinct\<close>, stating that its \<^verbatim>\<open>unat\<close> images are distinct;
   \<^item> the type \<^verbatim>\<open>T\<close> itself, as a \<^verbatim>\<open>typedef\<close> over \<^verbatim>\<open>set (map unat T_variants)\<close>, with
     \<^verbatim>\<open>setup_lifting\<close> applied;
-  \<^item> one constant \<^verbatim>\<open>Ci :: T\<close> per variant, by \<^verbatim>\<open>lift_definition\<close>, with the transfer rules
-    collected in the named theorem bundles \<^verbatim>\<open>T_rep_defs\<close> (the \<^verbatim>\<open>rep_eq\<close>s) and \<^verbatim>\<open>T_defs\<close>
-    (the \<^verbatim>\<open>abs_eq\<close>s). Each uses the same non-mandatory type qualification as a
-    \<^verbatim>\<open>datatype\<close> constructor, so variants can be named either bare or as \<^verbatim>\<open>T.Ci\<close>;
+  \<^item> one constant \<^verbatim>\<open>Ci :: T\<close> per variant, with the usual \<^verbatim>\<open>lift_definition\<close> facts and
+    transfer rule. At global theory level the closed, nullary definitions are installed in one
+    checked theory update; inside a locale or other local target the general
+    \<^verbatim>\<open>lift_definition\<close> path is retained. The representation and abstraction equations are
+    collected in the named theorem bundles \<^verbatim>\<open>T_rep_defs\<close> (the \<^verbatim>\<open>rep_eq\<close>s) and
+    \<^verbatim>\<open>T_defs\<close> (the \<^verbatim>\<open>abs_eq\<close>s). Each constant uses the same non-mandatory type
+    qualification as a \<^verbatim>\<open>datatype\<close> constructor, so variants can be named either bare or as
+    \<^verbatim>\<open>T.Ci\<close>;
   \<^item> \<^verbatim>\<open>T_all :: T list\<close>, the list of all inhabitants, together with \<^verbatim>\<open>T_all_concrete\<close> (a
     \<^verbatim>\<open>[code]\<close> equation presenting it as the literal list \<^verbatim>\<open>[C1, ..., Cn]\<close>),
     \<^verbatim>\<open>T_all_distinct\<close> and \<^verbatim>\<open>T_all_total\<close>;
@@ -322,6 +326,11 @@ sig
   (* Render a timer's log as an indented, human-readable breakdown under `title`. *)
   val format_timer_report: string -> timer -> string
 
+  (* Select how the per-variant constants are defined. The normal command uses Auto_Path:
+     the batched path at global theory level, and Isabelle's general lifting path for every
+     other local target. The explicit alternatives are exposed for benchmarking. *)
+  datatype variant_const_path = Auto_Path | Global_Path | Lifting_Path
+
   (* Everything a plugin needs to know about a freshly-declared enum. All of it is computed
      by the command anyway; this record just hands it on. Constants and theorems have been
      transported along the target morphism, so they are usable as they stand. *)
@@ -366,10 +375,17 @@ sig
      `report` prints the human-readable summary of generated items. The tuple is
      (plugin filter, word width, type binding, optional uRust name,
       (variant binding, value term string) list), where the filter is the still-unevaluated
-     form Plugin_Name.parse_filter yields. The benchmark command reuses this to drive many
-     enums under one timer. *)
+     form Plugin_Name.parse_filter yields. *)
   val simple_word_enum_core:
     { timer: timer, report: bool } ->
+    (Proof.context -> Plugin_Name.filter) * int * binding * string option *
+      (binding * string) list ->
+    local_theory -> local_theory
+
+  (* As above, but with an explicit variant-constant path. This is intended for controlled
+     comparisons; ordinary declarations should use simple_word_enum_core. *)
+  val simple_word_enum_core_with_path:
+    { timer: timer, report: bool, variant_const_path: variant_const_path } ->
     (Proof.context -> Plugin_Name.filter) * int * binding * string option *
       (binding * string) list ->
     local_theory -> local_theory
@@ -419,6 +435,8 @@ fun format_timer_report (title: string) (timer: timer) =
     fun fmt (d, name, t) =
       replicate_string (2 * (d + 1)) " " ^ name ^ ": " ^ Timing.message t
   in title :: map fmt (timer_entries timer) |> cat_lines end
+
+datatype variant_const_path = Auto_Path | Global_Path | Lifting_Path
 
 type enum_info = {
   type_name: string,
@@ -553,49 +571,80 @@ fun define_typedef type_binding mapped_variants variants_def lthy =
         (#type_definition typedef_info) lthy
   in ((typ_info, typedef_info), lthy) end
 
-(* Step 3: one lifted definition per variant, tagging rep_eq/abs_eq into the two bundles. *)
-fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_specs lthy =
+type prepared_variant = {
+  binding: binding,
+  def_name: binding,
+  rhs: term,
+  rsp_thm: thm,
+  member_thm: thm
+}
+
+type generated_variant = {
+  binding: binding,
+  const: term,
+  rsp_thm: thm,
+  transfer: thm,
+  abs_eq: thm,
+  rep_eq: thm
+}
+
+(* Step 3: define one constant per variant, tagging rep_eq/abs_eq into the two bundles. *)
+fun define_variant_consts timer variant_const_path type_name absT variants_def type_definition_thm
+      (rep_defs, defs) variant_specs lthy =
   let
     val (variants_const, words_term) = Thm.prop_of variants_def |> Logic.dest_equals
     val words = map snd variant_specs
     val wordT = fastype_of (hd words)
     val unat = Const (\<^const_name>\<open>unsigned\<close>, wordT --> HOLogic.natT)
-    val all_members =
-      @{thm simple_word_enum_map_members}
-      |> Drule.infer_instantiate lthy
-          [(("xs", 0), Thm.cterm_of lthy variants_const),
-           (("ys", 0), Thm.cterm_of lthy words_term),
-           (("f", 0), Thm.cterm_of lthy unat)]
-      |> (fn thm => thm OF [variants_def RS @{thm meta_eq_to_obj_eq}])
-    val member_thms =
-      Simplifier.simplify
-        (clear_simpset lthy addsimps
-          @{thms list_all_Cons_iff list_all_Nil_iff atomize_conj[symmetric]})
-        all_members
-      |> Conjunction.elim_conjunctions
-      |> filter_out (fn thm => Thm.prop_of thm aconv \<^prop>\<open>True\<close>)
-    val _ =
-      if length member_thms = length variant_specs then ()
-      else error "internal error: wrong number of simple-word-enum membership facts"
+    val member_thms = phase timer "membership_facts" (fn () =>
+      let
+        val all_members =
+          @{thm simple_word_enum_map_members}
+          |> Drule.infer_instantiate lthy
+              [(("xs", 0), Thm.cterm_of lthy variants_const),
+               (("ys", 0), Thm.cterm_of lthy words_term),
+               (("f", 0), Thm.cterm_of lthy unat)]
+          |> (fn thm => thm OF [variants_def RS @{thm meta_eq_to_obj_eq}])
+        val member_thms =
+          Simplifier.simplify
+            (clear_simpset lthy addsimps
+              @{thms list_all_Cons_iff list_all_Nil_iff atomize_conj[symmetric]})
+            all_members
+          |> Conjunction.elim_conjunctions
+          |> filter_out (fn thm => Thm.prop_of thm aconv \<^prop>\<open>True\<close>)
+        val _ =
+          if length member_thms = length variant_specs then ()
+          else error "internal error: wrong number of simple-word-enum membership facts"
+      in member_thms end)
 
     val qty_name = fst (dest_Type absT)
     val { quot_thm, ... } = the (Lifting_Info.lookup_quotients lthy qty_name)
     val raw_rel = Lifting_Util.quot_thm_rel quot_thm
 
-    fun define ((binding, word), member_thm) lthy =
+    fun prepare ((binding, word), member_thm) : prepared_variant =
       let
         val rhs = Const (\<^const_name>\<open>unsigned\<close>, fastype_of word --> HOLogic.natT) $ word
         (* Non-mandatory qualification gives the constant both the short access \<^verbatim>\<open>Ci\<close>
            and the datatype-style access \<^verbatim>\<open>T.Ci\<close> from a single namespace declaration. *)
         val qualified_binding = Binding.qualify false type_name binding
+        val def_name = Thm.make_def_binding true qualified_binding
         val rsp_goal = HOLogic.mk_Trueprop (raw_rel $ rhs $ rhs)
         val rsp_thm =
           Goal.prove lthy [] [] rsp_goal (fn { context = ctxt, ... } =>
             simp_tac
               (clear_simpset ctxt addsimps [@{thm eq_onp_same_args}, member_thm]) 1)
           |> Thm.close_derivation \<^here>
+      in
+        { binding = qualified_binding, def_name = def_name, rhs = rhs,
+          rsp_thm = rsp_thm, member_thm = member_thm }
+      end
+    val prepared =
+      phase timer "respectfulness" (fn () => map prepare (variant_specs ~~ member_thms))
+
+    fun define_lifted ({ binding, rhs, rsp_thm, ... }: prepared_variant) lthy =
+      let
         val (ld, lthy) = Lifting_Def.add_lift_def
-          { notes = true } (qualified_binding, NoSyn) absT rhs rsp_thm [] lthy
+          { notes = true } (binding, NoSyn) absT rhs rsp_thm [] lthy
         fun add_to bundle thm =
           Local_Theory.note ((Binding.empty,
             [Attrib.internal \<^here> (K (Named_Theorems.add bundle))]), [thm]) #> snd
@@ -606,7 +655,126 @@ fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_s
               | NONE => I)
         val c = Lifting_Def.lift_const_of_lift_def ld
       in (c, lthy) end
-    val (consts, lthy) = fold_map define (variant_specs ~~ member_thms) lthy
+
+    fun define_with_lifting lthy =
+      phase timer "lift_definitions" (fn () => fold_map define_lifted prepared lthy)
+
+    (* Lifting_Def.add_lift_def supports arbitrary functions and arbitrary local targets.
+       These constructors are a much narrower case: every right-hand side is a closed nat,
+       every result is the same typedef, and at global theory level no locale parameters or
+       target morphisms have to be recorded. Calling add_lift_def once per constructor would
+       nevertheless perform one local-to-global theory update per constructor.
+
+       The global path below creates the same externally visible material in grouped updates:
+         - a checked definition Ci == Abs (unat wi);
+         - Ci.rsp, Ci.transfer, Ci.abs_eq, and Ci.rep_eq;
+         - the transfer-rule attribute and the T_defs/T_rep_defs bundle entries;
+         - the abstract code equation based on Ci.rep_eq.
+       It is restricted to Named_Target.is_theory. Locales, classes, and experiments retain
+       add_lift_def, whose declarations and morphisms are needed to preserve their semantics. *)
+    fun define_global lthy =
+      let
+        val abs_const = Lifting_Util.quot_thm_abs quot_thm
+        val rep_const = Lifting_Util.quot_thm_rep quot_thm
+
+        fun add_definition
+              ({ binding, def_name, rhs, ... }: prepared_variant) thy =
+          let
+            val (const, thy) =
+              Sign.declare_const_global ((binding, absT), NoSyn) thy
+            val ((_, def_thm), thy) =
+              Thm.add_def_global false false
+                (Thm.def_binding_optional binding def_name,
+                  Logic.mk_equals (const, abs_const $ rhs)) thy
+          in ((const, def_thm), thy) end
+
+        (* Thm.add_def_global false false is the ordinary checked definition primitive:
+           dependency and cycle checking remain enabled. The fold happens inside a single
+           background-theory transaction, so the enlarged theory is transferred back to the
+           local context once rather than after every constructor. *)
+        val (defined, lthy) =
+          phase timer "checked_definitions" (fn () =>
+            Local_Theory.background_theory_result
+              (fold_map add_definition prepared) lthy)
+
+        (* Install the public Ci_def facts through the local-theory interface. Besides naming
+           them, this transports the raw global theorems into the current target context. *)
+        val (def_thms, lthy) = phase timer "definition_notes" (fn () =>
+          let
+            val def_facts =
+              map2 (fn ({ def_name, ... }: prepared_variant) => fn (_, def_thm) =>
+                ((def_name, []), [([def_thm], [])])) prepared defined
+            val (noted_defs, lthy) = Local_Theory.notes def_facts lthy
+          in (map (the_single o snd) noted_defs, lthy) end)
+
+        (* For a nullary typedef constructor the standard lifting theorems have direct kernel
+           derivations. abs_eq is the object-logic form of Ci_def; rep_eq additionally uses
+           Abs_inverse and the already-proved membership fact; transfer is the same
+           Quotient_to_transfer rule used by Lifting_Def.generate_transfer_rules. *)
+        fun finish
+              (({ binding, rsp_thm, member_thm, ... }: prepared_variant),
+               ((const, _), def_thm)) : generated_variant =
+          let
+            val abs_eq = HOLogic.mk_obj_eq def_thm
+            val rep_abs =
+              (type_definition_thm RS @{thm type_definition.Abs_inverse}) OF [member_thm]
+            val repped_def =
+              Thm.combination (Thm.reflexive (Thm.cterm_of lthy rep_const)) def_thm
+            val rep_eq =
+              Thm.transitive repped_def (rep_abs RS @{thm eq_reflection})
+              |> HOLogic.mk_obj_eq
+            val transfer =
+              Lifting_Util.MRSL
+                ([quot_thm, rsp_thm, def_thm], @{thm Quotient_to_transfer})
+              |> Lifting_Term.parametrize_transfer_rule lthy
+          in
+            { binding = binding, const = const, rsp_thm = rsp_thm, transfer = transfer,
+              abs_eq = abs_eq, rep_eq = rep_eq }
+          end
+        val facts =
+          phase timer "lifting_facts" (fn () =>
+            map finish (prepared ~~ (defined ~~ def_thms)))
+
+        (* For nat -> typedef, Lifting_Def.register_code_eq selects the representation
+           equation as an abstract code equation. Register the same certificates together
+           in one theory update. *)
+        val lthy =
+          phase timer "code_equations" (fn () =>
+            Local_Theory.background_theory
+              (fold (fn ({ rep_eq, ... }: generated_variant) =>
+                Code.declare_abstract_eqn_global rep_eq) facts) lthy)
+
+        fun bundle_attr bundle =
+          Attrib.internal \<^here> (K (Named_Theorems.add bundle))
+        fun fact_notes
+              ({ binding, rsp_thm, transfer, abs_eq, rep_eq, ... }: generated_variant) =
+          let
+            val lhs_name = Binding.reset_pos binding
+            fun name suffix = Binding.qualify_name true lhs_name suffix
+          in
+            [((name "rsp", []), [([rsp_thm], [])]),
+             ((name "transfer", []), [([transfer], @{attributes [transfer_rule]})]),
+             ((name "abs_eq", []), [([abs_eq], [bundle_attr defs])]),
+             ((name "rep_eq", []), [([rep_eq], [bundle_attr rep_defs])])]
+          end
+        (* One notes operation gives the facts their standard lift_definition names and
+           installs the attributes/bundle entries without growing the context between
+           constructors. *)
+        val lthy =
+          phase timer "fact_notes" (fn () =>
+            Local_Theory.notes (maps fact_notes facts) lthy |> snd)
+      in (map #const facts, lthy) end
+
+    fun require_global lthy =
+      if Named_Target.is_theory lthy then define_global lthy
+      else error "simple_word_enum: global variant-constant path requires a global theory target"
+
+    val (consts, lthy) =
+      (case variant_const_path of
+        Auto_Path =>
+          if Named_Target.is_theory lthy then define_global lthy else define_with_lifting lthy
+      | Global_Path => require_global lthy
+      | Lifting_Path => define_with_lifting lthy)
     (* The constants come back as they were at definition time; re-resolve against the
        target so that later steps see proper Consts rather than Frees. *)
     val consts = map (fn c => Const (dest_Const_name c, absT)) consts
@@ -670,10 +838,11 @@ fun define_all type_name wordT absT Abs_name Rep_name defs variants_const varian
     val (total_thm, lthy) = note_thm (all_total_name type_name) [] total_thm lthy
   in ((all_const, all_def, concrete_thm, distinct_thm, total_thm, variants_alt_thm), lthy) end
 
-(* The core of the command, parameterised by a timer so the benchmark command can reuse it.
-   Each generation step is wrapped in `phase`; `report` controls whether the human-readable
-   summary of what was generated is printed (the benchmark prints its own tables instead). *)
-fun simple_word_enum_core { timer, report }
+(* The core of the command, parameterised by a timer and variant-constant path so the
+   benchmark command can reuse it. Each generation step is wrapped in `phase`; `report`
+   controls whether the human-readable summary of what was generated is printed (the
+   benchmark prints its own tables instead). *)
+fun simple_word_enum_core_with_path { timer, report, variant_const_path }
       (raw_filter, width, type_binding, urust_name, variant_specs) lthy =
   let
     val type_name = Binding.name_of type_binding
@@ -723,8 +892,8 @@ fun simple_word_enum_core { timer, report }
 
     val (variant_consts, lthy) =
       phase timer "variant_consts" (fn () =>
-        define_variant_consts type_name absT variants_def (rep_defs, defs)
-          (bindings ~~ words) lthy)
+        define_variant_consts timer variant_const_path type_name absT variants_def
+          type_definition_thm (rep_defs, defs) (bindings ~~ words) lthy)
 
     val ((all_const, all_def, concrete_thm, distinct_thm, total_thm, variants_alt_thm), lthy) =
       phase timer "all" (fn () =>
@@ -765,6 +934,10 @@ fun simple_word_enum_core { timer, report }
               all_distinct_name type_name, all_total_name type_name]]
          @ Case_For_Typedef.generated_summary type_name n)))
   in lthy end
+
+fun simple_word_enum_core { timer, report } args lthy =
+  simple_word_enum_core_with_path
+    { timer = timer, report = report, variant_const_path = Auto_Path } args lthy
 
 fun simple_word_enum_cmd (((((raw_filter, width), type_binding), urust_name), variant_specs))
       lthy =
@@ -1159,10 +1332,21 @@ The plugin filter is accepted in the same position as for \<^verbatim>\<open>sim
 \<^verbatim>\<open>simple_word_enum_benchmark (plugins del: word_conversion) (32) sizes: 10 100\<close> measures the
 command on its own.
 
+The optional \<^verbatim>\<open>variant_consts:\<close> clause selects the implementation of the constructor-constant
+phase. Its values are \<^verbatim>\<open>auto\<close> (the default), \<^verbatim>\<open>global\<close>, \<^verbatim>\<open>lifting\<close>, and
+\<^verbatim>\<open>both\<close>. At global theory level, \<^verbatim>\<open>auto\<close> selects the batched global path;
+\<^verbatim>\<open>lifting\<close> forces the general \<^ML>\<open>Lifting_Def.add_lift_def\<close> path used in local targets.
+\<^verbatim>\<open>global\<close> requires a global theory target. \<^verbatim>\<open>both\<close> runs both paths independently from the
+same starting theory, for example:
+
+\<^verbatim>\<open>simple_word_enum_benchmark (32) variant_consts: both sizes: 128 256 512\<close>
+
 Output is a per-size phase breakdown followed by a table of totals, per-variant cost,
 \<^verbatim>\<open>variants\<close>, \<^verbatim>\<open>variant_consts\<close>, and \<^verbatim>\<open>case_setup\<close>, together with the slowest phase.
-This shows which parts are linear or worse. Benchmarking is a measurement, so it forces timing
-on regardless of \<^verbatim>\<open>simple_word_enum_timing\<close>.\<close>
+Nested entries under \<^verbatim>\<open>variant_consts\<close> divide that phase into membership, respectfulness,
+definitions, theorem generation, code registration, and fact registration. This shows which
+parts are linear or worse. Benchmarking is a measurement, so it forces timing on regardless of
+\<^verbatim>\<open>simple_word_enum_timing\<close>.\<close>
 
 ML \<open>
 local
@@ -1179,16 +1363,26 @@ fun format_elapsed t =
 (* Right-align in a fixed column, so the table lines up. *)
 fun pad w s = if size s >= w then s else replicate_string (w - size s) " " ^ s
 
+fun path_name Simple_Word_Enum.Global_Path = "global"
+  | path_name Simple_Word_Enum.Lifting_Path = "lifting"
+  | path_name Simple_Word_Enum.Auto_Path = "auto"
+
 (* One synthetic enum of `n` variants: values 0 .. n-1 are distinct in any word type wide
-   enough to hold them, which the width check below enforces. *)
-fun bench_spec width n =
+   enough to hold them, which the width check below enforces. Equal-length path tags keep the
+   namespace names directly comparable while making incidental output distinguishable. *)
+fun path_tag Simple_Word_Enum.Global_Path = "global"
+  | path_tag Simple_Word_Enum.Lifting_Path = "lifted"
+  | path_tag Simple_Word_Enum.Auto_Path = "auto__"
+
+fun bench_spec path width n =
   let
-    val base = "bench_" ^ string_of_int width ^ "_" ^ string_of_int n
+    val base =
+      "bench_" ^ path_tag path ^ "_" ^ string_of_int width ^ "_" ^ string_of_int n
     val variants = map (fn i =>
       (Binding.name (base ^ "_V" ^ string_of_int i), string_of_int i)) (0 upto n - 1)
   in (Binding.name base, variants) end
 
-fun benchmark_cmd ((raw_filter, width), sizes) lthy =
+fun benchmark_cmd (((raw_filter, width), requested_paths), sizes) lthy =
   let
     val _ = if null sizes then error "simple_word_enum_benchmark: no sizes given" else ()
     val _ = case filter (fn n => n < 1) sizes of
@@ -1202,31 +1396,41 @@ fun benchmark_cmd ((raw_filter, width), sizes) lthy =
       | bad => error ("simple_word_enum_benchmark: " ^ string_of_int width ^
           " word cannot hold " ^ commas (map string_of_int bad) ^ " distinct values")
 
+    (* Resolve auto once, against the benchmark's starting target. An explicitly requested
+       global path still goes through the core's guard, which gives a useful error in a
+       locale instead of silently measuring a different implementation. *)
+    fun resolve_path Simple_Word_Enum.Auto_Path =
+          if Named_Target.is_theory lthy
+          then Simple_Word_Enum.Global_Path
+          else Simple_Word_Enum.Lifting_Path
+      | resolve_path path = path
+    val paths = map resolve_path requested_paths
+
     (* Each size is declared into --- and then discarded from --- the *same* starting context:
        we keep the timer and throw the resulting local_theory away. That leaves no trace of the
        throwaway enums (so sizes may repeat, here and across invocations, and nothing pollutes
        the enclosing theory), and it also keeps the measurements comparable, since every size
        is measured against an identical context rather than one already carrying the previous
-       sizes' constants. One live timer per size keeps their breakdowns separate. *)
-    fun run_size n =
+       sizes' constants. One live timer per path-and-size run keeps their breakdowns separate. *)
+    fun run_size path n =
       let
         val timer = Simple_Word_Enum.new_timer true
-        val (type_binding, variants) = bench_spec width n
+        val (type_binding, variants) = bench_spec path width n
         (* No uRust name: the benchmark enums are throwaway, and a notation registration
            would be a global side effect surviving the discarded local theory. *)
-        val _ = Simple_Word_Enum.simple_word_enum_core
-          { timer = timer, report = false }
+        val _ = Simple_Word_Enum.simple_word_enum_core_with_path
+          { timer = timer, report = false, variant_const_path = path }
           (raw_filter, width, type_binding, NONE, variants) lthy
-      in (n, timer) end
-    val results = map run_size sizes
+      in (path, n, timer) end
+    val results = maps (fn n => map (fn path => run_size path n) paths) sizes
 
     (* Per-size breakdown, then a totals table. The per-variant column is the interesting
        one: flat means linear in the variant count, growing means worse than linear. *)
-    val breakdowns = map (fn (n, timer) =>
+    val breakdowns = map (fn (path, n, timer) =>
       Simple_Word_Enum.format_timer_report
-        (string_of_int n ^ " variants (" ^ Timing.message (Simple_Word_Enum.timer_total timer)
-         ^ " total):") timer) results
-    val header = pad 8 "variants" ^ pad 12 "total" ^ pad 14 "per variant" ^
+        (path_name path ^ ", " ^ string_of_int n ^ " variants (" ^
+         Timing.message (Simple_Word_Enum.timer_total timer) ^ " total):") timer) results
+    val header = pad 9 "path" ^ pad 9 "variants" ^ pad 12 "total" ^ pad 14 "per variant" ^
       pad 12 "variants" ^ pad 17 "variant_consts" ^ pad 14 "case_setup" ^
       "   slowest phase"
     fun top_phase name timer =
@@ -1235,7 +1439,7 @@ fun benchmark_cmd ((raw_filter, width), sizes) lthy =
           (Simple_Word_Enum.timer_entries timer) of
         SOME t => format_elapsed t
       | NONE => "-")
-    fun row (n, timer) =
+    fun row (path, n, timer) =
       let
         val total_timing = Simple_Word_Enum.timer_total timer
         val total = time_to_ms total_timing
@@ -1247,15 +1451,16 @@ fun benchmark_cmd ((raw_filter, width), sizes) lthy =
           |> (fn [] => "-" | (_, name, t) :: _ => name ^ " (" ^
                 format_elapsed t ^ ")")
       in
-        pad 8 (string_of_int n) ^ pad 12 (format_elapsed total_timing) ^ pad 14 per ^
+        pad 9 (path_name path) ^ pad 9 (string_of_int n) ^
+        pad 12 (format_elapsed total_timing) ^ pad 14 per ^
         pad 12 (top_phase "variants" timer) ^
         pad 17 (top_phase "variant_consts" timer) ^
         pad 14 (top_phase "case_setup" timer) ^
         "   " ^ slowest
       end
     val _ = writeln (cat_lines
-      ("simple_word_enum_benchmark (" ^ string_of_int width ^ " word), sizes " ^
-         commas (map string_of_int sizes) ^ ":"
+      ("simple_word_enum_benchmark (" ^ string_of_int width ^ " word), variant_consts " ^
+         commas (map path_name paths) ^ ", sizes " ^ commas (map string_of_int sizes) ^ ":"
        :: breakdowns
        @ ["", header] @ map row results))
   in lthy end
@@ -1270,6 +1475,14 @@ val _ =
          (Parse.$$$ "(" |-- Plugin_Name.parse_filter --| Parse.$$$ ")"))
        (K Plugin_Name.default_filter) --
       (Parse.$$$ "(" |-- Parse.nat --| Parse.$$$ ")") --
+      Scan.optional
+        (Parse.reserved "variant_consts" |-- Parse.$$$ ":" |--
+          ((Parse.reserved "auto" >> K [Simple_Word_Enum.Auto_Path]) ||
+           (Parse.reserved "global" >> K [Simple_Word_Enum.Global_Path]) ||
+           (Parse.reserved "lifting" >> K [Simple_Word_Enum.Lifting_Path]) ||
+           (Parse.reserved "both" >> K
+             [Simple_Word_Enum.Global_Path, Simple_Word_Enum.Lifting_Path])))
+        [Simple_Word_Enum.Auto_Path] --
       (Parse.reserved "sizes" |-- Parse.$$$ ":" |-- Scan.repeat1 Parse.nat)
      >> benchmark_cmd)
 
@@ -1282,10 +1495,10 @@ quick to check --- raise the sizes when actually investigating a regression.
 
 The \<^verbatim>\<open>variants\<close> phase evaluates merge sort followed by an adjacent-duplicate scan,
 so its executable check takes \<^verbatim>\<open>O(n log n)\<close> time. At larger sizes the complete command is
-also affected by \<^verbatim>\<open>variant_consts\<close> (one \<^verbatim>\<open>lift_definition\<close> per variant) and
+also affected by \<^verbatim>\<open>variant_consts\<close> (the constructor definitions and their lifting facts) and
 \<^verbatim>\<open>case_setup\<close>.\<close>
 
-simple_word_enum_benchmark (32) sizes: 4 16 32 64
+simple_word_enum_benchmark (32) variant_consts: both sizes: 4 16 32 64
 
 subsection\<open>The \<^verbatim>\<open>generate_debug\<close> plugin\<close>
 
