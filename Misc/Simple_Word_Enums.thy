@@ -553,7 +553,7 @@ fun define_typedef type_binding mapped_variants variants_def lthy =
         (#type_definition typedef_info) lthy
   in ((typ_info, typedef_info), lthy) end
 
-(* Step 3: one lift_definition per variant, tagging rep_eq/abs_eq into the two bundles. *)
+(* Step 3: one lifted definition per variant, tagging rep_eq/abs_eq into the two bundles. *)
 fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_specs lthy =
   let
     val (variants_const, words_term) = Thm.prop_of variants_def |> Logic.dest_equals
@@ -578,18 +578,24 @@ fun define_variant_consts type_name absT variants_def (rep_defs, defs) variant_s
       if length member_thms = length variant_specs then ()
       else error "internal error: wrong number of simple-word-enum membership facts"
 
+    val qty_name = fst (dest_Type absT)
+    val { quot_thm, ... } = the (Lifting_Info.lookup_quotients lthy qty_name)
+    val raw_rel = Lifting_Util.quot_thm_rel quot_thm
+
     fun define ((binding, word), member_thm) lthy =
       let
         val rhs = Const (\<^const_name>\<open>unsigned\<close>, fastype_of word --> HOLogic.natT) $ word
         (* Non-mandatory qualification gives the constant both the short access \<^verbatim>\<open>Ci\<close>
            and the datatype-style access \<^verbatim>\<open>T.Ci\<close> from a single namespace declaration. *)
         val qualified_binding = Binding.qualify false type_name binding
-        val (ld, lthy) = Lifting_Def.lift_def
-          { notes = true } (qualified_binding, NoSyn) absT rhs
-          (fn ctxt =>
-             simp_tac
-               (clear_simpset ctxt addsimps [@{thm eq_onp_same_args}, member_thm]) 1)
-          [] lthy
+        val rsp_goal = HOLogic.mk_Trueprop (raw_rel $ rhs $ rhs)
+        val rsp_thm =
+          Goal.prove lthy [] [] rsp_goal (fn { context = ctxt, ... } =>
+            simp_tac
+              (clear_simpset ctxt addsimps [@{thm eq_onp_same_args}, member_thm]) 1)
+          |> Thm.close_derivation \<^here>
+        val (ld, lthy) = Lifting_Def.add_lift_def
+          { notes = true } (qualified_binding, NoSyn) absT rhs rsp_thm [] lthy
         fun add_to bundle thm =
           Local_Theory.note ((Binding.empty,
             [Attrib.internal \<^here> (K (Named_Theorems.add bundle))]), [thm]) #> snd
