@@ -10,6 +10,12 @@ theory Simple_Word_Enums
   keywords "simple_word_enum" :: thy_decl
     and "simple_word_enum_benchmark" :: thy_decl
 begin
+
+(* The sorting library exports generic open names that collide with existing
+   downstream uses of List.sorted and free variables named key. This theory
+   qualifies Sorting_Algorithms.sorted and does not use Comparator.key. *)
+hide_const (open) Sorting_Algorithms.sorted Comparator.key
+
 (*>*)
 
 section\<open>Simple word enums\<close>
