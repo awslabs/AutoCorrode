@@ -579,31 +579,45 @@ fun define_variants type_name wordT words lthy =
     val ((const, def_thm), lthy) =
       define_const (variants_name type_name) (HOLogic.mk_list wordT words) lthy
 
-    (* distinct (list.map unat T_variants).
-
-       Normalize the backing words, cast the naturals injectively to integers, then
-       evaluate HOL's merge sort followed by distinct_adj. The integer representation keeps
-       code evaluation efficient for large word values. *)
+    (* distinct (list.map unat T_variants). *)
     val unatT = wordT --> HOLogic.natT
     val unat = Const (\<^const_name>\<open>unsigned\<close>, unatT)
     val mapped = \<^Const>\<open>map wordT HOLogic.natT\<close> $ unat $ const
     val goal = HOLogic.mk_Trueprop (\<^Const>\<open>distinct HOLogic.natT\<close> $ mapped)
     val distinct_thm = Goal.prove lthy [] [] goal (fn {context = ctxt, ...} =>
-      let
-        (* Keep mergesort and its efficient integer comparator opaque to simp.
-           Their code equations are used by eval after the surrounding word
-           and list expressions have been normalized. *)
-        val eval_ctxt =
-          ctxt delsimps
-            [@{thm Sorting_Algorithms.mergesort_is_sort},
-             @{thm comparator_linordered_group_def}]
-      in
+      (* Direct simp avoids eval's substantial fixed code-generation cost, but grows
+         quadratically with the number of variants. Local benchmarks put the crossover
+         near 100 variants. This cutoff is only a heuristic, but works well enough in
+         practice; exactly 100 variants takes the scalable eval path.
+
+         Applying the merge-sort distinctness lemma does not make simp a cheap n*log(n)
+         alternative. `mergesort_is_sort` is a simp rule that rewrites merge sort to
+         insertion sort; deleting it leaves merge sort opaque because its recursive
+         equation is a code equation, not a simp rule. Shape-specific recursive simp
+         rules can retain the n*log(n) comparison count, but simp must then reduce
+         length/div/take/drop/merge and construct all intermediate proof terms. In local
+         benchmarks this took about 15 s for 256 variants and 56 s for 512, versus about
+         2 s and 4 s with eval. *)
+      if length words < 100 then
         Local_Defs.unfold_tac ctxt [def_thm] THEN
-        resolve_tac ctxt
-          [@{thm simple_word_enum_distinct_iff_distinct_adj_mergesort_int[THEN iffD2]}] 1 THEN
-        simp_tac eval_ctxt 1 THEN
-        closed_eval_tac eval_ctxt
-      end)
+        simp_tac ctxt 1
+      else
+        let
+          (* Normalize the backing words, cast the naturals injectively to integers, then
+             evaluate HOL's merge sort followed by distinct_adj. Keep mergesort and its
+             efficient integer comparator opaque to simp: their code equations are used
+             by eval after the surrounding word and list expressions have been normalized. *)
+          val eval_ctxt =
+            ctxt delsimps
+              [@{thm Sorting_Algorithms.mergesort_is_sort},
+               @{thm comparator_linordered_group_def}]
+        in
+          Local_Defs.unfold_tac ctxt [def_thm] THEN
+          resolve_tac ctxt
+            [@{thm simple_word_enum_distinct_iff_distinct_adj_mergesort_int[THEN iffD2]}] 1 THEN
+          simp_tac eval_ctxt 1 THEN
+          closed_eval_tac eval_ctxt
+        end)
     val (distinct_thm, lthy) =
       note_thm (variants_distinct_name type_name) [] distinct_thm lthy
   in ((const, def_thm, distinct_thm, mapped), lthy) end
