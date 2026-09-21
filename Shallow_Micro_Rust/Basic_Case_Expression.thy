@@ -119,6 +119,22 @@ ML\<open>
     | print_term (t $ u) = "(" ^ (print_term t) ^ " $ " ^ (print_term u) ^ ")";
 
 fun case_error s = error ("Error in bcase expression:\n" ^ s);
+
+fun known_constructor_name ctxt name =
+      let
+        val full = Proof_Context.intern_const ctxt name
+        val thy = Proof_Context.theory_of ctxt
+      in
+        (case try (Sign.the_const_type thy) full of
+          SOME T =>
+            if Code.is_constr thy full
+              orelse Option.isSome
+                (Case_Translation.lookup_by_constr_permissive ctxt (full, T))
+            then SOME full
+            else NONE
+        | NONE => NONE)
+      end;
+
 fun case_tr err ctxt [t, u] =
       let
         \<comment> \<open>\<open>p\<close> is the binder \<^emph>\<open>term\<close>, e.g. \<open>Free (x, _)\<close> or
@@ -150,16 +166,6 @@ fun case_tr err ctxt [t, u] =
         fun dest_id_name id =
               (fst (Term.dest_Free (strip_id_pos id)))
                 handle TERM _ => case_error ("invalid pattern identifier: " ^ (print_term id))
-
-        fun known_constructor_name ctxt name =
-              let
-                val full = Proof_Context.intern_const ctxt name
-                val thy = Proof_Context.theory_of ctxt
-              in
-                if can (Sign.the_const_type thy) full andalso Code.is_constr thy full
-                then SOME full
-                else NONE
-              end
 
         \<comment> \<open>Re-wrap a resolved constructor \<^verbatim>\<open>Const\<close> in the original
             \<open>_constrain $ _ $ <pos>\<close> envelope so the decoder's namespace
@@ -347,7 +353,11 @@ fun case_tr err ctxt [t, u] =
   | case_tr _ _ _ = case_error "case_tr";
 
 val _ = Theory.setup (Sign.parse_translation [(\<^syntax_const>\<open>_case_basic_syntax\<close>, case_tr true)]);
-structure Basic_Case_Expression = struct val case_tr = case_tr end;
+structure Basic_Case_Expression =
+struct
+  val case_tr = case_tr
+  val known_constructor_name = known_constructor_name
+end;
 \<close>
 
 subsubsection\<open>Some tests\<close>

@@ -957,15 +957,7 @@ parse_translation\<open>
 \<close>
 
 ML\<open>
-  fun known_constructor_name ctxt name =
-    let
-      val full = Proof_Context.intern_const ctxt name
-      val thy = Proof_Context.theory_of ctxt
-    in
-      if can (Sign.the_const_type thy) full andalso Code.is_constr thy full
-      then SOME full
-      else NONE
-    end;
+  val known_constructor_name = Basic_Case_Expression.known_constructor_name;
 
   \<comment>\<open>Resolve a constructor identifier \<open>id\<close> to its fully-qualified
     \<^verbatim>\<open>Const\<close>. We must preserve the original \<^verbatim>\<open>_constrain $ _ $ <pos\<close>
