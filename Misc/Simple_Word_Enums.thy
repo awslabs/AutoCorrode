@@ -472,6 +472,49 @@ type enum_info = {
   report: bool
 }
 
+fun morph_case_result phi
+    ({ case_const, case_def, match_def, index_def, indices }:
+      Case_For_Typedef.case_result) : Case_For_Typedef.case_result =
+  { case_const = Morphism.term phi case_const,
+    case_def = Morphism.thm phi case_def,
+    match_def = Morphism.thm phi match_def,
+    index_def = Morphism.thm phi index_def,
+    indices = map (Morphism.thm phi) indices }
+
+fun morph_enum_info phi
+    ({ type_name, urust_name, absT, wordT, width, variant_bindings,
+       variant_consts, words, variants_const, variants_def, variants_distinct,
+       variants_alt, all_const, all_def, all_concrete, all_distinct, all_total,
+       type_definition, Abs_name, Rep_name, case_result, rep_defs, defs, timer,
+       report }: enum_info) : enum_info =
+  { type_name = type_name,
+    urust_name = urust_name,
+    absT = Morphism.typ phi absT,
+    wordT = Morphism.typ phi wordT,
+    width = width,
+    variant_bindings = map (Morphism.binding phi) variant_bindings,
+    variant_consts = map (Morphism.term phi) variant_consts,
+    words = map (Morphism.term phi) words,
+    variants_const = Morphism.term phi variants_const,
+    variants_def = Morphism.thm phi variants_def,
+    variants_distinct = Morphism.thm phi variants_distinct,
+    variants_alt = Morphism.thm phi variants_alt,
+    all_const = Morphism.term phi all_const,
+    all_def = Morphism.thm phi all_def,
+    all_concrete = Morphism.thm phi all_concrete,
+    all_distinct = Morphism.thm phi all_distinct,
+    all_total = Morphism.thm phi all_total,
+    type_definition = Morphism.thm phi type_definition,
+    Abs_name = Abs_name,
+    Rep_name = Rep_name,
+    case_result = morph_case_result phi case_result,
+    rep_defs = rep_defs,
+    defs = defs,
+    timer = timer,
+    report = report }
+
+val transfer_enum_info = morph_enum_info o Morphism.transfer_morphism
+
 (* The plugin mechanism is Isabelle's own (Pure/Tools/plugin.ML), as used by datatype,
    typedef and bnf_lfp_size: registered plugins run by default and are selected per
    declaration with the `(plugins only:/del: ...)` group. *)
@@ -481,8 +524,14 @@ structure Enum_Plugin = Plugin(type T = enum_info)
    introduce sit beside the enum's own. Note we deliberately do *not* re-root the background
    naming the way Typedef.interpretation does: that would discard an enclosing local target
    (e.g. an `experiment`), and the enum's own constants --- `case_T` in particular --- live
-   inside it. *)
-fun interpretation name f = Enum_Plugin.interpretation name f
+   inside it.
+
+   An interpretation may first meet an enum when two independent theory branches merge.
+   Transfer the stored payload into that merged theory before the plugin combines its
+   theorems with the enum's theorems, as Ctr_Sugar does for its plugin payload. *)
+fun interpretation name f =
+  Enum_Plugin.interpretation name (fn info => fn lthy =>
+    f (transfer_enum_info (Proof_Context.theory_of lthy) info) lthy)
 
 (* Naming conventions for the generated constants and facts. *)
 fun variants_name type_name = type_name ^ "_variants"
