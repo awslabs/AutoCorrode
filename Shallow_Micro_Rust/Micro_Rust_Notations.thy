@@ -886,11 +886,16 @@ fun check_forced_kind kind ctxt t =
   a bespoke grammar production + AST translation (see
   \<open>emit_bespoke_syntax\<close>): the dispatch-table entry alone is useless if the
   use site never parses.\<close>
-fun is_grammatical_name name =
-  let val remove_colons = String.translate (fn #":" => "" | c => String.str c)
-  in Symbol_Pos.is_identifier name
-       orelse Symbol_Pos.is_identifier (remove_colons name)
+fun is_identifier_path name =
+  let
+    val segments = String.tokens (fn c => c = #":") name
+  in
+    not (null segments)
+      andalso space_implode "::" segments = name
+      andalso forall Symbol_Pos.is_identifier segments
   end;
+
+fun is_grammatical_name name = is_identifier_path name;
 
 \<comment>\<open>For a non-grammatical rust name (turbofish/macro), emit a bespoke
   grammar production so the surface token parses, then funnel it back into
