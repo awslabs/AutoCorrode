@@ -128,6 +128,12 @@ lemma in_set_cons:
   shows \<open>(x \<in> set (Cons y zs)) = (x = y \<or> x \<in> set zs)\<close>
   by auto
 
+lemma in_not_in_disjoint:
+  assumes \<open>x \<in> A\<close>
+      and \<open>A \<inter> B = {}\<close>
+    shows \<open>x \<notin> B\<close>
+  using assms by blast
+
 (*<*)
 end
 (*>*)

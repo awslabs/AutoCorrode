@@ -108,7 +108,7 @@ lemma mapped_multiset_eq [mset_simps]:
     shows \<open>{# \<xi> . ms #} = {# \<tau> . ms #}\<close>
 using assms by (metis multiset.map_cong)
 
-lemma mset_set_minus_singletonE [elim]:
+lemma mset_set_minus_singletonE [elim!]:
   assumes \<open>i \<in># mset_set s - {#i#}\<close>
     shows \<open>R\<close>
 proof -
@@ -122,7 +122,7 @@ proof -
     by auto
 qed
 
-lemma mset_range_minus_singletonE [elim]:
+lemma mset_range_minus_singletonE [elim!]:
   assumes \<open>i \<in># mset [0..<N] - {#i#}\<close>
     shows \<open>R\<close>
 using assms Multiset.mset_upt mset_set_minus_singletonE by auto
@@ -475,6 +475,29 @@ proof -
   show ?thesis
     by (auto simp: multiset_eq_iff count_mset_set')
 qed
+
+subsection\<open>Distinctness from multiset inclusion\<close>
+
+lemma distinct_subset_mset_set:
+  assumes \<open>mset ys \<subseteq># mset_set X\<close>
+      and \<open>finite X\<close>
+    shows \<open>distinct ys\<close>
+  using assms
+  apply (induction ys, simp)
+  apply (auto simp add: subseteq_mset_def count_mset_set')
+  subgoal by (auto split: if_splits)
+  by (metis (full_types) nat_le_linear not_less_eq_eq)
+
+lemma distinct_from_sublist:
+  assumes \<open>distinct xs\<close>
+      and \<open>mset ys \<subseteq># mset xs\<close>
+    shows \<open>distinct ys\<close>
+  using assms
+  by (auto simp add: mset_set_set intro!: distinct_subset_mset_set[where X=\<open>set xs\<close>])
+
+lemma mset_take_submset [simp]:
+  shows \<open>mset (take i xs) \<subseteq># mset xs\<close>
+  by (metis append_take_drop_id mset_subset_eq_add_right union_code union_commute)
 
 (*<*)
 end
