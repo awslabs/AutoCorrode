@@ -301,17 +301,36 @@ struct
     end
 
   val TIME : Proof.context -> bool -> string -> tactic -> tactic =
-    fn ctxt => fn enabled => fn msg => TIME_CB ctxt Position.none enabled msg default_logger (K (K (K (K ()))))
+    fn ctxt => fn enabled =>
+      if enabled andalso Config.get ctxt timing_enabled then
+        fn msg => TIME_CB ctxt Position.none true msg default_logger
+          (K (K (K (K ()))))
+      else
+        K I
 
   val TIME' : Proof.context -> bool -> string -> (int -> tactic) -> (int -> tactic) =
-    fn ctxt => fn enabled => if not enabled then K I else fn msg => fn t => TIME ctxt true msg o t
+    fn ctxt => fn enabled =>
+      if enabled andalso Config.get ctxt timing_enabled then
+        fn msg => fn t => TIME_CB ctxt Position.none true msg default_logger
+          (K (K (K (K ())))) o t
+      else
+        K I
 
   val TIME_pos : Proof.context -> Position.T -> bool -> string -> logger -> tactic -> tactic =
-    fn ctxt => fn pos => fn enabled => fn msg => fn log => TIME_CB ctxt pos enabled msg log (K (K (K (K ()))))
+    fn ctxt => fn pos => fn enabled =>
+      if enabled andalso Config.get ctxt timing_enabled then
+        fn msg => fn log => TIME_CB ctxt pos true msg log
+          (K (K (K (K ()))))
+      else
+        K (K I)
 
   val TIME_pos' : Proof.context -> Position.T -> bool -> string -> logger -> (int -> tactic) -> (int -> tactic) =
     fn ctxt => fn pos => fn enabled =>
-      if not enabled then K (K I) else fn msg => fn log => fn t => TIME_pos ctxt pos true msg log o t
+      if enabled andalso Config.get ctxt timing_enabled then
+        fn msg => fn log => fn t => TIME_CB ctxt pos true msg log
+          (K (K (K (K ())))) o t
+      else
+        K (K I)
 
   fun TIME_CB' (ctxt: Proof.context) (pos: Position.T) (enabled: bool) :
        string
