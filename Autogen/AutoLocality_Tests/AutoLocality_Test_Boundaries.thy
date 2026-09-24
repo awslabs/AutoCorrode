@@ -22,6 +22,10 @@ definition boundary_attr :: \<open>boundary_rec \<Rightarrow> bool\<close> where
 definition boundary_rank_attr :: \<open>'a \<Rightarrow> boundary_rec \<Rightarrow> bool\<close> where
   \<open>boundary_rank_attr x R \<equiv> boundary_attr R\<close>
 
+definition boundary_rank_attr2 ::
+    \<open>nat \<Rightarrow> boundary_rec \<Rightarrow> nat \<Rightarrow> bool\<close> where
+  \<open>boundary_rank_attr2 x R y \<equiv> boundary_attr R\<close>
+
 definition manual_flip :: \<open>boundary_rec \<Rightarrow> boundary_rec\<close> where
   \<open>manual_flip R \<equiv> update_ba Suc R\<close>
 
@@ -849,6 +853,11 @@ ML\<open>
       ("registry ambiguity uses a dedicated exception",
          fn () => AutoLocality_Assert.check "typed registry ambiguity"
            (case ambiguous_inference_result of
+              Exn.Exn (Locality_Registry_Ambiguity _) => true
+            | _ => false)),
+      ("generic exception capture preserves registry ambiguity",
+         fn () => AutoLocality_Assert.check "captured registry ambiguity"
+           (case ambiguity_capture_result of
               Exn.Exn (Locality_Registry_Ambiguity _) => true
             | _ => false)),
       ("generic exception capture preserves registry ambiguity",

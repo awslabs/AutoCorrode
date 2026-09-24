@@ -151,11 +151,22 @@ lemma b0_base_on_demand_cancellation:
   by (simp only:
     [[locality_autocancellation (b0_state) b0_set_c b0_has_a 0]])
 
+lemma b0_base_inferred_on_demand_cancellation:
+  shows \<open>b0_has_a (b0_set_c n R) = b0_has_a R\<close>
+  by (simp only:
+    [[locality_autocancellation b0_set_c b0_has_a 0]])
+
 lemma b0_base_on_demand_commutativity:
   shows \<open>b0_set_b m (b0_set_c n R) =
     b0_set_c n (b0_set_b m R)\<close>
   by (rule
     [[locality_autocommutativity (b0_state) b0_set_b b0_set_c]])
+
+lemma b0_base_inferred_on_demand_commutativity:
+  shows \<open>b0_set_b m (b0_set_c n R) =
+    b0_set_c n (b0_set_b m R)\<close>
+  by (rule
+    [[locality_autocommutativity b0_set_b b0_set_c]])
 
 text\<open>Repeated record initialization is part of the public compatibility
 surface and must remain idempotent.\<close>

@@ -282,10 +282,10 @@ lemma \<open>pair_attr (set_c n L) (set_c m R) = pair_attr L R\<close>
   by simp
 
 lemma \<open>pair_attr (set_c n L) R = pair_attr L R\<close>
-  by (simp only: [[locality_autocancellation (ctx) set_c pair_attr 0]])
+  by (simp only: [[locality_autocancellation set_c pair_attr 0]])
 
 lemma \<open>pair_attr L (set_a n R) = pair_attr L R\<close>
-  by (simp only: [[locality_autocancellation (ctx) set_a pair_attr 1]])
+  by (simp only: [[locality_autocancellation set_a pair_attr 1]])
 
 ML\<open>
   val ctxt = \<^context>
