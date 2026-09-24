@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<!DOCTYPE DOCKABLES SYSTEM "dockables.dtd">
+
+<DOCKABLES>
+  <DOCKABLE NAME="fine-grained-timing-dockable" MOVABLE="TRUE">
+    new FineGrainedTimingDockable(view, position);
+  </DOCKABLE>
+</DOCKABLES>

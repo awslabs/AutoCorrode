@@ -1,0 +1,3 @@
+session Fine_Grained_Timing_Test = Fine_Grained_Timing +
+  theories
+    Fine_Grained_Timing_Test

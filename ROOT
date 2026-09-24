@@ -9,6 +9,7 @@ session AutoCorrode = HOL +
     "Crush"
     "Data_Structures"
     "Enum_Theory"
+    "Fine_Grained_Timing"
     "iq"
     "Micro_Rust_Examples"
     "Micro_Rust_Interfaces"

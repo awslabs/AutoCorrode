@@ -1,0 +1,3 @@
+session Fine_Grained_Timing = Pure +
+  theories
+    Fine_Grained_Timing
