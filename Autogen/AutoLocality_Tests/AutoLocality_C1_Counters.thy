@@ -637,7 +637,7 @@ lemma c1_counter_explicit_fact_ignores_ambient_opt_out:
   shows \<open>c1_counter_attr_a (c1_counter_front_cd R) =
     c1_counter_attr_a R\<close>
   by (rule [[locality_autocancellation
-    (c1_counter_state) c1_counter_front_cd c1_counter_attr_a 0]])
+    c1_counter_front_cd c1_counter_attr_a 0]])
 
 context
   notes [[locality_cancel]]

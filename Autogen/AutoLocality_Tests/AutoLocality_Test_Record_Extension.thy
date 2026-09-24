@@ -16,6 +16,7 @@ record standard_base =
 record standard_ext = standard_base +
   std_c :: nat
 
+locality_init for standard_base
 locality_init for standard_ext
 
 definition std_bump_a :: \<open>standard_ext \<Rightarrow> standard_ext\<close> where
@@ -56,6 +57,18 @@ ML\<open>
   val expected_updates = map (suffix Record.updateN) expected_fields
   val registered_fields =
     entries |> filter #field |> map #const_name
+  val bump_a_pattern = Syntax.read_term ctxt "std_a_update"
+  val bump_b_pattern = Syntax.read_term ctxt "std_b_update"
+  val has_b_pattern = Syntax.read_term ctxt "std_b"
+  val cancellation_candidates =
+    locality_cancellation_record_candidates ctxt
+      bump_a_pattern has_b_pattern 0
+  val commutativity_candidates =
+    locality_commutativity_record_candidates ctxt
+      bump_a_pattern bump_b_pattern
+  val expected_ambiguous_records =
+    ["AutoLocality_Test_Record_Extension.standard_base",
+     "AutoLocality_Test_Record_Extension.standard_ext"]
   val _ = AutoLocality_Assert.run_suite "Record-extension/metadata"
     [ ("inherited and new selectors are registered",
          fn () => AutoLocality_Assert.check "all standard selectors"
@@ -67,7 +80,27 @@ ML\<open>
          fn () => AutoLocality_Assert.check "custom operation"
            (case one "AutoLocality_Test_Record_Extension.std_bump_a" of
               [entry] => not (#field entry)
-            | _ => false)) ]
+            | _ => false)),
+      ("cancellation inference sees both record registrations",
+         fn () => AutoLocality_Assert.check
+           "ambiguous cancellation records"
+           (cancellation_candidates = expected_ambiguous_records)),
+      ("commutativity inference sees both record registrations",
+         fn () => AutoLocality_Assert.check
+           "ambiguous commutativity records"
+           (commutativity_candidates = expected_ambiguous_records)),
+      ("ambiguous cancellation requires an explicit record",
+         fn () => AutoLocality_Assert.assert_raises
+           "ambiguous cancellation inference"
+           (fn () =>
+             locality_infer_cancellation_record ctxt
+               bump_a_pattern has_b_pattern 0)),
+      ("ambiguous commutativity requires an explicit record",
+         fn () => AutoLocality_Assert.assert_raises
+           "ambiguous commutativity inference"
+           (fn () =>
+             locality_infer_commutativity_record ctxt
+               bump_a_pattern bump_b_pattern)) ]
 \<close>
 
 (*<*)

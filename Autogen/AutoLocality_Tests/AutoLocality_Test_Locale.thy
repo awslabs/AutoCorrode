@@ -140,10 +140,10 @@ text\<open>A footprint-disjoint operation under the parameter-using attribute ca
 lemma \<open>bigval (setc c X) = bigval X\<close> by simp
 lemma explicit_cancellation_uses_relative_index:
   shows \<open>bigval (setc c X) = bigval X\<close>
-  by (rule [[locality_autocancellation (loc) setc bigval 0]])
+  by (rule [[locality_autocancellation setc bigval 0]])
 lemma explicit_cancellation_uses_nonzero_relative_index:
   shows \<open>bigval_at n (setc c X) = bigval_at n X\<close>
-  by (rule [[locality_autocancellation (loc) setc bigval_at 1]])
+  by (rule [[locality_autocancellation setc bigval_at 1]])
 lemma \<open>bigval (setc c (bumpval X)) = bigval (bumpval X)\<close> by simp
 \<comment>\<open>The parameter-using operation's own disjointness lemma holds.\<close>
 lemma \<open>ob (bumpval X) = ob X\<close> by simp

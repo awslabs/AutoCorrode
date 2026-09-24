@@ -94,7 +94,7 @@ lemma \<open>has_a (update_fb g (update_fc hf X)) = has_a X\<close> by simp
 lemma \<open>read_b (set_c c (opaque_a h (opaque_b b X))) = read_b (opaque_b b X)\<close> by simp
 
 lemma \<open>has_a (opaque_b k R) = has_a R\<close>
-  by (simp only: [[locality_autocancellation (three) opaque_b has_a 0]])
+  by (simp only: [[locality_autocancellation opaque_b has_a 0]])
 
 text\<open>The cancellation also works through \<^verbatim>\<open>simp add: <record>_locality_facts\<close>, the bundle form
 that downstream proofs use: the simprocs ride along in the ambient simpset.\<close>
@@ -141,7 +141,7 @@ ML\<open>
           | NONE => error "opaque_a/set_c should have a derived theorem"
 \<close>
 
-text\<open>The same derivation is reachable from proof text via the \<^verbatim>\<open>[[locality_autocommutativity (rec) A B]]\<close>
+text\<open>The same derivation is reachable from proof text via the \<^verbatim>\<open>[[locality_autocommutativity A B]]\<close>
 attribute, which \<^emph>\<open>returns\<close> the (generalized) commutativity theorem as a fact rather than mutating the
 simpset. A bare operation-over-operation goal - which the default-on cancellation simprocs do
 \<^emph>\<open>not\<close> rewrite, since no attribute heads it - then closes by using that fact directly. We exercise all
@@ -149,17 +149,17 @@ three fact-position idioms: naming it with \<^theory_text>\<open>lemmas\<close>,
 \<^theory_text>\<open>simp add:\<close>.\<close>
 
 text\<open>Name the produced theorem, then discharge with it.\<close>
-lemmas opaque_a_set_c_commute = [[locality_autocommutativity (three) opaque_a set_c]]
+lemmas opaque_a_set_c_commute = [[locality_autocommutativity opaque_a set_c]]
 lemma \<open>opaque_a a (set_c c R) = set_c c (opaque_a a R)\<close>
   by (rule opaque_a_set_c_commute)
 
 text\<open>Or use the anonymous \<^verbatim>\<open>[[\<dots>]]\<close> fact inline, resolving against the goal.\<close>
 lemma \<open>opaque_a a (set_c c R) = set_c c (opaque_a a R)\<close>
-  by (rule [[locality_autocommutativity (three) opaque_a set_c]])
+  by (rule [[locality_autocommutativity opaque_a set_c]])
 
 text\<open>Or hand it to \<^verbatim>\<open>simp add:\<close> as a rewrite (the schematic generalization is what makes this work).\<close>
 lemma \<open>set_c c (opaque_b b R) = opaque_b b (set_c c R)\<close>
-  by (simp add: [[locality_autocommutativity (three) set_c opaque_b]])
+  by (simp add: [[locality_autocommutativity set_c opaque_b]])
 
 text\<open>Without the attribute the same bare goal is \<^emph>\<open>not\<close> closed by a plain \<^verbatim>\<open>simp\<close> (the cancellation
 simprocs only fire under an attribute head), so unfolding is required - confirming the attribute is

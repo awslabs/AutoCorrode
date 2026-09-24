@@ -278,6 +278,11 @@ ML\<open>
       Locality_Attribute
     | Locality_Operation
 
+  exception Locality_Registry_Ambiguity of string
+
+  fun locality_registry_ambiguity message =
+    raise Locality_Registry_Ambiguity message
+
   fun locality_entry_kind_name Locality_Attribute = "attribute"
     | locality_entry_kind_name Locality_Operation = "operation"
 
@@ -1370,7 +1375,10 @@ ML\<open>
     (case Exn.capture f () of
        Exn.Res result => SOME result
      | Exn.Exn exn =>
-         if Exn.is_interrupt exn then Exn.reraise exn else NONE)
+         if Exn.is_interrupt exn then Exn.reraise exn
+         else (case exn of
+           Locality_Registry_Ambiguity _ => Exn.reraise exn
+         | _ => NONE))
 
   fun locality_terms_provably_equal_with count ctxt (lhs, rhs) =
     let
@@ -2707,7 +2715,8 @@ ML\<open>
                 locality_specialize_entry_with count ctxt actual entry)
             end
           else
-            error ("Ambiguous autolocality registrations on " ^ rec_name)
+            locality_registry_ambiguity
+              ("Ambiguous autolocality registrations on " ^ rec_name)
     end
 
   fun select_locality_entry_with count ctxt rec_name kind_name head args =
@@ -3916,7 +3925,8 @@ ML\<open>
       | entry :: _ =>
           if locality_entries_have_same_effect_with count candidates
           then SOME (locality_specialize_entry_with count ctxt pattern entry)
-          else error ("Ambiguous autolocality pattern on " ^ rec_name)
+          else locality_registry_ambiguity
+            ("Ambiguous autolocality pattern on " ^ rec_name)
     end
 
   fun select_locality_entry_for_pattern_with count
@@ -3949,7 +3959,8 @@ ML\<open>
       | entry :: _ =>
           if locality_entries_have_same_effect_with count candidates
           then SOME (locality_specialize_entry_with count ctxt pattern entry)
-          else error ("Ambiguous autolocality pattern on " ^ rec_name)
+          else locality_registry_ambiguity
+            ("Ambiguous autolocality pattern on " ^ rec_name)
     end
 
   fun select_locality_entry_for_pattern_at_idx_with count
@@ -3962,6 +3973,153 @@ ML\<open>
     select_locality_entry_for_pattern_at_idx_with
       (locality_direct_counter ctxt)
       ctxt rec_name kind_name pattern idx
+
+  fun locality_pattern_at_entry_type ctxt pattern
+        (entry : locality_entry) =
+    let
+      val thy = Proof_Context.theory_of ctxt
+      val target = #pattern entry
+      val fresh_inc = Term.maxidx_of_term target + 1
+      val pattern' =
+        pattern
+        |> locality_varify_types_preserving
+             (locality_assumption_tfrees ctxt)
+        |> Term.map_types (Logic.incr_tvar fresh_inc)
+      val type_env =
+        Sign.typ_match thy
+          (Term.type_of pattern', Term.type_of target)
+          Vartab.empty
+    in
+      Envir.subst_term_types type_env pattern'
+    end
+
+  fun locality_explicit_pattern_candidates_with count ctxt
+        rec_name kind pattern absolute_idx =
+    let
+      val _ = locality_count_one count
+        AutoLocality_Instrumentation.Lookup_Requests
+      val keys =
+        (case absolute_idx of
+           NONE =>
+             locality_pattern_keys_with count ctxt rec_name kind pattern
+         | SOME idx =>
+             locality_pattern_at_idx_keys_with
+               count ctxt rec_name kind pattern idx)
+      val entries =
+        locality_entries_for_keys_generic
+          (Context.Proof ctxt)
+          (LocalityOperationalKeyTable.keys keys)
+      val _ = locality_count_list count
+        AutoLocality_Instrumentation.Lookup_Entries_Examined entries
+      fun specialize entry =
+        capture_noninterrupt (fn () =>
+          let
+            val actual =
+              locality_pattern_at_entry_type ctxt pattern entry
+            val _ =
+              if locality_entry_matches_prefix_with count
+                   ctxt actual entry
+              then ()
+              else raise Pattern.MATCH
+          in
+            locality_specialize_entry_with count
+              ctxt actual entry
+          end)
+      val candidates = map_filter specialize entries
+      val _ = locality_count_list count
+        AutoLocality_Instrumentation.Lookup_Candidates_Returned
+        candidates
+    in
+      candidates
+    end
+
+  fun select_locality_entry_for_explicit_pattern_with count ctxt
+        rec_name kind pattern absolute_idx =
+    case locality_explicit_pattern_candidates_with count ctxt
+           rec_name kind pattern absolute_idx of
+      [] => NONE
+    | entry :: entries =>
+        if locality_entries_have_same_effect_with count
+             (entry :: entries)
+        then SOME entry
+        else locality_registry_ambiguity
+          ("Ambiguous autolocality pattern on " ^ rec_name)
+
+  fun locality_commutativity_record_candidates_with count
+        ctxt patternA patternB =
+    let
+      fun has_operation rec_name pattern =
+        select_locality_entry_for_explicit_pattern_with count
+          ctxt rec_name Locality_Operation pattern NONE
+        |> Option.isSome
+    in
+      get_registered_records ctxt
+      |> List.filter (fn rec_name =>
+           has_operation rec_name patternA
+             andalso has_operation rec_name patternB)
+      |> sort_strings
+    end
+
+  fun locality_commutativity_record_candidates ctxt patternA patternB =
+    locality_commutativity_record_candidates_with
+      (locality_direct_counter ctxt) ctxt patternA patternB
+
+  fun locality_cancellation_record_candidates_with count
+        ctxt operation_pattern attribute_pattern
+        attribute_relative_idx =
+    let
+      val attribute_absolute_idx =
+        length (snd (Term.strip_comb attribute_pattern)) +
+          attribute_relative_idx
+      fun has_operation rec_name =
+        select_locality_entry_for_explicit_pattern_with count
+          ctxt rec_name Locality_Operation operation_pattern NONE
+        |> Option.isSome
+      fun has_attribute rec_name =
+        select_locality_entry_for_explicit_pattern_with count
+          ctxt rec_name Locality_Attribute attribute_pattern
+          (SOME attribute_absolute_idx)
+        |> Option.isSome
+    in
+      get_registered_records ctxt
+      |> List.filter (fn rec_name =>
+           has_operation rec_name andalso has_attribute rec_name)
+      |> sort_strings
+    end
+
+  fun locality_cancellation_record_candidates ctxt
+        operation_pattern attribute_pattern
+        attribute_relative_idx =
+    locality_cancellation_record_candidates_with
+      (locality_direct_counter ctxt) ctxt
+      operation_pattern attribute_pattern
+      attribute_relative_idx
+
+  fun locality_require_unique_record attribute_name candidates =
+    case candidates of
+      [rec_name] => rec_name
+    | [] =>
+        error (attribute_name ^ ": cannot infer a record type from the "
+          ^ "supplied registrations; use the explicit (record_type) form")
+    | _ =>
+        error (attribute_name ^ ": record type is ambiguous among "
+          ^ space_implode ", " (map quote candidates)
+          ^ "; use the explicit (record_type) form")
+
+  fun locality_infer_commutativity_record
+        ctxt patternA patternB =
+    locality_commutativity_record_candidates ctxt patternA patternB
+    |> locality_require_unique_record
+         "locality_autocommutativity"
+
+  fun locality_infer_cancellation_record
+        ctxt operation_pattern attribute_pattern
+        attribute_relative_idx =
+    locality_cancellation_record_candidates ctxt
+      operation_pattern attribute_pattern
+      attribute_relative_idx
+    |> locality_require_unique_record
+         "locality_autocancellation"
 
   \<comment>\<open>Auto-derive the pairwise commutativity theorem for two registered operations on a record:
      \<^verbatim>\<open>opA argsA (opB argsB R) = opB argsB (opA argsA R)\<close>, with the non-record arguments held as fixed
@@ -4104,12 +4262,14 @@ ML\<open>
        Exn.Res result => result
      | Exn.Exn exn =>
           if Exn.is_interrupt exn then Exn.reraise exn
-          else
+          else (case exn of
+            Locality_Registry_Ambiguity _ => Exn.reraise exn
+          | _ =>
             (locality_pretty_trace ctxt 1 (fn () =>
                Pretty.text "locality cancellation declined after exception:"
                @ [Pretty.brk 1, Pretty.str (Runtime.exn_message exn)]
                |> Pretty.block);
-             NONE))
+             NONE)))
 
   fun locality_cancellation_for_entry rec_name attribute ctxt ctm =
     locality_cancellation_for_entry_with
@@ -5475,14 +5635,16 @@ attribute_setup locality_no_cancel =
 
 text\<open>On-demand pairwise operation commutativity. The default-on cancellation simprocs only fire when
 an \<^emph>\<open>attribute\<close> heads the telescope; a bare \<^verbatim>\<open>opA (opB R)\<close> is not rewritten. Where a proof needs the
-two operations to commute, \<^verbatim>\<open>[[locality_autocommutativity (rec) A B]]\<close> derives that theorem from the
+two operations to commute, \<^verbatim>\<open>[[locality_autocommutativity A B]]\<close> derives that theorem from the
 footprint data and \<^emph>\<open>returns it as a fact\<close> (generalized to schematics, so it applies as a rewrite or
 rule) - nothing is registered permanently and the ambient simpset is not touched. It is used in a
-\<^emph>\<open>fact position\<close>: name it with \<^verbatim>\<open>lemmas c = [[locality_autocommutativity (rec) A B]]\<close>, discharge a bare
-op-over-op goal with \<^verbatim>\<open>by (rule [[locality_autocommutativity (rec) A B]])\<close>, or feed it to a tactic
-with \<^verbatim>\<open>by (simp add: [[locality_autocommutativity (rec) A B]])\<close>. It is sound: operations with disjoint
+\<^emph>\<open>fact position\<close>: name it with \<^verbatim>\<open>lemmas c = [[locality_autocommutativity A B]]\<close>, discharge a bare
+op-over-op goal with \<^verbatim>\<open>by (rule [[locality_autocommutativity A B]])\<close>, or feed it to a tactic
+with \<^verbatim>\<open>by (simp add: [[locality_autocommutativity A B]])\<close>. It is sound: operations with disjoint
 footprints commute and yield a theorem; a footprint-sharing pair genuinely does not commute and
-raises an error rather than fabricating a false theorem. The record type is given in parentheses.
+raises an error rather than fabricating a false theorem. The record type is normally inferred by
+intersecting the records carrying matching registrations for both operations. The existing
+\<^verbatim>\<open>(rec)\<close> prefix remains available when polymorphic constants make that intersection ambiguous.
 
 Because the attribute ignores the theorem it is applied to and synthesises a fresh one, it works
 from the empty \<^verbatim>\<open>[[\<dots>]]\<close> fact form (which seeds the attribute chain with \<^verbatim>\<open>Drule.dummy_thm\<close>): the
@@ -5498,13 +5660,20 @@ definition - and misspelled operands are rejected at parse time. \<^ML>\<open>Ar
 the fully-qualified constant name the footprint database is keyed under, so it is passed straight to
 \<^verbatim>\<open>locality_prove_commutativity\<close>.\<close>
 attribute_setup locality_autocommutativity =
-  \<open>(Scan.lift (Args.parens Parse.typ) -- Args.const {proper = false, strict = false}
+  \<open>(Scan.option (Scan.lift (Args.parens Parse.typ))
+     -- Args.const {proper = false, strict = false}
      -- Args.const {proper = false, strict = false}) >> (fn ((rc, a), b) =>
      Thm.rule_attribute [] (fn context => fn _ (* incoming (dummy) thm, discarded *) =>
        let
          val ctxt = Context.proof_of context
          val patternA = Syntax.read_term ctxt a
          val patternB = Syntax.read_term ctxt b
+         val rc =
+           (case rc of
+              SOME rec_name => rec_name
+            | NONE =>
+                locality_infer_commutativity_record
+                  ctxt patternA patternB)
        in
          case locality_prove_commutativity ctxt rc patternA patternB of
            SOME thm => Thm.forall_intr_frees thm |> Thm.forall_elim_vars 0
@@ -5515,14 +5684,17 @@ attribute_setup locality_autocommutativity =
 
 text\<open>For restricted simplifier calls such as \<^verbatim>\<open>simp only\<close>, the default cancellation
 simprocs are intentionally absent. The fact attribute
-\<^verbatim>\<open>[[locality_autocancellation (rec) operation attribute index]]\<close> derives exactly the requested
+\<^verbatim>\<open>[[locality_autocancellation operation attribute index]]\<close> derives exactly the requested
 operation/attribute projection equation on demand. The index is relative to the remaining
 attribute arguments after any prefix already supplied by the proof context. In particular,
 implicit locale parameters do not count. The index distinguishes registrations of one attribute
 at multiple record slots. As with \<^verbatim>\<open>locality_autocommutativity\<close>, no theorem is
-registered permanently.\<close>
+registered permanently. The record is normally inferred by intersecting the operation and indexed
+attribute registrations. The existing \<^verbatim>\<open>(rec)\<close> prefix disambiguates polymorphic constants
+registered for multiple records.\<close>
 attribute_setup locality_autocancellation =
-  \<open>(Scan.lift (Args.parens Parse.typ) -- Args.const {proper = false, strict = false}
+  \<open>(Scan.option (Scan.lift (Args.parens Parse.typ))
+     -- Args.const {proper = false, strict = false}
      -- Args.const {proper = false, strict = false} -- Scan.lift Parse.nat)
     >> (fn (((rc, operation), attribute), attribute_idx) =>
       Thm.rule_attribute [] (fn context => fn _ =>
@@ -5530,6 +5702,13 @@ attribute_setup locality_autocancellation =
           val ctxt = Context.proof_of context
           val operation_pattern = Syntax.read_term ctxt operation
           val attribute_pattern = Syntax.read_term ctxt attribute
+          val rc =
+            (case rc of
+               SOME rec_name => rec_name
+             | NONE =>
+                 locality_infer_cancellation_record ctxt
+                   operation_pattern attribute_pattern
+                   attribute_idx)
         in
           case locality_prove_cancellation_fact ctxt rc
                  operation_pattern attribute_pattern attribute_idx of
