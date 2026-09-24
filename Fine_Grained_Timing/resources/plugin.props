@@ -3,7 +3,7 @@
 plugin.FineGrainedTimingPlugin.name=Fine-Grained Timing
 plugin.FineGrainedTimingPlugin.author=Amazon Web Services
 plugin.FineGrainedTimingPlugin.version=1.0
-plugin.FineGrainedTimingPlugin.description=Fine-grained tactic timing for Isabelle/jEdit
+plugin.FineGrainedTimingPlugin.description=Fine-grained prover timing for Isabelle/jEdit
 plugin.FineGrainedTimingPlugin.activate=defer
 plugin.FineGrainedTimingPlugin.usePluginHome=false
 

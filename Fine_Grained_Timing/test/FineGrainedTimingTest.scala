@@ -130,6 +130,16 @@ object FineGrainedTimingTest {
     requireThat(merged.averageElapsedMicros == 3.75, "average elapsed time is incorrect")
     requireThat(merged.percentileElapsedMicros(0.5) == 3L, "p50 bucket is incorrect")
     requireThat(merged.percentileElapsedMicros(0.99) == 15L, "p99 bucket is incorrect")
+    val empty =
+      FineGrainedTiming.Aggregate(
+        0L,
+        FineGrainedTiming.Timing(0L, 0L, 0L),
+        0L,
+        0L,
+        Map.empty
+      )
+    requireThat(empty + merged == merged && merged + empty == merged,
+      "empty aggregate should be an additive identity")
   }
 
   def main(_args: Array[String]): Unit = {

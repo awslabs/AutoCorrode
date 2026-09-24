@@ -26,7 +26,10 @@ object FineGrainedTiming {
       maxElapsedMicros: Long,
       histogram: Map[Int, Long]
   ) {
-    def +(other: Aggregate): Aggregate = {
+    def +(other: Aggregate): Aggregate =
+      if (count == 0L) other
+      else if (other.count == 0L) this
+      else {
       val mergedHistogram =
         (histogram.keySet ++ other.histogram.keySet).iterator.map { bucket =>
           bucket -> (histogram.getOrElse(bucket, 0L) + other.histogram.getOrElse(bucket, 0L))
@@ -38,7 +41,7 @@ object FineGrainedTiming {
         maxElapsedMicros = math.max(maxElapsedMicros, other.maxElapsedMicros),
         histogram = mergedHistogram
       )
-    }
+      }
 
     def averageElapsedMicros: Double =
       if (count == 0L) 0.0 else timing.elapsedMicros.toDouble / count.toDouble
