@@ -8,17 +8,25 @@ endif
 # Paths (configurable via environment variables)
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
-ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
-JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
+ifneq ($(wildcard $(ISABELLE_HOME)/bin/isabelle),)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
+else ifneq ($(wildcard $(ISABELLE_HOME)/isabelle),)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME)/..)
+else
+$(warning Cannot find Isabelle under $(ISABELLE_HOME)/bin/isabelle or $(ISABELLE_HOME)/isabelle; treating ISABELLE_HOME as the installation root)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
+endif
+ISABELLE ?= $(ISABELLE_INSTALLATION_HOME)/bin/isabelle
+JEDIT_DIR := $(shell ls -d $(ISABELLE_INSTALLATION_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
-SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
+SCALA_HOME ?= $(ISABELLE_INSTALLATION_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
 SCALA ?= $(SCALA_HOME)/bin/scala
 SCALA_PARSER_JAR := $(wildcard $(SCALA_HOME)/lib/scala-parser-combinators_3-*.jar)
-XZ_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz-*.jar $(ISABELLE_HOME)/contrib/xz-java-*/lib/xz.jar))
-ZSTD_JAR := $(firstword $(wildcard $(ISABELLE_HOME)/contrib/zstd-jni-*/lib/zstd-jni-*.jar))
-ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
+XZ_JAR := $(firstword $(wildcard $(ISABELLE_INSTALLATION_HOME)/contrib/xz-java-*/lib/xz-*.jar $(ISABELLE_INSTALLATION_HOME)/contrib/xz-java-*/lib/xz.jar))
+ZSTD_JAR := $(firstword $(wildcard $(ISABELLE_INSTALLATION_HOME)/contrib/zstd-jni-*/lib/zstd-jni-*.jar))
+ISABELLE_JAR ?= $(ISABELLE_INSTALLATION_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
 JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
@@ -154,7 +162,7 @@ install: $(JAR_FILE)
 	echo "      Atomic install avoids partial writes, but a running classloader keeps old JAR state."
 	echo ""
 	echo "To use the plugin:"
-	echo "1. Start Isabelle/jEdit: $(ISABELLE_HOME)/bin/isabelle jedit"
+	echo "1. Start Isabelle/jEdit: $(ISABELLE_INSTALLATION_HOME)/bin/isabelle jedit"
 	echo "2. Go to Utilities -> Global Options -> Plugin Manager"
 	echo "3. The I/Q Plugin should be listed and active"
 	echo "4. Go to Utilities -> I/Q Server Log to open the dockable"
