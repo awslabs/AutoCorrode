@@ -71,7 +71,67 @@ object FineGrainedTiming {
       success: Boolean,
       timing: Option[Timing],
       samples: Vector[Sample]
-  )
+  ) {
+    /* Nested samples may overlap, so their aggregate times cannot be added to
+       obtain the invocation's wall time. New schema 2 producers carry an
+       explicit outer timing; older reports leave this empty. */
+    def totalTiming: Option[Timing] = timing
+
+    def totalElapsedMicros: Long =
+      totalTiming.map(_.elapsedMicros).getOrElse(0L)
+  }
+
+  private def sampleCount(invocation: Invocation): Long =
+    invocation.samples.iterator.map(_.aggregate.count).sum
+
+  private def timingExtent(invocation: Invocation): (Long, Long, Long) =
+    invocation.timing match {
+      case Some(timing) =>
+        (timing.elapsedMicros, timing.cpuMicros, timing.gcMicros)
+      case None => (-1L, -1L, -1L)
+    }
+
+  private def laterTiming(
+      candidate: Invocation,
+      existing: Invocation
+  ): Boolean = {
+    val (candidateElapsed, candidateCpu, candidateGc) =
+      timingExtent(candidate)
+    val (existingElapsed, existingCpu, existingGc) =
+      timingExtent(existing)
+    candidateElapsed > existingElapsed ||
+      candidateElapsed == existingElapsed &&
+        (candidateCpu > existingCpu ||
+          candidateCpu == existingCpu && candidateGc > existingGc)
+  }
+
+  private def supersedes(candidate: Invocation, existing: Invocation): Boolean = {
+    val candidateSamples = sampleCount(candidate)
+    val existingSamples = sampleCount(existing)
+    candidateSamples > existingSamples ||
+      (candidateSamples == existingSamples &&
+        (candidate.success && !existing.success ||
+          candidate.success == existing.success &&
+            laterTiming(candidate, existing)))
+  }
+
+  /* A profile re-reports as its caller pulls more results. Every report of one
+     invocation carries the same id and a complete snapshot. Keep the snapshot
+     with the most samples, then the latest outcome and outer timing. */
+  def latestPerInvocation(
+      invocations: Iterable[Invocation]
+  ): Vector[Invocation] =
+    invocations.iterator
+      .foldLeft(Map.empty[Long, Invocation]) { (result, invocation) =>
+        result.updatedWith(invocation.id) {
+          case Some(existing) if !supersedes(invocation, existing) =>
+            Some(existing)
+          case _ => Some(invocation)
+        }
+      }
+      .values
+      .toVector
+      .sortBy(_.id)
 
   final case class SampleKey(name: String, success: Boolean)
 
@@ -111,13 +171,18 @@ object FineGrainedTiming {
       version: Int,
       properties: Properties.T
   ): Option[Option[Timing]] =
-    if (version == SchemaVersion) Some(None)
-    else {
-      for {
-        elapsed <- longProperty(properties, "elapsed_us")
-        cpu <- longProperty(properties, "cpu_us")
-        gc <- longProperty(properties, "gc_us")
-      } yield Some(Timing(elapsed, cpu, gc))
+    {
+      val names = List("elapsed_us", "cpu_us", "gc_us")
+      val present = names.count(name => Properties.get(properties, name).isDefined)
+      if (version == SchemaVersion && present == 0) Some(None)
+      else if (present != names.length) None
+      else {
+        for {
+          elapsed <- longProperty(properties, "elapsed_us")
+          cpu <- longProperty(properties, "cpu_us")
+          gc <- longProperty(properties, "gc_us")
+        } yield Some(Timing(elapsed, cpu, gc))
+      }
     }
 
   private def normalizeBody(body: XML.Body): XML.Body =

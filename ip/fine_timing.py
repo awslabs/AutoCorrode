@@ -65,6 +65,7 @@ class DecodeResult:
     malformed: int = 0
     unsupported: int = 0
     duplicates: int = 0
+    superseded: int = 0
 
 
 class YXMLError(ValueError):
@@ -193,7 +194,12 @@ def decode_report(properties, body):
     version = _integer(properties, "version")
     if version not in SUPPORTED_VERSIONS:
         raise UnsupportedVersion(f"unsupported report version {version}")
-    timing = _timing(properties) if version == 1 else None
+    timing_names = ("elapsed_us", "cpu_us", "gc_us")
+    timing = (
+        _timing(properties)
+        if version == 1 or any(name in properties for name in timing_names)
+        else None
+    )
     return Invocation(
         version=version,
         invocation=_integer(properties, "invocation"),
@@ -250,6 +256,7 @@ def extract_reports(text, theory="", export_name=""):
         return result
 
     seen = set()
+    superseded = {}
     for node, ancestors in _walk(body):
         properties = None
         report_body = None
@@ -292,6 +299,7 @@ def extract_reports(text, theory="", export_name=""):
         key = (
             theory, invocation.invocation, invocation.method,
             invocation.success, invocation.command_offset,
+            _timing_extent(invocation),
             tuple(
                 (sample.name, sample.success, sample.aggregate.count,
                  sample.aggregate.timing.elapsed_us,
@@ -305,10 +313,47 @@ def extract_reports(text, theory="", export_name=""):
         )
         if key in seen:
             result.duplicates += 1
-        else:
-            seen.add(key)
+            continue
+        seen.add(key)
+
+        # A profile re-reports as its caller pulls more results, and each is a
+        # complete snapshot of the accumulator rather than an increment. The
+        # snapshots differ, so the content key above does not collapse them;
+        # keeping them all would count the same samples repeatedly. Retain the
+        # largest snapshot per invocation instead.
+        identity = (
+            theory, invocation.invocation, invocation.method,
+            invocation.command_offset,
+        )
+        previous_index = superseded.get(identity)
+        if previous_index is None:
+            superseded[identity] = len(result.invocations)
             result.invocations.append(invocation)
+        elif _snapshot_extent(invocation) > _snapshot_extent(
+                result.invocations[previous_index]):
+            result.invocations[previous_index] = invocation
+            result.superseded += 1
+        else:
+            result.superseded += 1
     return result
+
+
+def _snapshot_extent(invocation):
+    """Order snapshots of one invocation; the largest is the final one."""
+    return (
+        sum(sample.aggregate.count for sample in invocation.samples),
+        invocation.success,
+        _timing_extent(invocation),
+        sum(sample.aggregate.timing.elapsed_us
+            for sample in invocation.samples),
+    )
+
+
+def _timing_extent(invocation):
+    timing = invocation.timing
+    if timing is None:
+        return (-1, -1, -1)
+    return (timing.elapsed_us, timing.cpu_us, timing.gc_us)
 
 
 def merge_aggregate(left, right):

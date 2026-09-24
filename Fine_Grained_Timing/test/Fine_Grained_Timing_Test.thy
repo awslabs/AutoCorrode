@@ -111,8 +111,154 @@ ML \<open>
       error "Generic profile changed its input context"
     else ()
 
-  (* `profile_method` must tell a method that failed from one that yielded no
-     result at all, so the outcome predicate has to see `Seq.Error`. *)
+  (* A profile reports again on every pull that added samples, so the wrapper
+     around the tail must leave the sequence fully enumerable, and nested
+     samples must keep reaching the accumulator while the caller backtracks. *)
+  val backtrack_samples =
+    Synchronized.var "backtracking timing test sink" ([]: string list)
+  val backtrack_context =
+    profile_context
+    |> Fine_Grained_Timing.add_sink "test_backtrack"
+        (fn _ =>
+          SOME (fn {name, ...}: Fine_Grained_Timing.timing_result =>
+            Synchronized.change backtrack_samples (cons name)))
+  val backtrack_result =
+    Fine_Grained_Timing.profile_seq (K true) "backtracking" backtrack_context
+      (fn ctxt =>
+        Seq.of_list [1, 2, 3]
+        |> Seq.map (fn n =>
+            Fine_Grained_Timing.time_and_report ctxt "element" true
+              (fn () => n)))
+    |> Seq.list_of
+
+  val _ =
+    if backtrack_result = [1, 2, 3] then ()
+    else error "Profiling a sequence changed the elements it yields"
+  val _ =
+    let val collected = length (Synchronized.value backtrack_samples)
+    in
+      if collected = 3 then ()
+      else error ("Backtracking past the first result lost nested samples: \
+        \expected 3, got " ^ Value.print_int collected)
+    end
+
+  (* Samples gathered while backtracking are worthless unless they are also
+     reported. Each pull that adds samples must emit a fresh snapshot, and
+     every snapshot of one invocation must carry the same id. *)
+  val observed_reports =
+    Synchronized.var "profile report observer" ([]: Properties.T list)
+  val observing_context =
+    profile_context
+    |> Config.put Fine_Grained_Timing.timing_threshold_us 0
+    |> Fine_Grained_Timing.set_report_observer
+        (fn _ => fn properties => fn _ =>
+          Synchronized.change observed_reports (cons properties))
+  val _ =
+    Fine_Grained_Timing.profile_seq (K true) "observed" observing_context
+      (fn ctxt =>
+        Seq.of_list [1, 2, 3]
+        |> Seq.map (fn n =>
+            Fine_Grained_Timing.time_and_report ctxt "element" true
+              (fn () =>
+                (* Sleep so the sample clears the reporting threshold; a pure
+                   computation can measure as zero elapsed time. *)
+                (OS.Process.sleep (Time.fromMilliseconds 1); n))))
+    |> Seq.list_of
+
+  val _ =
+    let
+      val reported = Synchronized.value observed_reports
+      val invocations =
+        distinct (op =)
+          (map_filter (fn properties =>
+            Properties.get properties "invocation") reported)
+    in
+      if length reported < 3 then
+        error ("A profile stopped reporting while the caller backtracked: \
+          \expected at least 3 reports, got " ^
+          Value.print_int (length reported))
+      else if length invocations <> 1 then
+        error ("Reports of one invocation disagreed on its id: " ^
+          commas_quote invocations)
+      else ()
+    end
+
+  (* An error result can be followed by a successful result without adding a
+     timing sample. The changed outcome still needs a new snapshot. *)
+  val outcome_reports =
+    Synchronized.var "profile outcome observer" ([]: Properties.T list)
+  val outcome_context =
+    profile_context
+    |> Fine_Grained_Timing.set_report_observer
+        (fn _ => fn properties => fn _ =>
+          Synchronized.change outcome_reports (cons properties))
+  val outcome_result =
+    Fine_Grained_Timing.profile_seq I "outcome" outcome_context
+      (fn _ => Seq.of_list [false, true])
+    |> Seq.list_of
+  val _ =
+    if outcome_result = [false, true] then ()
+    else error "Profiling changed an outcome test sequence"
+  val _ =
+    let
+      val reported = Synchronized.value outcome_reports
+    in
+      if length reported < 2 then
+        error "An outcome change did not emit a second profile snapshot"
+      else if
+        Properties.get (hd reported) "success" = SOME "true" andalso
+        is_some (Properties.get (hd reported) "elapsed_us") andalso
+        exists
+          (fn properties =>
+            Properties.get properties "success" = SOME "false")
+          (tl reported)
+      then ()
+      else error "Profile snapshots did not preserve the latest outcome"
+    end
+
+  (* Pulls without nested samples still contribute to the invocation total.
+     They must publish a newer snapshot when the outcome is unchanged. *)
+  val timing_reports =
+    Synchronized.var "profile timing observer" ([]: Properties.T list)
+  val timing_context =
+    profile_context
+    |> Fine_Grained_Timing.set_report_observer
+        (fn _ => fn properties => fn _ =>
+          Synchronized.change timing_reports (cons properties))
+  fun delayed_sequence [] =
+        Seq.make (fn _ =>
+          (OS.Process.sleep (Time.fromMilliseconds 2); NONE))
+    | delayed_sequence (value :: values) =
+        Seq.make (fn _ =>
+          (OS.Process.sleep (Time.fromMilliseconds 2);
+           SOME (value, delayed_sequence values)))
+  val timing_result =
+    Fine_Grained_Timing.profile_seq (K true) "timing_only" timing_context
+      (fn _ => delayed_sequence [1, 2])
+    |> Seq.list_of
+  val _ =
+    if timing_result = [1, 2] then ()
+    else error "Profiling changed a timing-only sequence"
+  val _ =
+    (case Synchronized.value timing_reports of
+      latest :: earlier :: _ =>
+        let
+          val latest_elapsed =
+            the_default 0
+              (Properties.get latest "elapsed_us"
+                |> Option.map Value.parse_int)
+          val earlier_elapsed =
+            the_default 0
+              (Properties.get earlier "elapsed_us"
+                |> Option.map Value.parse_int)
+        in
+          if latest_elapsed > earlier_elapsed then ()
+          else error "A timing-only pull did not publish a newer snapshot"
+        end
+    | _ => error "Timing-only pulls did not emit repeated snapshots")
+
+  (* `profile_method` distinguishes a failing method from one that yields no
+     result at all, so the outcome predicate must see `Seq.Error`. *)
   val error_result =
     Fine_Grained_Timing.profile_seq
       (fn Seq.Result _ => true | Seq.Error _ => false)

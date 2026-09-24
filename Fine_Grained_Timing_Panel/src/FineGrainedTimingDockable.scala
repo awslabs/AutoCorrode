@@ -602,18 +602,26 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       offset: Int
   ): Vector[FineGrainedTiming.Invocation] = {
     val range = Text.Range(offset, offset + command.length)
-    snapshot
-      .select[FineGrainedTiming.Invocation](
-        range,
-        Markup.Elements(FineGrainedTiming.ReportMarkup),
-        _ => {
-          case Text.Info(_, tree) => FineGrainedTiming.decode(tree)
-        }
-      )
-      .iterator
-      .map(_.info)
-      .toVector
-      .distinct
+    /* `select` keeps only the last markup element of a given name per
+       markup-tree entry, and every report of one command shares
+       `Position.thread_data`, so all of them land in a single entry: a
+       command that opens several profiles — nested ones, or
+       `apply (crush_base ..., crush_base ...)` — showed just one.
+       `cumulate` accumulates the whole entry instead. */
+    val decoded =
+      snapshot
+        .cumulate[Vector[FineGrainedTiming.Invocation]](
+          range,
+          Vector.empty,
+          Markup.Elements(FineGrainedTiming.ReportMarkup),
+          _ => { case (found, Text.Info(_, tree)) =>
+            FineGrainedTiming.decode(tree).map(found :+ _)
+          }
+        )
+        .iterator
+        .flatMap(_.info)
+        .toVector
+    FineGrainedTiming.latestPerInvocation(decoded)
   }
 
   private def makeRenderState(
@@ -875,7 +883,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
           .filter(visible =>
             invocationVisible(visible.invocation, options.thresholdMicros))
           .sortBy(visible =>
-            -visible.invocation.timing.map(_.elapsedMicros).getOrElse(0L))
+            -visible.invocation.totalElapsedMicros)
           .map { visible =>
             val invocation = visible.invocation
             val location =
@@ -956,7 +964,7 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
   ): Vector[String] = {
     val sampleCount = invocation.samples.iterator.map(_.aggregate.count).sum
     val elapsed =
-      invocation.timing.map(timing => formatMicros(timing.elapsedMicros, digits))
+      invocation.totalTiming.map(timing => formatMicros(timing.elapsedMicros, digits))
     Vector(
       location,
       invocation.method,
@@ -1007,9 +1015,10 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
       invocation: FineGrainedTiming.Invocation,
       thresholdMicros: Double
   ): Boolean =
-    invocation.timing.forall(
-      _.elapsedMicros.toDouble >= thresholdMicros
-    )
+    /* Old schema 2 reports have no outer timing. Their total is unknown, not
+       zero, so retain them rather than hiding otherwise decodable heaps. */
+    invocation.totalTiming.forall(
+      _.elapsedMicros.toDouble >= thresholdMicros)
 
   private def commandVisible(
       view: FineGrainedTimingHierarchy.View,

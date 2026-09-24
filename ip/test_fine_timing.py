@@ -55,7 +55,7 @@ def sample(name="step", success=True, count=3):
 
 
 def transported_report(version=2, invocation=42, success=True,
-                       report_body=None):
+                       report_body=None, invocation_timing=None):
     properties = {
         "xml_name": "fine_grained_timing",
         "version": version,
@@ -68,6 +68,12 @@ def transported_report(version=2, invocation=42, success=True,
             "elapsed_us": 500,
             "cpu_us": 400,
             "gc_us": 10,
+        })
+    elif invocation_timing is not None:
+        properties.update({
+            "elapsed_us": invocation_timing.elapsed_us,
+            "cpu_us": invocation_timing.cpu_us,
+            "gc_us": invocation_timing.gc_us,
         })
     return elem(
         "xml_elem", properties,
@@ -107,6 +113,12 @@ class FineTimingDecodeTest(unittest.TestCase):
             export_body(transported_report(version=1)))
         self.assertEqual(result.invocations[0].timing.elapsed_us, 500)
 
+    def test_decodes_schema_two_invocation_timing(self):
+        timing = Timing(70, 40, 5)
+        result = extract_reports(export_body(
+            transported_report(invocation_timing=timing)))
+        self.assertEqual(result.invocations[0].timing, timing)
+
     def test_rejects_bad_histogram(self):
         bad_sample = sample().replace(Y + "count=3", Y + "count=4", 1)
         result = extract_reports(
@@ -133,6 +145,46 @@ class FineTimingDecodeTest(unittest.TestCase):
         self.assertEqual(len(result.invocations), 1)
         self.assertEqual(result.duplicates, 1)
 
+    def test_keeps_only_the_largest_snapshot_of_an_invocation(self):
+        # A profile re-reports as its caller backtracks. Each report is a
+        # complete snapshot, so the later one supersedes the earlier rather
+        # than adding to it.
+        partial = transported_report(report_body=[sample(count=2)])
+        complete = transported_report(report_body=[sample(count=3)])
+        result = extract_reports(export_body(partial) + export_body(complete))
+        self.assertEqual(len(result.invocations), 1)
+        self.assertEqual(result.superseded, 1)
+        self.assertEqual(result.invocations[0].samples[0].aggregate.count, 3)
+
+        reordered = extract_reports(
+            export_body(complete) + export_body(partial))
+        self.assertEqual(len(reordered.invocations), 1)
+        self.assertEqual(
+            reordered.invocations[0].samples[0].aggregate.count, 3)
+
+    def test_success_supersedes_failure_with_the_same_samples(self):
+        failed = transported_report(success=False)
+        successful = transported_report(success=True)
+        result = extract_reports(export_body(failed) + export_body(successful))
+        self.assertEqual(len(result.invocations), 1)
+        self.assertTrue(result.invocations[0].success)
+
+    def test_later_timing_supersedes_the_same_samples_and_outcome(self):
+        early = transported_report(
+            invocation_timing=Timing(10, 5, 0))
+        late = transported_report(
+            invocation_timing=Timing(90, 20, 1))
+        result = extract_reports(export_body(early) + export_body(late))
+        self.assertEqual(len(result.invocations), 1)
+        self.assertEqual(result.invocations[0].timing.elapsed_us, 90)
+
+    def test_distinct_invocations_are_not_collapsed(self):
+        first = transported_report(invocation=1)
+        second = transported_report(invocation=2)
+        result = extract_reports(export_body(first) + export_body(second))
+        self.assertEqual(len(result.invocations), 2)
+        self.assertEqual(result.superseded, 0)
+
     def test_merges_samples_and_preserves_histogram(self):
         first = extract_reports(
             export_body(transported_report(invocation=1))).invocations[0]
@@ -156,22 +208,27 @@ class FineTimingDecodeTest(unittest.TestCase):
 
 
 class FineTimingCLITest(unittest.TestCase):
+    def _database_with_export(self, directory, body):
+        database = os.path.join(directory, "Example.db")
+        connection = sqlite3.connect(database)
+        connection.execute(
+            "CREATE TABLE isabelle_exports ("
+            "session_name TEXT, theory_name TEXT, name TEXT, body BLOB)")
+        connection.execute(
+            "CREATE TABLE isabelle_sources ("
+            "session_name TEXT, name TEXT, digest TEXT)")
+        connection.execute(
+            "INSERT INTO isabelle_exports VALUES (?, ?, ?, ?)",
+            ("Example", "Example.Theory", "PIDE/markup", body))
+        connection.commit()
+        connection.close()
+        return database
+
     def test_json_output_is_machine_readable(self):
         with tempfile.TemporaryDirectory() as directory:
-            database = os.path.join(directory, "Example.db")
-            connection = sqlite3.connect(database)
-            connection.execute(
-                "CREATE TABLE isabelle_exports ("
-                "session_name TEXT, theory_name TEXT, name TEXT, body BLOB)")
-            connection.execute(
-                "CREATE TABLE isabelle_sources ("
-                "session_name TEXT, name TEXT, digest TEXT)")
-            connection.execute(
-                "INSERT INTO isabelle_exports VALUES (?, ?, ?, ?)",
-                ("Example", "Example.Theory", "PIDE/markup",
-                 export_body(transported_report()).encode("utf-8")))
-            connection.commit()
-            connection.close()
+            database = self._database_with_export(
+                directory,
+                export_body(transported_report()).encode("utf-8"))
 
             process = subprocess.run(
                 [
@@ -187,7 +244,6 @@ class FineTimingCLITest(unittest.TestCase):
                 "heap-db-inspect/fine-grained-timing")
             self.assertEqual(document["summary"]["reports"], 1)
             self.assertEqual(document["rows"][0]["sample"], "step")
-
 
 if __name__ == "__main__":
     unittest.main()
