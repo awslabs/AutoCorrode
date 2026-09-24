@@ -297,7 +297,8 @@ struct
 
   fun REPEAT_SMART (ctxt : Proof.context) (log : logger) (aggressive : bool) (m : logger -> tactic) : tactic = let
 
-     fun debug lvl = if lvl <= (Config.get ctxt Crush_Config.debug_level)  then tracing else K ()
+     val debug_level = Config.get ctxt Crush_Config.debug_level
+     fun debug lvl msg = if lvl <= debug_level then tracing (msg ()) else ()
      val prioritize_changed_goals = Config.get ctxt Crush_Config.prioritize_changed_goals
      val m = if Config.get ctxt Crush_Config.do_big_steps then DWELL o m else m
      val gas = Config.get ctxt Crush_Config.gas
@@ -334,10 +335,11 @@ struct
              val log' = fn pp => 
                [Pretty.enclose "[" "]" [count |> Int.toString |> Pretty.str], Pretty.brk 1, pp]
                |> Pretty.block |> log
-             val _ = "step: "     ^ (count |> Int.toString)                ^ ", " ^
+             val _ = debug 0 (fn () =>
+                     "step: "     ^ (count |> Int.toString)                ^ ", " ^
                      "goal: "     ^ (i |> Int.toString)                    ^ ", " ^
                      "goals: "    ^ (st |> Thm.nprems_of |> Int.toString)  ^ ", " ^
-                     "worklist: " ^ (intlist_to_string is) |> debug 0
+                     "worklist: " ^ (intlist_to_string is))
              val (st, is) = rotate_goal_adjust_indices i (st, is)
              val (res, abort) = ((m log' st |> Seq.pull, false) handle SMART _ => (NONE, true))
            in if abort then (error ("inner tactic raised stop exception at step " ^ (Int.toString count));
@@ -382,11 +384,11 @@ struct
                             else
                                (range_of_nats_base 1 (n_new_goals+1)) @ changed @ is'
 
-                 val _ = "Goals before: "     ^ (nprems_old |> Int.toString) |> debug 1
-                 val _ = "Goals after: "      ^ (nprems_new |> Int.toString) |> debug 1
-                 val _ = "Worklist: "         ^ (intlist_to_string is)       |> debug 1
-                 val _ = "Worklist shifted: " ^ (intlist_to_string is')      |> debug 1
-                 val _ = "New worklist: "     ^ (intlist_to_string is'')     |> debug 1
+                 val _ = debug 1 (fn () => "Goals before: " ^ (nprems_old |> Int.toString))
+                 val _ = debug 1 (fn () => "Goals after: " ^ (nprems_new |> Int.toString))
+                 val _ = debug 1 (fn () => "Worklist: " ^ (intlist_to_string is))
+                 val _ = debug 1 (fn () => "Worklist shifted: " ^ (intlist_to_string is'))
+                 val _ = debug 1 (fn () => "New worklist: " ^ (intlist_to_string is''))
                  in
                    SOME ((st', true), run_smart (count+1) st' is'')
                  end
