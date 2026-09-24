@@ -8,7 +8,8 @@
 ######################################################################
 
 .DEFAULT_GOAL: jedit
-.PHONY: register-components register-afp-components register-timing-component \
+.PHONY: register-components register-afp-components \
+        register-fine-grained-timing-panel-component \
         build autolocality-tests autolocality-stress jedit tutorial \
         build-ic2 ic2 ic2-status ic2-stop
 
@@ -44,13 +45,15 @@ ISABELLE_JEDIT_FLAGS += $(ISABELLE_REMOTE)
 jedit: register-components
 	$(ISABELLE_HOME)/isabelle jedit $(ISABELLE_JEDIT_FLAGS) -l HOL -d . ./AutoCorrode.thy  &
 
-register-components: register-afp-components register-timing-component
+register-components: register-afp-components \
+	register-fine-grained-timing-panel-component
 
 register-afp-components:
 	$(ISABELLE_HOME)/isabelle components -u $(AFP_COMPONENT_BASE)/Word_Lib
 
-register-timing-component:
-	$(ISABELLE_HOME)/isabelle components -u $(CURDIR)/Fine_Grained_Timing
+register-fine-grained-timing-panel-component:
+	$(MAKE) -C Fine_Grained_Timing_Panel \
+		ISABELLE_HOME=$(ISABELLE_HOME) register
 
 build: register-components
 	$(ISABELLE_HOME)/isabelle build $(ISABELLE_FLAGS) -d . \

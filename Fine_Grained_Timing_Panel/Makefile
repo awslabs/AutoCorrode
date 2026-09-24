@@ -1,10 +1,11 @@
-# Makefile for the Fine-Grained Timing component and jEdit plugin
+# Makefile for the Fine-Grained Timing panel component
 
 ifndef V
 .SILENT:
 endif
 
 COMPONENT_DIR := $(shell pwd)
+FINE_GRAINED_TIMING_DIR ?= $(COMPONENT_DIR)/../Fine_Grained_Timing
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
 ifneq ($(wildcard $(ISABELLE_HOME)/bin/isabelle),)
 ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
@@ -64,7 +65,8 @@ test: build $(TEST_CLASSES_DIR)/.compiled
 	echo "Fine-Grained Timing Scala tests passed."
 
 session-test:
-	$(ISABELLE) build -d . Fine_Grained_Timing_Test
+	$(ISABELLE) build -d "$(FINE_GRAINED_TIMING_DIR)" \
+		Fine_Grained_Timing_Test
 
 register:
 	$(ISABELLE) components -u "$(COMPONENT_DIR)"
