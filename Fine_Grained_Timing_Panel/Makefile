@@ -38,7 +38,7 @@ RESOURCE_FILES := $(wildcard resources/*)
 TEST_SOURCES := $(wildcard test/*.scala)
 TEST_CLASSPATH = $(CLASSES_DIR):$(TEST_CLASSES_DIR):$(JEDIT_JAR):$(ISABELLE_JAR)
 
-.PHONY: all build test session-test register install clean uninstall
+.PHONY: all build test session-test install clean uninstall
 
 all: build
 
@@ -68,10 +68,7 @@ session-test:
 	$(ISABELLE) build -d "$(FINE_GRAINED_TIMING_DIR)" \
 		Fine_Grained_Timing_Test
 
-register:
-	$(ISABELLE) components -u "$(COMPONENT_DIR)"
-
-install: register $(JAR_FILE)
+install: $(JAR_FILE)
 	echo "Installing Fine-Grained Timing plugin to $(INSTALL_DIR)..."
 	mkdir -p $(INSTALL_DIR)
 	@set -eu; \
