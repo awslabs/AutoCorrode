@@ -14,6 +14,13 @@ object FineGrainedTimingScope {
   private val NamedProofStarters: Set[String] =
     Set("lemma", "theorem", "corollary", "proposition", "schematic_goal")
 
+  private val ProofNamePattern =
+    """(?s)^\s*(?:lemma|theorem|corollary|proposition|schematic_goal)\s+([A-Za-z0-9_'.]+)""".r
+
+  def proofName(source: String, fallback: String): String =
+    ProofNamePattern.findFirstMatchIn(source).map(_.group(1))
+      .getOrElse(fallback)
+
   def partitionNamedProofs(commands: IndexedSeq[ScopeCommand]): IndexedSeq[NamedProof] = {
     val result = Vector.newBuilder[NamedProof]
     var i = 0

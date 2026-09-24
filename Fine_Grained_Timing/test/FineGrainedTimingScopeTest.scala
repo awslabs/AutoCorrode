@@ -39,9 +39,20 @@ object FineGrainedTimingScopeTest {
     requireThat(proofs.isEmpty, "an incomplete named proof should not be partitioned")
   }
 
+  private def testQualifiedProofName(): Unit = {
+    requireThat(
+      FineGrainedTimingScope.proofName(
+        "lemma foo.first [simp]: \"True\"",
+        "lemma"
+      ) == "foo.first",
+      "qualified proof names should not be truncated"
+    )
+  }
+
   def main(_args: Array[String]): Unit = {
     testNamedProofPartitioning()
     testIncompleteNamedProofIsExcluded()
+    testQualifiedProofName()
     println("FineGrainedTimingScopeTest: all tests passed")
   }
 }
