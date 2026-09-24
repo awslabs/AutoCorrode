@@ -188,5 +188,6 @@ instance ..
 
 end
 
+(*<*)
 end
 (*>*)
