@@ -6,11 +6,19 @@ endif
 
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
-JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
+ifneq ($(wildcard $(ISABELLE_HOME)/bin/isabelle),)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
+else ifneq ($(wildcard $(ISABELLE_HOME)/isabelle),)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME)/..)
+else
+$(warning Cannot find Isabelle under $(ISABELLE_HOME)/bin/isabelle or $(ISABELLE_HOME)/isabelle; treating ISABELLE_HOME as the installation root)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
+endif
+JEDIT_DIR := $(shell ls -d $(ISABELLE_INSTALLATION_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
-SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
+SCALA_HOME ?= $(ISABELLE_INSTALLATION_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
-ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
+ISABELLE_JAR ?= $(ISABELLE_INSTALLATION_HOME)/lib/classes/isabelle.jar
 
 BUILD_DIR ?= $(PLUGIN_DIR)/build
 CLASSES_DIR ?= $(BUILD_DIR)/classes

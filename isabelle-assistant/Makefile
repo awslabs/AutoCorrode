@@ -6,10 +6,18 @@ endif
 
 PLUGIN_DIR := $(shell pwd)
 ISABELLE_HOME ?= /Applications/Isabelle2025-2.app
-ISABELLE ?= $(if $(wildcard $(ISABELLE_HOME)/bin/isabelle),$(ISABELLE_HOME)/bin/isabelle,$(ISABELLE_HOME)/isabelle)
-JEDIT_DIR := $(shell ls -d $(ISABELLE_HOME)/contrib/jedit-* 2>/dev/null | head -1)
+ifneq ($(wildcard $(ISABELLE_HOME)/bin/isabelle),)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
+else ifneq ($(wildcard $(ISABELLE_HOME)/isabelle),)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME)/..)
+else
+$(warning Cannot find Isabelle under $(ISABELLE_HOME)/bin/isabelle or $(ISABELLE_HOME)/isabelle; treating ISABELLE_HOME as the installation root)
+ISABELLE_INSTALLATION_HOME := $(abspath $(ISABELLE_HOME))
+endif
+ISABELLE ?= $(ISABELLE_INSTALLATION_HOME)/bin/isabelle
+JEDIT_DIR := $(shell ls -d $(ISABELLE_INSTALLATION_HOME)/contrib/jedit-* 2>/dev/null | head -1)
 JEDIT_JAR ?= $(JEDIT_DIR)/jedit5.7.0-patched/jedit.jar
-SCALA_HOME ?= $(ISABELLE_HOME)/contrib/scala-3.3.4
+SCALA_HOME ?= $(ISABELLE_INSTALLATION_HOME)/contrib/scala-3.3.4
 SCALAC ?= $(SCALA_HOME)/bin/scalac
 SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard -Wnonunit-statement
 # Test flags mirror the production flags except for -Wnonunit-statement:
@@ -18,7 +26,7 @@ SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privat
 # assertion. Keep -Werror and -Wvalue-discard — they catch real mistakes
 # without interfering with idiomatic test bodies.
 TEST_SCALAC_FLAGS ?= -deprecation -feature -unchecked -Werror -Wunused:imports,privates,locals,params -Xlint:all -Wvalue-discard
-ISABELLE_JAR ?= $(ISABELLE_HOME)/lib/classes/isabelle.jar
+ISABELLE_JAR ?= $(ISABELLE_INSTALLATION_HOME)/lib/classes/isabelle.jar
 JAVA_HOME ?= $(shell $(ISABELLE) getenv -b JAVA_HOME 2>/dev/null)
 JAVA ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/java,java)
 JAR ?= $(if $(JAVA_HOME),$(JAVA_HOME)/bin/jar,jar)
