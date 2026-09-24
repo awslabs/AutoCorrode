@@ -389,7 +389,11 @@ struct
         ("fine_grained_timing", properties) (YXML.string_of_body body)
     end
 
-  fun above_pide_threshold ctxt ({timing, ...}: timing_result) =
+  (* `timing_threshold_us` gates every sink, not just PIDE: it is the
+     user-facing statement that samples below it are noise. Filtering in the
+     PIDE sink alone makes `fine_grained_timing_output` trace every
+     sub-microsecond sample. *)
+  fun above_threshold ctxt ({timing, ...}: timing_result) =
     let val threshold = Time.fromMicroseconds (Config.get ctxt timing_threshold_us)
     in #elapsed timing > threshold end
 
@@ -400,17 +404,19 @@ struct
         [] => NONE
       | statistics :: _ =>
           SOME (fn result as {name, success, timing} =>
-            if above_pide_threshold ctxt result then
+            if above_threshold ctxt result then
               Fine_Grained_Timing_Accumulator.add statistics
                 (name, success, timing)
             else ()))
 
   fun output_sink_factory ctxt =
     if Config.get ctxt output_enabled then
-      SOME (fn {name, success, timing} =>
-        tracing ("fine-grained timing " ^ quote name ^ " " ^
-          (if success then "success" else "failure") ^ ": " ^
-          Timing.message timing))
+      SOME (fn result as {name, success, timing} =>
+        if above_threshold ctxt result then
+          tracing ("fine-grained timing " ^ quote name ^ " " ^
+            (if success then "success" else "failure") ^ ": " ^
+            Timing.message timing)
+        else ())
     else NONE
 
   structure Sink_Data = Proof_Data (
