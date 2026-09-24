@@ -116,9 +116,11 @@ sig
     -> (unit -> (Timing.timing * bool) * 'a)
 
   (* Create one PIDE aggregation boundary around an arbitrary lazy sequence.
-     The string is the invocation label shown in the report header. *)
-  val profile_seq :
-    string -> Proof.context -> (Proof.context -> 'a Seq.seq) -> 'a Seq.seq
+     The string is the invocation label shown in the report header. The
+     predicate decides whether a pulled element counts as a successful
+     outcome; element types that cannot carry failure use `K true`. *)
+  val profile_seq : ('a -> bool)
+    -> string -> Proof.context -> (Proof.context -> 'a Seq.seq) -> 'a Seq.seq
 
   val profile_tactic :
     string -> Proof.context -> (Proof.context -> tactic) -> tactic
@@ -545,7 +547,7 @@ struct
   PIDE stack frame and performs a plain pull. Nested `time` operations resolve
   the statically registered PIDE sink against that frame.
   *)
-  fun profile_seq invocation_name ctxt make_sequence =
+  fun profile_seq element_success invocation_name ctxt make_sequence =
     if not (Config.get ctxt enabled) then
       make_sequence ctxt
     else
@@ -566,12 +568,16 @@ struct
         Seq.make (fn _ =>
           let
             val output = Seq.pull (make_sequence ctxt')
-            val _ = emit_pide_report ctxt' invocation (is_some output)
+            val success =
+              (case output of
+                NONE => false
+              | SOME (element, _) => element_success element)
+            val _ = emit_pide_report ctxt' invocation success
           in output end)
       end
 
   fun profile_tactic invocation_name ctxt make_tactic state =
-    profile_seq invocation_name ctxt
+    profile_seq (K true) invocation_name ctxt
       (fn ctxt' => make_tactic ctxt' state)
 
   (* Methods additionally return proof contexts. Restore the caller's profile
@@ -581,7 +587,9 @@ struct
       val ctxt = fst context
       val profiles = PIDE_Profiles.get ctxt
     in
-      profile_seq invocation_name ctxt
+      profile_seq
+        (fn Seq.Result _ => true | Seq.Error _ => false)
+        invocation_name ctxt
         (fn ctxt' => make_method ctxt' facts (ctxt', snd context))
       |> Seq.map_result (fn (result_ctxt, result) =>
           (PIDE_Profiles.put profiles result_ctxt, result))
