@@ -298,7 +298,7 @@ subsection\<open>Crush\<close>
 ML_file "crush.ML"
 
 ML\<open>open Crush_Tacticals\<close>
-ML\<open>open Crush_Time\<close>
+ML\<open>open Fine_Grained_Timing\<close>
 
 subsection\<open>Arithmetic\<close>
 

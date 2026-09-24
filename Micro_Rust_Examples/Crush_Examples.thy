@@ -798,11 +798,10 @@ end
 subsubsection\<open>Profiling \<^verbatim>\<open>crush\<close>\<close>
 
 text\<open>Despite all efforts to keep \<^verbatim>\<open>crush\<close> fast, some \<^verbatim>\<open>crush\<close> invocations can take a long time.
-In this case, the general profiling variant \<^verbatim>\<open>apply\<tau>\<close> can be used in conjunction with some or all
-of the configuration options \<^verbatim>\<open>crush_time_...\<close> to get a timing profile for \<^verbatim>\<open>crush\<close>.
-
-NB: Unfortunately, timing profiles are proof local, so you cannot currently aggregate performance
-statistics along multiple proofs.\<close>
+The \<^verbatim>\<open>pide timing: true\<close> modifier emits one bounded PIDE report for the complete
+invocation. The report retains successful and failing branch statistics and can be aggregated
+by the \<^verbatim>\<open>Fine-Grained Timing\<close> jEdit panel at command, proof, theory, and global scope.
+Global scope combines all timing reports in the current PIDE document session.\<close>
 
 experiment
   fixes P Q :: \<open>'a \<Rightarrow> 's::sepalg assert\<close>
@@ -816,100 +815,9 @@ begin
   lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     \<comment>\<open>By default, the timing mechanism ignores runtimes < 2ms, which is too high to observe
     the runtime of the tactics in this trivial example. We reduce the threshold to 5ns.\<close>
-    using [[crush_time_toplevel, crush_timing_threshold=5]]
-    apply\<tau> (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
-    show_timelogs
-(* Top ten time sinks
-- crush_branch_aentails_core_tac: 0.000374s (0.000073s failing, 0.000301s succeeding)
-- crush_branch_aentails_cancel_tac: 0.000301s (0.000118s failing, 0.000183s succeeding)
-- crush_branch_base_simps_tac: 0.000261s (0.000250s failing, 0.000011s succeeding)
-- crush_branch_aentails_rule_tac: 0.000079s (0.000000s failing, 0.000079s succeeding)
-- crush_branch_unfold_prems_tac: 0.000041s (0.000028s failing, 0.000013s succeeding)
-- crush_branch_focus_tac: 0.000026s (0.000026s failing, 0.000000s succeeding)
-- crush_branch_schematics_tac: 0.000022s (0.000000s failing, 0.000022s succeeding)
-- crush_branch_unfold_concls_tac: 0.000017s (0.000017s failing, 0.000000s succeeding)
-Timing statistics for: crush_branch_aentails_core_tac
-- Total time: 0.000374s
-- SUCCESSES
-  * Number of time reports: 1
-  * total 0.000301s, average 0.000301s, median 0.000301s
-  * Percentiles:  0.000301s 0.000301s 0.000301s 0.000301s 0.000301s 0.000301s ...
-- FAILURES
-  * Number of time reports: 2
-  * total 0.000073s, average 0.000036s, median 0.000039s
-  * Percentiles:  0.000034s 0.000034s 0.000034s 0.000034s 0.000034s 0.000039s ...
-Timing statistics for: crush_branch_aentails_cancel_tac
-- Total time: 0.000301s
-- SUCCESSES
-  * Number of time reports: 3
-  * total 0.000183s, average 0.000061s, median 0.000064s
-  * Percentiles:  0.000044s 0.000044s 0.000044s 0.000044s 0.000064s 0.000064s ...
-- FAILURES
-  * Number of time reports: 4
-  * total 0.000118s, average 0.000029s, median 0.000047s
-  * Percentiles:  0.000006s 0.000006s 0.000006s 0.000007s 0.000007s 0.000047s ...
-Timing statistics for: crush_branch_base_simps_tac
-- Total time: 0.000261s
-- SUCCESSES
-  * Number of time reports: 1
-  * total 0.000011s, average 0.000011s, median 0.000011s
-  * Percentiles:  0.000011s 0.000011s 0.000011s 0.000011s 0.000011s 0.000011s ...
-- FAILURES
-  * Number of time reports: 7
-  * total 0.000250s, average 0.000035s, median 0.000038s
-  * Percentiles:  0.000026s 0.000026s 0.000027s 0.000031s 0.000031s 0.000038s ...
-Timing statistics for: crush_branch_aentails_rule_tac
-- Total time: 0.000079s
-- SUCCESSES
-  * Number of time reports: 1
-  * total 0.000079s, average 0.000079s, median 0.000079s
-  * Percentiles:  0.000079s 0.000079s 0.000079s 0.000079s 0.000079s 0.000079s ...
-- FAILURES
-  * Number of time reports: 0
-  * total 0.000000s, average 0.000000s, median 0.000000s
-  * Percentiles:
-Timing statistics for: crush_branch_unfold_prems_tac
-- Total time: 0.000041s
-- SUCCESSES
-  * Number of time reports: 1
-  * total 0.000013s, average 0.000013s, median 0.000013s
-  * Percentiles:  0.000013s 0.000013s 0.000013s 0.000013s 0.000013s 0.000013s ...
-- FAILURES
-  * Number of time reports: 3
-  * total 0.000028s, average 0.000009s, median 0.000010s
-  * Percentiles:  0.000006s 0.000006s 0.000006s 0.000006s 0.000010s 0.000010s ...
-Timing statistics for: crush_branch_focus_tac
-- Total time: 0.000026s
-- SUCCESSES
-  * Number of time reports: 0
-  * total 0.000000s, average 0.000000s, median 0.000000s
-  * Percentiles:
-- FAILURES
-  * Number of time reports: 1
-  * total 0.000026s, average 0.000026s, median 0.000026s
-  * Percentiles:  0.000026s 0.000026s 0.000026s 0.000026s 0.000026s 0.000026s ...
-Timing statistics for: crush_branch_schematics_tac
-- Total time: 0.000022s
-- SUCCESSES
-  * Number of time reports: 1
-  * total 0.000022s, average 0.000022s, median 0.000022s
-  * Percentiles:  0.000022s 0.000022s 0.000022s 0.000022s 0.000022s 0.000022s ...
-- FAILURES
-  * Number of time reports: 0
-  * total 0.000000s, average 0.000000s, median 0.000000s
-  * Percentiles:
-Timing statistics for: crush_branch_unfold_concls_tac
-- Total time: 0.000017s
-- SUCCESSES
-  * Number of time reports: 0
-  * total 0.000000s, average 0.000000s, median 0.000000s
-  * Percentiles:
-- FAILURES
-  * Number of time reports: 1
-  * total 0.000017s, average 0.000017s, median 0.000017s
-  * Percentiles:  0.000017s 0.000017s 0.000017s 0.000017s 0.000017s 0.000017s ...
-Top ten time sinks *)
-  done
+    using [[crush_time_toplevel, fine_grained_timing_threshold=5]]
+    apply (crush_base pide timing: true simp prems add: Some_Ex_def seplog rule add: PQ)
+    done
 end
 
 text\<open>If you suspect that poor performance of \<^verbatim>\<open>crush\<close> is due to a particular branch running slowly,
@@ -1440,9 +1348,8 @@ lemma test_record2_zeroize_contract_spec:
   shows \<open>\<Gamma>; test_record2_zeroize ptr \<Turnstile>\<^sub>F test_record2_zeroize_contract ptr g v\<close>
   apply (crush_boot f: test_record2_zeroize_def contract: test_record2_zeroize_contract_def)
   using [[crush_time_steps, crush_time_base_simps]]
-  apply\<tau> (crush_base stepwise)
+  apply (crush_base stepwise)
   step *
-  show_timelogs
   done
 
 text\<open>Another similar stress test, but this time using array accesses behind a function wrapper.\<close>
@@ -1585,7 +1492,7 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   note eq = this[simplified]
   show ?case
   \<comment>\<open>TODO: This proof gets slower over time. Investigate\<close>
-  apply\<tau> (crush_base stepwise)
+  apply (crush_base stepwise)
   step 100
   step 100
   step 100
@@ -1595,7 +1502,6 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   step 100
   step 100
   step *
-  show_timelogs
   apply (simp add: eq)
   done
 qed
