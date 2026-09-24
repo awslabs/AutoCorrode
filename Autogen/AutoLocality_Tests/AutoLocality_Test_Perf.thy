@@ -31,8 +31,23 @@ definition pset_d :: \<open>nat \<Rightarrow> perf \<Rightarrow> perf\<close> wh
 definition pbump_c :: \<open>nat \<Rightarrow> perf \<Rightarrow> perf\<close> where \<open>pbump_c k R \<equiv> update_qc (\<lambda>old. old + k + qc R) R\<close>
 definition pdelegate_c :: \<open>nat \<Rightarrow> perf \<Rightarrow> perf\<close> where
   \<open>pdelegate_c k R \<equiv> pbump_c k R\<close>
+\<comment>\<open>Only the \<open>True\<close> specialization is registered. The delegate below calls \<open>False\<close>, so
+helper suppression must inspect the actual application and unfold the unmatched helper body.\<close>
+definition pspecial_c :: \<open>bool \<Rightarrow> nat \<Rightarrow> perf \<Rightarrow> perf\<close> where
+  \<open>pspecial_c mode k R \<equiv>
+    update_qc (\<lambda>old. if mode then old + k else old + k + 1) R\<close>
+definition pdelegate_special_c :: \<open>nat \<Rightarrow> perf \<Rightarrow> perf\<close> where
+  \<open>pdelegate_special_c k R \<equiv> pspecial_c False k R\<close>
+\<comment>\<open>The custom-attributed helper has certificates in the semantic registry but not in the
+record's default locality-facts bundle. Its delegate must use those theorem objects directly.\<close>
+definition pcustom_c :: \<open>nat \<Rightarrow> perf \<Rightarrow> perf\<close> where
+  \<open>pcustom_c k R \<equiv> update_qc (\<lambda>old. old + k + qc R) R\<close>
+definition pdelegate_custom_c :: \<open>nat \<Rightarrow> perf \<Rightarrow> perf\<close> where
+  \<open>pdelegate_custom_c k R \<equiv> pcustom_c k R\<close>
 \<comment>\<open>Attribute on \<open>qd\<close>: disjoint from all of pset_a/pset_b/pset_c/pbump_c.\<close>
 definition phas_d :: \<open>perf \<Rightarrow> bool\<close> where \<open>phas_d R \<equiv> qd R > 0\<close>
+
+named_theorems perf_custom_locality
 
 locality_lemma for perf: \<open>pset_a\<close> footprint [qa] .
 locality_lemma for perf: \<open>pset_b\<close> footprint [qb] .
@@ -40,10 +55,21 @@ locality_lemma for perf: \<open>pset_c\<close> footprint [qc] .
 locality_lemma for perf: \<open>pset_d\<close> footprint [qd] .
 locality_lemma for perf: \<open>pbump_c\<close> footprint [qc] .
 locality_lemma for perf: \<open>pdelegate_c\<close> footprint [qc] .
+locality_lemma for perf: \<open>pspecial_c True\<close> footprint [qc] .
+locality_lemma for perf: \<open>pdelegate_special_c\<close> footprint [qc] .
+locality_lemma for perf [perf_custom_locality]:
+  \<open>pcustom_c\<close> footprint [qc] .
+locality_lemma for perf: \<open>pdelegate_custom_c\<close> footprint [qc] .
 locality_lemma for perf: \<open>phas_d\<close> footprint [qd] .
 
 text\<open>Sanity: a deep nest cancels by plain @{term \<open>simp\<close>} as an object-level lemma too.\<close>
 lemma \<open>phas_d (pset_a a (pset_b b (pset_c c (pbump_c k (pset_a a2 X))))) = phas_d X\<close>
+  by simp
+
+lemma \<open>phas_d (pdelegate_special_c k X) = phas_d X\<close>
+  by simp
+
+lemma \<open>phas_d (pdelegate_custom_c k X) = phas_d X\<close>
   by simp
 
 ML\<open>

@@ -2990,15 +2990,107 @@ ML\<open>
         andalso not (String.isPrefix "case_" (Long_Name.base_name c)))
     end
 
-  \<comment>\<open>Previously registered helpers already carry linear locality certificates in the
-     record's locality-facts bundle. Prefer those certificates to unfolding the helper body: a
-     helper may contain a large fold or update telescope whose raw definition is much harder to
-     normalize, and unfolding it can hide the exact registered operation pattern before its
-     certificate fires.\<close>
-  fun locality_body_helpers_to_unfold ctxt rec_name cname =
-    locality_body_helper_consts ctxt rec_name cname
-    |> List.filter (fn helper =>
-         null (get_record_locality_entries_for_const rec_name helper ctxt))
+  type locality_body_helper_plan = {
+    unfold: string list,
+    certificates: thm list
+  }
+
+  \<comment>\<open>Collect maximal applications of the one-level helper constants in a definition. Looking
+     at the constant name alone is insufficient: a registration for \<^verbatim>\<open>helper A\<close> cannot justify
+     suppressing the definition of an occurrence \<^verbatim>\<open>helper B x R\<close>. Descending through the
+     arguments, rather than through the application spine, records only the complete occurrence and
+     not each of its partial prefixes.\<close>
+  fun locality_body_helper_applications ctxt cname helpers =
+    let
+      fun application_eq
+            ((helper0, head0, args0), (helper1, head1, args1)) =
+        helper0 = helper1 andalso
+        Term.aconv
+          (Term.list_comb (head0, args0),
+           Term.list_comb (head1, args1))
+      fun collect term applications =
+        let
+          val (head, args) = Term.strip_comb term
+          val applications' =
+            (case head of
+               Const (helper, _) =>
+                 if member (op =) helpers helper
+                 then insert application_eq (helper, head, args) applications
+                 else applications
+             | _ => applications)
+        in
+          case term of
+            Abs (_, _, body) => collect body applications'
+          | _ => fold collect args applications'
+        end
+    in
+      fold (collect o Thm.prop_of)
+        (locality_def_thms_of ctxt cname) []
+    end
+
+  \<comment>\<open>Prefer a registered helper's linear certificates only when every actual occurrence in
+     the definition is covered by a typed registration. The selected certificate objects are passed
+     directly to the generated proof, so this also works when the helper was registered under a
+     custom theorem attribute and is absent from the record's default locality-facts bundle.
+
+     If any occurrence is uncovered, unfold the helper definition. This is deliberately
+     all-or-nothing per helper constant: mixing a certificate for one specialization with raw
+     unfolding for another makes the automatic proof harder to predict and buys no useful
+     performance advantage.\<close>
+  fun locality_body_helper_plan ctxt rec_name cname :
+        locality_body_helper_plan =
+    let
+      val helpers = locality_body_helper_consts ctxt rec_name cname
+      val applications =
+        locality_body_helper_applications ctxt cname helpers
+      fun matching_entries head args =
+        [Locality_Operation, Locality_Attribute]
+        |> map_filter (fn kind =>
+             select_locality_entry_kind_with locality_no_count
+               ctxt rec_name kind head args
+             |> Option.map #2)
+      fun entry_certificates (entry : locality_entry) =
+        #core_thms entry @ #disjoint_thms entry
+      fun analyse helper =
+        let
+          val helper_applications =
+            applications
+            |> List.filter (fn (helper', _, _) => helper = helper')
+          val entries =
+            helper_applications
+            |> map (fn (_, head, args) =>
+                 matching_entries head args)
+        in
+          if not (null helper_applications)
+              andalso List.all (not o null) entries
+          then
+            (NONE,
+             flat entries
+             |> maps entry_certificates)
+          else
+            (SOME helper, [])
+        end
+      val analyses = map analyse helpers
+    in
+      { unfold = map_filter fst analyses,
+        certificates =
+          maps snd analyses
+          |> map (Thm.transfer' ctxt)
+          |> distinct Thm.eq_thm_prop }
+    end
+
+  val locality_body_helper_certificate_fact =
+    "autolocality_body_helper_certificates"
+
+  \<comment>\<open>Method strings are parsed against a private copy of the declaration context containing
+     the selected helper certificates as one internal fact. The fact is captured in the method
+     closure and never installed in the surrounding local theory or its ambient simpset.\<close>
+  fun locality_body_helper_method_context ctxt certificates =
+    if null certificates then ctxt
+    else
+      Proof_Context.put_thms false
+        (locality_body_helper_certificate_fact,
+         SOME certificates) ctxt
 
   \<comment>\<open>Datatype case-split rules (\<^verbatim>\<open>T.split\<close>) for every \<^verbatim>\<open>case_T\<close> combinator appearing in the bodies of
      the given constants. An operation whose body is a \<^verbatim>\<open>case x of \<dots>\<close> (e.g.
@@ -4570,11 +4662,15 @@ ML\<open>
          type clash). *)
       val p_op_str = "(" ^ (Syntax.pretty_term ctxt p_term |> Pretty.pure_string_of) ^ ")"
 
+      val helper_plan =
+        locality_body_helper_plan ctxt rec_name p_name
+      val helper_certificates = #certificates helper_plan
+
       (* Constants to unfold when discharging: the operation, the constants baked into a partial
-         application, and the user-defined helpers/operations the body delegates to. *)
+         application, and helpers whose actual applications have no matching registration. *)
       val discharge_cnames =
         (p_name :: baked_cnames
-          @ locality_body_helpers_to_unfold ctxt rec_name p_name)
+          @ #unfold helper_plan)
         |> distinct (op =)
 
       fun arglist_with x =
@@ -4670,20 +4766,33 @@ ML\<open>
       val default_simps =
         let val const_unfold =
               discharge_cnames |> map_filter (locality_def_fact_name ctxt)
+            val helper_facts =
+              if null helper_certificates then []
+              else [locality_body_helper_certificate_fact]
             val locality_facts = if Option.isSome attribs_opt then [] else [default_named_theorems_for_record rec_name]
-            val all_simps = ["Let_def"] @ const_unfold @ locality_facts
+            val all_simps =
+              ["Let_def"] @ const_unfold @ helper_facts @ locality_facts
         in
           String.concatWith " " all_simps
         end
       val default_splits = String.concatWith " " (locality_body_case_split_names ctxt discharge_cnames)
 
-      fun start_core_proof ctxt cont = ctxt
-           |> Proof.theorem NONE (after_qed (not is_field) NONE commutativity_thm_name cont) [map (fn t => (t,[])) commutativity_stms]
-           |> apply_method (SIMPLE_METHOD all_tac)
-           |> (if with_proof then
-                apply_txt ctxt ("(auto simp add: " ^ default_simps ^ " split: " ^ default_splits ^ ")?")
-              else
-                I)
+      fun start_core_proof ctxt cont =
+        let
+          val method_ctxt =
+            locality_body_helper_method_context
+              ctxt helper_certificates
+        in
+          ctxt
+          |> Proof.theorem NONE (after_qed (not is_field) NONE commutativity_thm_name cont) [map (fn t => (t,[])) commutativity_stms]
+          |> apply_method (SIMPLE_METHOD all_tac)
+          |> (if with_proof then
+               apply_txt method_ctxt
+                 ("(auto simp add: " ^ default_simps
+                   ^ " split: " ^ default_splits ^ ")?")
+             else
+               I)
+        end
 
       \<comment>\<open>The 'local action' lemma is fully automatic. The old method-string discharge is
          \<^verbatim>\<open>auto intro: <rec>.expand simp add: <disjointness>\<close>: extensionality reduces to per-field
@@ -4977,16 +5086,24 @@ ML\<open>
          <defs> <_locality_facts>\<close>: handing the rules to \<^verbatim>\<open>auto\<close> by name lets the simplifier reuse the
          ambient indexed simpset, whereas the WIP rewrite's ML-built simpset paid for ambient
          construction eagerly per-call.\<close>
-      (* As on the operation path: unfold the attribute and the user-defined helpers its body
-         delegates to, so case/let/delegation attribute bodies normalise. *)
+      val helper_plan =
+        locality_body_helper_plan ctxt rec_name p_name
+      val helper_certificates = #certificates helper_plan
+
+      (* As on the operation path: unfold the attribute and helpers whose actual applications have
+         no matching registration, so case/let/delegation attribute bodies normalise. *)
       val attr_discharge_cnames =
-        (p_name :: locality_body_helpers_to_unfold ctxt rec_name p_name)
+        (p_name :: #unfold helper_plan)
         |> distinct (op =)
       val default_simps =
         let val const_unfold =
               attr_discharge_cnames |> map_filter (locality_def_fact_name ctxt)
+            val helper_facts =
+              if null helper_certificates then []
+              else [locality_body_helper_certificate_fact]
             val locality_facts = if Option.isSome attribs_opt then [] else [default_named_theorems_for_record rec_name]
-            val all_simps = ["Let_def"] @ const_unfold @ locality_facts
+            val all_simps =
+              ["Let_def"] @ const_unfold @ helper_facts @ locality_facts
         in
           String.concatWith " " all_simps
         end
@@ -5023,18 +5140,25 @@ ML\<open>
             ctxt0
             |> Named_Theorems.declare
                 (Binding.make (cancellation_thms_name, \<^here>)) ""
-          fun start_core_proof ctxt cont = ctxt
-               |> Proof.theorem NONE
-                    (after_qed (SOME cancellation_thms_name)
-                      cancellation_thm_name cont)
-                    [map (fn t => (t, [])) commutativity_stms]
-               |> apply_method (SIMPLE_METHOD all_tac)
-               |> (if with_proof then
-                    apply_txt ctxt
-                      ("(auto simp add: " ^ default_simps
-                        ^ " split: " ^ default_splits ^ ")?")
-                  else
-                    I)
+          fun start_core_proof ctxt cont =
+            let
+              val method_ctxt =
+                locality_body_helper_method_context
+                  ctxt helper_certificates
+            in
+              ctxt
+              |> Proof.theorem NONE
+                   (after_qed (SOME cancellation_thms_name)
+                     cancellation_thm_name cont)
+                   [map (fn t => (t, [])) commutativity_stms]
+              |> apply_method (SIMPLE_METHOD all_tac)
+              |> (if with_proof then
+                   apply_txt method_ctxt
+                     ("(auto simp add: " ^ default_simps
+                       ^ " split: " ^ default_splits ^ ")?")
+                 else
+                   I)
+            end
         in
           start_core_proof ctxt' wrapup
         end
