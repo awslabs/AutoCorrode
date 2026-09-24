@@ -4801,8 +4801,48 @@ ML\<open>
          the Const-headed arguments count: they are what the baked-in operator must carry. Locale
          parameters are left to the ordinary 'make_arglist'/'num_args' machinery (which fills the
          remaining argument positions), so the locale case keeps the original behaviour. *)
+      (* Baked-in constants enter 'discharge_cnames' below, so their definitions are unfolded by
+         the automatic discharge in order to expose the field footprint: 'w_apply_policy policy_a'
+         needs 'policy_a_def' before wf04 becomes visible. Two guards keep that from unfolding
+         arguments where it cannot help.
+
+         (1) The constant's type must mention the record type. A bool, numeral or string literal
+             carries no record structure, so unfolding it can reveal no field of the record.
+
+         (2) The constant must not be declared by the logical core, i.e. by a theory at or below
+             \<^theory>\<open>HOL\<close>. Core constants do have definitions, but those are the
+             axiomatic underpinning of the logic rather than operations on data:
+             \<^const>\<open>True\<close> is defined as \<^term>\<open>(\<lambda>x::bool. x) = (\<lambda>x. x)\<close>,
+             so handing 'True_def' to the simplifier rewrites its own normal form and the
+             discharge diverges instead of failing.
+
+         The declaring theory is resolved through the constant name space rather than by
+         inspecting the long name, so a user constant that merely happens to sit in a
+         'HOL'-prefixed namespace is not misclassified. Narrowing this list cannot rename any
+         generated fact: 'locality_public_id' decides partial-application naming from 'p_term'
+         with its own, deliberately broader, test. *)
+      fun baked_const_unfoldable (c, T) =
+        let
+          val mentions_record =
+            T |> Term.exists_subtype (fn Type (n, _) => n = rec_name | _ => false)
+          val declaring_theory =
+            try (Name_Space.theory_name {long = true}
+                  (Consts.space_of (Proof_Context.consts_of ctxt))) c
+          val from_logical_core =
+            (case declaring_theory of
+               NONE => false
+             | SOME thy_name =>
+                 (case try (Theory.check {long = true} ctxt) (thy_name, Position.none) of
+                    NONE => false
+                  | SOME thy => Context.subthy (thy, \<^theory>\<open>HOL\<close>)))
+        in
+          mentions_record andalso not from_logical_core
+        end
+
       val baked_cnames = snd (Term.strip_comb p_term) |> map_filter (fn t =>
-        case Term.head_of t of Const (c, _) => SOME c | _ => NONE)
+        case Term.head_of t of
+          Const (c, T) => if baked_const_unfoldable (c, T) then SOME c else NONE
+        | _ => NONE)
 
       (* Identifier used for the generated fact names. For a bare constant (or one applied only to
          locale parameters) this is its base name, keeping the common-case names stable; for a genuine
