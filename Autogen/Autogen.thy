@@ -2,11 +2,9 @@
    SPDX-License-Identifier: MIT *)
 
 theory Autogen
-  imports AutoLens 
+  imports
     AutoCommon
-    AutoLocality_Test0
-    AutoLocality_Test1
-    AutoLocality_Test2
+    AutoLens
     AutoLocality
 begin
 end

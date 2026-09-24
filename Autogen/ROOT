@@ -8,6 +8,37 @@ session Autogen = HOL +
     AutoLens
     AutoLocality
     Autogen
-    AutoLocality_Test0
-    AutoLocality_Test1
-    AutoLocality_Test2
+
+session AutoLocality_Tests in "AutoLocality_Tests" = Autogen +
+  options [document = false]
+  sessions
+    Crush
+  theories
+    AutoLocality_Test3
+    AutoLocality_Test_Common
+    AutoLocality_Test_Linear
+    AutoLocality_Test_Cancel
+    AutoLocality_Test_Errors
+    AutoLocality_Test_Locale
+    AutoLocality_Test_Contexts
+    AutoLocality_Test_Polymorphic
+    AutoLocality_Test_Diamond_Base
+    AutoLocality_Test_Diamond_Left
+    AutoLocality_Test_Diamond_Right
+    AutoLocality_Test_Diamond
+    AutoLocality_Test_Boundaries
+    AutoLocality_Test_Record_Extension
+    AutoLocality_Test_Shapes
+    AutoLocality_Test_Perf
+    AutoLocality_Test_Wide
+    AutoLocality_Test_Shapes_Wide
+    AutoLocality_Test_Matrix
+    AutoLocality_Test_Matrix_Locale
+    AutoLocality_B0_All
+    AutoLocality_B0_Conflict_Left
+    AutoLocality_B0_Conflict_Right
+    AutoLocality_B0_Automation
+    AutoLocality_B0_Crush_All
+    AutoLocality_C1_Locale_Retention
+    AutoLocality_C1_Instrumentation
+    AutoLocality_C1_Counters

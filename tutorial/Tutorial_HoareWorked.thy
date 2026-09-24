@@ -490,8 +490,8 @@ text \<open>\<^bold>\<open>1. Explicit modifies-clauses (s2n-bignum).\<close>  E
 
 text \<open>\<^bold>\<open>2. AutoCorrode's \<open>AutoLocality\<close> autogen.\<close>  Driven by
   \<^emph>\<open>record footprints\<close>: declare which fields each operation touches,
-  and \<open>locality_autoderive\<close> produces all pairwise commutativity lemmas
-  automatically. Plain HOL; no SL connectives.\<close>
+  and produces all pairwise commutativity and cancellation lemmas
+  on the fly. Plain HOL; no SL connectives.\<close>
 
 text \<open>\<^bold>\<open>3. Separation logic.\<close> \<^emph>\<open>What AutoCorrode picks -- see next section...\<close>\<close>
 

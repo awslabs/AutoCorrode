@@ -96,7 +96,12 @@ Crush is a family of highly customizable and scalable tactics for reasoning in s
 
 ### [Autogen](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Autogen.Autogen.html)
 
-Autogen facilitates pure reasoning about functions on records: Users can annotate functions with their footprint -- the set of record fields they depend on -- and have footprint-based commutativity relations derived automatically. See [Autogen/AutoLocality_Test0.thy](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Autogen.AutoLocality_Test0.html) for an example.
+Autogen facilitates pure reasoning about functions on records: users annotate
+functions with their footprints, and AutoLocality uses those declarations to
+cancel irrelevant state operations during simplification. See the
+[AutoLocality guide](Autogen/README.md) for motivation, commands, and
+examples. The executable regression theories live under
+`Autogen/AutoLocality_Tests/`.
 
 ### [Byte_Level_Encoding](https://awslabs.github.io/AutoCorrode/Unsorted/AutoCorrode/Byte_Level_Encoding.Byte_Level_Encoding.html)
 
