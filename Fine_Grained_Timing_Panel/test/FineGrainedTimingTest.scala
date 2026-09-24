@@ -43,7 +43,9 @@ object FineGrainedTimingTest {
 
   private def report(
       version: Int,
-      body: XML.Body
+      body: XML.Body,
+      invocationTiming: Option[FineGrainedTiming.Timing] = None,
+      success: Boolean = true
   ): XML.Tree =
     XML.Elem(
       Markup(
@@ -52,15 +54,20 @@ object FineGrainedTimingTest {
           "version" -> Value.Int(version),
           "invocation" -> Value.Long(17L),
           "method" -> "example_method",
-          "success" -> Value.Boolean(true)
+          "success" -> Value.Boolean(success)
         ) ++
           (if (version == FineGrainedTiming.LegacySchemaVersion)
-            List(
-              "elapsed_us" -> Value.Long(100L),
-              "cpu_us" -> Value.Long(60L),
-              "gc_us" -> Value.Long(10L)
-            )
-          else Nil)
+             List(
+               "elapsed_us" -> Value.Long(100L),
+               "cpu_us" -> Value.Long(60L),
+               "gc_us" -> Value.Long(10L)
+             )
+           else invocationTiming.toList.flatMap(timing =>
+             List(
+               "elapsed_us" -> Value.Long(timing.elapsedMicros),
+               "cpu_us" -> Value.Long(timing.cpuMicros),
+               "gc_us" -> Value.Long(timing.gcMicros)
+             )))
       ),
       body
     )
@@ -79,7 +86,8 @@ object FineGrainedTimingTest {
     requireThat(nested == encoded, "nested and YXML-text bodies should decode identically")
     val invocation = nested.getOrElse(sys.error("expected a decoded invocation"))
     requireThat(invocation.id == 17L, s"unexpected invocation id ${invocation.id}")
-    requireThat(invocation.timing.isEmpty, "version 2 should not contain implicit outer timing")
+    requireThat(invocation.timing.isEmpty,
+      "schema 2 without outer timing should remain valid")
     requireThat(invocation.samples.head.aggregate.count == 3L, "sample count was not decoded")
   }
 
@@ -142,11 +150,88 @@ object FineGrainedTimingTest {
       "empty aggregate should be an additive identity")
   }
 
+  private def testSchemaTwoUsesOuterTiming(): Unit = {
+    val outer = FineGrainedTiming.Timing(70L, 40L, 5L)
+    val decoded = FineGrainedTiming.decode(report(
+      FineGrainedTiming.SchemaVersion,
+      List(
+        entry("first", success = true, 2L, 40L, List(bucket(5, 2))),
+        entry("second", success = true, 1L, 60L, List(bucket(5, 1)))
+      ),
+      invocationTiming = Some(outer)
+    ))
+    requireThat(decoded.isDefined, "schema 2 report should decode")
+    val invocation = decoded.get
+    requireThat(invocation.totalTiming.contains(outer),
+      s"schema 2 should use its outer timing, got ${invocation.totalTiming}")
+    requireThat(invocation.totalElapsedMicros == 70L,
+      s"nested samples must not be added, got ${invocation.totalElapsedMicros}")
+
+    val legacySchemaTwo = FineGrainedTiming.decode(report(
+      FineGrainedTiming.SchemaVersion,
+      List(entry("sample", success = true, 1L, 60L, List(bucket(5, 1))))
+    )).get
+    requireThat(legacySchemaTwo.totalTiming.isEmpty,
+      "schema 2 reports without an outer timing should remain decodable")
+  }
+
+  private def testRepeatedSnapshotsKeepTheLatest(): Unit = {
+    def snapshot(count: Long, elapsed: Long) =
+      FineGrainedTiming.decode(report(
+        FineGrainedTiming.SchemaVersion,
+        List(entry("step", success = true, count, elapsed, List(bucket(5, count))))
+      )).get
+
+    val partial = snapshot(1L, 10L)
+    val complete = snapshot(3L, 90L)
+    /* Both snapshots share invocation id 17: the later one supersedes the
+       earlier rather than adding to it. */
+    val kept = FineGrainedTiming.latestPerInvocation(Vector(partial, complete))
+    requireThat(kept.length == 1,
+      s"snapshots of one invocation should collapse, got ${kept.length}")
+    requireThat(kept.head.samples.head.aggregate.count == 3L,
+      s"the largest snapshot should win, got ${kept.head.samples.head.aggregate.count}")
+
+    val reordered = FineGrainedTiming.latestPerInvocation(Vector(complete, partial))
+    requireThat(reordered.head.samples.head.aggregate.count == 3L,
+      "collapsing must not depend on report order")
+
+    val failed = partial.copy(success = false)
+    val successful = partial.copy(success = true)
+    val latestOutcome =
+      FineGrainedTiming.latestPerInvocation(Vector(failed, successful))
+    requireThat(latestOutcome.head.success,
+      "success should supersede failure when sample counts are equal")
+
+    val earlyTiming =
+      partial.copy(timing = Some(FineGrainedTiming.Timing(10L, 5L, 0L)))
+    val lateTiming =
+      partial.copy(timing = Some(FineGrainedTiming.Timing(90L, 20L, 1L)))
+    val latestTiming =
+      FineGrainedTiming.latestPerInvocation(Vector(earlyTiming, lateTiming))
+    requireThat(latestTiming.head.timing == lateTiming.timing,
+      "outer timing should supersede an otherwise equal snapshot")
+  }
+
+  private def testDistinctInvocationsAreKept(): Unit = {
+    val first = FineGrainedTiming.decode(report(
+      FineGrainedTiming.SchemaVersion,
+      List(entry("a", success = true, 1L, 10L, List(bucket(3, 1))))
+    )).get
+    val second = first.copy(id = 18L)
+    val kept = FineGrainedTiming.latestPerInvocation(Vector(first, second))
+    requireThat(kept.length == 2,
+      s"distinct invocations must both survive, got ${kept.length}")
+  }
+
   def main(_args: Array[String]): Unit = {
     testDecodeNestedAndYxmlBodies()
     testDecodeLegacyOuterTiming()
     testRejectMalformedHistogram()
     testAssociativeMergeAndPercentiles()
+    testSchemaTwoUsesOuterTiming()
+    testRepeatedSnapshotsKeepTheLatest()
+    testDistinctInvocationsAreKept()
     println("FineGrainedTimingTest: all tests passed")
   }
 }

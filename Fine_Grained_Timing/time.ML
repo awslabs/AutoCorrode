@@ -9,7 +9,7 @@ This file has three jobs:
 
   1. measure named operations only when at least one sink wants the sample;
   2. deliver each sample to all active sinks; and
-  3. let `profile` bundle PIDE samples into one report.
+  3. let `profile` bundle PIDE samples into invocation snapshots.
 
 Sink factories are stored in the proof context. A factory receives the current
 context and returns either an active callback or `NONE`. The two default
@@ -42,19 +42,18 @@ The factory, rather than the callback, receives the proof context. This lets a
 sink inspect configuration once for each `time` wrapper. If the factory returns
 `NONE`, that destination adds no measurement overhead beyond sink resolution.
 
-`profile` does not measure its wrapped operation. It pushes a fresh synchronized
-PIDE accumulator, performs one ordinary sequence pull, and emits one report
-containing the samples produced by nested `time` wrappers. To include a total,
-write it explicitly:
-
-  apply (profile ‹time "total" ‹my_method››)
+`profile` pushes a fresh synchronized PIDE accumulator and measures each pull
+of its wrapped sequence. The report header carries the accumulated invocation
+time, while the body contains samples produced by nested `time` wrappers.
+Lazy methods may emit updated snapshots when later pulls add samples or change
+the invocation outcome.
 
 Nested profiles push another accumulator. The PIDE sink writes only to the top
 stack frame, so the inner samples are not counted again by the outer profile.
 After the inner profile returns, later samples go to the outer frame.
 
-One report per profile is deliberate. A method may produce millions of
-samples; aggregation keeps PIDE traffic bounded.
+Reports are complete snapshots, not increments. Consumers keep the newest
+snapshot of each invocation instead of adding snapshots together.
 *)
 
 signature FINE_GRAINED_TIMING =
@@ -109,6 +108,11 @@ sig
   val output_enabled : bool Config.T
   val timing_threshold_us : int Config.T
   val active : Proof.context -> bool
+
+  (* Divert invocation reports away from PIDE markup, for tests. *)
+  val set_report_observer :
+    (Position.T -> Properties.T -> string -> unit)
+    -> Proof.context -> Proof.context
 
   val time_it : (unit -> 'a) -> (unit -> Timing.timing * 'a)
   val time_and_report : Proof.context -> string -> bool -> (unit -> 'a) -> 'a
@@ -343,7 +347,8 @@ struct
     id: int,
     invocation_name: string,
     position: Position.T,
-    statistics: Fine_Grained_Timing_Accumulator.T
+    statistics: Fine_Grained_Timing_Accumulator.T,
+    timing: Timing.timing Synchronized.var
     }
 
   (* The stack itself is immutable context data. Each entry is a fresh
@@ -354,6 +359,16 @@ struct
     val init = K [])
 
   fun active ctxt = not (null (PIDE_Profiles.get ctxt))
+
+  (* Report emission is context-local so that tests can observe it directly.
+     `Context_Position.report_text` is silent whenever the context is
+     invisible, as it is in a batch build, which would otherwise leave the
+     report schedule untestable. *)
+  structure Report_Observer = Proof_Data (
+    type T = (Position.T -> Properties.T -> string -> unit) option
+    val init = K NONE)
+
+  fun set_report_observer observe = Report_Observer.put (SOME observe)
 
   (*
   PIDE report schema version 2:
@@ -366,34 +381,46 @@ struct
       ...encoded aggregate entries...
     </fine_grained_timing>
 
-  The header deliberately has no implicit outer timing. `profile` controls
-  the accumulator lifetime but does not generate a measurement. Users who
-  need a total add an explicit outer `time` wrapper.
+  The header carries the cumulative time spent pulling results from the
+  profiled sequence. The aggregate entries describe named work recorded by
+  nested `time` wrappers and may overlap with each other and with the outer
+  timing.
 
   The aggregate entries are passed as YXML text because report markup has a
   text payload. The Scala decoder accepts this representation and the nested
   XML form used by tests. Position-attached markup follows PIDE document
   lifetime, so edited commands do not leave stale reports.
   *)
+  fun encode_time time = Value.print_int (Time.toMicroseconds time)
+
   fun emit_pide_report ctxt
-      ({id, invocation_name, position, statistics}: pide_invocation) success =
+      ({id, invocation_name, position, statistics, timing}: pide_invocation)
+      success =
     let
+      val total = Synchronized.value timing
       val properties = [
         ("version", "2"),
         ("invocation", Value.print_int id),
         ("method", invocation_name),
-        ("success", Bool.toString success)
+        ("success", Bool.toString success),
+        ("elapsed_us", encode_time (#elapsed total)),
+        ("cpu_us", encode_time (#cpu total)),
+        ("gc_us", encode_time (#gc total))
         ]
       val body = Fine_Grained_Timing_Accumulator.encode
         (Fine_Grained_Timing_Accumulator.value statistics)
+      val text = YXML.string_of_body body
     in
-      Context_Position.report_text ctxt position
-        ("fine_grained_timing", properties) (YXML.string_of_body body)
+      (case Report_Observer.get ctxt of
+        SOME observe => observe position properties text
+      | NONE =>
+          Context_Position.report_text ctxt position
+            ("fine_grained_timing", properties) text)
     end
 
   (* `timing_threshold_us` gates every sink, not just PIDE: it is the
      user-facing statement that samples below it are noise. Filtering in the
-     PIDE sink alone makes `fine_grained_timing_output` trace every
+     PIDE sink alone would make `fine_grained_timing_output` trace every
      sub-microsecond sample. *)
   fun above_threshold ctxt ({timing, ...}: timing_result) =
     let val threshold = Time.fromMicroseconds (Config.get ctxt timing_threshold_us)
@@ -454,6 +481,13 @@ struct
 
   fun time_it f =
     time_it_with_status f (K true) #> apfst fst
+
+  fun add_timing (delta: Timing.timing) (total: Timing.timing) : Timing.timing =
+    {
+      elapsed = #elapsed total + #elapsed delta,
+      cpu = #cpu total + #cpu delta,
+      gc = #gc total + #gc delta
+      }
 
   fun time_and_report ctxt name producer_enabled f =
     if not producer_enabled then f ()
@@ -556,25 +590,74 @@ struct
         val statistics =
           Fine_Grained_Timing_Accumulator.create
             ("Fine-grained timing invocation " ^ Value.print_int id)
+        val invocation_timing =
+          Synchronized.var
+            ("Fine-grained timing total " ^ Value.print_int id)
+            Timing.zero
         val invocation = {
           id = id,
           invocation_name = invocation_name,
           position = Position.thread_data (),
-          statistics = statistics
+          statistics = statistics,
+          timing = invocation_timing
           }
         val profiles = PIDE_Profiles.get ctxt
         val ctxt' = PIDE_Profiles.put (statistics :: profiles) ctxt
-      in
-        Seq.make (fn _ =>
+        (*
+        Every pull can contribute samples: the profiled method may backtrack,
+        and nested `time` wrappers keep writing to `statistics` while it does.
+        Reporting after the first pull only would discard everything a caller
+        reaches by backtracking, so wrap the tail and report again whenever a
+        pull actually added samples.
+
+        Each report is a complete snapshot of the accumulator and all reports
+        of one invocation share its id, so a consumer must keep the newest
+        report per id rather than summing them. The outer timing changes even
+        when no nested sample clears the threshold, so it is part of the
+        snapshot state as well.
+        *)
+        fun timing_key ({elapsed, cpu, gc}: Timing.timing) =
+          (Time.toMicroseconds elapsed,
+           Time.toMicroseconds cpu,
+           Time.toMicroseconds gc)
+        fun report succeeded
+              (reported_samples, reported_success, reported_timing) =
           let
-            val output = Seq.pull (make_sequence ctxt')
-            val success =
-              (case output of
-                NONE => false
-              | SOME (element, _) => element_success element)
-            val _ = emit_pide_report ctxt' invocation success
-          in output end)
-      end
+            val samples =
+              Fine_Grained_Timing_Accumulator.total_samples
+                (Fine_Grained_Timing_Accumulator.value statistics)
+            val current_timing =
+              timing_key (Synchronized.value invocation_timing)
+          in
+            if samples = reported_samples andalso
+                reported_success = SOME succeeded andalso
+                reported_timing = SOME current_timing
+            then (reported_samples, reported_success, reported_timing)
+            else
+              (emit_pide_report ctxt' invocation succeeded;
+               (samples, SOME succeeded, SOME current_timing))
+          end
+        fun wrap succeeded reported make =
+          Seq.make (fn _ =>
+            let
+              val (pull_timing, output) =
+                time_it (fn _ => Seq.pull (make ())) ()
+              val _ =
+                Synchronized.change invocation_timing
+                  (add_timing pull_timing)
+              val succeeded' =
+                succeeded orelse
+                  (case output of
+                    NONE => false
+                  | SOME (element, _) => element_success element)
+              val reported' = report succeeded' reported
+            in
+              Option.map
+                (fn (element, tail) =>
+                  (element, wrap succeeded' reported' (fn _ => tail)))
+                output
+            end)
+      in wrap false (~1, NONE, NONE) (fn _ => make_sequence ctxt') end
 
   fun profile_tactic invocation_name ctxt make_tactic state =
     profile_seq (K true) invocation_name ctxt
@@ -629,7 +712,7 @@ in
     (Method.setup @{binding "profile"}
       (parser >> (fn (name, method) => fn _ =>
         Fine_Grained_Timing.profile_method name method))
-      "profile a method and emit one bundled fine-grained timing report")
+      "profile a method and emit bundled fine-grained timing snapshots")
 
   val _ = Theory.setup
     (Method.setup @{binding "time"}

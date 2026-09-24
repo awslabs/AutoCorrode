@@ -44,7 +44,7 @@ import sqlite3
 import sys
 
 from fine_timing import (
-    DecodeResult, aggregate_invocations, aggregate_to_json,
+    DecodeResult, _snapshot_extent, aggregate_invocations, aggregate_to_json,
     extract_reports, percentile_upper_bound,
 )
 from isar_source import THY_GOALS, collect_keyword_kinds, infer_commands
@@ -855,6 +855,7 @@ def read_fine_timing_reports(conn, session, theory=None):
 
     result = DecodeResult()
     seen = set()
+    superseded = {}
     missing_decoder = False
     for theory_name, export_name, blob in conn.execute(query, parameters):
         text = decompress_blob(blob)
@@ -865,10 +866,20 @@ def read_fine_timing_reports(conn, session, theory=None):
         result.malformed += decoded.malformed
         result.unsupported += decoded.unsupported
         result.duplicates += decoded.duplicates
+        result.superseded += decoded.superseded
         for invocation in decoded.invocations:
             key = (
                 invocation.theory, invocation.invocation, invocation.method,
                 invocation.success, invocation.command_offset,
+                (
+                    (
+                        invocation.timing.elapsed_us,
+                        invocation.timing.cpu_us,
+                        invocation.timing.gc_us,
+                    )
+                    if invocation.timing is not None
+                    else (-1, -1, -1)
+                ),
                 tuple(
                     (sample.name, sample.success, sample.aggregate.count,
                      sample.aggregate.timing.elapsed_us,
@@ -882,9 +893,24 @@ def read_fine_timing_reports(conn, session, theory=None):
             )
             if key in seen:
                 result.duplicates += 1
-            else:
-                seen.add(key)
+                continue
+            seen.add(key)
+            # Snapshots of one invocation also cross export boundaries; keep
+            # the largest, as extract_reports does within a single export.
+            identity = (
+                invocation.theory, invocation.invocation, invocation.method,
+                invocation.command_offset,
+            )
+            previous_index = superseded.get(identity)
+            if previous_index is None:
+                superseded[identity] = len(result.invocations)
                 result.invocations.append(invocation)
+            elif _snapshot_extent(invocation) > _snapshot_extent(
+                    result.invocations[previous_index]):
+                result.invocations[previous_index] = invocation
+                result.superseded += 1
+            else:
+                result.superseded += 1
     return result, missing_decoder
 
 
@@ -1060,6 +1086,7 @@ def _fine_summary(result, invocations):
         "malformed_reports": result.malformed,
         "unsupported_reports": result.unsupported,
         "duplicate_reports": result.duplicates,
+        "superseded_reports": result.superseded,
     }
 
 
@@ -1143,11 +1170,13 @@ def show_fine_timing_text(result, invocations, args, unavailable):
         f"v{version}: {count}"
         for version, count in sorted(summary["schema_versions"].items()))
     print(f"  Schemas:       {versions or '—'}")
-    if result.malformed or result.unsupported or result.duplicates:
+    if (result.malformed or result.unsupported or result.duplicates or
+            result.superseded):
         print(
             f"  Ignored:       {result.malformed} malformed, "
             f"{result.unsupported} unsupported, "
-            f"{result.duplicates} duplicate")
+            f"{result.duplicates} duplicate, "
+            f"{result.superseded} superseded")
     if unavailable:
         print(
             f"  {YELLOW}Source attribution unavailable for "
