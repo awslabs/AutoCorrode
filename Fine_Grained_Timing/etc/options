@@ -1,0 +1,9 @@
+(* :mode=isabelle-options: *)
+
+section "Fine-grained timing"
+
+public option fine_grained_timing : bool = false for content
+  -- "emit bounded fine-grained timing reports for tactic invocations"
+
+public option fine_grained_timing_output : bool = false for content
+  -- "print each fine-grained timing sample as prover output"

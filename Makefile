@@ -8,8 +8,8 @@
 ######################################################################
 
 .DEFAULT_GOAL: jedit
-.PHONY: register-afp-components build autolocality-tests \
-        autolocality-stress jedit tutorial \
+.PHONY: register-components register-afp-components register-timing-component \
+        build autolocality-tests autolocality-stress jedit tutorial \
         build-ic2 ic2 ic2-status ic2-stop
 
 # Set this to the directory containing the Isabelle2025-2 binary
@@ -41,27 +41,32 @@ ISABELLE_JEDIT_FLAGS?=
 ISABELLE_FLAGS += $(ISABELLE_REMOTE)
 ISABELLE_JEDIT_FLAGS += $(ISABELLE_REMOTE)
 
-jedit: register-afp-components
+jedit: register-components
 	$(ISABELLE_HOME)/isabelle jedit $(ISABELLE_JEDIT_FLAGS) -l HOL -d . ./AutoCorrode.thy  &
+
+register-components: register-afp-components register-timing-component
 
 register-afp-components:
 	$(ISABELLE_HOME)/isabelle components -u $(AFP_COMPONENT_BASE)/Word_Lib
 
-build: register-afp-components
+register-timing-component:
+	$(ISABELLE_HOME)/isabelle components -u $(CURDIR)/Fine_Grained_Timing
+
+build: register-components
 	$(ISABELLE_HOME)/isabelle build $(ISABELLE_FLAGS) -d . \
 	  AutoCorrode AutoLocality_Tests
 
-autolocality-tests: register-afp-components
+autolocality-tests: register-components
 	$(ISABELLE_HOME)/isabelle build $(ISABELLE_FLAGS) -d . AutoLocality_Tests
 
 # Kept as a compatibility entry point. The unified test session includes
 # the former locale-retention stress theory.
-autolocality-stress: register-afp-components
+autolocality-stress: register-components
 	$(ISABELLE_HOME)/isabelle build $(ISABELLE_FLAGS) -d . AutoLocality_Tests
 
 # Build the slide-deck tutorial in tutorial/. Inherits the AutoCorrode
 # parent heap, so run `make build` first if it isn't built yet.
-tutorial: register-afp-components
+tutorial: register-components
 	$(MAKE) -C tutorial ISABELLE_HOME=$(ISABELLE_HOME) build
 
 #######################################
@@ -94,7 +99,7 @@ build-ic2:
 # Start a daemonised ic2 server for the full AutoCorrode session, on the HOL
 # heap. Run `make build` first to have the AutoCorrode heap ready; otherwise the
 # cold build runs in the background (see ic2/README.md).
-ic2: register-afp-components build-ic2
+ic2: register-components build-ic2
 	$(ISABELLE_HOME)/isabelle ic2 server start $(IC2_FLAGS) -n $(IC2_NAME) -d . -l HOL
 	@echo ''
 	@echo '  ic2 server "$(IC2_NAME)" launched. Follow its console (build progress + logs) with:'

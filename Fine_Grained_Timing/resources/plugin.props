@@ -1,0 +1,17 @@
+# Fine-Grained Timing Plugin Properties
+
+plugin.FineGrainedTimingPlugin.name=Fine-Grained Timing
+plugin.FineGrainedTimingPlugin.author=Amazon Web Services
+plugin.FineGrainedTimingPlugin.version=1.0
+plugin.FineGrainedTimingPlugin.description=Fine-grained tactic timing for Isabelle/jEdit
+plugin.FineGrainedTimingPlugin.activate=defer
+plugin.FineGrainedTimingPlugin.usePluginHome=false
+
+plugin.FineGrainedTimingPlugin.depend.0=jdk 21
+plugin.FineGrainedTimingPlugin.depend.1=jedit 05.06.00.00
+
+plugin.FineGrainedTimingPlugin.menu.label=Fine-Grained Timing
+plugin.FineGrainedTimingPlugin.menu=fine-grained-timing-dockable
+
+fine-grained-timing-dockable.label=Fine-Grained Timing
+fine-grained-timing-dockable.title=Fine-Grained Timing
