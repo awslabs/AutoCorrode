@@ -18,6 +18,18 @@ except ImportError:
     HAS_ZSTD = False
 
 
+class BlobDecodeError(RuntimeError):
+    """A compressed heap database field could not be decoded."""
+
+
+class ZstdDecoderUnavailable(BlobDecodeError):
+    """Neither the Python module nor the zstd command is available."""
+
+
+class ZstdDecodeError(BlobDecodeError):
+    """A decoder was available, but the zstd frame was invalid."""
+
+
 # ---------------------------------------------------------------------------
 # Isabelle environment and path resolution
 # ---------------------------------------------------------------------------
@@ -190,16 +202,35 @@ def decompress_blob(blob):
         return ""
     if blob[:4] == b'\x28\xb5\x2f\xfd':  # zstd magic
         if HAS_ZSTD:
-            data = zstandard.ZstdDecompressor().decompress(
-                blob, max_output_size=50*1024*1024)
+            try:
+                decoder = zstandard.ZstdDecompressor().decompressobj()
+                data = decoder.decompress(blob)
+                if not decoder.eof:
+                    raise ZstdDecodeError(
+                        "zstd frame ended before its end marker"
+                    )
+            except zstandard.ZstdError as error:
+                raise ZstdDecodeError(
+                    f"invalid zstd frame: {error}"
+                ) from error
         else:
             try:
                 process = subprocess.run(
                     ["zstd", "-q", "-d", "-c"],
                     input=blob, capture_output=True, check=True)
                 data = process.stdout
-            except (OSError, subprocess.CalledProcessError):
-                return None  # signal missing decoder
+            except OSError as error:
+                raise ZstdDecoderUnavailable(
+                    "install Python 'zstandard' or the 'zstd' command"
+                ) from error
+            except subprocess.CalledProcessError as error:
+                detail = error.stderr.decode(
+                    "utf-8", errors="replace"
+                ).strip()
+                raise ZstdDecodeError(
+                    "invalid zstd frame"
+                    + (f": {detail}" if detail else "")
+                ) from error
         return data.decode("utf-8", errors="replace")
     return blob.decode("utf-8", errors="replace") if isinstance(blob, bytes) else blob
 
@@ -405,9 +436,6 @@ class HeapInfo:
             self._timing_records = []
             return self._timing_records
         text = decompress_blob(blob[0])
-        if text is None:
-            self._timing_records = []
-            return self._timing_records
         records = parse_yxml_records(text)
         # Filter out system sources
         self._timing_records = [

@@ -66,6 +66,7 @@ class DecodeResult:
     unsupported: int = 0
     duplicates: int = 0
     superseded: int = 0
+    decode_failures: list = field(default_factory=list)
 
 
 class YXMLError(ValueError):

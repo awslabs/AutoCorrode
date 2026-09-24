@@ -56,6 +56,7 @@ from heap_info import (
     isabelle_getenv, resolve_path, file_sha1, is_system_source,
     decompress_blob, parse_yxml_records, decode_yxml_props, fmt_time,
     SourceChecker, file_lines, offset_to_line,
+    BlobDecodeError, ZstdDecoderUnavailable, ZstdDecodeError,
     _isabelle_env_cache,
 )
 
@@ -87,6 +88,15 @@ def bar(n, max_n):
 def section(title):
     print(f"\n{BOLD}{title}{RESET}")
     print(f"{'─' * 60}")
+
+
+def blob_decode_error(kind, error):
+    if isinstance(error, ZstdDecoderUnavailable):
+        return (
+            f"install Python 'zstandard' or the 'zstd' command "
+            f"to decode {kind}"
+        )
+    return f"could not decode {kind}: {error}"
 
 
 def show_build(conn, session):
@@ -340,8 +350,6 @@ def read_command_timings(conn, session):
         return []
 
     text = decompress_blob(blob[0])
-    if text is None:
-        return None
     return parse_yxml_records(text)
 
 
@@ -712,10 +720,6 @@ def show_timings(conn, session, top_n, theory=None, checker=None,
                  with_system=False, records=None, isabelle="isabelle"):
     if records is None:
         records = read_command_timings(conn, session)
-    if records is None:
-        print(f"\n  {YELLOW}Install Python 'zstandard' or the 'zstd' command "
-              f"to decode command timings{RESET}")
-        return
     if not records:
         return
 
@@ -856,11 +860,15 @@ def read_fine_timing_reports(conn, session, theory=None):
     result = DecodeResult()
     seen = set()
     superseded = {}
-    missing_decoder = False
     for theory_name, export_name, blob in conn.execute(query, parameters):
-        text = decompress_blob(blob)
-        if text is None:
-            missing_decoder = True
+        try:
+            text = decompress_blob(blob)
+        except ZstdDecoderUnavailable:
+            raise
+        except ZstdDecodeError as error:
+            result.decode_failures.append(
+                f"{theory_name}:{export_name}: {error}"
+            )
             continue
         decoded = extract_reports(text, theory_name, export_name)
         result.malformed += decoded.malformed
@@ -911,7 +919,7 @@ def read_fine_timing_reports(conn, session, theory=None):
                 result.superseded += 1
             else:
                 result.superseded += 1
-    return result, missing_decoder
+    return result
 
 
 def _theory_source(checker, theory):
@@ -1087,6 +1095,7 @@ def _fine_summary(result, invocations):
         "unsupported_reports": result.unsupported,
         "duplicate_reports": result.duplicates,
         "superseded_reports": result.superseded,
+        "failed_exports": len(result.decode_failures),
     }
 
 
@@ -1109,6 +1118,7 @@ def fine_timing_json(session, result, invocations, args):
         "view": args.fine_view,
         "group_by": args.fine_group_by,
         "summary": _fine_summary(result, invocations),
+        "failed_exports": result.decode_failures,
     }
     if args.fine_view == "calls":
         rows = []
@@ -1170,6 +1180,11 @@ def show_fine_timing_text(result, invocations, args, unavailable):
         f"v{version}: {count}"
         for version, count in sorted(summary["schema_versions"].items()))
     print(f"  Schemas:       {versions or '—'}")
+    if result.decode_failures:
+        print(
+            f"  {YELLOW}Skipped {len(result.decode_failures)} undecodable "
+            f"PIDE markup export(s).{RESET}"
+        )
     if (result.malformed or result.unsupported or result.duplicates or
             result.superseded):
         print(
@@ -1254,9 +1269,6 @@ def show_ml_stats(conn, session):
         return
 
     text = decompress_blob(blob[0])
-    if text is None:
-        print(f"\n  {YELLOW}Install 'zstandard' to decode ML statistics{RESET}")
-        return
     records = parse_yxml_records(text)
     if not records:
         return
@@ -1454,21 +1466,28 @@ def main():
                     print(f"    {var} = {RED}(unset){RESET}")
 
     ws = args.with_system_sources
-    timing_records = (
-        read_command_timings(conn, session)
-        if command_timing_requested else None)
+    try:
+        timing_records = (
+            read_command_timings(conn, session)
+            if command_timing_requested else None)
+    except BlobDecodeError as error:
+        conn.close()
+        sys.exit(f"{RED}Error: {blob_decode_error('command timings', error)}"
+                 f"{RESET}")
 
     fine_result = None
     fine_invocations = None
     fine_unavailable = set()
     if args.fine_timings:
-        fine_result, missing_decoder = read_fine_timing_reports(
-            conn, session, theory=args.theory)
-        if missing_decoder:
+        try:
+            fine_result = read_fine_timing_reports(
+                conn, session, theory=args.theory)
+        except BlobDecodeError as error:
             conn.close()
             sys.exit(
-                f"{RED}Error: install Python 'zstandard' or the 'zstd' "
-                f"command to decode PIDE markup exports{RESET}")
+                f"{RED}Error: "
+                f"{blob_decode_error('PIDE markup exports', error)}"
+                f"{RESET}")
         fine_unavailable = annotate_fine_timing_locations(
             fine_result.invocations, checker, session, args.isabelle,
             need_proofs=args.fine_group_by == "proof")
@@ -1508,11 +1527,6 @@ def main():
                 for name, digest in mismatched:
                     print(f"  {RED}✗{RESET} {RED}{name:{max_name}s}{RESET}  {DIM}{digest}{RESET}")
     try:
-        if ((args.timing_range or args.annotate_source) and
-                timing_records is None):
-            raise ValueError(
-                "Install Python 'zstandard' or the 'zstd' command to "
-                "decode command timings")
         if args.timing_range:
             show_timing_range(timing_records, checker, args.timing_range)
         if args.annotate_source:
@@ -1530,7 +1544,14 @@ def main():
     if args.fine_timings:
         show_fine_timing_text(
             fine_result, fine_invocations, args, fine_unavailable)
-    if args.ml_stats:   show_ml_stats(conn, session)
+    if args.ml_stats:
+        try:
+            show_ml_stats(conn, session)
+        except BlobDecodeError as error:
+            conn.close()
+            sys.exit(
+                f"{RED}Error: "
+                f"{blob_decode_error('ML statistics', error)}{RESET}")
     if args.sources:    show_sources_full(conn, session, grep=args.grep, checker=checker,
                                           with_system=ws)
     elif args.source_summary: show_sources_summary(conn, session, with_system=ws)
