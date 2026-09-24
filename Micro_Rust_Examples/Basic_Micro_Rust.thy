@@ -400,6 +400,7 @@ definition add_local :: \<open>('s, 64 word, _, _, _, _) expression\<close> wher
 
 (*<*)
 end
+(*>*)
 
 text\<open>You may have noted that we didn't run any experimental evaluations. To be able to conduct
 such, we would first need to exhibit a concrete \<^emph>\<open>implementation\<close> of the interfaces exposed

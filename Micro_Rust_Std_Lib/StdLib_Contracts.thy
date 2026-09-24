@@ -169,5 +169,6 @@ using assms
     satisfies_function_contract_weaken)
   done
 
+(*<*)
 end
 (*>*)

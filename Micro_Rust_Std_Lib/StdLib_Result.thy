@@ -212,5 +212,6 @@ instance ..
 
 end
 
+(*<*)
 end
 (*>*)

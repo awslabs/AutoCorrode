@@ -249,6 +249,7 @@ lemma aentails_cancel_points_to_raw_with_typed_0R:
   using aentails_cancel_points_to_raw_with_typed by (metis asepconj_ident2 assms ucincl_points_to_raw) 
 
 declare reference_axioms [reference_axioms]
+(*<*)
 end
 
 end
