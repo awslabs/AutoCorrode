@@ -305,13 +305,6 @@ struct
 
      fun error msg = msg |> tracing
 
-     fun subgoals_have_changed st st' (i,j) =
-       let val goal_i = List.nth (Thm.prems_of st, i-1)
-           val goal_j = List.nth (Thm.prems_of st', j-1)
-       in
-         not (Envir.aeconv (goal_i, goal_j))
-       end
-
     fun rotate_goal_adjust_indices i (st, is) =
       if i = 1 then (st, is) else
       let
@@ -371,10 +364,18 @@ struct
                  val nprems_old  = Thm.nprems_of st
                  val nprems_new  = Thm.nprems_of st'
                  val n_new_goals = nprems_new - nprems_old
+                 val prems_old = Thm.prems_of st
+                 val prems_new = Thm.prems_of st'
+                 fun subgoal_has_changed (i, j) =
+                   let val goal_i = List.nth (prems_old, i-1)
+                       val goal_j = List.nth (prems_new, j-1)
+                   in
+                     not (Envir.aeconv (goal_i, goal_j))
+                   end
                  val not_is_old = filter (list_contains_not is) (range_of_nats_base 2 (nprems_old-1))
                  val not_is_new = insert_goals_adjust_idxs n_new_goals not_is_old
                  val changed = (not_is_old, not_is_new) |> op ~~
-                               |> List.filter (subgoals_have_changed st st') |> List.map snd
+                               |> List.filter subgoal_has_changed |> List.map snd
 
                  (* Add inserted subgoals to worklist *)
                  val is'  = insert_goals_adjust_idxs n_new_goals is
