@@ -142,14 +142,71 @@ ML\<open>
    \<comment>\<open>Update the ith entry of a list\<close>
    fun list_set_nth (i : int) (x : 'a) = nth_map i (K x)
 
-   \<comment>\<open>Looks up a datatype record in the given context, and returns the list of fields\<close>
-   fun get_fields rec_name thy = let
-     val ctxt = Local_Theory.target_of thy
-     val (ty, _) = Term.dest_Type (Proof_Context.read_type_name {proper = true, strict = false} ctxt rec_name)
-     val sels = hd (#selss (the (Ctr_Sugar.ctr_sugar_of ctxt ty))) in
-          map (fst o Term.dest_Const) sels
-       |> map Long_Name.base_name
+   \<comment>\<open>Looks up a datatype record in the given context, and returns the list of fields (fully qualified)\<close>
+
+   fun get_fields_full rec_name thy =
+     let
+       val ctxt = Local_Theory.target_of thy
+       val theory = Proof_Context.theory_of ctxt
+       val (ty, _) =
+         Term.dest_Type
+           (Proof_Context.read_type_name
+             {proper = true, strict = false} ctxt rec_name)
+       fun standard_record_hierarchy name =
+         let
+           val info = Record.the_info theory name
+           val parents =
+             (case #parent info of
+                NONE => []
+              | SOME (_, parent_name) =>
+                  standard_record_hierarchy parent_name)
+         in
+           parents @ [info]
+         end
+     in
+       case Ctr_Sugar.ctr_sugar_of ctxt ty of
+         SOME sugar =>
+           hd (#selss sugar) |> map (fst o Term.dest_Const)
+       | NONE =>
+           (case Record.get_info theory ty of
+              SOME _ =>
+                standard_record_hierarchy ty
+                |> maps #fields
+                |> map fst
+            | NONE =>
+                error ("Unknown datatype or record type " ^ quote rec_name))
      end
+
+   fun get_fields rec_name thy =
+          get_fields_full rec_name thy
+       |> map Long_Name.base_name
+
+  fun extract_const_core ((Const ("_type_constraint_", _)) $ t) = extract_const_core t
+    | extract_const_core (Abs (_, _, t)) = extract_const_core t
+    | extract_const_core t = t |> Term.strip_comb |> fst |> Term.dest_Const
+
+  val extract_const = extract_const_core #> fst
+
+  fun field_update rec_name field = rec_name ^ "." ^ "update_" ^ field
+
+  fun get_field_updates_full rec_name thy =
+    let
+      val ctxt = Local_Theory.target_of thy
+      val theory = Proof_Context.theory_of ctxt
+      val (ty, _) =
+        Term.dest_Type
+          (Proof_Context.read_type_name
+            {proper = true, strict = false} ctxt rec_name)
+    in
+      case Record.get_info theory ty of
+        SOME _ => get_fields_full rec_name thy |> map (suffix Record.updateN)
+      | NONE =>
+          get_fields rec_name thy
+          |> List.map (field_update rec_name
+                       #> Syntax.parse_term thy
+                       #> extract_const)
+    end
+
 
    \<comment>\<open>General helpers for interpreting strings as methods and applying them\<close>
    val apply_text = (Seq.the_result "initial method") oo ((fn t => (t, Position.no_range)) #> Proof.apply)
@@ -556,4 +613,3 @@ end
 (*<*)
 end
 (*>*)
-
