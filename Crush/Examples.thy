@@ -1023,38 +1023,4 @@ schematic_goal \<open>?y = ?y\<close>
   apply refl_schematic
   oops
 
-subsubsection\<open>Profiling\<close>
-
-lemma
-  shows \<open>(\<forall>x. \<exists>y. R x y) \<longrightarrow> (\<exists>f. \<forall>x. R x (f x))\<close>
-  show_timelogs     (* Nothing showing up *)
-  apply\<tau>(time auto) (* time <> is meaningful without auto\<tau>, in which case it only prints
-                       the measurments to the tracing output. apply\<tau> means that the measurements
-                       will be accumulated in the proof context *)
-  show_timelogs
-  apply\<tau>(time auto)
-  apply\<tau>(time auto)
-  enable_print_timings
-  apply\<tau>(time auto)
-  apply\<tau>(time auto)
-  apply\<tau>(time "sleep" \<open>sleep 1\<close>)
-  show_timelogs     (* See the update time logs *)
-  disable_print_timings
-  apply\<tau>(time auto)
-  apply\<tau>(time auto)
-  reset_timelogs  (* Start again *)
-  apply\<tau>(tactic \<open>Crush_Time.TIME @{context} true "auto_tac" (auto_tac @{context})\<close>)
-  show_timelogs   (* Shouldn't show anything *)
-  apply\<tau>(time auto)
-  apply\<tau>(time auto)
-  apply\<tau>(time auto)
-  apply\<tau>(time auto)
-  show_timelogs   (* Logs for the last 4 auto calls *)
-  (* apply\<tau> unfortunately never fails -- that seems to be necessary so we are allowed
-     to update the proof context. It would be useful to at least have markup indicating
-     that the inner method failed, but I don't know how to do that yet. *)
-  apply\<tau> (time "clssarsimp" \<open>assumption | auto\<close>)
-  show_timelogs
-  oops
-
 end

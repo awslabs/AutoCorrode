@@ -310,8 +310,9 @@ sig
      its elapsed time under a name; the accumulated log is printed as a breakdown when timing
      is on. The timer is carried explicitly (in enum_info) rather than through global state,
      so a plugin records into the same log the command prints, and parallel runs stay
-     independent. Modelled on Crush's Crush_Time (Crush/time.ML), pared down: the phases run
-     once each, so per-name statistics/percentiles are unnecessary here. *)
+     independent. Unlike the general fine-grained timing support, this timer is deliberately
+     pared down: the phases run once each, so per-name statistics and percentiles are
+     unnecessary here. *)
   type timer
 
   (* Timing is off unless this config is set, so a bare declaration is silent as before. *)

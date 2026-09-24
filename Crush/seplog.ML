@@ -1088,7 +1088,7 @@ struct
      let val ucincl_intro = intro_tac (Named_Theorems.get ctxt @{named_theorems ucincl_intros}) ctxt
          val ucincl_elim  = elim_tac  (Named_Theorems.get ctxt @{named_theorems ucincl_elims}) ctxt
          val ctxt' = ctxt addsimps @{thms Let_def}
-         fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_ucincl) msg
+         fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_ucincl) msg
                       #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_ucincl) msg
      in Crush_Tacticals.IF' is_ucincl ( NOTE "ucincl_solve" (
        ( REPEAT_ALL_NEW (
@@ -2129,7 +2129,7 @@ struct
            (TRY o (solves_reference_axioms ctxt |> SOLVED')))
 
   val aentails_cancel_points_to_raw_with_typed_tac : Proof.context -> int -> tactic = fn ctxt => let
-    fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
+    fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
                   #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_cancel) msg in
           NOTE "aentails_cancel_raw_with_typed_float_concls" (aentails_float_points_to_concls_tac' ctxt)
     THEN' NOTE "aentails_cancel_raw_with_typed_float_assms" (aentails_float_points_to_raw_assms_tac' ctxt)
@@ -2198,7 +2198,7 @@ struct
 
   (* TODO: This is out of sync with the _method_ `aentails_simp_core` *)
   val aentails_simp_core_tac : Proof.context -> int -> tactic = fn ctxt => let
-     fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_core) msg
+     fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_core) msg
                   #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_core) msg in
     ucincl_discharge_tac ctxt (
             NOTE "aentails_core_hoist_pure_assms" (aentails_hoist_pure_assms_tac ctxt)
@@ -2223,7 +2223,7 @@ struct
       end
 
    fun aentails_cancel_core_tac ctxt =
-     (Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) "aentails_cancel_tac_unify_and_float"
+     (Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) "aentails_cancel_tac_unify_and_float"
                   (aentails_float_match ctxt (is_cancellable_pair ctxt)))
            THEN' (resolve_tac ctxt @{thms aentails_refl asepconj_mono asepconj_mono5 aentails_cancel_r})
 
@@ -2232,7 +2232,7 @@ struct
        K no_tac
      else
      let
-     fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
+     fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
                   #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_cancel) msg in
               NOTE "aentails_cancel_tac_points_to" (aentails_cancel_points_to_tac ctxt)
       ORELSE' NOTE "aentails_cancel_tac_points_to_raw" (aentails_cancel_points_to_raw_tac ctxt)
@@ -2241,7 +2241,7 @@ struct
      end
 
   val aentails_cancel_tac : Proof.context -> int -> tactic = fn ctxt => let
-     fun NOTE msg =  Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
+     fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) msg
                   #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_cancel) msg in
             NOTE "aentails_cancel_tac_core" (aentails_cancel_core_tac ctxt)
     ORELSE' NOTE "aentails_cancel_tac_multi" (aentails_cancel_multi_tac ctxt)
@@ -2295,7 +2295,7 @@ struct
      CONVERSION (aentails_simp_concls_conv thms ctxt)
 
   val unfold_prems_tac : thm list -> Proof.context -> int -> tactic =  fn thms => fn ctxt =>
-    let val TIME = Crush_Time.TIME' ctxt (Config.get ctxt Crush_Config.time_unfold_prems) in
+    let val TIME = Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_unfold_prems) in
     CHANGED_PROP o (
              TRY o TIME "unfold_prems_sat_unfold"    (Crush_Unfold.sat_unfold_tac thms ctxt)
        (* This seems redundant given the saturating unfold...?

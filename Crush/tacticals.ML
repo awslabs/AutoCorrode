@@ -144,7 +144,7 @@ struct
                  |> Pretty.text_fold |> log
              else ()
       in
-         Crush_Time.time_seq cb tac
+         Fine_Grained_Timing.measure_seq cb tac
       end
     end
 
@@ -160,7 +160,7 @@ struct
              else
                (msg ^ " fail (" ^ (time |> time_to_str) ^ ")" |> tracing)
       in
-         ptac_start THEN Crush_Time.time_seq cb tac THEN ptac_end
+         ptac_start THEN Fine_Grained_Timing.measure_seq cb tac THEN ptac_end
       end
 
   fun LOG_pos' (ctxt : Proof.context) (pos : Position.T) (enable : bool) : string -> logger -> (int -> tactic) -> (int -> tactic) =
@@ -237,7 +237,7 @@ struct
         (* Fast path: if there are no schematics in the pre-state, the wrapped
            tactic cannot instantiate any, so skip the observation entirely. *)
         if null names_before then tac' i st
-        else Crush_Time.time_seq cb (tac' i) st
+        else Fine_Grained_Timing.measure_seq cb (tac' i) st
       end
 
   fun LOGFULL' (ctxt : Proof.context) (enable : bool) : string -> (int -> tactic) -> (int -> tactic) =

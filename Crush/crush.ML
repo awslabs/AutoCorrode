@@ -799,7 +799,9 @@ struct
                      post_step_tac_parser,
                      additional_tac_parser, additional_method_parser,
                      abort_at_filter_parser, abort_at_pattern_parser]
-  val time_parsers = [make_time_parser "steps"    Crush_Config.time_steps,
+  val time_parsers = [make_arg_parser' (Args.$$$ "pide" |-- Args.$$$ "timing")
+                        Parser.parse_bool (Config.put Fine_Grained_Timing.enabled) \<^here>,
+                      make_time_parser "steps"    Crush_Config.time_steps,
                       make_time_parser "clarsimp" Crush_Config.time_clarsimp,
                       make_time_parser "toplevel" Crush_Config.time_toplevel]
   val log_parsers = [make_log_parser "toplevel" Crush_Config.log_toplevel,
@@ -863,13 +865,25 @@ end;
 
 local
   val _ = Theory.setup (Method.setup @{binding "crush_base"}
-          (Method.sections Crush.crush_modifiers |-- Scan.succeed (SIMPLE_METHOD o Crush.crush_base_tac)) "")
+          (Method.sections Crush.crush_modifiers |--
+            Scan.succeed (fn ctxt =>
+              SIMPLE_METHOD
+                (Fine_Grained_Timing.profile_tactic
+                  "crush_base" ctxt Crush.crush_base_tac))) "")
 
   val _ = Theory.setup (Method.setup @{binding "fastcrush_base"}
-          (Method.sections Crush.crush_modifiers |-- Scan.succeed (SIMPLE_METHOD o Crush.fastcrush_base_tac)) "")
+          (Method.sections Crush.crush_modifiers |--
+            Scan.succeed (fn ctxt =>
+              SIMPLE_METHOD
+                (Fine_Grained_Timing.profile_tactic
+                  "fastcrush_base" ctxt Crush.fastcrush_base_tac))) "")
 
   val _ = Theory.setup (Method.setup @{binding "crush_base_step"}
           (Method.sections Crush.crush_modifiers |--
-            Scan.succeed (SIMPLE_METHOD o HEADGOAL o (fn ctxt => Crush.crush_base_step_tac ctxt default_logger))) "")
+            Scan.succeed (fn ctxt =>
+              SIMPLE_METHOD
+                (Fine_Grained_Timing.profile_tactic
+                  "crush_base_step" ctxt
+                  (fn ctxt' => HEADGOAL (Crush.crush_base_step_tac ctxt' default_logger))))) "")
 
 in end

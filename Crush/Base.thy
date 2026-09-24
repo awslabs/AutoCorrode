@@ -3,10 +3,9 @@
 
 (*<*)
 theory Base
-  imports Main
+  imports Main "Fine_Grained_Timing.Fine_Grained_Timing"
   keywords
-    "enable_print_timings" "disable_print_timings" "enable_timings" "disable_timings"
-    "reset_timelogs" "show_timelogs" "apply\<tau>" "step" :: prf_script % "proof"
+    "step" :: prf_script % "proof"
 begin
 
 subsection \<open>Configuration\<close>
@@ -24,8 +23,7 @@ ML_file "parsers.ML"
 
 subsection \<open>Tactic profiling\<close>
 
-ML_file "time.ML"
-ML\<open>open Crush_Time\<close>
+ML\<open>open Fine_Grained_Timing\<close>
 
 
 subsection\<open>Meng-Paulson filter for premises\<close>
