@@ -164,22 +164,30 @@ heap storage.
 As a remedy, you can consider putting the following in your local `etc/settings`:
 
 ```
-if [ -n "$ISABELLE_HEAP_BASE" ]; then
-  ISABELLE_HEAPS="$ISABELLE_HEAP_BASE/heaps"
-fi
+if [ -n "$ISABELLE_HEAPS_OVERRIDE" ]; then
+  ISABELLE_HEAPS="$ISABELLE_HEAPS_OVERRIDE"
+else
+  if [ -n "$ISABELLE_HEAP_BASE" ]; then
+    ISABELLE_HEAPS="$ISABELLE_HEAP_BASE/heaps"
+  fi
 
-if [ -n "$ISABELLE_HEAP_SUFFIX" ]; then
-  ISABELLE_HEAPS="$ISABELLE_HEAPS-$ISABELLE_HEAP_SUFFIX"
+  if [ -n "$ISABELLE_HEAP_SUFFIX" ]; then
+    ISABELLE_HEAPS="$ISABELLE_HEAPS-$ISABELLE_HEAP_SUFFIX"
+  fi
 fi
 ```
 
-With this, if you set the environment variable `ISABELLE_HEAP_SUFFIX` prior to starting Isabelle,
-then the provided suffix will be added to the default heap directory. For example, with
-`ISABELLE_HEAP_SUFFIX=A`, heaps will be looked up and stored in `$ISABELLE_HOME_USER/heaps-A`
-instead of the default `$ISABELLE_HOME_USER/heaps`.
+`ISABELLE_HEAPS_OVERRIDE` selects an exact heap directory and takes precedence over both
+`ISABELLE_HEAP_BASE` and `ISABELLE_HEAP_SUFFIX`.
+
+Without an override, setting `ISABELLE_HEAP_SUFFIX` prior to starting Isabelle adds the provided
+suffix to the selected heap directory. For example, with `ISABELLE_HEAP_SUFFIX=A`, heaps will be
+looked up and stored in `$ISABELLE_HOME_USER/heaps-A` instead of the default
+`$ISABELLE_HOME_USER/heaps`.
 
 If you even want to change the base directory to something other than `$ISABELLE_HOME_USER`, the
-above would allow you to do so by setting `$ISABELLE_HEAP_BASE`.
+above allows you to do so by setting `$ISABELLE_HEAP_BASE`, unless
+`ISABELLE_HEAPS_OVERRIDE` is set.
 
 This allows you to maintain multiple heap stores and manually switch between them.
 In particular, when working with multiple worktrees, you could use different heap stores per
@@ -242,12 +250,16 @@ Only timings recorded by Isabelle are included.
 * Add the following to your local `etc/settings` (e.g. `~/.isabelle/Isabelle2025-2/etc/settings`):
 
 ```
-if [ -n "$ISABELLE_HEAP_BASE" ]; then
-  ISABELLE_HEAPS="$ISABELLE_HEAP_BASE/heaps"
-fi
+if [ -n "$ISABELLE_HEAPS_OVERRIDE" ]; then
+  ISABELLE_HEAPS="$ISABELLE_HEAPS_OVERRIDE"
+else
+  if [ -n "$ISABELLE_HEAP_BASE" ]; then
+    ISABELLE_HEAPS="$ISABELLE_HEAP_BASE/heaps"
+  fi
 
-if [ -n "$ISABELLE_HEAP_SUFFIX" ]; then
-  ISABELLE_HEAPS="$ISABELLE_HEAPS-$ISABELLE_HEAP_SUFFIX"
+  if [ -n "$ISABELLE_HEAP_SUFFIX" ]; then
+    ISABELLE_HEAPS="$ISABELLE_HEAPS-$ISABELLE_HEAP_SUFFIX"
+  fi
 fi
 
 if [ -n "$ISABELLE_PROJECT_BASE" ]; then
