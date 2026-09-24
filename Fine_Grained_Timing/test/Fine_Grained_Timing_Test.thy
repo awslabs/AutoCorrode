@@ -98,7 +98,7 @@ ML \<open>
   val profile_context =
     Config.put Fine_Grained_Timing.enabled true @{context}
   val profile_result =
-    Fine_Grained_Timing.profile_seq "generic_profile" profile_context
+    Fine_Grained_Timing.profile_seq (K true) "generic_profile" profile_context
       (fn ctxt => Seq.single (Fine_Grained_Timing.active ctxt))
     |> Seq.pull
 
@@ -110,6 +110,19 @@ ML \<open>
     if Fine_Grained_Timing.active profile_context then
       error "Generic profile changed its input context"
     else ()
+
+  (* `profile_method` must tell a method that failed from one that yielded no
+     result at all, so the outcome predicate has to see `Seq.Error`. *)
+  val error_result =
+    Fine_Grained_Timing.profile_seq
+      (fn Seq.Result _ => true | Seq.Error _ => false)
+      "error_profile" profile_context
+      (fn _ => Seq.single (Seq.Error (fn () => "failed")))
+    |> Seq.pull
+  val _ =
+    (case error_result of
+      SOME (Seq.Error _, _) => ()
+    | _ => error "Profiling dropped or rewrote a Seq.Error result")
 \<close>
 
 method_setup assert_no_fine_grained_profile =
