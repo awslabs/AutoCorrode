@@ -1111,7 +1111,8 @@ struct
     fn ct => fn ctxt => ct ctxt THEN_ALL_NEW (TRY o (ucincl_solve_tac ctxt))
 
   val ucincl_must_discharge_tac : Proof.context -> (int -> tactic) -> (int -> tactic) = fn ctxt =>
-    fn ct => ct THEN_ALL_NEW (IF_OK' is_ucincl (SOLVED' (ucincl_solve_tac ctxt)))
+    let val solve = ucincl_solve_tac ctxt
+    in fn ct => ct THEN_ALL_NEW (IF_OK' is_ucincl (SOLVED' solve)) end
 
   val ucincl_must_discharge_tac' : (Proof.context -> int -> tactic) -> (Proof.context -> int -> tactic) =
     fn ct => fn ctxt => ct ctxt THEN_ALL_NEW (IF_OK' is_ucincl (SOLVED' (ucincl_solve_tac ctxt)))
