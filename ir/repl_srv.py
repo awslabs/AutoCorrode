@@ -73,6 +73,7 @@ import secrets
 import socket
 import subprocess
 import threading
+from heap_info import BlobDecodeError
 
 # Ensure stdout/stderr are unbuffered so parent processes reading our
 # output via pipes see lines immediately.
@@ -1344,8 +1345,11 @@ class Server:
         m = re.search(r'--theory\s+"([^"]*)"', text)
         if m:
             file_filter = m.group(1)
-        return self.heap_info.timing_hotspots(
-            top_n=top_n, file_filter=file_filter)
+        try:
+            return self.heap_info.timing_hotspots(
+                top_n=top_n, file_filter=file_filter)
+        except BlobDecodeError as error:
+            return f"Command timings unavailable: {error}"
 
     def _cmd_source_map(self, text, ansi=False):
         m, err = self._parse_slash(
@@ -1371,7 +1375,10 @@ class Server:
         # Get timing data
         timing_by_offset = {}
         if self.heap_info:
-            timing_by_offset = self.heap_info.timing_by_offset()
+            try:
+                timing_by_offset = self.heap_info.timing_by_offset()
+            except BlobDecodeError:
+                pass
 
         # Transform pipeline: YXML → ANSI (console) or plain text (TCP)
         transforms = console_transforms if ansi else tcp_transforms
