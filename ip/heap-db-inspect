@@ -15,6 +15,7 @@ Sections (default: -baES):
   -d, --documents        Documents (PDFs)
   -c, --checksums        Sources shasum (rebuild-check digests)
   -T, --timings          Slowest commands and per-file timing
+  -F, --fine-timings     Fine-grained PIDE timing reports
   -M, --ml-stats         ML runtime statistics summary (peak heap, GC, workers)
   -A, --all              Everything
 
@@ -24,16 +25,28 @@ Filters:
   --top N                Number of entries for timing lists (default: 15)
   --timing-range SPEC    Sum commands starting in FILE:START-END
   --annotate-source SPEC Show source commands, timings, and inferred depths
+
+Fine-grained timing:
+  --fine-view VIEW       aggregate (default) or calls
+  --fine-group-by SCOPE  global (default), theory, proof, or command
+  --fine-method REGEX    Restrict invocation labels
+  --fine-sample REGEX    Restrict sample labels
+  --format FORMAT        text (default) or json
 """
 
 import argparse
 import glob
+import json
 import os
 import re
 import shutil
 import sqlite3
 import sys
 
+from fine_timing import (
+    DecodeResult, aggregate_invocations, aggregate_to_json,
+    extract_reports, percentile_upper_bound,
+)
 from isar_source import THY_GOALS, collect_keyword_kinds, infer_commands
 
 # Import shared utilities from ir/heap_info.py
@@ -830,6 +843,380 @@ def show_timings(conn, session, top_n, theory=None, checker=None,
                     f"{DIM}{short}{RESET}")
 
 
+def read_fine_timing_reports(conn, session, theory=None):
+    query = (
+        "SELECT theory_name, name, body FROM isabelle_exports "
+        "WHERE session_name=? AND name LIKE 'PIDE/markup%'")
+    parameters = [session]
+    if theory:
+        query += " AND theory_name=?"
+        parameters.append(theory)
+    query += " ORDER BY theory_name, name"
+
+    result = DecodeResult()
+    seen = set()
+    missing_decoder = False
+    for theory_name, export_name, blob in conn.execute(query, parameters):
+        text = decompress_blob(blob)
+        if text is None:
+            missing_decoder = True
+            continue
+        decoded = extract_reports(text, theory_name, export_name)
+        result.malformed += decoded.malformed
+        result.unsupported += decoded.unsupported
+        result.duplicates += decoded.duplicates
+        for invocation in decoded.invocations:
+            key = (
+                invocation.theory, invocation.invocation, invocation.method,
+                invocation.success, invocation.command_offset,
+                tuple(
+                    (sample.name, sample.success, sample.aggregate.count,
+                     sample.aggregate.timing.elapsed_us,
+                     sample.aggregate.timing.cpu_us,
+                     sample.aggregate.timing.gc_us,
+                     sample.aggregate.min_elapsed_us,
+                     sample.aggregate.max_elapsed_us,
+                     tuple(sorted(sample.aggregate.histogram.items())))
+                    for sample in invocation.samples
+                ),
+            )
+            if key in seen:
+                result.duplicates += 1
+            else:
+                seen.add(key)
+                result.invocations.append(invocation)
+    return result, missing_decoder
+
+
+def _theory_source(checker, theory):
+    suffix = theory.replace(".", "/") + ".thy"
+    matches = [
+        (name, digest) for name, digest in checker.rows
+        if name.replace("\\", "/").endswith("/" + suffix)
+        or name.replace("\\", "/") == suffix
+    ]
+    return matches[0] if len(matches) == 1 else (None, None)
+
+
+def _proof_labels(source, commands):
+    labels = {}
+    active = None
+    for command in commands:
+        if (active is None and command["pre_depth"] == 0 and
+                command.get("category") in THY_GOALS):
+            text = command_source_text(source, command)
+            active = (text.splitlines() or [command["name"]])[0].strip()
+            if len(active) > 100:
+                active = active[:97] + "..."
+        if active is not None:
+            labels[command["offset"]] = active
+            if command["post_depth"] == 0:
+                active = None
+    return labels
+
+
+def annotate_fine_timing_locations(
+        invocations, checker, session, isabelle, need_proofs=False):
+    by_theory = {}
+    for invocation in invocations:
+        by_theory.setdefault(invocation.theory, []).append(invocation)
+
+    unavailable = set()
+    keyword_kinds = None
+    for theory, theory_invocations in by_theory.items():
+        stored, digest = _theory_source(checker, theory)
+        if stored is None:
+            unavailable.add(theory)
+            continue
+        local_path, matches = checker.check(stored, digest)
+        if not local_path or matches is not True:
+            unavailable.add(theory)
+            continue
+        for invocation in theory_invocations:
+            invocation.source_file = stored
+            if invocation.command_offset is not None:
+                invocation.line = checker.get_line(
+                    stored, invocation.command_offset)
+        if not need_proofs:
+            continue
+        if keyword_kinds is None:
+            keyword_kinds = collect_keyword_kinds(
+                source_keyword_roots(local_path, session, isabelle))
+        try:
+            with open(local_path, "r", errors="replace") as stream:
+                source = stream.read()
+        except OSError:
+            unavailable.add(theory)
+            continue
+        timed_commands = {
+            (invocation.command_offset, invocation.command)
+            for invocation in theory_invocations
+            if invocation.command_offset is not None and invocation.command
+        }
+        _, commands = infer_commands(source, keyword_kinds, timed_commands)
+        labels = _proof_labels(source, commands)
+        for invocation in theory_invocations:
+            invocation.proof = labels.get(invocation.command_offset, "")
+    return unavailable
+
+
+def _compile_filter(pattern, option):
+    try:
+        return re.compile(pattern, re.IGNORECASE) if pattern else None
+    except re.error as ex:
+        raise ValueError(f"Invalid {option} regular expression: {ex}") from ex
+
+
+def filter_fine_timing_invocations(invocations, args):
+    method = _compile_filter(args.fine_method, "--fine-method")
+    sample_name = _compile_filter(args.fine_sample, "--fine-sample")
+    grep = _compile_filter(args.grep, "--grep")
+    selected = []
+    for invocation in invocations:
+        if (args.fine_invocation_outcome != "all" and
+                invocation.success !=
+                (args.fine_invocation_outcome == "success")):
+            continue
+        if method and not method.search(invocation.method):
+            continue
+        grep_matches_invocation = (
+            not grep or grep.search(invocation.theory) or
+            grep.search(invocation.method))
+        samples = []
+        for sample in invocation.samples:
+            if (args.fine_sample_outcome != "all" and
+                    sample.success !=
+                    (args.fine_sample_outcome == "success")):
+                continue
+            if sample_name and not sample_name.search(sample.name):
+                continue
+            if (grep and not grep_matches_invocation and
+                    not grep.search(sample.name)):
+                continue
+            samples.append(sample)
+        sample_filtering = (
+            sample_name is not None or
+            args.fine_sample_outcome != "all")
+        if samples or (
+                not invocation.samples and not sample_filtering and
+                grep_matches_invocation):
+            invocation.samples = samples
+            selected.append(invocation)
+    return selected
+
+
+def _fine_group(invocation, group_by):
+    if group_by == "global":
+        return ""
+    if group_by == "theory":
+        return invocation.theory
+    location = invocation.theory
+    if invocation.line is not None:
+        location += f":{invocation.line}"
+    elif invocation.command_offset is not None:
+        location += f"+{invocation.command_offset}"
+    if group_by == "command":
+        return f"{location} {invocation.command}".rstrip()
+    return f"{location} {invocation.proof or '(unknown proof)'}"
+
+
+def _fmt_micros(value):
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.3f}s"
+    if value >= 1_000:
+        return f"{value / 1_000:.3f}ms"
+    return f"{value}us"
+
+
+def _display_fine_group(group, group_by, width=56):
+    display = group
+    if group_by in ("proof", "command"):
+        colon = group.find(":")
+        if colon >= 0:
+            dot = group.rfind(".", 0, colon)
+            if dot >= 0:
+                display = group[dot + 1:]
+    if len(display) > width:
+        display = display[:width - 3] + "..."
+    return f"{display:{width}s}"
+
+
+def _fine_summary(result, invocations):
+    schemas = {}
+    successful = 0
+    measurements = 0
+    for invocation in invocations:
+        schemas[str(invocation.version)] = (
+            schemas.get(str(invocation.version), 0) + 1)
+        successful += int(invocation.success)
+        measurements += sum(
+            sample.aggregate.count for sample in invocation.samples)
+    return {
+        "reports": len(invocations),
+        "successful_invocations": successful,
+        "failed_invocations": len(invocations) - successful,
+        "measurements": measurements,
+        "schema_versions": schemas,
+        "malformed_reports": result.malformed,
+        "unsupported_reports": result.unsupported,
+        "duplicate_reports": result.duplicates,
+    }
+
+
+def _location_json(invocation):
+    return {
+        "theory": invocation.theory,
+        "source_file": invocation.source_file or None,
+        "line": invocation.line,
+        "command": invocation.command or None,
+        "command_offset": invocation.command_offset,
+        "proof": invocation.proof or None,
+    }
+
+
+def fine_timing_json(session, result, invocations, args):
+    document = {
+        "format": "heap-db-inspect/fine-grained-timing",
+        "version": 1,
+        "session": session,
+        "view": args.fine_view,
+        "group_by": args.fine_group_by,
+        "summary": _fine_summary(result, invocations),
+    }
+    if args.fine_view == "calls":
+        rows = []
+        for invocation in invocations[:args.top]:
+            row = {
+                "location": _location_json(invocation),
+                "invocation": {
+                    "id": invocation.invocation,
+                    "schema_version": invocation.version,
+                    "method": invocation.method,
+                    "success": invocation.success,
+                    "timing_us": (
+                        None if invocation.timing is None else {
+                            "elapsed": invocation.timing.elapsed_us,
+                            "cpu": invocation.timing.cpu_us,
+                            "gc": invocation.timing.gc_us,
+                        }),
+                },
+                "samples": [],
+            }
+            for sample in invocation.samples:
+                sample_json = {
+                    "name": sample.name,
+                    "success": sample.success,
+                }
+                sample_json.update(aggregate_to_json(sample.aggregate))
+                row["samples"].append(sample_json)
+            rows.append(row)
+        document["rows"] = rows
+    else:
+        aggregates = aggregate_invocations(
+            invocations,
+            lambda invocation: _fine_group(
+                invocation, args.fine_group_by))
+        rows = []
+        for (group, name, success), aggregate in sorted(
+                aggregates.items(),
+                key=lambda item: -item[1].timing.elapsed_us)[:args.top]:
+            row = {
+                "group": group or None,
+                "sample": name,
+                "success": success,
+            }
+            row.update(aggregate_to_json(aggregate))
+            rows.append(row)
+        document["rows"] = rows
+    return document
+
+
+def show_fine_timing_text(result, invocations, args, unavailable):
+    summary = _fine_summary(result, invocations)
+    section("Fine-Grained Timing")
+    print(
+        f"  Reports:       {BOLD}{summary['reports']}{RESET} "
+        f"({summary['successful_invocations']} successful, "
+        f"{summary['failed_invocations']} failed)")
+    print(f"  Measurements:  {BOLD}{summary['measurements']}{RESET}")
+    versions = ", ".join(
+        f"v{version}: {count}"
+        for version, count in sorted(summary["schema_versions"].items()))
+    print(f"  Schemas:       {versions or '—'}")
+    if result.malformed or result.unsupported or result.duplicates:
+        print(
+            f"  Ignored:       {result.malformed} malformed, "
+            f"{result.unsupported} unsupported, "
+            f"{result.duplicates} duplicate")
+    if unavailable:
+        print(
+            f"  {YELLOW}Source attribution unavailable for "
+            f"{len(unavailable)} theory/theories; offsets or unknown proof "
+            f"labels are shown.{RESET}")
+    if not invocations:
+        print(f"\n  {DIM}(no matching timing reports){RESET}")
+        return
+
+    if args.fine_view == "calls":
+        print(f"\n  {BOLD}Calls (first {min(args.top, len(invocations))}):{RESET}")
+        for invocation in invocations[:args.top]:
+            location = _fine_group(invocation, "command")
+            print(
+                f"\n  {CYAN}{location}{RESET}  "
+                f"invocation={invocation.invocation}")
+            print(
+                f"    method={invocation.method}  "
+                f"outcome={'success' if invocation.success else 'failure'}")
+            if invocation.timing is not None:
+                print(
+                    f"    invocation timing="
+                    f"{_fmt_micros(invocation.timing.elapsed_us)}")
+            print(
+                f"\n    {'Count':>7} {'Total':>10} {'CPU':>10} {'GC':>10} "
+                f"{'Outcome':>8}  Sample")
+            for sample in sorted(
+                    invocation.samples,
+                    key=lambda value: -value.aggregate.timing.elapsed_us):
+                aggregate = sample.aggregate
+                print(
+                    f"    {aggregate.count:7d} "
+                    f"{_fmt_micros(aggregate.timing.elapsed_us):>10} "
+                    f"{_fmt_micros(aggregate.timing.cpu_us):>10} "
+                    f"{_fmt_micros(aggregate.timing.gc_us):>10} "
+                    f"{'success' if sample.success else 'failure':>8}  "
+                    f"{sample.name}")
+        return
+
+    aggregates = aggregate_invocations(
+        invocations,
+        lambda invocation: _fine_group(invocation, args.fine_group_by))
+    rows = sorted(
+        aggregates.items(), key=lambda item: -item[1].timing.elapsed_us)
+    print(
+        f"\n  {BOLD}Aggregates (top {min(args.top, len(rows))} by total "
+        f"elapsed):{RESET}\n")
+    group_heading = (
+        f"{'Group':56s} " if args.fine_group_by != "global" else "")
+    print(
+        f"  {group_heading}{'Total':>10} {'Count':>8} {'Average':>10} "
+        f"{'p50≤':>10} {'p90≤':>10} {'p99≤':>10} "
+        f"{'Outcome':>8}  Sample")
+    for (group, name, success), aggregate in rows[:args.top]:
+        group_text = (
+            _display_fine_group(group, args.fine_group_by) + " "
+            if args.fine_group_by != "global" else "")
+        average = aggregate.timing.elapsed_us // aggregate.count
+        print(
+            f"  {group_text}"
+            f"{_fmt_micros(aggregate.timing.elapsed_us):>10} "
+            f"{aggregate.count:8d} "
+            f"{_fmt_micros(average):>10} "
+            f"{_fmt_micros(percentile_upper_bound(aggregate, 0.50)):>10} "
+            f"{_fmt_micros(percentile_upper_bound(aggregate, 0.90)):>10} "
+            f"{_fmt_micros(percentile_upper_bound(aggregate, 0.99)):>10} "
+            f"{'success' if success else 'failure':>8}  {name}")
+
+
 def show_ml_stats(conn, session):
     blob = conn.execute(
         "SELECT ml_statistics FROM isabelle_session_info WHERE session_name=?",
@@ -919,6 +1306,9 @@ def main():
     g.add_argument("-d", "--documents", action="store_true", help="Documents")
     g.add_argument("-c", "--checksums", action="store_true", help="Sources shasum")
     g.add_argument("-T", "--timings", action="store_true", help="Command timings")
+    g.add_argument(
+        "-F", "--fine-timings", action="store_true",
+        help="Fine-grained PIDE timing reports")
     g.add_argument("-M", "--ml-stats", action="store_true", help="ML runtime statistics")
     g.add_argument("-A", "--all", action="store_true", help="Everything")
 
@@ -939,10 +1329,38 @@ def main():
         "--isabelle", default=os.environ.get("ISABELLE_TOOL", "isabelle"),
         help="Isabelle tool used for environment and keyword source lookup")
 
+    fine = parser.add_argument_group("fine-grained timing")
+    fine.add_argument(
+        "--fine-view", choices=("aggregate", "calls"), default="aggregate",
+        help="Aggregate samples or show individual calls (default: aggregate)")
+    fine.add_argument(
+        "--fine-group-by",
+        choices=("global", "theory", "proof", "command"), default="global",
+        help="Aggregate scope (default: global)")
+    fine.add_argument(
+        "--fine-method", metavar="REGEX",
+        help="Restrict invocation labels")
+    fine.add_argument(
+        "--fine-sample", metavar="REGEX",
+        help="Restrict sample labels")
+    fine.add_argument(
+        "--fine-invocation-outcome",
+        choices=("all", "success", "failure"), default="all",
+        help="Restrict invocation outcomes (default: all)")
+    fine.add_argument(
+        "--fine-sample-outcome",
+        choices=("all", "success", "failure"), default="all",
+        help="Restrict sample outcomes (default: all)")
+    fine.add_argument(
+        "--format", choices=("text", "json"), default="text",
+        help="Fine-grained timing output format (default: text)")
+
     args = parser.parse_args()
 
     if not os.path.isfile(args.db):
         sys.exit(f"{RED}Error: {args.db} not found{RESET}")
+    if args.top < 1:
+        sys.exit(f"{RED}Error: --top must be at least 1{RESET}")
 
     session = args.session or os.path.splitext(os.path.basename(args.db))[0]
     conn = sqlite3.connect(args.db)
@@ -950,7 +1368,8 @@ def main():
     any_section = (args.build or args.ancestry or args.sources or args.source_summary
                    or args.exports or args.export_summary or args.theories
                    or args.documents or args.checksums or args.timings
-                   or args.ml_stats or args.all or args.timing_range
+                   or args.fine_timings or args.ml_stats or args.all
+                   or args.timing_range
                    or args.annotate_source)
     if not any_section:
         args.build = args.ancestry = args.source_summary = True
@@ -958,7 +1377,18 @@ def main():
     if args.all:
         args.build = args.ancestry = args.sources = True
         args.theories = args.documents = args.checksums = True
-        args.timings = args.ml_stats = True
+        args.timings = args.fine_timings = args.ml_stats = True
+
+    other_sections = (
+        args.build or args.ancestry or args.sources or args.source_summary or
+        args.exports or args.export_summary or args.theories or
+        args.documents or args.checksums or args.timings or args.ml_stats or
+        args.timing_range or args.annotate_source)
+    if args.format == "json" and (not args.fine_timings or other_sections):
+        conn.close()
+        sys.exit(
+            f"{RED}Error: --format json requires --fine-timings without "
+            f"other sections{RESET}")
 
     # Header
     heap_dir = os.path.dirname(os.path.dirname(args.db))
@@ -966,10 +1396,11 @@ def main():
     heap_size = fmt_size(os.path.getsize(heap_file)) if os.path.isfile(heap_file) else f"{RED}missing{RESET}"
     db_size = fmt_size(os.path.getsize(args.db))
 
-    print(f"\n{BOLD}Isabelle Heap: {CYAN}{session}{RESET}")
-    print(f"{'═' * 60}")
-    print(f"  DB:   {DIM}{args.db}{RESET}  ({db_size})")
-    print(f"  Heap: {DIM}{heap_file}{RESET}  ({heap_size})")
+    if args.format == "text":
+        print(f"\n{BOLD}Isabelle Heap: {CYAN}{session}{RESET}")
+        print(f"{'═' * 60}")
+        print(f"  DB:   {DIM}{args.db}{RESET}  ({db_size})")
+        print(f"  Heap: {DIM}{heap_file}{RESET}  ({heap_size})")
 
     if args.mismatches:
         args.check = True
@@ -979,12 +1410,13 @@ def main():
 
     # Create source checker if needed
     checker = None
-    timing_requested = (
+    command_timing_requested = (
         args.timings or args.timing_range or args.annotate_source)
+    timing_requested = command_timing_requested or args.fine_timings
     if args.check or timing_requested:
         checker = SourceChecker(conn, session, isabelle_bin=args.isabelle)
         # Show resolved environment variables
-        if _isabelle_env_cache:
+        if args.format == "text" and _isabelle_env_cache:
             print(f"\n  {BOLD}Environment:{RESET}")
             for (var, _bin), val in sorted(_isabelle_env_cache.items()):
                 if val:
@@ -994,7 +1426,43 @@ def main():
 
     ws = args.with_system_sources
     timing_records = (
-        read_command_timings(conn, session) if timing_requested else None)
+        read_command_timings(conn, session)
+        if command_timing_requested else None)
+
+    fine_result = None
+    fine_invocations = None
+    fine_unavailable = set()
+    if args.fine_timings:
+        fine_result, missing_decoder = read_fine_timing_reports(
+            conn, session, theory=args.theory)
+        if missing_decoder:
+            conn.close()
+            sys.exit(
+                f"{RED}Error: install Python 'zstandard' or the 'zstd' "
+                f"command to decode PIDE markup exports{RESET}")
+        fine_unavailable = annotate_fine_timing_locations(
+            fine_result.invocations, checker, session, args.isabelle,
+            need_proofs=args.fine_group_by == "proof")
+        try:
+            fine_invocations = filter_fine_timing_invocations(
+                fine_result.invocations, args)
+        except ValueError as ex:
+            conn.close()
+            sys.exit(f"{RED}Error: {ex}{RESET}")
+        fine_invocations.sort(
+            key=lambda invocation: (
+                invocation.theory,
+                invocation.command_offset
+                if invocation.command_offset is not None else -1,
+                invocation.invocation))
+
+    if args.format == "json":
+        print(json.dumps(
+            fine_timing_json(
+                session, fine_result, fine_invocations, args),
+            indent=2, sort_keys=True))
+        conn.close()
+        return
 
     if args.build:      show_build(conn, session)
     if args.ancestry:   show_ancestry(conn, session)
@@ -1030,6 +1498,9 @@ def main():
         show_timings(
             conn, session, args.top, theory=args.theory, checker=checker,
             with_system=ws, records=timing_records, isabelle=args.isabelle)
+    if args.fine_timings:
+        show_fine_timing_text(
+            fine_result, fine_invocations, args, fine_unavailable)
     if args.ml_stats:   show_ml_stats(conn, session)
     if args.sources:    show_sources_full(conn, session, grep=args.grep, checker=checker,
                                           with_system=ws)

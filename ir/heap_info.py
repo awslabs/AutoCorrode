@@ -189,9 +189,17 @@ def decompress_blob(blob):
     if not blob:
         return ""
     if blob[:4] == b'\x28\xb5\x2f\xfd':  # zstd magic
-        if not HAS_ZSTD:
-            return None  # signal missing dependency
-        data = zstandard.ZstdDecompressor().decompress(blob, max_output_size=50*1024*1024)
+        if HAS_ZSTD:
+            data = zstandard.ZstdDecompressor().decompress(
+                blob, max_output_size=50*1024*1024)
+        else:
+            try:
+                process = subprocess.run(
+                    ["zstd", "-q", "-d", "-c"],
+                    input=blob, capture_output=True, check=True)
+                data = process.stdout
+            except (OSError, subprocess.CalledProcessError):
+                return None  # signal missing decoder
         return data.decode("utf-8", errors="replace")
     return blob.decode("utf-8", errors="replace") if isinstance(blob, bytes) else blob
 
