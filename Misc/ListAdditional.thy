@@ -553,6 +553,12 @@ lemma sorted_wrt_on_map:
   shows \<open>sorted_wrt_on P I (list.map f xs) = sorted_wrt_on (\<lambda>x y. P (f x) (f y)) (I \<circ> f) xs\<close>
 by (simp add: sorted_wrt_on_def)
 
+lemma find_Some_iff_distinct:
+  assumes \<open>distinct (list.map f xs)\<close>
+  shows \<open>(find (\<lambda> l. f l = n) xs = Some x) = (\<exists>i<length xs. f (xs ! i) = n \<and> xs ! i = x)\<close>
+  using assms[simplified distinct_conv_nth]
+  by (auto simp add: find_Some_iff)
+
 (*<*)
 end
 (*>*)
