@@ -26,6 +26,10 @@ session AutoLocality_Tests in "AutoLocality_Tests" = Autogen +
     AutoLocality_Test_Diamond_Left
     AutoLocality_Test_Diamond_Right
     AutoLocality_Test_Diamond
+    AutoLocality_Test_Sibling_Base
+    AutoLocality_Test_Sibling_Left
+    AutoLocality_Test_Sibling_Right
+    AutoLocality_Test_Sibling_Merge
     AutoLocality_Test_Boundaries
     AutoLocality_Test_Record_Extension
     AutoLocality_Test_Shapes

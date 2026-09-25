@@ -571,7 +571,7 @@ ML\<open>
            (fn () => merge_entries (conflict, entry))) ]
 \<close>
 
-subsection\<open>Physical dispatcher origins merge strictly\<close>
+subsection\<open>Physical dispatcher families merge by dispatch key\<close>
 
 ML\<open>
   val ctxt = \<^context>
@@ -581,53 +581,50 @@ ML\<open>
       \<^term>\<open>boundary_attr\<close>)
   val dispatch_key =
     locality_dispatch_key_of_entry ctxt source_entry
-  val origin = stamp ()
-  val other_origin = stamp ()
-
-  fun singleton key origin source_name alias =
+  fun singleton key source_name alias =
     LocalityDispatchKeyTable.update
       (key,
-       { origin = origin,
-         source_name = source_name,
+       { source_name = source_name,
          alias = alias } :
          locality_dispatcher_inventory_entry)
       LocalityDispatchKeyTable.empty
 
-  val same_origin_left =
-    singleton dispatch_key origin "source" "alias.left"
-  val same_origin_right =
-    singleton dispatch_key origin "source" "alias.right"
-  val merged_same_origin_lr =
+  val left =
+    singleton dispatch_key "z.source" "alias.left"
+  val right =
+    singleton dispatch_key "a.source" "alias.right"
+  val merged_lr =
     merge_locality_dispatcher_inventories
-      (same_origin_left, same_origin_right)
-  val merged_same_origin_rl =
+      (left, right)
+  val merged_rl =
     merge_locality_dispatcher_inventories
-      (same_origin_right, same_origin_left)
+      (right, left)
   fun merged_alias inventory =
     (case LocalityDispatchKeyTable.lookup inventory dispatch_key of
        SOME entry => #alias entry
      | NONE => "")
-  val different_origin =
-    singleton dispatch_key other_origin "source" "alias.right"
-
+  fun merged_source_name inventory =
+    (case LocalityDispatchKeyTable.lookup inventory dispatch_key of
+       SOME entry => #source_name entry
+     | NONE => "")
   val _ = AutoLocality_Assert.run_suite
-    "Boundaries/dispatcher-origin-merge"
-    [ ("same-origin aliases choose one deterministic representative",
+    "Boundaries/dispatcher-key-merge"
+    [ ("same-key names and aliases choose deterministic representatives",
          fn () => AutoLocality_Assert.check
-           "same-origin representative alias"
-           (merged_alias merged_same_origin_lr = "alias.left"
+           "same-key representatives"
+           (merged_source_name merged_lr = "a.source"
             andalso
-            merged_alias merged_same_origin_rl = "alias.left")),
-      ("independent origins reject left-first",
-         fn () => AutoLocality_Assert.assert_raises
-           "independent dispatcher origin"
-           (fn () => merge_locality_dispatcher_inventories
-             (same_origin_left, different_origin))),
-      ("independent origins reject right-first",
-         fn () => AutoLocality_Assert.assert_raises
-           "independent dispatcher origin"
-           (fn () => merge_locality_dispatcher_inventories
-             (different_origin, same_origin_left))) ]
+            merged_source_name merged_rl = "a.source"
+            andalso
+            merged_alias merged_lr = "alias.left"
+            andalso
+            merged_alias merged_rl = "alias.left")),
+      ("same-key merges retain both branch-independent entries",
+         fn () => AutoLocality_Assert.check
+           "same-key merge"
+           (LocalityDispatchKeyTable.size merged_lr = 1
+            andalso
+            LocalityDispatchKeyTable.size merged_rl = 1)) ]
 \<close>
 
 subsection\<open>Semantic replay is independent of dispatcher inventory\<close>
