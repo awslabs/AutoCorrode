@@ -50,6 +50,7 @@ class Invocation:
     success: bool
     timing: object
     samples: list
+    raised: bool = False
     theory: str = ""
     export_name: str = ""
     command: str = ""
@@ -116,6 +117,14 @@ def parse_yxml(text):
 
 def _nodes(body):
     return [item for item in body if isinstance(item, YXMLNode)]
+
+
+def _entry_children(body):
+    return [
+        child for child in body
+        if isinstance(child, YXMLNode)
+        and child.name == ENTRY_MARKUP
+    ]
 
 
 def _property(properties, name):
@@ -207,6 +216,10 @@ def decode_report(properties, body):
         method=_property(properties, "method"),
         success=_boolean(properties, "success"),
         timing=timing,
+        raised=(
+            _boolean(properties, "raised")
+            if "raised" in properties else False
+        ),
         samples=[
             _decode_sample(node) for node in _normalize_report_body(body)
         ],
@@ -250,6 +263,8 @@ def _walk(body, ancestors=()):
 def extract_reports(text, theory="", export_name=""):
     """Decode all transported timing reports in one PIDE markup export."""
     result = DecodeResult()
+    if REPORT_MARKUP not in text:
+        return result
     try:
         body = parse_yxml(text)
     except YXMLError:
@@ -276,15 +291,14 @@ def extract_reports(text, theory="", export_name=""):
                 continue
             report_body = bodies[0].body
         elif node.name == REPORT_MARKUP:
-            direct = _normalize_report_body(node.body)
-            if all(isinstance(child, YXMLNode) and
-                   child.name == ENTRY_MARKUP for child in direct):
-                properties = node.properties
-                report_body = direct
+            properties = node.properties
+            report_body = node.body
         if properties is None:
             continue
 
         try:
+            report_body = _entry_children(
+                _normalize_report_body(report_body))
             invocation = decode_report(properties, report_body)
         except UnsupportedVersion:
             result.unsupported += 1
@@ -299,7 +313,8 @@ def extract_reports(text, theory="", export_name=""):
             ancestors)
         key = (
             theory, invocation.invocation, invocation.method,
-            invocation.success, invocation.command_offset,
+            invocation.success, invocation.raised,
+            invocation.command_offset,
             _timing_extent(invocation),
             tuple(
                 (sample.name, sample.success, sample.aggregate.count,
@@ -341,9 +356,14 @@ def extract_reports(text, theory="", export_name=""):
 
 def _snapshot_extent(invocation):
     """Order snapshots of one invocation; the largest is the final one."""
+    outcome = (
+        2 if invocation.raised
+        else 1 if invocation.success
+        else 0
+    )
     return (
         sum(sample.aggregate.count for sample in invocation.samples),
-        invocation.success,
+        outcome,
         _timing_extent(invocation),
         sum(sample.aggregate.timing.elapsed_us
             for sample in invocation.samples),
