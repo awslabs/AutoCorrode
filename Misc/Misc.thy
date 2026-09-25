@@ -10,6 +10,7 @@ theory Misc
     Debug_Logging
     ListAdditional
     MultisetAdditional
+    Quiet_Context
     Remove_Enum_Discriminate_Elims
     Result
     SetAdditional
