@@ -90,8 +90,8 @@ The following are the main persistent storage entities.
   \<^verbatim>\<open>RecordLocalityData\<close>.
 \<^enum> \<^verbatim>\<open>LocalityDispatcherInventory\<close> is a third
   \<^verbatim>\<open>Generic_Data\<close> value. It records which local named simproc
-  belongs to each dispatcher family. It stores the source name, a canonical
-  alias, and an origin stamp, but no theorem payload.
+  belongs to each dispatcher family. It stores the source name and a
+  canonical alias, but no theorem payload.
 \<^enum> The named theorem bundles created for each record contain the
   declaration-time field facts and certificates used by the proof routines.
   They are ordinary proof-context theorem collections, not a replacement for
@@ -1831,7 +1831,6 @@ ML\<open>
     else alias0
 
   type locality_dispatcher_inventory_entry = {
-    origin: stamp,
     source_name: string,
     alias: string
   }
@@ -1839,31 +1838,23 @@ ML\<open>
   fun merge_locality_dispatcher_inventory_entry dispatch_key
         (entry0 : locality_dispatcher_inventory_entry,
          entry1 : locality_dispatcher_inventory_entry) =
-    if #origin entry0 <> #origin entry1 then
-      error ("Conflicting independent AutoLocality dispatchers for "
-        ^ describe_locality_dispatch_key dispatch_key)
-    else if #source_name entry0 <> #source_name entry1 then
-      error ("Inconsistent AutoLocality source dispatcher names for "
-        ^ describe_locality_dispatch_key dispatch_key)
-    else
-      { origin = #origin entry0,
-        source_name = #source_name entry0,
-        alias =
-          canonical_locality_dispatcher_alias
-            (#alias entry0, #alias entry1) }
+    { source_name =
+        canonical_locality_dispatcher_alias
+          (#source_name entry0, #source_name entry1),
+      alias =
+        canonical_locality_dispatcher_alias
+          (#alias entry0, #alias entry1) }
 
-  fun insert_locality_dispatcher_alias dispatch_key origin
-        source_name alias inventory =
+  fun insert_locality_dispatcher_alias dispatch_key source_name alias
+        inventory =
     LocalityDispatchKeyTable.map_default
       (dispatch_key,
-       { origin = origin,
-         source_name = source_name,
+       { source_name = source_name,
          alias = alias })
       (fn entry =>
         merge_locality_dispatcher_inventory_entry dispatch_key
           (entry,
-           { origin = origin,
-             source_name = source_name,
+           { source_name = source_name,
              alias = alias }))
       inventory
 
@@ -1871,10 +1862,10 @@ ML\<open>
     LocalityDispatchKeyTable.join
       merge_locality_dispatcher_inventory_entry inventories
 
-  \<comment>\<open>Local inventory of named generic dispatchers. It contains no theorem payload and
-     no declaration lineage. A private origin stamp distinguishes transport of one standard
-     declaration from independently allocated sibling dispatchers. One deterministic alias
-     per family is enough for \<^verbatim>\<open>[[locality_cancel]]\<close> to restore a representative after
+  \<comment>\<open>Local inventory of named generic dispatchers. It contains no theorem payload
+     or declaration lineage. One deterministic source name and alias per
+     dispatch-key family are enough for \<^verbatim>\<open>[[locality_cancel]]\<close> to restore a
+     representative after
      \<^verbatim>\<open>simp only:\<close> clears the ambient simpset.\<close>
   structure LocalityDispatcherInventory = Generic_Data
   (
@@ -4613,8 +4604,8 @@ ML\<open>
     morph_locality_entry_bundle_with
       (locality_trim_morphism context phi) descriptor facts0
 
-  fun replay_locality_dispatcher_name dispatch_key origin source_name
-        binding phi context =
+  fun replay_locality_dispatcher_name dispatch_key source_name binding
+        phi context =
     let
       val ctxt = Context.proof_of context
       val alias =
@@ -4630,7 +4621,7 @@ ML\<open>
     in
       LocalityDispatcherInventory.map
         (insert_locality_dispatcher_alias
-          dispatch_key origin source_name alias) context
+          dispatch_key source_name alias) context
     end
 
   fun ensure_locality_dispatcher dispatch_key lthy =
@@ -4665,7 +4656,6 @@ ML\<open>
       | (NONE, NONE) =>
           let
             val binding = locality_simproc_binding dispatch_key
-            val origin = stamp ()
             val source_name =
               Local_Theory.full_name lthy binding
             val identifier =
@@ -4680,7 +4670,7 @@ ML\<open>
                    {pervasive = false, syntax = false,
                     pos = Binding.pos_of binding}
                    (replay_locality_dispatcher_name
-                     dispatch_key origin source_name binding)
+                     dispatch_key source_name binding)
             val _ =
               if locality_dispatcher_declared
                    (Context.Proof lthy'') dispatch_key
