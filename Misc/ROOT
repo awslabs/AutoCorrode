@@ -14,6 +14,7 @@ session Misc = HOL +
     ListAdditional
     MultisetAdditional
     Num_Case_Expression
+    Quiet_Context
     Remove_Enum_Discriminate_Elims
     Result
     SetAdditional
