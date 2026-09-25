@@ -1078,17 +1078,20 @@ def _display_fine_group(group, group_by, width=56):
 def _fine_summary(result, invocations):
     schemas = {}
     successful = 0
+    raised = 0
     measurements = 0
     for invocation in invocations:
         schemas[str(invocation.version)] = (
             schemas.get(str(invocation.version), 0) + 1)
         successful += int(invocation.success)
+        raised += int(invocation.raised)
         measurements += sum(
             sample.aggregate.count for sample in invocation.samples)
     return {
         "reports": len(invocations),
         "successful_invocations": successful,
         "failed_invocations": len(invocations) - successful,
+        "raised_invocations": raised,
         "measurements": measurements,
         "schema_versions": schemas,
         "malformed_reports": result.malformed,
@@ -1130,6 +1133,7 @@ def fine_timing_json(session, result, invocations, args):
                     "schema_version": invocation.version,
                     "method": invocation.method,
                     "success": invocation.success,
+                    "raised": invocation.raised,
                     "timing_us": (
                         None if invocation.timing is None else {
                             "elapsed": invocation.timing.elapsed_us,
@@ -1210,7 +1214,7 @@ def show_fine_timing_text(result, invocations, args, unavailable):
                 f"invocation={invocation.invocation}")
             print(
                 f"    method={invocation.method}  "
-                f"outcome={'success' if invocation.success else 'failure'}")
+                f"outcome={'raised' if invocation.raised else 'success' if invocation.success else 'failure'}")
             if invocation.timing is not None:
                 print(
                     f"    invocation timing="

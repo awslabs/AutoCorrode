@@ -7,13 +7,16 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+import fine_timing  # noqa: E402
 from fine_timing import (  # noqa: E402
-    Aggregate, Timing, aggregate_invocations, extract_reports,
+    Aggregate, REPORT_MARKUP, Timing, YXMLNode, YXMLError,
+    aggregate_invocations, extract_reports,
     percentile_upper_bound,
 )
 
@@ -55,7 +58,7 @@ def sample(name="step", success=True, count=3):
 
 
 def transported_report(version=2, invocation=42, success=True,
-                       report_body=None, invocation_timing=None):
+                       raised=False, report_body=None, invocation_timing=None):
     properties = {
         "xml_name": "fine_grained_timing",
         "version": version,
@@ -63,6 +66,8 @@ def transported_report(version=2, invocation=42, success=True,
         "method": "example_method",
         "success": str(success).lower(),
     }
+    if raised:
+        properties["raised"] = "true"
     if version == 1:
         properties.update({
             "elapsed_us": 500,
@@ -139,6 +144,65 @@ class FineTimingDecodeTest(unittest.TestCase):
         result = extract_reports(report)
         self.assertEqual(len(result.invocations), 1)
 
+    def test_filters_non_entry_direct_children(self):
+        mixed = elem(
+            "fine_grained_timing",
+            {"version": 2, "invocation": 42, "method": "example_method",
+             "success": "true"},
+            [sample(), elem("unexpected")])
+        result = extract_reports(mixed)
+        self.assertEqual(result.malformed, 0)
+        self.assertEqual(len(result.invocations), 1)
+        self.assertEqual(result.invocations[0].samples[0].aggregate.count, 3)
+
+    def test_filters_non_entry_transported_children(self):
+        mixed = transported_report(
+            report_body=[sample(), elem("unexpected")])
+        result = extract_reports(export_body(mixed))
+        self.assertEqual(result.malformed, 0)
+        self.assertEqual(len(result.invocations), 1)
+        self.assertEqual(result.invocations[0].samples[0].aggregate.count, 3)
+
+    def test_decodes_string_encoded_transported_body(self):
+        properties = {
+            "version": "2",
+            "invocation": "42",
+            "method": "example_method",
+            "success": "true",
+        }
+        report = YXMLNode(
+            "xml_elem", {"xml_name": REPORT_MARKUP, **properties}, [
+                YXMLNode("xml_body", {}, [sample()])])
+        entry = fine_timing.parse_yxml(sample())[0]
+        with patch.object(
+                fine_timing, "parse_yxml",
+                side_effect=[[report], [entry]]):
+            result = extract_reports(REPORT_MARKUP)
+        self.assertEqual(result.malformed, 0)
+        self.assertEqual(len(result.invocations), 1)
+        self.assertEqual(result.invocations[0].samples[0].aggregate.count, 3)
+
+    def test_counts_malformed_string_encoded_transported_body(self):
+        properties = {
+            "version": "2",
+            "invocation": "42",
+            "method": "example_method",
+            "success": "true",
+        }
+        report = YXMLNode(
+            "xml_elem", {"xml_name": REPORT_MARKUP, **properties}, [
+                YXMLNode("xml_body", {}, [X + "malformed body"])])
+        with patch.object(
+                fine_timing, "parse_yxml",
+                side_effect=[[report], YXMLError("malformed body")]):
+            result = extract_reports(REPORT_MARKUP)
+        self.assertEqual(result.malformed, 1)
+        self.assertEqual(result.invocations, [])
+
+    def test_skips_markup_free_exports(self):
+        result = extract_reports(elem("command_span", {"name": "apply"}))
+        self.assertEqual(result, extract_reports(""))
+
     def test_deduplicates_repeated_transport_records(self):
         report = transported_report()
         result = extract_reports(report + report)
@@ -168,6 +232,15 @@ class FineTimingDecodeTest(unittest.TestCase):
         result = extract_reports(export_body(failed) + export_body(successful))
         self.assertEqual(len(result.invocations), 1)
         self.assertTrue(result.invocations[0].success)
+
+    def test_raised_supersedes_success_with_the_same_samples(self):
+        successful = transported_report(success=True)
+        raised = transported_report(success=False, raised=True)
+        result = extract_reports(
+            export_body(successful) + export_body(raised))
+        self.assertEqual(len(result.invocations), 1)
+        self.assertTrue(result.invocations[0].raised)
+        self.assertFalse(result.invocations[0].success)
 
     def test_later_timing_supersedes_the_same_samples_and_outcome(self):
         early = transported_report(
@@ -244,6 +317,36 @@ class FineTimingCLITest(unittest.TestCase):
                 "heap-db-inspect/fine-grained-timing")
             self.assertEqual(document["summary"]["reports"], 1)
             self.assertEqual(document["rows"][0]["sample"], "step")
+
+    def test_json_and_text_preserve_raised_outcome(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = self._database_with_export(
+                directory,
+                export_body(transported_report(
+                    success=False, raised=True)).encode("utf-8"))
+
+            json_process = subprocess.run(
+                [
+                    os.path.join(HERE, "heap-db-inspect"),
+                    database,
+                    "--fine-timings",
+                    "--fine-view", "calls",
+                    "--format", "json",
+                ],
+                check=True, capture_output=True, text=True)
+            document = json.loads(json_process.stdout)
+            self.assertTrue(document["rows"][0]["invocation"]["raised"])
+            self.assertEqual(document["summary"]["raised_invocations"], 1)
+
+            text_process = subprocess.run(
+                [
+                    os.path.join(HERE, "heap-db-inspect"),
+                    database,
+                    "--fine-timings",
+                    "--fine-view", "calls",
+                ],
+                check=True, capture_output=True, text=True)
+            self.assertIn("outcome=raised", text_process.stdout)
 
 if __name__ == "__main__":
     unittest.main()
