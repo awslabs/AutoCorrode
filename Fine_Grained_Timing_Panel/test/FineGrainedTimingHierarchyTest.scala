@@ -35,6 +35,22 @@ object FineGrainedTimingHierarchyTest {
       }.toVector
     )
 
+  private def untimedInvocation(
+      id: Long,
+      method: String,
+      success: Boolean,
+      samples: (String, Boolean, FineGrainedTiming.Aggregate)*
+  ): FineGrainedTiming.Invocation =
+    FineGrainedTiming.Invocation(
+      id,
+      method,
+      success,
+      None,
+      samples.map { case (name, sampleSuccess, sampleAggregate) =>
+        FineGrainedTiming.Sample(name, sampleSuccess, sampleAggregate)
+      }.toVector
+    )
+
   private val commands =
     Vector(
       FineGrainedTimingHierarchy.Command(
@@ -87,6 +103,26 @@ object FineGrainedTimingHierarchyTest {
             elapsed = 30L
           )
         )
+      ),
+      FineGrainedTimingHierarchy.Command(
+        "command-4",
+        order = 3,
+        theory = "T4",
+        proof = Some("p4"),
+        Vector(
+          invocation(
+            5L,
+            "slow_profile",
+            success = true,
+            elapsed = 1000L
+          ),
+          untimedInvocation(
+            6L,
+            "unknown_profile",
+            success = true,
+            ("branch", true, aggregate(1L, 4L))
+          )
+        )
       )
     )
 
@@ -103,9 +139,10 @@ object FineGrainedTimingHierarchyTest {
     val signal = index.signals.head
     requireThat(signal.signal == FineGrainedTimingHierarchy.Signal("branch", true),
       s"unexpected signal ${signal.signal}")
-    requireThat(signal.aggregate.count == 5L,
+    requireThat(signal.aggregate.count == 6L,
       s"aggregate count should merge commands: ${signal.aggregate.count}")
-    requireThat(signal.commands.map(_.command.theory) == Vector("T1", "T2"),
+    requireThat(signal.commands.map(_.command.theory) ==
+      Vector("T1", "T2", "T4"),
       s"command order was not retained: ${signal.commands}")
   }
 
@@ -130,8 +167,25 @@ object FineGrainedTimingHierarchyTest {
       index.signals.find(_.signal ==
         FineGrainedTimingHierarchy.Signal("empty_profile", true))
         .getOrElse(sys.error(s"missing zero-sample call: ${index.signals}"))
-    requireThat(empty.aggregate.count == 0L && empty.commands.head.invocations.length == 1,
-      s"zero-sample call was not indexed: $empty")
+    requireThat(
+      empty.aggregate.count == 1L &&
+        empty.aggregate.timing.elapsedMicros == 30L &&
+        empty.commands.head.invocations.length == 1,
+      s"zero-sample call was not aggregated from invocation timing: $empty")
+    requireThat(
+      index.signals.head.signal ==
+        FineGrainedTimingHierarchy.Signal("slow_profile", true),
+      s"Calls groups were not sorted by invocation timing: ${index.signals}")
+    val unknown =
+      index.signals.find(_.signal ==
+        FineGrainedTimingHierarchy.Signal("unknown_profile", true))
+        .getOrElse(sys.error(s"missing unknown-timing signal: ${index.signals}"))
+    requireThat(
+      unknown.aggregate.count == 0L &&
+        unknown.aggregate.timing.elapsedMicros == 0L &&
+        unknown.aggregate.histogram.isEmpty &&
+        unknown.commands.head.invocations.length == 1,
+      s"unknown timings were included in Calls aggregates: $unknown")
 
     val left =
       FineGrainedTimingHierarchy.build(

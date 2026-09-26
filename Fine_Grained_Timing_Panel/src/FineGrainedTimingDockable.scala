@@ -968,7 +968,8 @@ extends JPanel(new BorderLayout) with DefaultFocusComponent {
     Vector(
       location,
       invocation.method,
-      if (invocation.success) "success" else "failure",
+      if (invocation.raised) "raised"
+      else if (invocation.success) "success" else "failure",
       sampleCount.toString,
       elapsed.getOrElse(""),
       "",
