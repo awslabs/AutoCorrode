@@ -70,13 +70,8 @@ object FineGrainedTimingHierarchy {
               Signal(invocation.method, invocation.success)
             }
             .foreach { case (signal, indexedInvocations) =>
-              val aggregate =
-                indexedInvocations.iterator
-                  .flatMap { case (invocation, _) =>
-                    invocation.samples.iterator.map(_.aggregate)
-                  }
-                  .reduceOption(_ + _)
-                  .getOrElse(EmptyAggregate)
+              val aggregate = callAggregate(
+                indexedInvocations.iterator.map(_._1))
               add(
                 signal,
                 CommandData(
@@ -153,12 +148,36 @@ object FineGrainedTimingHierarchy {
   ): Option[FineGrainedTiming.Aggregate] =
     aggregates.reduceOption(_ + _)
 
-  private val EmptyAggregate =
+  private def callAggregate(
+      invocations: Iterator[FineGrainedTiming.Invocation]
+  ): FineGrainedTiming.Aggregate = {
+    val values = invocations.toVector
+    val timed = values.flatMap { invocation =>
+      invocation.totalTiming.map(timing => (invocation, timing))
+    }
+    val total = timed.iterator
+      .map(_._2)
+      .foldLeft(FineGrainedTiming.Timing(0L, 0L, 0L))(_ + _)
+    val elapsed = timed.map(_._2.elapsedMicros)
+    val histogram = timed
+      .groupBy { case (_, timing) => timingBucket(timing) }
+      .view
+      .mapValues(_.size.toLong)
+      .toMap
     FineGrainedTiming.Aggregate(
-      count = 0L,
-      timing = FineGrainedTiming.Timing(0L, 0L, 0L),
-      minElapsedMicros = 0L,
-      maxElapsedMicros = 0L,
-      histogram = Map.empty
+      count = timed.size.toLong,
+      timing = total,
+      minElapsedMicros = elapsed.minOption.getOrElse(0L),
+      maxElapsedMicros = elapsed.maxOption.getOrElse(0L),
+      histogram = histogram
     )
+  }
+
+  private def timingBucket(timing: FineGrainedTiming.Timing): Int =
+    timingBucket(timing.elapsedMicros)
+
+  private def timingBucket(elapsedMicros: Long): Int =
+    if (elapsedMicros <= 1L) 0
+    else 63 - java.lang.Long.numberOfLeadingZeros(elapsedMicros)
+
 }
