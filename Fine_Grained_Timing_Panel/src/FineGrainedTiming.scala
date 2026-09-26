@@ -70,7 +70,8 @@ object FineGrainedTiming {
       method: String,
       success: Boolean,
       timing: Option[Timing],
-      samples: Vector[Sample]
+      samples: Vector[Sample],
+      raised: Boolean = false
   ) {
     /* Nested samples may overlap, so their aggregate times cannot be added to
        obtain the invocation's wall time. New schema 2 producers carry an
@@ -108,16 +109,18 @@ object FineGrainedTiming {
   private def supersedes(candidate: Invocation, existing: Invocation): Boolean = {
     val candidateSamples = sampleCount(candidate)
     val existingSamples = sampleCount(existing)
+    def outcomeRank(invocation: Invocation): Int =
+      if (invocation.raised) 2 else if (invocation.success) 1 else 0
     candidateSamples > existingSamples ||
       (candidateSamples == existingSamples &&
-        (candidate.success && !existing.success ||
-          candidate.success == existing.success &&
+        (outcomeRank(candidate) > outcomeRank(existing) ||
+          outcomeRank(candidate) == outcomeRank(existing) &&
             laterTiming(candidate, existing)))
   }
 
   /* A profile re-reports as its caller pulls more results. Every report of one
      invocation carries the same id and a complete snapshot. Keep the snapshot
-     with the most samples, then the latest outcome and outer timing. */
+     with the most samples, then the terminal outcome and outer timing. */
   def latestPerInvocation(
       invocations: Iterable[Invocation]
   ): Vector[Invocation] =
@@ -162,7 +165,10 @@ object FineGrainedTiming {
           method = method,
           success = success,
           timing = timing,
-          samples = samples
+          samples = samples,
+          raised = Properties.get(properties, "raised")
+            .flatMap(Value.Boolean.unapply)
+            .getOrElse(false)
         )
       case _ => None
     }

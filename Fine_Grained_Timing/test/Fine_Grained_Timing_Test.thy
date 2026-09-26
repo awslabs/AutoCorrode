@@ -283,7 +283,9 @@ ML \<open>
   val _ =
     (case Synchronized.value raising_reports of
       properties :: _ =>
-        if Properties.get properties "success" = SOME "false" then ()
+        if Properties.get properties "success" = SOME "false" andalso
+           Properties.get properties "raised" = SOME "true"
+        then ()
         else error "An exception report was not marked as failed"
     | [] => error "Profiling did not report a pull exception")
 
