@@ -395,7 +395,7 @@ struct
 
   fun emit_pide_report ctxt
       ({id, invocation_name, position, statistics, timing}: pide_invocation)
-      success =
+      success raised =
     let
       val total = Synchronized.value timing
       val properties = [
@@ -403,6 +403,7 @@ struct
         ("invocation", Value.print_int id),
         ("method", invocation_name),
         ("success", Bool.toString success),
+        ("raised", Bool.toString raised),
         ("elapsed_us", encode_time (#elapsed total)),
         ("cpu_us", encode_time (#cpu total)),
         ("gc_us", encode_time (#gc total))
@@ -620,8 +621,9 @@ struct
           (Time.toMicroseconds elapsed,
            Time.toMicroseconds cpu,
            Time.toMicroseconds gc)
-        fun report succeeded
-              (reported_samples, reported_success, reported_timing) =
+        fun report succeeded raised
+              (reported_samples, reported_success, reported_raised,
+               reported_timing) =
           let
             val samples =
               Fine_Grained_Timing_Accumulator.total_samples
@@ -631,11 +633,14 @@ struct
           in
             if samples = reported_samples andalso
                 reported_success = SOME succeeded andalso
+                reported_raised = SOME raised andalso
                 reported_timing = SOME current_timing
-            then (reported_samples, reported_success, reported_timing)
+            then
+              (reported_samples, reported_success, reported_raised,
+               reported_timing)
             else
-              (emit_pide_report ctxt' invocation succeeded;
-               (samples, SOME succeeded, SOME current_timing))
+              (emit_pide_report ctxt' invocation succeeded raised;
+               (samples, SOME succeeded, SOME raised, SOME current_timing))
           end
         fun wrap succeeded reported make =
           Seq.make (fn _ =>
@@ -649,7 +654,7 @@ struct
             in
               case pulled of
                 Exn.Exn exn =>
-                  (report false reported;
+                  (report false true reported;
                    Exn.reraise exn)
               | Exn.Res output =>
                   let
@@ -658,7 +663,7 @@ struct
                         (case output of
                           NONE => false
                         | SOME (element, _) => element_success element)
-                    val reported' = report succeeded' reported
+                    val reported' = report succeeded' false reported
                   in
                     Option.map
                       (fn (element, tail) =>
@@ -666,7 +671,8 @@ struct
                       output
                   end
             end)
-      in wrap false (~1, NONE, NONE) (fn _ => make_sequence ctxt') end
+      in wrap false (~1, NONE, NONE, NONE)
+        (fn _ => make_sequence ctxt') end
 
   fun profile_tactic invocation_name ctxt make_tactic state =
     profile_seq (K true) invocation_name ctxt

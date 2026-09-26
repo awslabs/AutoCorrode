@@ -45,7 +45,8 @@ object FineGrainedTimingTest {
       version: Int,
       body: XML.Body,
       invocationTiming: Option[FineGrainedTiming.Timing] = None,
-      success: Boolean = true
+      success: Boolean = true,
+      raised: Boolean = false
   ): XML.Tree =
     XML.Elem(
       Markup(
@@ -54,7 +55,8 @@ object FineGrainedTimingTest {
           "version" -> Value.Int(version),
           "invocation" -> Value.Long(17L),
           "method" -> "example_method",
-          "success" -> Value.Boolean(success)
+          "success" -> Value.Boolean(success),
+          "raised" -> Value.Boolean(raised)
         ) ++
           (if (version == FineGrainedTiming.LegacySchemaVersion)
              List(
@@ -173,6 +175,16 @@ object FineGrainedTimingTest {
     )).get
     requireThat(legacySchemaTwo.totalTiming.isEmpty,
       "schema 2 reports without an outer timing should remain decodable")
+
+    val raised = FineGrainedTiming.decode(report(
+      FineGrainedTiming.SchemaVersion,
+      List(entry("sample", success = false, 1L, 60L, List(bucket(5, 1)))),
+      invocationTiming = Some(outer),
+      success = false,
+      raised = true
+    )).get
+    requireThat(raised.raised && !raised.success,
+      "raised schema 2 reports should preserve their terminal outcome")
   }
 
   private def testRepeatedSnapshotsKeepTheLatest(): Unit = {
@@ -202,6 +214,16 @@ object FineGrainedTimingTest {
       FineGrainedTiming.latestPerInvocation(Vector(failed, successful))
     requireThat(latestOutcome.head.success,
       "success should supersede failure when sample counts are equal")
+
+    val raised = partial.copy(
+      success = false,
+      raised = true,
+      timing = Some(FineGrainedTiming.Timing(90L, 20L, 1L))
+    )
+    val afterRaise =
+      FineGrainedTiming.latestPerInvocation(Vector(successful, raised))
+    requireThat(afterRaise.head.raised && !afterRaise.head.success,
+      "a raised snapshot should supersede an earlier successful snapshot")
 
     val earlyTiming =
       partial.copy(timing = Some(FineGrainedTiming.Timing(10L, 5L, 0L)))
