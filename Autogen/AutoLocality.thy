@@ -3044,11 +3044,12 @@ ML\<open>
       val applications =
         locality_body_helper_applications ctxt cname helpers
       fun matching_entries head args =
-        [Locality_Operation, Locality_Attribute]
-        |> map_filter (fn kind =>
-             select_locality_entry_kind_with locality_no_count
-               ctxt rec_name kind head args
-             |> Option.map #2)
+        ([Locality_Operation, Locality_Attribute]
+         |> map_filter (fn kind =>
+              select_locality_entry_kind_with locality_no_count
+                ctxt rec_name kind head args
+              |> Option.map #2))
+        handle Locality_Registry_Ambiguity _ => []
       fun entry_certificates (entry : locality_entry) =
         #core_thms entry @ #disjoint_thms entry
       fun analyse helper =

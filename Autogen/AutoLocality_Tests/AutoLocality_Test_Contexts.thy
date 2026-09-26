@@ -269,6 +269,11 @@ definition pair_attr :: \<open>ctx \<Rightarrow> ctx \<Rightarrow> bool\<close> 
 locality_lemma for ctx: \<open>pair_attr\<close> [0] footprint [xa] .
 locality_lemma for ctx: \<open>pair_attr\<close> [1] footprint [xb] .
 
+definition wrapped_pair_attr :: \<open>ctx \<Rightarrow> ctx \<Rightarrow> bool\<close> where
+  \<open>wrapped_pair_attr L R \<equiv> pair_attr L R\<close>
+
+locality_lemma for ctx: \<open>wrapped_pair_attr\<close> footprint [xa, xb] .
+
 lemma \<open>pair_attr (set_c n L) R = pair_attr L R\<close>
   by simp
 
