@@ -320,6 +320,21 @@ begin
     by (crush_base simp prems add: Some_Ex_def seplog drule add: PQ)
 end
 
+text\<open>A destruction rule may produce a precise-pure factor. The entailment
+core leaves its content as a separating entailment, so the spatial drule
+branch remains applicable; \<^term>\<open>ucincl Q\<close> licenses the discarded remainder.\<close>
+
+experiment
+  fixes P Q :: \<open>'s::sepalg assert\<close>
+    and R :: bool
+  assumes PQ: \<open>P \<longlongrightarrow> Q \<star> \<langle>R\<rangle>\<close>
+begin
+  lemma
+    assumes \<open>ucincl Q\<close>
+      shows \<open>P \<longlongrightarrow> \<langle>R\<rangle> \<star> Q\<close>
+    using assms by (crush_base seplog drule add: PQ)
+end
+
 subsubsection\<open>Generic simplifications\<close>
 
 text\<open>We have already seen that \<^verbatim>\<open>crush\<close> applies simplification rules for separation logic
@@ -351,13 +366,13 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     by (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
 
   text\<open>This example would already be rather tedious to prove by hand. Indeed, already the number of
   \<^verbatim>\<open>crush\<close> steps has increased notably:\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
@@ -392,13 +407,50 @@ begin
   with \<^verbatim>\<open>crush\<close>.\<close>
   ucincl_auto Some_Ex
 
-  lemma \<open>Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> \<gamma>\<close>
+  lemma \<open>Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> \<gamma>\<close>
     \<comment>\<open>This would not have worked without \<^verbatim>\<open>no_schematics\<close> because \<^verbatim>\<open>Some_Ex\<close> needs early unfolding.
     Alternatively to \<^verbatim>\<open>simp prems add: ..\<close>, we can also avoid introducing schematics for now, and this
     way ensure that \<^verbatim>\<open>Some_Ex\<close> gets unfolded before schematics are introduced:\<close>
     apply (crush_base simp add: Some_Ex_def no_schematics)
     apply (crush_base seplog rule add: PQ)
     done
+end
+
+subsection\<open>Support for separation logic constructs\<close>
+subsubsection\<open>Support for pure embeddings \<^term>\<open>apure (P)\<close> and precise pure embeddings \<^term>\<open>\<langle>P\<rangle>\<close>\<close>
+experiment
+  fixes P Q :: bool
+    and R :: \<open>'s::sepalg assert\<close>
+begin
+text\<open>Ordinary pure conclusions can absorb \<^term>\<open>R\<close> because they are
+upwards-closed.\<close>
+lemma
+  assumes P
+  shows \<open>apure (Q) \<star> R \<longlongrightarrow> apure (P) \<star> apure (Q)\<close>
+  using assms by crush_base
+
+text\<open>Precise pure conclusions require \<^term>\<open>R\<close> to own no resource.\<close>
+lemma
+  assumes \<open>R \<longlongrightarrow> emp\<close>
+  shows \<open>\<langle>Q \<and> P\<rangle> \<star> R \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle>\<close>
+  by crush_base (rule assms)
+end
+
+subsubsection\<open>Support for discardability \<^term>\<open>discardable_in \<delta> \<rho>\<close>\<close>
+experiment
+  fixes \<alpha> \<beta> :: \<open>'s::sepalg assert\<close>
+begin
+text\<open>An upwards-closed retained assertion absorbs the resource of unmatched assumptions:\<close>
+lemma
+  assumes \<open>ucincl \<alpha>\<close>
+  shows \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>\<close>
+  using assms by crush_base
+
+text\<open>An unmatched assertion entailing \<^term>\<open>emp\<close> supplies a zero-ownership licence:\<close>
+lemma
+  assumes \<open>\<beta> \<longlongrightarrow> emp\<close>
+  shows \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>\<close>
+  using assms by crush_base
 end
 
 subsection\<open>Disabling case splits\<close>
@@ -485,13 +537,13 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     by (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
 
   text\<open>This example would already be rather tedious to prove by hand. Indeed, already the number of
   \<^verbatim>\<open>crush\<close> steps has increased notably:\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
     apply (crush_base_step simp prems add: Some_Ex_def seplog rule add: PQ)
@@ -519,23 +571,23 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     by (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
 
   \<comment>\<open>How many steps did we actually need?\<close>
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 10)
     done \<comment>\<open>10 was enough!\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 5)
     oops \<comment>\<open>5 not enough\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 9)
     done \<comment>\<open>9 was enough!\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ bigstep: false gas: 8)
     oops \<comment>\<open>8 not enough\<close>
 
@@ -563,7 +615,7 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     using [[crush_log_toplevel]]
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ stepwise)
     step to goal pattern "_ \<longlongrightarrow> (\<Squnion>_. _)"
@@ -572,14 +624,14 @@ begin
     step *
     done
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     using [[crush_log_toplevel]]
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ stepwise)
     step to premise pattern "R"
     step *
     done
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     using [[crush_log_toplevel]]
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ stepwise)
     step to schematic "x" 7
@@ -602,7 +654,7 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     \<comment>\<open>TODO: This should be configurable through the \<^verbatim>\<open>crush\<close> command line\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ history)
     back back back back
@@ -642,12 +694,12 @@ begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
   ucincl_auto Some_Ex
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     \<comment>\<open>Stopping once the existential quantification on the right has reached the top-level\<close>
     apply (crush_base bigstep:false abort at pattern: "_ \<longlongrightarrow> (\<Squnion>_. _)")
     oops
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     \<comment>\<open>Stopping on the first non-separation logic goal\<close>
     apply (crush_base bigstep:false simp prems add: Some_Ex_def seplog rule add: PQ abort at filter: \<open>
       fn (ctxt : Proof.context) => fn (goal : term) =>
@@ -693,7 +745,7 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     using [[crush_log_toplevel]]
     by (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
     (* crush_branch_aentails_cancel_tac success (0.000091s)
@@ -706,7 +758,7 @@ begin
        crush_branch_aentails_cancel_tac success (0.000049s) *)
 
   \<comment>\<open>The same, but now also showing all intermediate goals:\<close>
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     using [[crush_log_toplevel, crush_log_goal]]
     by (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
 end
@@ -735,13 +787,13 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
  
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     using [[crush_log_schematics]]
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ)
     oops
 
   \<comment>\<open>Again, but this time implicit in \<^verbatim>\<open>stepwise\<close>, and giving a finer breakdown of steps:\<close>
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     apply (crush_base simp prems add: Some_Ex_def seplog rule add: PQ stepwise)
     step *
     oops
@@ -812,7 +864,7 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     \<comment>\<open>By default, the timing mechanism ignores runtimes < 2ms, which is too high to observe
     the runtime of the tactics in this trivial example. We reduce the threshold to 5ns.\<close>
     using [[crush_time_toplevel, fine_grained_timing_threshold=5]]
@@ -834,7 +886,7 @@ experiment
 begin
   definition \<open>Some_Ex \<equiv> \<Squnion>x. P x\<close>
 
-  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> \<langle>R\<rangle> \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
+  lemma \<open>\<delta> \<star> Some_Ex \<star> (\<alpha> \<star> \<beta>) \<star> apure (R) \<longlongrightarrow> \<alpha> \<star> (\<Squnion>x. Q x) \<star> (\<gamma> \<star> \<delta>)\<close>
     \<comment>\<open>Stop if \<^verbatim>\<open>crush\<close> hits a branch that takes more than 1s\<close>
     using [[crush_time_steps, crush_time_step_bound_ms=1000]]
     apply (crush_base simp prems add: Some_Ex_def bigstep: false branch add: \<open>sleep 2\<close>)
@@ -979,10 +1031,6 @@ lemma
   step
   step
   step
-  step
-  step
-  step
-  step
   done
 
 subsubsection\<open>Function contracts and specifications\<close>
@@ -1012,13 +1060,6 @@ definition swap_ref_fun_contract ::
 text\<open>Note how we are force to make all contextual parameters of the function specification arguments
 to the function contract definition.\<close>
 
-text\<open>As with all assertions, we need to prove that pre and post conditions are upwards closed.
-Luckily, there is custom automation to do this:\<close>
-ucincl_auto swap_ref_fun_contract
-
-text\<open>If the proof isn't trivial, you can use \<^verbatim>\<open>ucincl_proof\<close> instead to open up a proof context
-for the required \<^verbatim>\<open>ucincl\<close> assertions.\<close>
-
 text\<open>Next, we state and prove the function specification:\<close>
 
 lemma swap_ref_fun_spec:
@@ -1044,7 +1085,6 @@ definition rotate_ref3_contract ::
      let pre = rA \<mapsto> \<langle>\<top>\<rangle> gA\<down>vA \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB\<down>vB \<star> rC \<mapsto>\<langle>\<top>\<rangle> gC\<down>vC in
      let post = \<lambda>_. (\<Squnion>gA' gB' gC'. rA \<mapsto> \<langle>\<top>\<rangle> gA'\<down>vB \<star> rB \<mapsto>\<langle>\<top>\<rangle> gB'\<down>vC \<star> rC \<mapsto>\<langle>\<top>\<rangle> gC'\<down>vA) in
       make_function_contract pre post\<close>
-ucincl_auto rotate_ref3_contract
 
 text\<open>To prove the specification for \<^verbatim>\<open>rotate_ref3\<close>, we could just unfold/inline the definition of
 \<^verbatim>\<open>swap_ref_fun\<close>:\<close>
@@ -1101,6 +1141,28 @@ no_adhoc_overloading store_update_const \<rightleftharpoons>
   update_fun
 
 end
+
+text\<open>\<^verbatim>\<open>crush_boot\<close> hoists precise-pure preconditions into HOL premises, which
+\<^verbatim>\<open>goal_cases\<close> exposes for Isar reasoning.\<close>
+
+definition bounded_id :: \<open>nat \<Rightarrow> ('s, nat, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
+  \<open>bounded_id n \<equiv> FunctionBody (literal n)\<close>
+
+definition bounded_id_contract :: \<open>nat \<Rightarrow> ('s::sepalg, nat, 'abort) function_contract\<close> where
+  \<open>bounded_id_contract n \<equiv>
+     let pre = \<langle>n < 20\<rangle> in
+     let post = \<lambda>r. \<langle>r = n\<rangle> \<star> \<langle>n + 1 \<le> 20\<rangle> in
+      make_function_contract pre post\<close>
+
+lemma bounded_id_spec:
+  shows \<open>\<Gamma>; bounded_id n \<Turnstile>\<^sub>F bounded_id_contract n\<close>
+proof (crush_boot f: bounded_id_def contract: bounded_id_contract_def, goal_cases)
+  case 1
+  from 1 have \<open>n + 1 \<le> 20\<close>
+    by simp
+  then show ?case
+    by crush_base
+qed
 
 subsubsection\<open>Reasoning about references and structures\<close>
 
@@ -1160,9 +1222,8 @@ definition write_foo_read_bar_contract ::
    \<open>('a, 'b, test_record) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> test_record \<Rightarrow> ('s, int, 'abort) function_contract\<close>
   where \<open>write_foo_read_bar_contract r g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v in
-     let post = \<lambda>t. \<langle>t = test_record.bar v\<rangle> \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(test_record.update_foo (\<lambda>_. 42) v)) in
+     let post = \<lambda>t. apure (t = test_record.bar v) \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(test_record.update_foo (\<lambda>_. 42) v)) in
       make_function_contract pre post\<close>
-ucincl_auto write_foo_read_bar_contract
 
 lemma write_foo_read_bar_spec:
   shows \<open>\<Gamma>; write_foo_read_bar ptr \<Turnstile>\<^sub>F write_foo_read_bar_contract ptr g v\<close>
@@ -1177,7 +1238,6 @@ lemma write_foo_read_bar_spec':
   apply (crush_boot f: write_foo_read_bar_def contract: write_foo_read_bar_contract_def)
   using [[crush_log_toplevel]]
   apply (crush_base stepwise)
-  step
   step
   step
   step
@@ -1318,7 +1378,7 @@ definition test_record2_zeroize_contract ::
    \<open>('a, 'b, test_record2) Global_Store.ref \<Rightarrow> 'b \<Rightarrow> test_record2 \<Rightarrow> ('s, int, 'abort) function_contract\<close>
   where \<open>test_record2_zeroize_contract r g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v in
-     let post = \<lambda>t. \<langle>t = test_record2.f20 v\<rangle> \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(
+     let post = \<lambda>t. apure (t = test_record2.f20 v) \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(
           test_record2.update_f0 (\<lambda>_. 0) (
           test_record2.update_f1 (\<lambda>_. 0) (
           test_record2.update_f2 (\<lambda>_. 0) (
@@ -1342,7 +1402,6 @@ definition test_record2_zeroize_contract ::
             v
           )))))))))))))))))))))) in
       make_function_contract pre post\<close>
-ucincl_auto test_record2_zeroize_contract
 
 lemma test_record2_zeroize_contract_spec:
   shows \<open>\<Gamma>; test_record2_zeroize ptr \<Turnstile>\<^sub>F test_record2_zeroize_contract ptr g v\<close>
@@ -1366,7 +1425,6 @@ definition test_record3_zero_field_contract ::
      let zero_ith_pure :: test_record3 \<Rightarrow> test_record3 = (\<lambda>t. t \<lparr> data := array_update (data t) (unat i) 0 \<rparr> ) in
      let post = \<lambda>_. r \<mapsto> \<langle>\<top>\<rangle> zero_ith_pure\<sqdot>(g\<down>v) in
       make_function_contract pre post\<close>
-ucincl_auto test_record3_zero_field_contract
 
 text\<open>For many non-trivial examples it is useful to conduct some Isar-style reasoning prior to
 starting the \<^verbatim>\<open>apply\<close>-style \<^verbatim>\<open>crush\<close> proof. The following proof demonstrates this pattern:\<close>
@@ -1451,9 +1509,8 @@ definition test_record3_zeroize_contract ::
   where \<open>test_record3_zeroize_contract r g v \<equiv>
      let pre = r \<mapsto> \<langle>\<top>\<rangle> g\<down>v in
      let zero_data_pure :: test_record3 \<Rightarrow> test_record3 = (\<lambda>t. t \<lparr> data := array_constant 0 \<rparr> ) in
-     let post = \<lambda>ret. \<langle>ret = rest v\<rangle> \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(zero_data_pure v)) in
+     let post = \<lambda>ret. apure (ret = rest v) \<star> (\<Squnion>g'. r \<mapsto> \<langle>\<top>\<rangle> g'\<down>(zero_data_pure v)) in
       make_function_contract pre post\<close>
-ucincl_auto test_record3_zeroize_contract
 
 lemma test_record3_zeroize_spec:
   \<comment>\<open>TODO: This can go away once specs are eager by default\<close>
@@ -1493,14 +1550,6 @@ proof (crush_boot f: test_record3_zeroize_def contract: test_record3_zeroize_con
   show ?case
   \<comment>\<open>TODO: This proof gets slower over time. Investigate\<close>
   apply (crush_base stepwise)
-  step 100
-  step 100
-  step 100
-  step 100
-  step 100
-  step 100
-  step 100
-  step 100
   step *
   apply (simp add: eq)
   done

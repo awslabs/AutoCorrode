@@ -36,20 +36,20 @@ definition generic_write_contract :: \<open>(share \<Rightarrow> 'v \<Rightarrow
 definition standard_rw_resource :: \<open>('s::{sepalg}, 'v, 'abort, 'i prompt, 'o prompt_output) rw_resource \<Rightarrow> bool\<close>
   where
   \<open>standard_rw_resource r \<equiv>
-    (\<forall>sh v. ucincl (rw_resource_is r sh v)) \<and>
     (\<forall>sh0 sh1 v. 0 < sh0 \<longrightarrow> 0 < sh1 \<longrightarrow> sh0 \<sharp> sh1 \<longrightarrow>
         rw_resource_is r (sh0 + sh1) v \<longlongrightarrow> rw_resource_is r sh0 v \<star> rw_resource_is r sh1 v) \<and>
     (\<forall>sh0 sh1 v0 v1. rw_resource_is r sh0 v0 \<star> rw_resource_is r sh1 v1
-        \<longlongrightarrow>  \<langle>sh0 \<sharp> sh1\<rangle> \<star> \<langle>v0 = v1\<rangle> \<star> rw_resource_is r (sh0 + sh1) v0) \<and>
+        \<longlongrightarrow> \<langle>sh0 \<sharp> sh1\<rangle> \<star> \<langle>v0 = v1\<rangle> \<star>
+          rw_resource_is r (sh0 + sh1) v0) \<and>
     (\<forall>\<Gamma> v. \<Gamma> ; rw_resource_write r v \<Turnstile>\<^sub>F generic_write_contract (rw_resource_is r) v) \<and>
     (\<forall>\<Gamma> v sh. \<Gamma> ; rw_resource_read r \<Turnstile>\<^sub>F generic_read_contract (rw_resource_is r) v sh)\<close>
 
 lemma standard_rw_resourceI:
-  assumes \<open>\<And>sh v. ucincl (rw_resource_is r sh v)\<close>
-     and \<open>\<And>sh0 sh1 v. 0 < sh0 \<Longrightarrow> 0 < sh1 \<Longrightarrow> sh0 \<sharp> sh1 \<Longrightarrow>
+  assumes \<open>\<And>sh0 sh1 v. 0 < sh0 \<Longrightarrow> 0 < sh1 \<Longrightarrow> sh0 \<sharp> sh1 \<Longrightarrow>
         rw_resource_is r (sh0 + sh1) v \<longlongrightarrow> rw_resource_is r sh0 v \<star> rw_resource_is r sh1 v\<close>
      and \<open>\<And>sh0 sh1 v0 v1. rw_resource_is r sh0 v0 \<star> rw_resource_is r sh1 v1
-        \<longlongrightarrow> \<langle>sh0 \<sharp> sh1\<rangle> \<star> \<langle>v0 = v1\<rangle> \<star> rw_resource_is r (sh0 + sh1) v0\<close>
+        \<longlongrightarrow> \<langle>sh0 \<sharp> sh1\<rangle> \<star> \<langle>v0 = v1\<rangle> \<star>
+          rw_resource_is r (sh0 + sh1) v0\<close>
      and \<open>\<And>\<Gamma> v. \<Gamma> ; rw_resource_write r v \<Turnstile>\<^sub>F generic_write_contract (rw_resource_is r) v\<close>
      and \<open>\<And>\<Gamma> v sh. \<Gamma> ; rw_resource_read r \<Turnstile>\<^sub>F generic_read_contract (rw_resource_is r) v sh\<close>
    shows \<open>standard_rw_resource r\<close>
@@ -67,22 +67,12 @@ lemma standard_rw_resource_write_spec:
     \<open>\<Gamma> ; rw_resource_write r v \<Turnstile>\<^sub>F generic_write_contract (rw_resource_is r) v\<close>
   using assms standard_rw_resource_def by fastforce
 
-\<comment>\<open>Don't mark this as \<^verbatim>\<open>ucincl_intros\<close>, but instead specific instantiations
-for known standard resources. Otherwise, \<^verbatim>\<open>standard_rw_resource\<close> assumptions
-will pop up in random places in proofs.\<close>
-lemma standard_rw_resource_is_ucincl:
-  assumes
-    \<open>standard_rw_resource reg\<close>
-  shows
-    \<open>ucincl (rw_resource_is reg sh v)\<close>
-  using assms by (simp add: standard_rw_resource_def)
-
 lemma standard_rw_resource_combine:
   assumes \<open>standard_rw_resource reg\<close>
   shows
      \<open>rw_resource_is reg sh1 a1 \<star> rw_resource_is reg sh2 a2 \<longlongrightarrow>
       rw_resource_is reg (sh1+sh2) a1 \<star> \<langle>sh1\<sharp>sh2 \<and> a1 = a2\<rangle>\<close>
-  using assms by (simp add: asepconj_comm asepconj_pure2 standard_rw_resource_def)
+  using assms by (simp add: asepconj_comm asepconj_pure2_precise standard_rw_resource_def)
 
 lemma standard_rw_resource_split:
   assumes

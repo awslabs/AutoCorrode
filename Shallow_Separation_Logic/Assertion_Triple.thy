@@ -3,7 +3,7 @@
 
 (*<*)
 theory Assertion_Triple
-  imports Shallow_Micro_Rust.Eval Assertion_Language Precision Locality "HOL-Library.Rewrite"
+  imports Shallow_Micro_Rust.Eval Assertion_Language Precision Locality
 begin
 
 context sepalg begin
@@ -12,21 +12,71 @@ context sepalg begin
 subsubsection\<open>Assertion triples\<close>
 
 text\<open>The following relation expresses that two states \<^term>\<open>\<sigma>\<close> and \<^term>\<open>\<sigma>'\<close> are related by
-'swapping out' a sub-state satisfying assertion \<^term>\<open>\<phi>\<close> for a sub-state satisfying \<^term>\<open>\<psi>\<close>:\<close>
+'swapping out' a sub-state satisfying assertion \<^term>\<open>\<phi>\<close> for a sub-state satisfying \<^term>\<open>\<psi>\<close>.
+The frame \<^term>\<open>\<pi>\<close> ranges over all assertions, so the pre- and post-conditions account
+exactly for the resource they describe:\<close>
 definition atriple :: \<open>'a assert \<Rightarrow> 'a \<Rightarrow> 'a \<Rightarrow> 'a assert \<Rightarrow> bool\<close>
       ("(_) \<tturnstile>/ '(_,_')/ \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (_)" [50,50,50]50) where
-  \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<equiv> \<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<star> \<pi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> \<star> \<pi>\<close>
+  \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<equiv> \<forall>\<pi>. \<sigma> \<Turnstile> \<phi> \<star> \<pi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> \<star> \<pi>\<close>
 
 lemma atripleI:
-  assumes \<open>\<And>\<pi>. ucincl \<pi> \<Longrightarrow> \<sigma> \<Turnstile> (\<phi> \<star> \<pi>) \<Longrightarrow> \<sigma>' \<Turnstile> (\<psi> \<star> \<pi>)\<close>
+  assumes \<open>\<And>\<pi>. \<sigma> \<Turnstile> (\<phi> \<star> \<pi>) \<Longrightarrow> \<sigma>' \<Turnstile> (\<psi> \<star> \<pi>)\<close>
     shows \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
 using assms by (auto simp add: atriple_def)
 
 lemma atripleE:
   assumes \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
-      and \<open>(\<And>\<pi>. ucincl \<pi> \<Longrightarrow> \<sigma> \<Turnstile> (\<phi> \<star> \<pi>) \<Longrightarrow> \<sigma>' \<Turnstile> (\<psi> \<star> \<pi>)) \<Longrightarrow> R\<close>
+      and \<open>(\<And>\<pi>. \<sigma> \<Turnstile> (\<phi> \<star> \<pi>) \<Longrightarrow> \<sigma>' \<Turnstile> (\<psi> \<star> \<pi>)) \<Longrightarrow> R\<close>
     shows R
 using assms by (auto simp add: atriple_def)
+
+text \<open>Quantifying only over upwards-closed frames is equivalent to an exact triple whose
+post-condition has the form \<^term>\<open>\<psi> \<star> \<top>\<close>:\<close>
+lemma atriple_ucincl_frames_iff:
+  shows \<open>(\<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<star> \<pi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> \<star> \<pi>) \<longleftrightarrow>
+           (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<star> \<top>)\<close>
+proof (rule iffI)
+  assume old: \<open>\<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<star> \<pi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> \<star> \<pi>\<close>
+  show \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<star> \<top>\<close>
+  proof (rule atripleI)
+       fix \<pi>
+    assume \<open>\<sigma> \<Turnstile> \<phi> \<star> \<pi>\<close>
+    have grow: \<open>\<phi> \<star> \<pi> \<longlongrightarrow> \<phi> \<star> (\<pi> \<star> \<top>)\<close>
+      by (intro asepconj_mono asepconj_mono6 aentails_refl aentails_true)
+    from \<open>\<sigma> \<Turnstile> \<phi> \<star> \<pi>\<close> and grow have \<open>\<sigma> \<Turnstile> \<phi> \<star> (\<pi> \<star> \<top>)\<close>
+      by (simp add: aentails_def)
+    moreover have \<open>ucincl (\<pi> \<star> \<top>)\<close>
+      by (intro ucincl_asepconjR ucincl_UNIV)
+    ultimately have \<open>\<sigma>' \<Turnstile> \<psi> \<star> (\<pi> \<star> \<top>)\<close>
+      using old by blast
+    then show \<open>\<sigma>' \<Turnstile> (\<psi> \<star> \<top>) \<star> \<pi>\<close>
+      by (simp add: asepconj_AC)
+  qed
+next
+  assume new: \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<star> \<top>\<close>
+  show \<open>\<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<star> \<pi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> \<star> \<pi>\<close>
+  proof (intro allI impI)
+       fix \<pi>
+    assume \<open>ucincl \<pi>\<close> and \<open>\<sigma> \<Turnstile> \<phi> \<star> \<pi>\<close>
+    from new and \<open>\<sigma> \<Turnstile> \<phi> \<star> \<pi>\<close> have \<open>\<sigma>' \<Turnstile> (\<psi> \<star> \<top>) \<star> \<pi>\<close>
+      by (elim atripleE)
+    then show \<open>\<sigma>' \<Turnstile> \<psi> \<star> \<pi>\<close>
+      using \<open>ucincl \<pi>\<close> by (simp add: asepconj_assoc asepconj_ident)
+  qed
+qed
+
+text \<open>Instantiating the frame with the unit \<^term>\<open>emp\<close> extracts the unframed state
+transition:\<close>
+lemma atripleE_emp_frame:
+  assumes \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
+      and \<open>(\<sigma> \<Turnstile> \<phi> \<Longrightarrow> \<sigma>' \<Turnstile> \<psi>) \<Longrightarrow> R\<close>
+    shows \<open>R\<close>
+proof -
+  from assms(1) have \<open>\<sigma> \<Turnstile> \<phi> \<star> emp \<Longrightarrow> \<sigma>' \<Turnstile> \<psi> \<star> emp\<close>
+    by (elim atripleE)
+  from this and assms(2) show \<open>R\<close>
+    by (simp add: asepconj_emp_unit)
+qed
 
 lemma atriple_refl:
   shows \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<phi>\<close>
@@ -34,7 +84,7 @@ by (simp add: atriple_def)
 
 lemma atriple_refl':
   shows \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<top> \<star> \<phi>\<close>
-by (simp add: atriple_def) (metis local.asepconj_assoc local.asepconj_ident local.asepconj_swap_top)
+  by (simp add: atriple_def asepconj_assoc asepconj_weaken2I)
 
 lemma atriple_pre_false:
   shows \<open>{} \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
@@ -42,7 +92,7 @@ by (simp add: atriple_def local.asepconj_bot_zero)
 
 lemma atriple_post_true:
   shows \<open>\<phi>  \<tturnstile> (\<sigma>, \<sigma>) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<top>\<close>
-by (metis aentails_def atripleI local.aentails_cancel_l local.asepconj_ident)
+  by (meson aentails_def asat_connectives_characterisation(1) asepconj_mono4 atripleI)
 
 lemma atriple_consequence:
   assumes \<open>\<phi>' \<longlongrightarrow> \<phi>\<close>
@@ -66,7 +116,7 @@ by (auto simp add: atriple_def asepconj_Inf_distrib' asepconj_simp)
 lemma atriple_frame_rule:
   assumes \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
     shows \<open>\<phi> \<star> \<xi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> \<star> \<xi>\<close>
-using assms by (simp add: atriple_def local.asepconj_assoc local.ucincl_asepconjR)
+using assms by (simp add: atriple_def local.asepconj_assoc)
 
 lemma atriple_complement:
   assumes \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
@@ -75,9 +125,7 @@ lemma atriple_complement:
   obtains \<sigma>0' where \<open>\<sigma>0' \<Turnstile> \<psi> \<star> \<top>\<close> and \<open>\<sigma>0' \<sharp> \<sigma>c\<close> and \<open>\<sigma>' = \<sigma>0' + \<sigma>c\<close>
 proof -
   let ?\<pi> = \<open>\<up>\<^sub>s \<sigma>c\<close>
-  have \<open>ucincl ?\<pi>\<close>
-    by (simp add: uc_state_ucincl)
-  moreover have \<open>\<sigma> \<Turnstile> ?\<pi> \<star> \<phi>\<close>
+  have \<open>\<sigma> \<Turnstile> ?\<pi> \<star> \<phi>\<close>
     by (metis asat_def assms(2) assms(3) local.asepconjI local.asepconj_comm local.derived_order_refl
       local.is_splitting_def local.uc_state_def mem_Collect_eq)
   moreover from this have \<open>\<sigma>' \<Turnstile> ?\<pi> \<star> \<psi>\<close>
@@ -94,13 +142,20 @@ proof -
       local.sepalg_apart_plus_distrib local.sepalg_assoc local.sepalg_comm that)
 qed
 
+text \<open>The pure assertion \<^term>\<open>apure (P)\<close> may absorb arbitrary resource, so hoisting it
+leaves \<^term>\<open>\<phi> \<star> \<top>\<close>. Use \<^term>\<open>\<langle>P\<rangle>\<close> when the pure factor must own no
+resource.\<close>
 lemma atriple_hoist_pure:
-  shows \<open>(\<phi> \<star> \<langle>P\<rangle> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
-    and \<open>(\<langle>P\<rangle> \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close> (is ?g2)
+  shows \<open>(\<phi> \<star> apure (P) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
+           (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
+    and \<open>(apure (P) \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
+           (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
 proof -
-  show \<open>(\<phi> \<star> \<langle>P\<rangle> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
+  show \<open>(\<phi> \<star> apure (P) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
+          (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
     by (clarsimp simp add: atriple_def apure_def asepconj_simp)
-  from this show \<open>(\<langle>P\<rangle> \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
+  from this show \<open>(apure (P) \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
+          (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
     by (simp add: asepconj_comm)
 qed
 
@@ -121,18 +176,6 @@ lemma atriple_minimal:
 using assms by (clarsimp simp add: is_minimal_def asat_def atriple_def) (metis asat_def asepconjE
   asepconj_weakenI derived_order_def disjoint_sym reflE sepalg_apart_plus2 sepalg_comm)
 
-text\<open>The assertion triple is invariant under passage to upward closure:\<close>
-lemma atriple_upwards_closure:
-  shows \<open>((\<phi> \<star> \<top>) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<psi> \<star> \<top>)) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>((\<top> \<star> \<phi>) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<top> \<star> \<psi>)) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>((\<phi> \<star> \<top>) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<top> \<star> \<psi>)) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>((\<top> \<star> \<phi>) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<psi> \<star> \<top>)) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>(\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<psi> \<star> \<top>)) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>(\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>(\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<top> \<star> \<psi>)) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-    and \<open>(\<top> \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow> (\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>)\<close>
-by (simp add: atriple_def local.asepconj_assoc local.asepconj_ident local.ucincl_asepconjR)+
-
 (*<*)
 end
 
@@ -144,38 +187,62 @@ lemma atriple_minimal':
   assumes \<open>is_minimal \<xi> \<sigma>\<close>
       and \<open>has_minimal_splittings \<xi>\<close>
       and \<open>\<sigma>' \<Turnstile> \<psi>\<close>
+      and \<open>ucincl \<psi>\<close>
+        \<comment>\<open>The residue of a minimal frame splitting is absorbed into the post-condition.\<close>
       and \<open>\<sigma> \<sharp> \<sigma>C\<close>
       and \<open>\<sigma>' \<sharp> \<sigma>C\<close>
       and \<open>\<xi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
     shows \<open>\<xi> \<tturnstile> (\<sigma> + \<sigma>C, \<sigma>' + \<sigma>C) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>\<close>
-proof -
-  have \<open>precise (minimal_states \<xi>)\<close> and \<open>\<xi> = (minimal_states \<xi>) \<star> \<top>\<close>
-    using assms(2) local.has_minimal_splittings_via_minimal_states by blast+
-  {
-       fix \<pi>
-    assume \<open>ucincl \<pi>\<close>
-       and \<open>\<sigma> + \<sigma>C \<Turnstile> \<pi> \<star> \<xi>\<close>
-    moreover from this obtain \<tau>0 \<tau>1 where \<open>\<tau>0 \<sharp> \<tau>1\<close> and \<open>\<tau>0 \<Turnstile> \<xi>\<close> \<open>\<tau>1 \<Turnstile> \<pi>\<close> and \<open>\<sigma> + \<sigma>C = \<tau>0 + \<tau>1\<close>
-      by (metis local.asepconjE local.asepconj_comm)
-    moreover from this obtain \<tau>0' \<tau>0'' where \<open>is_minimal_splitting \<tau>0 \<tau>0' \<tau>0'' \<xi>\<close>
-      by (meson assms(2) local.has_minimal_splittingsE)
-    moreover from this have \<open>\<tau>0' \<Turnstile> minimal_states \<xi>\<close>
-      by (simp add: asat_def local.is_minimal_splitting_is_minimal local.minimal_states_def)
-    moreover from calculation have \<open>\<sigma> + \<sigma>C = \<tau>0' + (\<tau>0'' + \<tau>1)\<close>
-      using local.is_minimal_splitting_def local.is_splitting_def local.sepalg_assoc
-        local.sepalg_pairwise by force
-    moreover from calculation and \<open>precise (minimal_states \<xi>)\<close> have \<open>\<sigma> = \<tau>0'\<close>
-      by (metis asat_def assms(1) assms(4) local.derived_orderI is_minimal_splitting_def
-        is_splitting_def minimal_states_def preciseE local.sepalg_apart_assoc mem_Collect_eq)
-    moreover from calculation have \<open>\<tau>0'' + \<tau>1 = \<sigma>C\<close>
-      by (metis assms(4) local.disjoint_sym local.is_minimal_splitting_def local.is_splitting_def
-        local.sepalg_apart_assoc local.sepalg_cancel local.sepalg_comm)
-    ultimately have \<open>(\<sigma>' + \<sigma>C) \<Turnstile> \<pi> \<star> \<psi>\<close>
-      by (metis assms(3) assms(5) local.asat_weaken local.asepconjI local.disjoint_sym
-        local.is_minimal_splitting_def local.is_splitting_def local.sepalg_comm local.sepalg_pairwise2)
-  }
-  from this show ?thesis
-    by (simp add: local.asepconj_comm local.atriple_def)
+proof (rule atripleI)
+  fix \<pi>
+  assume H: \<open>\<sigma> + \<sigma>C \<Turnstile> \<xi> \<star> \<pi>\<close>
+  from H obtain \<tau>0 \<tau>1 where split: \<open>\<sigma> + \<sigma>C = \<tau>0 + \<tau>1\<close> \<open>\<tau>0 \<sharp> \<tau>1\<close>
+      \<open>\<tau>0 \<Turnstile> \<xi>\<close> \<open>\<tau>1 \<Turnstile> \<pi>\<close>
+    by (elim asepconjE)
+  from \<open>\<tau>0 \<Turnstile> \<xi>\<close> and \<open>has_minimal_splittings \<xi>\<close> obtain \<tau>m \<tau>r where
+      minsplit: \<open>is_minimal_splitting \<tau>0 \<tau>m \<tau>r \<xi>\<close>
+    by (meson has_minimal_splittingsE)
+  from minsplit have mr: \<open>\<tau>m \<sharp> \<tau>r\<close> and tau0_eq: \<open>\<tau>0 = \<tau>m + \<tau>r\<close>
+    by (simp_all add: is_minimal_splitting_def is_splitting_def)
+  from mr and split(2) and tau0_eq have t1_m: \<open>\<tau>1 \<sharp> \<tau>m\<close> and t1_r: \<open>\<tau>1 \<sharp> \<tau>r\<close>
+    by (simp_all add: sepalg_pairwise2)
+  from t1_m and t1_r have m_t1: \<open>\<tau>m \<sharp> \<tau>1\<close> and r_t1: \<open>\<tau>r \<sharp> \<tau>1\<close>
+    by (simp_all add: disjoint_sym)
+  have tm_apart: \<open>\<tau>m \<sharp> \<tau>r + \<tau>1\<close>
+    using mr m_t1 r_t1 by (simp add: sepalg_pairwise2)
+  have total: \<open>\<sigma> + \<sigma>C = \<tau>m + (\<tau>r + \<tau>1)\<close>
+    using split(1) tau0_eq sepalg_assoc[OF mr r_t1 m_t1] by simp
+  have precise_min: \<open>precise (minimal_states \<xi>)\<close>
+    using \<open>has_minimal_splittings \<xi>\<close> has_minimal_splittings_via_minimal_states by blast
+  have sigma_min: \<open>\<sigma> \<Turnstile> minimal_states \<xi>\<close>
+    using \<open>is_minimal \<xi> \<sigma>\<close> by (simp add: asat_def minimal_states_def)
+  have tm_min: \<open>\<tau>m \<Turnstile> minimal_states \<xi>\<close>
+    using minsplit by (simp add: asat_def is_minimal_splitting_is_minimal minimal_states_def)
+  have sigma_below: \<open>\<sigma> \<preceq> \<sigma> + \<sigma>C\<close>
+    by (rule derived_orderI[where z=\<open>\<sigma>C\<close>]) (simp add: \<open>\<sigma> \<sharp> \<sigma>C\<close>)
+  have tm_below: \<open>\<tau>m \<preceq> \<sigma> + \<sigma>C\<close>
+    by (rule derived_orderI[where z=\<open>\<tau>r + \<tau>1\<close>]) (simp add: tm_apart total)
+  have sigma_eq: \<open>\<sigma> = \<tau>m\<close>
+    using precise_min sigma_below tm_below sigma_min tm_min by (blast elim: preciseE)
+  have C_apart_sigma: \<open>\<sigma>C \<sharp> \<sigma>\<close>
+    using \<open>\<sigma> \<sharp> \<sigma>C\<close> by (simp add: disjoint_sym)
+  have residual_apart_sigma: \<open>\<tau>r + \<tau>1 \<sharp> \<sigma>\<close>
+    using tm_apart sigma_eq by (simp add: disjoint_sym)
+  have sum_comm: \<open>\<sigma>C + \<sigma> = (\<tau>r + \<tau>1) + \<sigma>\<close>
+    using total sigma_eq sepalg_comm[OF C_apart_sigma] sepalg_comm[OF residual_apart_sigma]
+    by simp
+  have residual_eq: \<open>\<sigma>C = \<tau>r + \<tau>1\<close>
+    using sepalg_cancel[OF sum_comm C_apart_sigma residual_apart_sigma] .
+  from \<open>\<sigma>' \<sharp> \<sigma>C\<close> and residual_eq and r_t1 have out_r: \<open>\<sigma>' \<sharp> \<tau>r\<close> and out_t1: \<open>\<sigma>' \<sharp> \<tau>1\<close>
+    by (simp_all add: sepalg_pairwise2)
+  have out_psi: \<open>\<sigma>' + \<tau>r \<Turnstile> \<psi>\<close>
+    using asat_weaken[OF \<open>\<sigma>' \<Turnstile> \<psi>\<close> out_r \<open>ucincl \<psi>\<close>] .
+  have out_apart: \<open>\<sigma>' + \<tau>r \<sharp> \<tau>1\<close>
+    using sepalg_pairwise_apart[OF out_r r_t1 out_t1] .
+  have out_eq: \<open>\<sigma>' + \<sigma>C = (\<sigma>' + \<tau>r) + \<tau>1\<close>
+    using residual_eq sepalg_assoc[OF out_r r_t1 out_t1] by simp
+  show \<open>\<sigma>' + \<sigma>C \<Turnstile> \<psi> \<star> \<pi>\<close>
+    using asepconjI[OF out_eq out_apart out_psi split(4)] .
 qed
 
 (*<*)
@@ -260,16 +327,18 @@ proof -
   moreover have \<open>\<alpha> \<tturnstile> (\<sigma>A0, \<sigma>A0'') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<alpha>'\<close> and \<open>\<beta> \<tturnstile> (\<sigma>B0, \<sigma>B0' + C) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<beta>'\<close>
     by (auto simp add: atriple_minimal calculation)
   moreover from calculation have \<open>\<alpha> \<tturnstile> (\<sigma>A0 + (\<sigma>B0 + \<sigma>Ac + \<sigma>Bc), \<sigma>A0'' + (\<sigma>B0 + \<sigma>Ac + \<sigma>Bc)) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<alpha>'\<close>
-    using preciseA by (auto intro!: atriple_minimal' simp add: is_minimal_splitting_def
-      is_splitting_def sepalg_pairwise2)
+    using preciseA preciseA'
+    by (auto intro!: atriple_minimal' has_minimal_splittings_ucincl
+      simp add: is_minimal_splitting_def is_splitting_def sepalg_pairwise2)
   moreover have \<open>\<sigma>B0 \<sharp> (\<sigma>A0'' + \<sigma>Ac + \<sigma>Bc)\<close>
     using calculation by (metis (no_types, opaque_lifting) disjoint_sym is_minimal_splitting_def
       is_splitting_def sepalg_pairwise2)
   moreover from calculation have \<open>\<sigma>B0' + C \<sharp> (\<sigma>A0'' + \<sigma>Ac + \<sigma>Bc)\<close>
     by (metis (no_types, opaque_lifting) disjoint_sym sepalg_pairwise)
   moreover from calculation have \<open>\<beta> \<tturnstile> (\<sigma>B0 + (\<sigma>A0'' + \<sigma>Ac + \<sigma>Bc), \<sigma>B0' + C + (\<sigma>A0'' + \<sigma>Ac + \<sigma>Bc)) \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<beta>'\<close>
-    using preciseA by (auto simp add: preciseB is_minimal_splitting_def is_splitting_def
-      sepalg_pairwise sepalg_pairwise2 intro!: atriple_minimal')
+    using preciseB preciseB'
+    by (auto intro!: atriple_minimal' has_minimal_splittings_ucincl
+      simp add: is_minimal_splitting_def is_splitting_def sepalg_pairwise sepalg_pairwise2)
   moreover from calculation have \<open>\<sigma>B0' + C + (\<sigma>A0'' + \<sigma>Ac + \<sigma>Bc) = \<sigma>'\<close>
     by (metis (no_types, lifting) disjoint_sym sepalg_apart_plus sepalg_assoc sepalg_comm)
   moreover from calculation have \<open>\<sigma>A0'' + (\<sigma>B0 + \<sigma>Ac + \<sigma>Bc) = \<sigma>B0 + (\<sigma>A0'' + \<sigma>Ac + \<sigma>Bc)\<close> (is \<open>?a = ?b\<close>)
@@ -303,7 +372,7 @@ begin
 
 definition atriple_rel :: \<open>'a assert \<Rightarrow> ('a \<Rightarrow> ('t \<times> 'a) \<Rightarrow> bool) \<Rightarrow> ('t \<Rightarrow> 'a assert) \<Rightarrow> bool\<close>
       ("(_) \<turnstile>/ _/ \<stileturn>\<^sub>R (_)" [50,50,50]50) where
-  \<open>\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi> \<equiv> is_local R \<phi> \<and> (\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> v \<star> \<top>)\<close>
+  \<open>\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi> \<equiv> is_local R \<phi> \<and> (\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> v)\<close>
 
 definition atriple_rel_id :: \<open>'a assert \<Rightarrow> ('a \<Rightarrow> 'a \<Rightarrow> bool) \<Rightarrow> bool\<close> ("_\<sim>_") where
   \<open>\<xi>\<sim>P \<equiv> is_local0 P \<xi> \<and> (\<forall>\<sigma> \<sigma>'. \<sigma> \<Turnstile> \<xi> \<longrightarrow> P \<sigma> \<sigma>' \<longrightarrow> \<sigma>' \<Turnstile> \<xi>)\<close>
@@ -321,85 +390,32 @@ lemma atriple_local:
     shows \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> v\<close>
 using assms by (clarsimp simp add: is_local_def atriple_def asat_def asepconj_def) (metis local.disjoint_sym)
 
-lemma atriple_local':
-  assumes \<open>is_local R \<phi>\<close>
-      and  \<open>\<And>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<Longrightarrow> \<sigma> \<Turnstile> \<phi> \<Longrightarrow> \<sigma>' \<Turnstile> \<psi> v \<star> \<top>\<close>
-      and \<open>R \<sigma> (v, \<sigma>')\<close>
-    shows \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> v\<close>
-proof -
-  from assms have \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<lambda>v. \<psi> v \<star> \<top>) v\<close>
-    by (intro atriple_local[where R=R]; simp)
-  from this show ?thesis
-    using atriple_upwards_closure(5) by blast
-qed
-
-lemma atriple_rel_upwards_closure:
-  shows \<open>(\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<psi> v \<star> \<top>))\<close>
-proof
-  assume \<open>\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-  moreover {
-       fix \<sigma> v \<sigma>'
-    assume \<open>is_local R \<phi>\<close>
-       and \<open>\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<longrightarrow> \<sigma>' \<Turnstile> \<psi> v \<star> UNIV\<close>
-       and \<open>R \<sigma> (v, \<sigma>')\<close>
-       and \<open>\<sigma> \<Turnstile> \<phi> \<star> UNIV\<close>
-    from this calculation have \<open>\<sigma>' \<Turnstile> \<psi> v \<star> UNIV\<close>
-      by (metis atriple_local' local.atripleE local.ucincl_UNIV)
-  }
-  ultimately show \<open>\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<psi> v \<star> \<top>)\<close>
-    by (auto simp add: atriple_rel_def is_local_upwards_closure asepconj_simp)
-next
-  assume \<open>\<phi> \<star> UNIV \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<psi> v \<star> UNIV)\<close>
-  moreover {
-       fix \<sigma> \<sigma>' v
-    assume \<open>is_local R \<phi>\<close>
-       and \<open>\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<Turnstile> \<phi> \<star> UNIV \<longrightarrow> \<sigma>' \<Turnstile> \<psi> v \<star> UNIV\<close>
-       and \<open>R \<sigma> (v, \<sigma>')\<close>
-       and \<open>\<sigma> \<Turnstile> \<phi>\<close>
-    from this have \<open>\<sigma>' \<Turnstile> \<psi> v \<star> UNIV\<close>
-      by (simp add: local.asepconj_weakenI)
-  }
-  ultimately show \<open>\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-    by (clarsimp simp add: atriple_rel_def is_local_upwards_closure asepconj_simp)
-qed
-
+text \<open>Hoisting an absorbing pure factor from an \<^term>\<open>atriple_rel\<close> leaves
+\<^term>\<open>\<phi> \<star> \<top>\<close>:\<close>
 lemma atriple_rel_hoist_pure:
-  shows \<open>(\<phi> \<star> \<langle>P\<rangle> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
-    and \<open>(\<langle>P\<rangle> \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
+  shows \<open>(\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
+    and \<open>(apure (P) \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
 proof -
   {
-    assume \<open>\<phi> \<star> \<langle>P\<rangle> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
+    assume \<open>\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
        and \<open>P\<close>
-    from this have \<open>\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
+    from this have \<open>\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
       by (simp add: atriple_rel_def local.asepconj_False_True(2) local.asepconj_comm
         local.asepconj_weaken2I local.is_local_upwards_closure(2))
   } moreover {
     assume \<open>\<not> P\<close>
-    from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
+    from this have \<open>\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
       by (simp add: atriple_rel_def local.asat_apure_distrib'(1) local.is_local_hoist_pure)
   } moreover {
-    assume \<open>\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-    from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-      by (clarsimp simp add: atriple_rel_def apure_def asepconj_simp)
-        (metis atriple_local' local.atripleE local.is_local_empty local.is_local_frame local.ucincl_UNIV)
+    assume \<open>\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
+    from this have \<open>\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
+      by (clarsimp simp add: atriple_rel_def apure_def asepconj_simp) (metis local.is_local_empty)
   }
-  ultimately show \<open>(\<phi> \<star> \<langle>P\<rangle> \<turnstile> R \<stileturn>\<^sub>R \<psi>) = (P \<longrightarrow> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
+  ultimately show \<open>(\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>) = (P \<longrightarrow> \<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
     by auto
-  from this show \<open>(\<langle>P\<rangle> \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
+  from this show \<open>(apure (P) \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
     by (simp add: asepconj_comm)
 qed
-
-lemma atriple_rel_upwards_closure':
-  shows \<open>((\<phi> \<star> \<top>) \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<psi> v \<star> \<top>)) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>((\<top> \<star> \<phi>) \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<top> \<star> \<psi> v)) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>((\<phi> \<star> \<top>) \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<top> \<star> \<psi> v)) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>((\<top> \<star> \<phi>) \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<psi> v \<star> \<top>)) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>(\<phi> \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<psi> v \<star> \<top>)) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>(\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>(\<phi> \<turnstile> R \<stileturn>\<^sub>R (\<lambda>v. \<top> \<star> \<psi> v)) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    and \<open>(\<top> \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (\<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-by (rewrite at "\<hole> \<longleftrightarrow> _" atriple_rel_upwards_closure, rewrite at "_ \<longleftrightarrow>  \<hole>"
-  atriple_rel_upwards_closure, simp add: asepconj_simp asepconj_comm asepconj_UNIV_collapse_top)+
 
 lemma atriple_rel_bind:
     fixes \<phi> :: \<open>'a assert\<close>
@@ -410,12 +426,10 @@ lemma atriple_rel_bind:
       and B: \<open>\<And>v. (\<psi> v \<turnstile> S v \<stileturn>\<^sub>R \<tau>)\<close>
     shows \<open>\<phi> \<turnstile> R \<lozenge> S \<stileturn>\<^sub>R \<tau>\<close>
 proof -
-  from assms have \<open>\<And>v. (\<psi> v \<star> \<top> \<turnstile> S v \<stileturn>\<^sub>R \<tau>)\<close>
-    by (metis atriple_rel_upwards_closure local.asepconj_UNIV_idempotent local.asepconj_assoc)
-  moreover {
-    assume \<section>: \<open>(\<And>v. is_local (S v) (\<psi> v \<star> UNIV) \<and> (\<forall>\<sigma> \<sigma>' va. S v \<sigma> (va, \<sigma>') \<longrightarrow> \<sigma> \<in> \<psi> v \<star> UNIV \<longrightarrow> \<sigma>' \<in> \<tau> va \<star> UNIV))\<close>
+  {
+    assume \<section>: \<open>(\<And>v. is_local (S v) (\<psi> v) \<and> (\<forall>\<sigma> \<sigma>' va. S v \<sigma> (va, \<sigma>') \<longrightarrow> \<sigma> \<in> \<psi> v \<longrightarrow> \<sigma>' \<in> \<tau> va))\<close>
         and \<open>is_local R \<phi>\<close>
-        and \<open>\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<in> \<phi> \<longrightarrow> \<sigma>' \<in> \<psi> v \<star> UNIV\<close>
+        and \<open>\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<in> \<phi> \<longrightarrow> \<sigma>' \<in> \<psi> v\<close>
     moreover {
          fix \<sigma>_0 \<sigma>_1 \<sigma>_0' v
       assume \<open>\<sigma>_0 \<sharp> \<sigma>_1\<close>
@@ -442,13 +456,13 @@ proof -
       by (intro is_localI) 
   } moreover {
        fix \<sigma> \<sigma>' v
-    assume \<open>\<And>v. is_local (S v) (\<psi> v) \<and> (\<forall>\<sigma> \<sigma>' va. S v \<sigma> (va, \<sigma>') \<longrightarrow> \<sigma> \<in> \<psi> v \<longrightarrow> \<sigma>' \<in> \<tau> va \<star> UNIV)\<close>
+    assume \<open>\<And>v. is_local (S v) (\<psi> v) \<and> (\<forall>\<sigma> \<sigma>' va. S v \<sigma> (va, \<sigma>') \<longrightarrow> \<sigma> \<in> \<psi> v \<longrightarrow> \<sigma>' \<in> \<tau> va)\<close>
        and \<open>is_local R \<phi>\<close>
-       and \<open>\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<in> \<phi> \<longrightarrow> \<sigma>' \<in> \<psi> v \<star> UNIV\<close>
+       and \<open>\<forall>\<sigma> \<sigma>' v. R \<sigma> (v, \<sigma>') \<longrightarrow> \<sigma> \<in> \<phi> \<longrightarrow> \<sigma>' \<in> \<psi> v\<close>
        and \<open>(R \<lozenge> S) \<sigma> (v, \<sigma>')\<close>
        and \<open>\<sigma> \<in> \<phi>\<close>
-    from this calculation have \<open>\<sigma>' \<in> \<tau> v \<star> UNIV\<close>
-      by (metis asat_def atriple_rel_def rel_compose_def)
+    from this calculation have \<open>\<sigma>' \<in> \<tau> v\<close>
+      by (metis rel_compose_def)
   }
   ultimately show ?thesis
     using assms by (auto simp add: atriple_rel_def asat_def)

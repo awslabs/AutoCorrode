@@ -478,7 +478,7 @@ lemma rbt_share_map_decompose_generic:
 proof (induct rule: rbt_share_map_induct)
   case 1
   then show ?case
-    by (clarsimp simp add: asat_def asepconj_simp)
+    by (clarsimp simp add: asat_def asepconj_simp emp_def)
 next
   case (2 k sh v m)
   then have ND': \<open>rbt_share_map_\<alpha> m k = No_Value\<close>
@@ -505,7 +505,7 @@ lemma rbt_share_map_decompose_by_domain:
 proof (induct rule: rbt_share_map_induct)
   case 1
   then show ?case
-    by (auto simp add: asat_def asepconj_simp)
+    by (auto simp add: asat_def asepconj_simp emp_def)
 next
   case (2 k sh v m)
   then have ND': \<open>rbt_share_map_\<alpha> m k = No_Value\<close>

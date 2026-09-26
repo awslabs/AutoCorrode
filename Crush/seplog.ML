@@ -378,6 +378,10 @@ sig
   val aentails_float_pure_concls_tac' : Proof.context -> int -> tactic
   \<comment> \<open>Moves pure assumptions and conclusions in a separating entailment to the left most position(s)\<close>
   val aentails_float_pure_tac : Proof.context -> int -> tactic
+  \<comment> \<open>Moves precise pure assumptions in a separating entailment to the leftmost position(s)\<close>
+  val aentails_float_pure_precise_assms_tac : Proof.context -> int -> tactic
+  \<comment> \<open>Moves precise pure conclusions in a separating entailment to the leftmost position(s)\<close>
+  val aentails_float_pure_precise_concls_tac : Proof.context -> int -> tactic
   \<comment> \<open>Moves typed points_to assumptions in a separating entailment to the leftmost position(s)\<close>
   val aentails_float_points_to_assms_tac : Proof.context -> int -> tactic
   \<comment> \<open>Moves typed points_to assumptions in a separating entailment to the leftmost position(s);
@@ -411,9 +415,18 @@ sig
 
   val aentails_hoist_pure_assms_tac : Proof.context -> int -> tactic
   val aentails_hoist_pure_concls_tac : Proof.context -> int -> tactic
+  \<comment>\<open>Hoist zero-owning pure assumptions without a closure condition.\<close>
+  val aentails_hoist_pure_precise_assms_tac : Proof.context -> int -> tactic
+  \<comment>\<open>Split zero-owning pure conclusions without a closure condition.\<close>
+  val aentails_hoist_pure_precise_concls_tac : Proof.context -> int -> tactic
   \<comment>\<open>Hoist \<Squnion>(range ...) out of the LHS of an entailment, then intro \<^verbatim>\<open>aexists_entailsL\<close>.\<close>
   val aentails_hoist_existential_assms_tac : Proof.context -> int -> tactic
+  \<comment>\<open>Move literal \<^term>\<open>\<top>\<close> assertions to the front of each side of an
+  entailment and merge duplicates.\<close>
+  val aentails_canonicalize_top_tac : Proof.context -> int -> tactic
+  val aentails_simp_core_intro_concls_tac : Proof.context -> int -> tactic
   val aentails_simp_core_intro_others_tac : Proof.context -> int -> tactic
+  val aentails_simp_core_intro_aforall_assms_tac : Proof.context -> int -> tactic
   val aentails_simp_core_cancel_univ_prems : Proof.context -> int -> tactic
 
   val aentails_simp_core_tac : Proof.context -> int -> tactic
@@ -437,6 +450,9 @@ sig
       entailment, and cancels them.
       This is essentially \<^verbatim>\<open>float_match\<close> for \<^verbatim>\<open>is_unifiable_pair\<close>, plus a cancellation lemma.\<close>
   val aentails_cancel_core_tac : Proof.context -> int -> tactic
+  \<comment> \<open>Inserts \<^verbatim>\<open>\<top>\<close> after the first right-hand factor when that factor is
+      upwards-closed, making it an absorber for subsequent cancellation.\<close>
+  val aentails_insert_top_tac : Proof.context -> int -> tactic
   \<comment> \<open>Identifies and cancels matching pairs of iterated separating conjunctions.\<close>
   val aentails_cancel_asepconj_multi: Proof.context -> int -> tactic
   \<comment> \<open>Identifies pairs of separating assumptions and conclusions which are both applications of the
@@ -503,6 +519,11 @@ sig
   val ucincl_must_discharge_tac' : (Proof.context -> int -> tactic) -> (Proof.context -> int -> tactic)
 
   val ucincl_discharge_method : Method.method -> Method.method
+
+  \<comment> \<open>Automatic discharge of \<^verbatim>\<open>discardable_in\<close> conditions.\<close>
+
+  \<comment>\<open>Close a \<^verbatim>\<open>discardable_in\<close> goal or fail without changing its shape.\<close>
+  val discardable_in_tac : Proof.context -> int -> tactic
 
   \<comment> \<open>Solves the first goal if it is an equality between permuted separating conjunctions\<close>
   val asepconj_solve_eq_tac : Proof.context -> int -> tactic
@@ -836,12 +857,19 @@ struct
   fun dest_pure ((Const (@{const_name apure}, _)) $ t) = t
     | dest_pure _ = raise SeparationLogic "dest_pure"
 
+  fun dest_pure_precise ((Const (@{const_name apure_precise}, _)) $ t) = t
+    | dest_pure_precise _ = raise SeparationLogic "dest_pure_precise"
+
+  fun dest_discardable_in ((Const (@{const_name discardable_in}, _)) $ d $ r) = (d, r)
+    | dest_discardable_in _ = raise SeparationLogic "not a discardable_in proposition"
+
   val dest_asepconj_multi_mapped = dest_asepconj_multi #> dest_mapped_multiset
 
   val unwrap_aentails    = find_metaimp_conclusion #> dest_aentails
   val unwrap_wp_aentails = unwrap_aentails #> snd #> dest_wp
   val unwrap_wp_call     = unwrap_wp_aentails #> #2 #> dest_urust_call
   val unwrap_ucincl      = find_metaimp_conclusion #> dest_ucincl
+  val unwrap_discardable_in = find_metaimp_conclusion #> dest_discardable_in
 
   fun dest_Const_or_Free (Const x) = x
     | dest_Const_or_Free (Free x) = x
@@ -857,11 +885,13 @@ struct
   val is_entailment     = succeeds unwrap_aentails
   val is_wp_entailment  = succeeds unwrap_wp_aentails
   val is_ucincl         = succeeds unwrap_ucincl
+  val is_discardable_in = succeeds unwrap_discardable_in
   val is_points_to      = succeeds dest_points_to
   val is_points_to_raw  = succeeds dest_points_to_raw
   val is_asepconj       = succeeds dest_asepconj
   val is_asepconj_multi = succeeds dest_asepconj_multi
   val is_pure           = succeeds dest_pure
+  val is_pure_precise   = succeeds dest_pure_precise
   val is_wp_call        = succeeds unwrap_wp_call
 
   fun conjunction_of (filter : term -> bool) : term -> bool = find_conclusions #> List.all filter
@@ -1090,6 +1120,10 @@ struct
          val ctxt' = ctxt addsimps @{thms Let_def}
          fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_ucincl) msg
                       #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_ucincl) msg
+         (* Full `clarsimp` may instantiate a schematic witness. A schematic surviving the
+            bounded search is undetermined, so leave that subgoal to the caller. Concrete
+            fallbacks remain visible through `crush_log_ucincl`. *)
+         val has_no_schematics = not o Term.exists_subterm Term.is_Var
      in Crush_Tacticals.IF' is_ucincl ( NOTE "ucincl_solve" (
        ( REPEAT_ALL_NEW (
                  NOTE "ucincl_solve_intro"      ucincl_intro
@@ -1097,9 +1131,8 @@ struct
          ORELSE' NOTE "ucincl_solve_clarify"   (CHANGED_PROP o clarify_tac ctxt)
          ORELSE' NOTE "ucincl_solve_safe_simp" (CHANGED_PROP o safe_full_simp_tac ctxt')
          ORELSE' NOTE "ucincl_solve_safe"      (CHANGED_PROP o safe_steps_tac ctxt)
-         ORELSE' ((print_tac ctxt
-                  "Warning: ucincl_solve trying full-blown clarsimp -- should not be needed?" |> K)
-           THEN' NOTE "ucincl_solve_clarsimp"  (CHANGED_PROP o clarsimp_tac ctxt'))
+         ORELSE' Crush_Tacticals.IF' has_no_schematics
+                   (NOTE "ucincl_solve_clarsimp" (CHANGED_PROP o clarsimp_tac ctxt'))
        ))))
      end
 
@@ -1116,6 +1149,30 @@ struct
 
   val ucincl_must_discharge_tac' : (Proof.context -> int -> tactic) -> (Proof.context -> int -> tactic) =
     fn ct => fn ctxt => ct ctxt THEN_ALL_NEW (IF_OK' is_ucincl (SOLVED' (ucincl_solve_tac ctxt)))
+
+  (* Every branch closes the disposal licence or fails, so cancellation commits only to licensed
+     resource disposal. `intro_tac` also avoids choosing a shape for a schematic discarded factor. *)
+  fun discardable_in_tac ctxt =
+     let (* Use a direct licence or a stated zero-ownership entailment. *)
+         val discardable_in_assm =
+                   assume_tac ctxt
+           ORELSE' (intro_tac @{thms discardable_in_aentails_empI} ctxt THEN' assume_tac ctxt)
+         (* Structural zero-ownership rules may decompose the discarded assertion. *)
+         val discardable_in_intro =
+                 intro_tac (Named_Theorems.get ctxt @{named_theorems discardable_in_intros}) ctxt
+           THEN_ALL_NEW (TRY o discardable_in_assm)
+         (* An upwards-closed retained context absorbs the discarded resource. *)
+         val discardable_in_from_ucincl =
+           ucincl_must_discharge_tac ctxt (intro_tac @{thms discardable_in_ucinclI} ctxt)
+         fun NOTE msg = Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_discardable_in) msg
+                     #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_discardable_in) msg
+     in Crush_Tacticals.IF' is_discardable_in ( NOTE "discardable_in" (
+               NOTE "discardable_in_assm"           discardable_in_assm
+               (* Prefer structural licences. `SOLVED' preserves the closure fallback when
+                  decomposition leaves an unlicensed factor. *)
+       ORELSE' NOTE "discardable_in_intro"          (SOLVED' discardable_in_intro)
+       ORELSE' NOTE "discardable_in_from_ucincl"    discardable_in_from_ucincl))
+     end
 
   val ucincl_discharge_method : Method.method -> Method.method = fn m => fn ts =>
     m ts |> context_tactic_to_context_tactic'
@@ -1165,11 +1222,11 @@ struct
   val ucincl_auto = fold ucincl_auto_single
 
   val _ = Outer_Syntax.local_theory_to_proof @{command_keyword "ucincl_proof"}
-          "open a proof context for upward closure"
+          "open an upward-closure proof for an assertion or contract"
              (Parse.embedded >> ucincl_proof)
 
   val _ = Outer_Syntax.local_theory @{command_keyword "ucincl_auto"}
-          "open a proof context for upward closure of a contract's pre/post condition"
+          "prove upward closure for an assertion or contract"
              (Scan.repeat1 Parse.embedded >> ucincl_auto)
 
   \<comment>\<open>Instantiates and applied the theorem \<^term>\<open>thm\<close> with the transformation of \<^term>\<open>t\<close> under\<^term>\<open>pi\<close>.\<close>
@@ -1860,6 +1917,10 @@ struct
   val aentails_float_pure_assms_tac'  = aentails_pick_assms_tac'  is_pure
   val aentails_float_pure_concls_tac' = aentails_pick_concls_tac' is_pure
 
+  (* Float precise pure factors to the front of a separating conjunction. *)
+  val aentails_float_pure_precise_assms_tac  = aentails_pick_assms_tac''  is_pure_precise
+  val aentails_float_pure_precise_concls_tac = aentails_pick_concls_tac'' is_pure_precise
+
   (* floating typed points_to relations to the front of a separating conjunction *)
 
   val aentails_float_points_to_assms_tac      = aentails_pick_assms_tac''  is_points_to
@@ -1997,9 +2058,15 @@ struct
   fun aentails_crule_tac_single (thm : thm) (ctxt : Proof.context) =
     (aentails_float_crule_tac thm ctxt
      THEN' (
-         resolve_tac ctxt [aentails_crule_core OF [thm],
-                           aentails_crule_coreL OF [thm],
-                           aentails_crule_coreR OF [thm], thm]
+         (* `aentails_crule_coreR` drops a factor and must close its disposal
+            premise within this alternative. Composed theorem premises precede
+            that disposal, so `THEN_LAST` addresses it without counting.
+            `APPEND'` preserves ordered alternatives and outer backtracking. *)
+                 resolve_tac ctxt [aentails_crule_core OF [thm],
+                                   aentails_crule_coreL OF [thm]]
+         APPEND' (resolve_tac ctxt [aentails_crule_coreR OF [thm]]
+                    THEN_LAST SOLVED' (discardable_in_tac ctxt))
+         APPEND' resolve_tac ctxt [thm]
             handle THM _ => K no_tac
      ))
      THEN_LAST (TRY o (aentails_normalize_assoc_concls_tac ctxt))
@@ -2083,11 +2150,14 @@ struct
            ORELSE (resolve_tac ctxt [@{thm aentails_cancel_multi_0R}] i)
            ORELSE all_tac)
 
+   (* Bare `asepconj_mono7` leaves the matched-factor entailment at `i` and
+      disposal at `i + 1`. Close the disposal here or reject the alternative. *)
    fun aentails_cancel_injective match_head arglist ctxt i =
      aentails_float_match ctxt (matching_injective_assertion ctxt match_head arglist) i
      THEN ((resolve_tac ctxt [@{thm asepconj_mono4}] i)
            ORELSE (resolve_tac ctxt [@{thm asepconj_mono6}] i)
-           ORELSE (resolve_tac ctxt [@{thm asepconj_mono7}] i)
+           ORELSE (resolve_tac ctxt [@{thm asepconj_mono7}] i
+                   THEN SOLVED' (discardable_in_tac ctxt) (i + 1))
            ORELSE all_tac)
 
   val solves_reference_axioms : Proof.context -> int -> tactic =
@@ -2151,18 +2221,57 @@ struct
        fn i => [float_concls i, float_assms i] |> map TRY |> EVERY |> CHANGED
      end
 
+  fun is_top (Const (@{const_name top}, _)) = true
+    | is_top _ = false
+
+  val collapse_leading_top_conv =
+    Conv.repeat_conv
+      (Conv.rewrs_conv
+        (@{thms asepconj_UNIV_collapse_top asepconj_UNIV_idempotent}
+          |> force_meta_eqs))
+
+  val aentails_canonicalize_top_tac : Proof.context -> int -> tactic = fn ctxt =>
+    SUBGOAL (fn (goal, i) =>
+      let
+        val (assms, concls) = unwrap_aentails goal
+        val has_top =
+          List.exists is_top (split_asepconj assms @ split_asepconj concls)
+        val normalize = aentails_normalize_assoc_tac ctxt
+        val float_concls = aentails_pick_concls_tac'' is_top ctxt
+        val float_assms = aentails_pick_assms_tac'' is_top ctxt
+        val collapse =
+          CONVERSION
+            (aentails_conv' collapse_leading_top_conv collapse_leading_top_conv ctxt)
+      in
+        if has_top then
+          [normalize i, float_concls i, float_assms i, collapse i]
+          |> map TRY |> EVERY |> CHANGED
+        else
+          no_tac
+      end
+      handle SeparationLogic _ => no_tac)
+
+  val aentails_simp_core_intro_concls_tac : Proof.context -> int -> tactic = fn ctxt =>
+    intro_tac @{thms aentails_intI_top
+      aforall_entailsR_top aforall_entailsR
+      awand_emp_adjointI_top awand_adjointI_top
+      awand_emp_adjointI awand_adjointI} ctxt
+
   val aentails_simp_core_intro_others_tac : Proof.context -> int -> tactic = fn ctxt =>
-    intro_tac @{thms aforall_entailsL aforall_entailsR aexists_entailsL
-      aentails_refl all_aentails_true aentails_top_R aentails_top_R'
-      bot_aentails_all awand_adjointI aentails_intI aentails_true} ctxt
+    intro_tac @{thms aexists_entailsL aentails_refl all_aentails_true
+      bot_aentails_all aentails_intI aentails_true} ctxt
+
+  val aentails_simp_core_intro_aforall_assms_tac : Proof.context -> int -> tactic = fn ctxt =>
+    intro_tac @{thms aforall_entailsL} ctxt
+    ORELSE' aentails_drule_tac_single @{thm aentails_forallL} ctxt
 
   val aentails_simp_core_cancel_univ_prems : Proof.context -> int -> tactic = fn ctxt =>
     ucincl_must_discharge_tac ctxt (intro_tac @{thms aentails_top_L aentails_top_L'} ctxt)
 
   val aentails_simp_core_simps_tac : Proof.context -> int -> tactic = fn ctxt =>
-     let val asepconj_simps = Named_Theorems.get ctxt @{named_theorems crush_asepconj_simp} in
-       safe_simp_no_asm_simp_only_tac ctxt asepconj_simps
-     end
+    let val asepconj_simps = Named_Theorems.get ctxt @{named_theorems crush_asepconj_simp} in
+      safe_simp_no_asm_simp_only_tac ctxt asepconj_simps
+    end
 
   val aentails_simp_core_split_tac : Proof.context -> int -> tactic = fn ctxt =>
      if Config.get ctxt Crush_Config.enable_branch_split then
@@ -2182,13 +2291,27 @@ struct
             (* split the newly introduced pure premise *)
       THEN' TRY o (elim_tac @{thms HOL.conjE} ctxt)
 
+  val aentails_hoist_pure_precise_assms_tac : Proof.context -> int -> tactic = fn ctxt =>
+            (* Float all precise pure assumptions. *)
+            TRY o aentails_float_pure_precise_assms_tac ctxt
+            (* Hoist directly; zero ownership produces no closure condition. *)
+      THEN' intro_tac @{thms apure_precise_entailsL0 apure_precise_entailsL} ctxt
+            (* Split newly introduced pure premises. *)
+      THEN' TRY o (elim_tac @{thms HOL.conjE} ctxt)
+
   val aentails_hoist_pure_concls_tac : Proof.context -> int -> tactic = fn ctxt =>
-    ucincl_discharge_tac ctxt (
-            (* float all pure conclusion *)
+    ucincl_must_discharge_tac ctxt (
+            (* float all pure conclusions *)
             TRY o aentails_float_pure_concls_tac ctxt
-            (* hoist them out *)
-      THEN' intro_tac @{thms apure_entailsR} ctxt
+            (* The restricted rule requires the retained conclusion to absorb split resource. *)
+      THEN' intro_tac @{thms apure_entailsR_restricted} ctxt
     )
+
+  val aentails_hoist_pure_precise_concls_tac : Proof.context -> int -> tactic = fn ctxt =>
+            (* Float all precise pure conclusions. *)
+            TRY o aentails_float_pure_precise_concls_tac ctxt
+            (* Keep the pure premise spatial for later drule and rule branches. *)
+      THEN' intro_tac @{thms apure_precise_entailsR'} ctxt
 
   val aentails_hoist_existential_assms_tac : Proof.context -> int -> tactic = fn ctxt =>
     CHANGED o (
@@ -2196,13 +2319,16 @@ struct
       THEN' REPEAT_ALL_NEW (resolve_tac ctxt @{thms aexists_entailsL})
     )
 
-  (* TODO: This is out of sync with the _method_ `aentails_simp_core` *)
   val aentails_simp_core_tac : Proof.context -> int -> tactic = fn ctxt => let
      fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_core) msg
                   #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_aentails_core) msg in
     ucincl_discharge_tac ctxt (
             NOTE "aentails_core_hoist_pure_assms" (aentails_hoist_pure_assms_tac ctxt)
+    ORELSE' NOTE "aentails_core_hoist_pure_precise_assms" (aentails_hoist_pure_precise_assms_tac ctxt)
     ORELSE' NOTE "aentails_core_hoist_pure_concls" (aentails_hoist_pure_concls_tac ctxt)
+    ORELSE' NOTE "aentails_core_hoist_pure_precise_concls" (aentails_hoist_pure_precise_concls_tac ctxt)
+    ORELSE' NOTE "aentails_core_canonicalize_top" (aentails_canonicalize_top_tac ctxt)
+    ORELSE' NOTE "aentails_core_intro_concls" (aentails_simp_core_intro_concls_tac ctxt)
     ORELSE' NOTE "aentails_core_intro_others" (aentails_simp_core_intro_others_tac ctxt)
     ORELSE' NOTE "aentails_core_cancel_univ_prems" (aentails_simp_core_cancel_univ_prems ctxt)
     ORELSE' NOTE "aentails_core_hoist_existential_assms" (aentails_hoist_existential_assms_tac ctxt)
@@ -2216,16 +2342,50 @@ struct
    fun is_cancellable_pair (ctxt : Proof.context) =
       let val allow_pure = Config.get ctxt Crush_Config.cancel_pure in
       fn (t0 : term) => fn (t1 : term) =>
-        if (not allow_pure) andalso (is_pure t0 orelse is_pure t1) then
+        if (not allow_pure) andalso
+           (is_pure t0 orelse is_pure t1 orelse is_pure_precise t0 orelse is_pure_precise t1) then
           false
         else
           is_unifiable_pair ctxt t0 t1
       end
 
+   (* Cancellation floats its selected pair first. Insert top immediately after the selected
+      right-hand factor, so its own upwards closure is sufficient and schematics in the remaining
+      right-hand conjunction are irrelevant. A schematic selected factor is still left alone:
+      asking closure search to shape it could choose a caller-owned witness. *)
+   fun wants_inserted_top (t : term) : bool =
+     let val (_, concls) = t |> unwrap_aentails
+         val concl_factors = split_asepconj concls
+     in
+       case concl_factors of
+         factor :: _ :: _ =>
+              not (List.exists is_top concl_factors)
+         andalso not (Term.exists_subterm Term.is_Var factor)
+       | _ => false
+     end
+     handle SeparationLogic _ => false
+
+   fun aentails_insert_top_tac ctxt =
+     let fun NOTE msg =  Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_insert_top) msg
+                      #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_insert_top) msg
+     in
+       Crush_Tacticals.IF' wants_inserted_top (NOTE "aentails_insert_top" (
+         (* The insertion is available only when closure of the selected factor is proved. *)
+         ucincl_must_discharge_tac ctxt
+           (resolve_tac ctxt @{thms aentails_insert_top_after_ucincl})))
+     end
+
    fun aentails_cancel_core_tac ctxt =
-     (Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel) "aentails_cancel_tac_unify_and_float"
-                  (aentails_float_match ctxt (is_cancellable_pair ctxt)))
-           THEN' (resolve_tac ctxt @{thms aentails_refl asepconj_mono asepconj_mono5 aentails_cancel_r})
+           (Fine_Grained_Timing.TIME' ctxt (Config.get ctxt Crush_Config.time_aentails_cancel)
+              "aentails_cancel_tac_unify_and_float"
+              (aentails_float_match ctxt (is_cancellable_pair ctxt)))
+     THEN' (TRY o aentails_insert_top_tac ctxt)
+           THEN' (
+                     (* Prefer rules which account for every factor. *)
+                     resolve_tac ctxt @{thms aentails_refl asepconj_mono asepconj_mono5}
+                     (* Dropping unmatched assumptions requires an immediately discharged licence. *)
+             ORELSE' (resolve_tac ctxt @{thms aentails_cancel_r_discardable}
+                       THEN_ALL_NEW discardable_in_tac ctxt))
 
   val aentails_cancel_legacy_points_to : Proof.context -> int -> tactic = fn ctxt =>
      if not (Config.get ctxt Crush_Config.enable_legacy_points_to_tactics) then
@@ -2370,6 +2530,9 @@ local
   val _ = Theory.setup (Method.setup @{binding "aentails_hoist_pure_assms"}
           (Scan.succeed (SIMPLE_METHOD' o (Separation_Logic_Tactics.aentails_hoist_pure_assms_tac))) "")
 
+  val _ = Theory.setup (Method.setup @{binding "aentails_hoist_pure_precise_assms"}
+          (Scan.succeed (SIMPLE_METHOD' o (Separation_Logic_Tactics.aentails_hoist_pure_precise_assms_tac))) "")
+
   val _ = Theory.setup (Method.setup @{binding "aentails_hoist_existential"}
           (Scan.succeed (SIMPLE_METHOD' o (Separation_Logic_Tactics.aentails_hoist_existential_assms_tac)))
           "hoist existentials out of the LHS of a separating entailment")
@@ -2398,7 +2561,8 @@ local
 
   val _ = Theory.setup (Method.setup @{binding "ucincl_solve"}
           (Method.sections (Simplifier.simp_modifiers @ Splitter.split_modifiers)
-                |-- Scan.succeed (fn ctxt => SIMPLE_METHOD' (REPEAT_DETERM1 o (Separation_Logic_Tactics.ucincl_solve_tac ctxt)))) "")
+                |-- Scan.succeed (fn ctxt => SIMPLE_METHOD'
+                  (SOLVED' (Separation_Logic_Tactics.ucincl_solve_tac ctxt)))) "")
 
   val _ = Theory.setup (Method.setup @{binding "ucincl_discharge"}
           (Method.sections Simplifier.simp_modifiers |-- Scan.lift (Parser.parse_method >> (fn m => fn (ctxt : Proof.context) =>

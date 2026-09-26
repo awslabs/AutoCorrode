@@ -53,12 +53,12 @@ definition read_atomic_value :: \<open>('v option, 'v, 'abort, 'i, 'o) function_
 definition read_atomic_value_contract :: \<open>'v \<Rightarrow> ('v option, 'v, 'abort) function_contract\<close>
   where \<open>read_atomic_value_contract \<equiv> \<lambda>v.
      let pre = atomic_value_is v in
-     let post = \<lambda>r. atomic_value_is v \<star> \<langle>r = v\<rangle> in
+     let post = \<lambda>r. atomic_value_is v \<star> apure (r = v) in
      make_function_contract pre post\<close>
 
 lemma read_atomic_value_contract_no_abort:
   shows \<open>function_contract_abort (read_atomic_value_contract b) = \<bottom>\<close>
-  by (simp add: read_atomic_value_contract_def pull_back_contract_def)
+  by (simp add: read_atomic_value_contract_def pull_back_contract_framed_def)
 
 lemma read_atomic_value_spec:
   shows \<open>\<Gamma>; read_atomic_value \<Turnstile>\<^sub>F read_atomic_value_contract v\<close>
@@ -133,7 +133,7 @@ definition write_atomic_value_contract :: \<open>'v \<Rightarrow> ('v option, un
 
 lemma write_atomic_value_contract_no_abort:
   shows \<open>function_contract_abort (write_atomic_value_contract a) = \<bottom>\<close>
-  by (simp add: write_atomic_value_contract_def pull_back_contract_def)
+  by (simp add: write_atomic_value_contract_def pull_back_contract_framed_def)
 
 lemma write_atomic_value_spec:
   shows \<open>\<Gamma>; write_atomic_value v \<Turnstile>\<^sub>F write_atomic_value_contract v\<close>
@@ -152,7 +152,7 @@ mechanism to obtain read/write functions on the larger separation algebra:\<clos
 type_synonym ('s, 'v) atomic_resource = \<open>('s, 'v option) lens\<close>
 
 definition atomic_resource_is :: \<open>('s, 'v) atomic_resource \<Rightarrow> 'v \<Rightarrow> 's assert\<close>
-  where \<open>atomic_resource_is l v \<equiv> l\<inverse> (atomic_value_is v)\<close>
+  where \<open>atomic_resource_is l v \<equiv> pull_back_assertion_framed l (atomic_value_is v)\<close>
 
 definition read_atomic_resource :: \<open>('s, 'v) atomic_resource \<Rightarrow> ('s, 'v, 'abort, 'i, 'o) function_body\<close>
   where \<open>read_atomic_resource l \<equiv> l\<inverse> read_atomic_value\<close>
@@ -161,20 +161,22 @@ definition write_atomic_resource :: \<open>('s, 'v) atomic_resource\<Rightarrow>
   where \<open>write_atomic_resource l v \<equiv> l\<inverse> (write_atomic_value v)\<close>
 
 definition read_atomic_resource_contract :: \<open>('s::sepalg, 'v) atomic_resource \<Rightarrow> 'v \<Rightarrow> ('s, 'v, 'abort) function_contract\<close>
-  where \<open>read_atomic_resource_contract l v \<equiv> l\<inverse> (read_atomic_value_contract v)\<close>
+  where \<open>read_atomic_resource_contract l v \<equiv>
+    pull_back_contract_framed l (read_atomic_value_contract v)\<close>
 
 lemma read_atomic_resource_contract_no_abort:
   shows \<open>function_contract_abort (read_atomic_resource_contract a b) = \<bottom>\<close>
-  by (simp add: read_atomic_value_contract_no_abort read_atomic_resource_contract_def pull_back_contract_def
-    pull_back_assertion_def bot_fun_def)
+  by (simp add: read_atomic_value_contract_no_abort read_atomic_resource_contract_def pull_back_contract_framed_def
+    pull_back_assertion_framed_def bot_fun_def)
 
 definition write_atomic_resource_contract :: \<open>('s::sepalg, 'v) atomic_resource \<Rightarrow> 'v \<Rightarrow> ('s, unit, 'abort) function_contract\<close>
-  where \<open>write_atomic_resource_contract l v \<equiv> l\<inverse> (write_atomic_value_contract v)\<close>
+  where \<open>write_atomic_resource_contract l v \<equiv>
+    pull_back_contract_framed l (write_atomic_value_contract v)\<close>
 
 lemma write_atomic_resource_contract_no_abort:
   shows \<open>function_contract_abort (write_atomic_resource_contract a b) = \<bottom>\<close>
-  by (simp add: write_atomic_value_contract_no_abort write_atomic_resource_contract_def pull_back_contract_def
-    pull_back_assertion_def bot_fun_def)
+  by (simp add: write_atomic_value_contract_no_abort write_atomic_resource_contract_def pull_back_contract_framed_def
+    pull_back_assertion_framed_def bot_fun_def)
 
 lemma read_atomic_resource_spec:
   assumes \<open>is_valid_slens l\<close>

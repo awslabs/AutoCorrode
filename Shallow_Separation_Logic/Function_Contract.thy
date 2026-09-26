@@ -28,9 +28,6 @@ definition satisfies_function_contract :: \<open>('a, 'abort, 'i, 'o) striple_co
       ('a, 'r, 'abort, 'i prompt, 'o prompt_output) function_body \<Rightarrow>
       ('a, 'r, 'abort) function_contract \<Rightarrow> bool\<close> (\<open>(_)/ ; (_) \<Turnstile>\<^sub>F (_)\<close> [50,50,50]50) where
   \<open>\<Gamma> ; f \<Turnstile>\<^sub>F \<C> \<longleftrightarrow>
-     ucincl (function_contract_pre \<C>) \<and>
-     (\<forall>r. ucincl (function_contract_post \<C> r)) \<and>
-     (\<forall>r. ucincl (function_contract_abort \<C> r)) \<and>
      \<Gamma> ; function_contract_pre \<C>
          \<turnstile> function_body f
          \<stileturn> function_contract_post \<C>
@@ -38,10 +35,7 @@ definition satisfies_function_contract :: \<open>('a, 'abort, 'i, 'o) striple_co
             \<bowtie> function_contract_abort \<C>\<close>
 
 lemma satisfies_function_contractI:
-  assumes \<open>ucincl (function_contract_pre \<C>)\<close>
-      and \<open>\<And>r. ucincl (function_contract_post \<C> r)\<close>
-      and \<open>\<And>r. ucincl (function_contract_abort \<C> r)\<close>
-      and \<open>\<Gamma> ; function_contract_pre \<C> \<turnstile> function_body f
+  assumes \<open>\<Gamma> ; function_contract_pre \<C> \<turnstile> function_body f
                  \<stileturn> function_contract_post \<C> \<bowtie> function_contract_post \<C> \<bowtie> function_contract_abort \<C>\<close>
     shows \<open>\<Gamma> ; f \<Turnstile>\<^sub>F \<C>\<close>
   using assms by (simp add: satisfies_function_contract_def)
@@ -49,20 +43,14 @@ lemma satisfies_function_contractI:
 lemma satisfies_function_contractE:
   assumes \<open>\<Gamma> ; f \<Turnstile>\<^sub>F \<C>\<close>
       and \<open>(\<And>\<rho>. \<Gamma> ; function_contract_pre \<C> \<turnstile> call f
-                \<stileturn> function_contract_post \<C> \<bowtie> \<rho> \<bowtie> function_contract_abort \<C>) \<Longrightarrow>
-            ucincl (function_contract_pre \<C>) \<Longrightarrow>
-              (\<And>r. ucincl (function_contract_post \<C> r)) \<Longrightarrow>
-              (\<And>r. ucincl (function_contract_abort \<C> r)) \<Longrightarrow> R\<close>
+                \<stileturn> function_contract_post \<C> \<bowtie> \<rho> \<bowtie> function_contract_abort \<C>) \<Longrightarrow> R\<close>
     shows \<open>R\<close>
 using assms by (cases f) (simp add: satisfies_function_contract_def sstriple_callI)
 
 lemma satisfies_function_contractE':
   assumes \<open>\<Gamma> ; f \<Turnstile>\<^sub>F \<C>\<close>
       and \<open>(\<Gamma> ; function_contract_pre \<C> \<turnstile> function_body f
-                \<stileturn> function_contract_post \<C> \<bowtie> function_contract_post \<C> \<bowtie> function_contract_abort \<C>) \<Longrightarrow>
-            ucincl (function_contract_pre \<C>) \<Longrightarrow>
-              (\<And>r. ucincl (function_contract_post \<C> r)) \<Longrightarrow>
-              (\<And>r. ucincl (function_contract_abort \<C> r)) \<Longrightarrow> R\<close>
+                \<stileturn> function_contract_post \<C> \<bowtie> function_contract_post \<C> \<bowtie> function_contract_abort \<C>) \<Longrightarrow> R\<close>
     shows \<open>R\<close>
 using assms by (cases f) (simp add: satisfies_function_contract_def sstriple_callI)
 
@@ -93,7 +81,7 @@ text\<open>This contract requires that a function behaves precisely like the fir
 function), and does so without requiring any state.\<close>
 definition lift_pure_to_contract :: \<open>'b \<Rightarrow> ('s::sepalg, 'b, 'c) function_contract\<close> where
   \<open>lift_pure_to_contract pure \<equiv>
-    let pre = \<top> in
+    let pre = emp in
     let post = \<lambda> ret. \<langle>ret = pure\<rangle> in
     make_function_contract pre post\<close>
 

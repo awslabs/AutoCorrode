@@ -37,10 +37,6 @@ proof -
     by (metis bot.not_eq_extremum zero_share_def)
 qed
 
-ucincl_auto memset_tagged_phys_contract
-  load_tagged_physical_address_contract
-  store_tagged_physical_address_contract
-
 end
 
 datatype_record raw_pmem_region =
@@ -97,14 +93,12 @@ definition points_to_tagged_phys_bytes :: \<open>64 word \<Rightarrow> share \<R
   \<open>points_to_tagged_phys_bytes addr sh tag bs \<equiv>
     let idxs = [0..<length bs] in
     \<star>\<star>{# points_to_tagged_phys_byte (addr + (word_of_nat idx)) sh tag (bs!idx) \<Colon> idx \<leftarrow> idxs #}\<close>
-ucincl_auto points_to_tagged_phys_bytes
 
 definition points_to_raw' :: \<open>(raw_pref,8 word list) gref \<Rightarrow> share \<Rightarrow> 8 word list \<Rightarrow> 's assert\<close>
   where \<open>points_to_raw' r sh bs \<equiv> (let pr = Global_Store.address r in
     \<langle>is_valid_raw_pmem_region pr\<rangle> \<star>
     \<langle>length bs = raw_pmem_region_size pr\<rangle> \<star>
     (\<Squnion>tag. points_to_tagged_phys_bytes (raw_pmem_region_base pr) sh tag bs))\<close>
-ucincl_auto points_to_raw'
 
 definition update_raw_fun :: \<open>(raw_pref, 8 word list) gref \<Rightarrow> 8 word list \<Rightarrow> ('s, unit, 'abort, 'i prompt, 'o prompt_output) function_body\<close> where
   \<open>update_raw_fun r bs \<equiv>
@@ -147,30 +141,9 @@ definition gref_can_store :: \<open>(raw_pref, 8 word list) gref \<Rightarrow> 8
 definition new_gref_can_store :: \<open>8 word list set\<close> where \<open>new_gref_can_store \<equiv> {}\<close>
 
 definition can_alloc_reference :: \<open>'s assert\<close> where \<open>can_alloc_reference \<equiv> {}\<close>
+\<comment>\<open>The \<^verbatim>\<open>reference\<close> locale requires allocator availability to be upwards
+closed; the registered fact discharges that interpretation obligation below.\<close>
 ucincl_auto can_alloc_reference
-
-lemma [ucincl_intros]:
-  shows \<open>ucincl (function_contract_pre (
-            reference_defs.update_raw_contract points_to_raw' gref_can_store a b c))\<close>
-    and \<open>ucincl (function_contract_post (
-            reference_defs.update_raw_contract points_to_raw' gref_can_store a b c) r)\<close>
-    and \<open>ucincl (function_contract_abort (
-            reference_defs.update_raw_contract points_to_raw' gref_can_store a b c) ab)\<close>
-    and \<open>ucincl (function_contract_pre (
-            reference_defs.dereference_raw_contract points_to_raw' x y z))\<close>
-    and \<open>ucincl (function_contract_post (
-            reference_defs.dereference_raw_contract points_to_raw' x y z) r')\<close>
-    and \<open>ucincl (function_contract_abort (
-            reference_defs.dereference_raw_contract points_to_raw' x y z) ab)\<close>
-    and \<open>ucincl (function_contract_pre (
-            reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store can_alloc_reference g))\<close>
-    and \<open>ucincl (function_contract_post (
-            reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store can_alloc_reference g) r'')\<close>
-    and \<open>ucincl (function_contract_abort (
-            reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store can_alloc_reference g) ab)\<close>
-  by (auto intro!: ucincl_intros simp: reference_defs.update_raw_contract_def
-    reference_defs.reference_raw_contract_def
-    reference_defs.dereference_raw_contract_def reference_defs.points_to_raw_def)
 
 lemma update_raw_fun_spec:
   notes mset_upt [simp del]
@@ -210,16 +183,18 @@ proof -
   show ?thesis
   apply (crush_boot f: dereference_raw_fun_def contract: reference_defs.dereference_raw_contract_def)
   apply (crush_base simp add: Rust_Iterator.map_def collect_def reference_defs.points_to_raw_def
-    points_to_raw'_def Let_def)
-  apply (ucincl_discharge\<open>rule_tac \<tau>=\<open>\<lambda>_. {}\<close> and INV=\<open>\<lambda>i ls.
-     \<langle>ls = List.take i g\<rangle> \<star> (points_to_tagged_phys_bytes (raw_pmem_region_base (gref_address r)) sh tag g)
-  \<close> in wp_gather_framedI'\<close>)
+    points_to_raw'_def Let_def asepconj_False_True)
+  apply (rule_tac \<tau>=\<open>\<lambda>_. {}\<close> and INV=\<open>\<lambda>i ls.
+     \<langle>ls = List.take i g\<rangle> \<star> points_to_tagged_phys_bytes (raw_pmem_region_base (gref_address r)) sh tag g
+  \<close> in wp_gather_framedI')
   apply (fastcrush_base simp add: iterator_ethunks_def iterator_thunks_def make_iterator_from_list_def
     is_valid_raw_pmem_region_nat_word_conv specs add: load_physical_address_spec
     contracts add: load_tagged_physical_address_contract_def)
   apply (fastcrush_base simp prems add: points_to_tagged_phys_bytes_def)
-  apply (aentails_float_multi_assms', rule_tac i=\<open>length res\<close> in aentails_multi_mapped_pick_0L, simp,
-    fastcrush_base simp add: take_Suc_conv_app_nth simp concls add: points_to_tagged_phys_bytes_def)
+  apply (aentails_float_multi_assms',
+    rule_tac i=\<open>length res\<close> in aentails_multi_mapped_pick_0L, simp)
+  apply (fastcrush_base simp add: take_Suc_conv_app_nth
+    simp concls add: points_to_tagged_phys_bytes_def)
   apply (simp add: aentails_def asepconj_comm asepconj_multi_mapped_pick)
   done
 qed
@@ -243,17 +218,18 @@ lemma points_to_tagged_bytes_join:
        reference_defs.points_to_raw points_to_raw' r sh2 v2
      \<longlongrightarrow> reference_defs.points_to_raw points_to_raw' r (sh1 + sh2) v1 \<star> \<langle>v1 = v2\<rangle>\<close>
   apply (clarsimp simp add: reference_defs.points_to_raw_def points_to_raw'_def Let_def
-       points_to_tagged_phys_bytes_def asepconj_simp)
+    points_to_tagged_phys_bytes_def asepconj_simp)
   apply crush_base
-  apply (simp flip: asepconj_multi_split_body add: points_to_tagged_phys_byte_combinesplit
-    asepconj_multi_split_body asepconj_multi_pure)
-  apply fastcrush_base
+  apply (simp_all flip: asepconj_multi_split_body asepconj_assoc)
+  apply (simp add: points_to_tagged_phys_byte_combinesplit asepconj_multi_split_body)
+  apply (rule aentails_cancel_r_discardable)
+  apply (intro discardable_in_conj discardable_in_multi discardable_in_apure_preciseI)
+  apply (auto intro: discardable_in_apure_preciseI)
+  apply (simp add: points_to_tagged_phys_byte_combinesplit)
+  apply is_sat_destruct
   apply (intro nth_equalityI; simp)
-  apply (simp flip: asepconj_multi_split_body add: points_to_tagged_phys_byte_combinesplit)
-  apply is_sat_destruct
-  apply (erule_tac x=i in meta_allE)
-  apply is_sat_destruct
-  done
+  apply (erule meta_allE, erule meta_impE, assumption)
+  by is_sat_destruct
 
 lemma points_to_tagged_bytes_split:
   notes mset_upt[simp del]
@@ -266,7 +242,7 @@ lemma points_to_tagged_bytes_split:
          reference_defs.points_to_raw points_to_raw' r sh1 v \<star>
          reference_defs.points_to_raw points_to_raw' r sh2 v\<close>
   by (fastcrush_base simp add: reference_defs.points_to_raw_def points_to_raw'_def
-       points_to_tagged_phys_bytes_def seplog drule add: points_to_tagged_phys_byte_split
+    points_to_tagged_phys_bytes_def seplog drule add: points_to_tagged_phys_byte_split
     simp flip: asepconj_multi_split_body intro add: aentails_multi_list_pointwise)
 
 lemma reference_sublocale:
@@ -284,9 +260,6 @@ next
                 g \<Turnstile>\<^sub>F reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store
                         can_alloc_reference g\<close>
     by (rule reference_raw_fun_spec)
-next
-  show \<open>\<And>r sh g. ucincl (reference_defs.points_to_raw points_to_raw' r sh g)\<close>
-    unfolding reference_defs.points_to_raw_def by ucincl_solve
 next
   show \<open>ucincl can_alloc_reference\<close>
     unfolding can_alloc_reference_def by ucincl_solve

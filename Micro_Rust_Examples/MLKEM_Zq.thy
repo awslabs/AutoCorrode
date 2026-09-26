@@ -92,7 +92,6 @@ definition zq_add_contract :: \<open>16 word \<Rightarrow> 16 word \<Rightarrow>
         post = \<lambda>r. \<langle>r = MLKEM_Specification.zq_add a b\<rangle> \<star>
                \<langle>unat r < mlkem_q\<rangle>
      in make_function_contract pre post\<close>
-ucincl_auto zq_add_contract
 
 lemma zq_add_spec [crush_specs]:
   shows \<open>\<Gamma>; zq_add a b \<Turnstile>\<^sub>F zq_add_contract a b\<close>
@@ -119,7 +118,6 @@ definition zq_sub_contract :: \<open>16 word \<Rightarrow> 16 word \<Rightarrow>
          post = \<lambda>r. \<langle>r = MLKEM_Specification.zq_sub a b\<rangle> \<star>
                 \<langle>unat r < mlkem_q\<rangle>
       in make_function_contract pre post\<close>
-ucincl_auto zq_sub_contract
 
 lemma zq_sub_spec [crush_specs]:
   shows \<open>\<Gamma>; zq_sub a b \<Turnstile>\<^sub>F zq_sub_contract a b\<close>
@@ -155,7 +153,6 @@ definition zq_mul_contract :: \<open>16 word \<Rightarrow> 16 word \<Rightarrow>
         post = \<lambda>r. \<langle>r = MLKEM_Specification.zq_mul a b\<rangle> \<star>
                \<langle>unat r < mlkem_q\<rangle>
      in make_function_contract pre post\<close>
-ucincl_auto zq_mul_contract
 
 lemma zq_mul_spec [crush_specs]:
   shows \<open>\<Gamma>; zq_mul a b \<Turnstile>\<^sub>F zq_mul_contract a b\<close>

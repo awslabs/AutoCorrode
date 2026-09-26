@@ -56,14 +56,12 @@ it should always return \<^term>\<open>12 :: nat\<close>. However, executing thi
 the allocation of local mutables. Owning the \<^term>\<open>can_alloc_reference\<close> resource makes
 sure that we have the capability to do this.
 Note also the embedding of a pure fact \<^verbatim>\<open>r = 12\<close> into separation logic via the
-\<^verbatim>\<open>\<langle>_\<rangle>\<close> antiquotation.\<close>
+\<^verbatim>\<open>apure (_)\<close> antiquotation.\<close>
 definition ref_test_contract where
   \<open>ref_test_contract \<equiv>
      let pre  = can_alloc_reference in
-     let post = \<lambda>r. can_alloc_reference \<star> \<langle>r = 12\<rangle> in
+     let post = \<lambda>r. can_alloc_reference \<star> apure (r = 12) in
      make_function_contract pre post\<close>
-text\<open>The \<^verbatim>\<open>ucincl_auto\<close> command is necessary boilerplate for every contract, ignore for now.\<close>
-ucincl_auto ref_test_contract
 
 text\<open>Now we prove that the function satisfies the contract!\<close>
 lemma ref_test_spec:
@@ -101,7 +99,6 @@ definition swap_ref_contract :: \<open>('addr, 'gv, 'v) Global_Store.ref \<Right
                lref \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. rval) \<sqdot> (lg\<down>lval) \<star>
                rref \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. lval) \<sqdot> (rg\<down>rval) in
     make_function_contract pre post\<close>
-ucincl_auto swap_ref_contract
 
 text\<open>Proving this specification is as straightforward as before\<close>
 lemma swap_ref_spec:
@@ -123,9 +120,8 @@ text\<open>After swapping, the variable left should now contain the value \<^ter
 definition swap_client_contract where
   \<open>swap_client_contract \<equiv>
     let pre  = can_alloc_reference in
-    let post = \<lambda> r. \<langle>r = (72 :: nat)\<rangle> \<star> can_alloc_reference in
+    let post = \<lambda> r. apure (r = (72 :: nat)) \<star> can_alloc_reference in
     make_function_contract pre post\<close>
-ucincl_auto swap_client_contract
 
 text\<open>We can verify this in two ways. Firstly, we can tell the automation to use the verified
 specification of \<^term>\<open>swap_ref\<close>, using the \<^verbatim>\<open>specs add:\<close> and \<^verbatim>\<open>contracts add:\<close> modifiers\<close>
@@ -169,11 +165,10 @@ text\<open>The contract for \<^term>\<open>sum_array\<close>: the stateful imple
 as the functional implementation that uses \<^term>\<open>sum_list\<close>\<close>
 definition sum_array_contract :: \<open>(nat, 'a::len) array \<Rightarrow> 64 word \<Rightarrow> ('s, nat, 'b) function_contract\<close> where
   \<open>sum_array_contract nums l \<equiv>
-    let pre  = can_alloc_reference \<star> \<langle>unat l = LENGTH('a)\<rangle> in
+    let pre  = can_alloc_reference \<star> apure (unat l = LENGTH('a)) in
     let post = \<lambda> r.
-               \<langle>r = sum_list (array_to_list nums)\<rangle> \<star> can_alloc_reference in
+               apure (r = sum_list (array_to_list nums)) \<star> can_alloc_reference in
     make_function_contract pre post\<close>
-ucincl_auto sum_array_contract
 
 text\<open>The proof of the specification is a bit more involved, since we need to deal with the loop\<close>
 lemma sum_spec:
@@ -197,13 +192,13 @@ so that we can reference it in the loop invariant.\<close>
 \<comment> \<open>Now, apply the rule for proving for-loops. The \<^verbatim>\<open>INV=\<open>\<lambda> _ i. \<dots>\<close>\<close> states the loop-invariant
 that we will use in the proof to verify our specification. The \<^verbatim>\<open>\<tau>=\<dots>\<close> and \<^verbatim>\<open>\<theta>=\<dots>\<close> refer to
 conditions for raising exceptions or returning early while inside the loop body. Making these
-equal to \<^term>\<open>\<lambda>_. \<langle>False\<rangle>\<close> ensures that raising an exception or returning early is illegal,
+equal to \<^term>\<open>\<lambda>_. apure (False)\<close> ensures that raising an exception or returning early is illegal,
 like we would expect.\<close>
       apply (ucincl_discharge\<open>
         rule_tac 
           INV=\<open>\<lambda>_ i. \<Squnion> g. sum_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>(sum_list (take i (array_to_list nums)))\<close> and 
-          \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close> and
-          \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+          \<tau>=\<open>\<lambda>_. apure (False)\<close> and
+          \<theta>=\<open>\<lambda>_. apure (False)\<close>
         in wp_raw_for_loop_framedI'
       \<close>)
 \<comment> \<open>We are left with two subgoals:

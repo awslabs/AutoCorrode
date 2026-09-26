@@ -104,8 +104,8 @@ assumes load_physical_address_spec [all_raw_tagged_physical_memory_specs]:
       \<Longrightarrow> is_aligned pa n
       \<Longrightarrow> \<Gamma>; memset_tagged_phys_block pa n b \<Turnstile>\<^sub>F make_function_contract (memset_tagged_block_pre pa n tag) (\<lambda>_. memset_tagged_block_post pa n tag b)\<close>
 
-   and points_to_tagged_phys_byte_ucincl[ucincl_intros, all_raw_tagged_physical_memory_specs]:
-     \<open>\<And>a b c d. ucincl (points_to_tagged_phys_byte a b c d)\<close>
+   \<comment>\<open>Byte assertions describe concrete resource and carry no upwards-closure requirement.
+   A model may still provide closure when it is inherent in the representation.\<close>
 
    and points_to_tagged_phys_byte_empty_share[all_raw_tagged_physical_memory_specs]:
      \<open>\<And>pa b tag. points_to_tagged_phys_byte pa 0 tag b = {}\<close>

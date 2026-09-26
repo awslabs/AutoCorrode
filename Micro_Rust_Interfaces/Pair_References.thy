@@ -101,13 +101,11 @@ definition points_to_raw' :: \<open>('a0 + 'a1, 'b0 + 'b1) gref \<Rightarrow> sh
          (Inl r0, Inl b0) \<Rightarrow> points_to_raw'A r0 sh b0
        | (Inr r1, Inr b1) \<Rightarrow> points_to_raw'B r1 sh b1
        | _ \<Rightarrow> {}\<close>
-ucincl_proof points_to_raw'
-  using refA.ucincl_points_to_raw[unfolded reference_defs.points_to_raw_def]
-        refB.ucincl_points_to_raw[unfolded reference_defs.points_to_raw_def]
-  by (case_tac \<open>plus_gref r\<close>; case_tac b; auto simp add: ucincl_intros)
 
 definition can_alloc_reference :: \<open>'s set\<close>
   where \<open>can_alloc_reference \<equiv> can_alloc_referenceA\<close>
+\<comment>\<open>The \<^verbatim>\<open>reference\<close> locale requires allocator availability to be upwards
+closed; the registered fact discharges that interpretation obligation below.\<close>
 ucincl_auto can_alloc_reference
 
 definition gref_can_store :: \<open>('a0 + 'a1, 'b0 + 'b1) gref \<Rightarrow> ('b0 + 'b1) set\<close> where
@@ -119,34 +117,9 @@ definition gref_can_store :: \<open>('a0 + 'a1, 'b0 + 'b1) gref \<Rightarrow> ('
 definition new_gref_can_store :: \<open>('b0 + 'b1) set\<close> where
   \<open>new_gref_can_store \<equiv> Inl ` new_gref_can_storeA\<close>
 
-lemma [ucincl_intros]:
-  shows \<open>ucincl (function_contract_pre (
-            reference_defs.update_raw_contract points_to_raw' gref_can_store a b c))\<close>
-    and \<open>ucincl (function_contract_post (
-            reference_defs.update_raw_contract points_to_raw' gref_can_store a b c) r)\<close>
-    and \<open>ucincl (function_contract_abort (
-            reference_defs.update_raw_contract points_to_raw' gref_can_store a b c) ab)\<close>
-    and \<open>ucincl (function_contract_pre (
-            reference_defs.dereference_raw_contract points_to_raw' x y z))\<close>
-    and \<open>ucincl (function_contract_post (
-            reference_defs.dereference_raw_contract points_to_raw' x y z) r')\<close>
-    and \<open>ucincl (function_contract_abort (
-            reference_defs.dereference_raw_contract points_to_raw' x y z) ab)\<close>
-    and \<open>ucincl (function_contract_pre (
-            reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store can_alloc_reference g))\<close>
-    and \<open>ucincl (function_contract_post (
-            reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store can_alloc_reference g) r'')\<close>
-    and \<open>ucincl (function_contract_abort (
-            reference_defs.reference_raw_contract points_to_raw' gref_can_store new_gref_can_store can_alloc_reference g) ab)\<close>
-  by (auto intro!: ucincl_intros simp: reference_defs.update_raw_contract_def 
-    reference_defs.reference_raw_contract_def
-    reference_defs.dereference_raw_contract_def reference_defs.points_to_raw_def)
-
 lemma function_contract_empty:
-  assumes \<open>\<And>r. ucincl (\<tau> r)\<close>
   shows \<open>\<Gamma> ; f \<Turnstile>\<^sub>F make_function_contract {} \<tau>\<close>
-  using assms by (intro satisfies_function_contractI; clarsimp simp add: ucincl_intros
-     bot_aentails_all wp_to_sstriple)
+  by (intro satisfies_function_contractI; clarsimp simp add: bot_aentails_all wp_to_sstriple)
 
 lemma update_raw_fun_spec:
   \<open>\<Gamma> ; update_raw_fun r g \<Turnstile>\<^sub>F
@@ -154,7 +127,7 @@ lemma update_raw_fun_spec:
   using refA.update_raw_spec refB.update_raw_spec
   by (cases \<open>plus_gref r\<close>; cases g; cases g0; clarsimp simp add: update_raw_fun_def
     points_to_raw'_def gref_can_store_def reference_defs.update_raw_contract_def
-    reference_defs.points_to_raw_def Inl_Inr_image_in asepconj_False_True ucincl_intros
+    reference_defs.points_to_raw_def Inl_Inr_image_in
     asepconj_simp intro!: function_contract_empty)
 
 lemma dereference_raw_fun_spec:
@@ -221,9 +194,6 @@ next
                 g \<Turnstile>\<^sub>F reference_defs.reference_raw_contract points_to_raw' gref_can_store
                         new_gref_can_store can_alloc_reference g\<close>
     by (rule reference_raw_fun_spec)
-next
-  show \<open>\<And>r sh g. ucincl (reference_defs.points_to_raw points_to_raw' r sh g)\<close>
-    by (clarsimp simp add: reference_defs.points_to_raw_def ucincl_intros)
 next
   show \<open>ucincl can_alloc_reference\<close>
     by ucincl_solve

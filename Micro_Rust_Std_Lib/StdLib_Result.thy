@@ -25,7 +25,6 @@ definition result_expect_contract ::
   where [crush_contracts]: \<open>result_expect_contract self v \<equiv>
     let pre = \<langle>self = Ok v\<rangle>; post = \<lambda>r. \<langle>r = v\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto result_expect_contract
 
 lemma result_expect_spec [crush_specs]:
   shows \<open>\<Gamma>; result_expect res m \<Turnstile>\<^sub>F result_expect_contract res v\<close>
@@ -44,7 +43,6 @@ definition result_unwrap_contract ::
   where [crush_contracts]: \<open>result_unwrap_contract self v \<equiv>
     let pre = \<langle>self = Ok v\<rangle>; post = \<lambda>r. \<langle>r = v\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto result_unwrap_contract
 
 lemma result_unwrap_spec [crush_specs]:
   shows \<open>\<Gamma>; result_unwrap res \<Turnstile>\<^sub>F result_unwrap_contract res v\<close>
@@ -64,9 +62,8 @@ micro_rust_notation (call) urust_func_result_is_err ("is_err")
 definition result_is_err_contract ::
   \<open>('a, 'e) result \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>result_is_err_contract res \<equiv>
-    let pre = UNIV; post = \<lambda>r. \<langle>r = result_is_err res\<rangle>
+    let pre = emp; post = \<lambda>r. \<langle>r = result_is_err res\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto result_is_err_contract
 
 lemma result_is_err_spec [crush_specs]:
   shows \<open>\<Gamma>; urust_func_result_is_err res \<Turnstile>\<^sub>F result_is_err_contract res\<close>
@@ -86,9 +83,8 @@ micro_rust_notation (call) urust_func_result_is_ok ("is_ok")
 definition result_is_ok_contract ::
   \<open>('a, 'e) result \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>result_is_ok_contract res \<equiv>
-    let pre = UNIV; post = \<lambda>r. \<langle>r = result_is_ok res\<rangle>
+    let pre = emp; post = \<lambda>r. \<langle>r = result_is_ok res\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto result_is_ok_contract
 
 lemma result_is_ok_spec [crush_specs]:
   shows \<open>\<Gamma>; urust_func_result_is_ok res \<Turnstile>\<^sub>F result_is_ok_contract res\<close>
@@ -115,9 +111,8 @@ lemma result_or_pure_simps[simp]:
 definition result_or_contract :: 
   \<open>('a, 'e) result \<Rightarrow> ('a, 'f) result \<Rightarrow> ('s::{sepalg}, ('a, 'f) result, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>result_or_contract res if_err \<equiv>
-    let pre = UNIV; post = \<lambda>r. \<langle>r = result_or_pure res if_err\<rangle>
+    let pre = emp; post = \<lambda>r. \<langle>r = result_or_pure res if_err\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto result_or_contract
 
 lemma result_or_spec [crush_specs]:
   shows \<open>\<Gamma>; result_or res if_err \<Turnstile>\<^sub>F result_or_contract res if_err\<close>
@@ -143,10 +138,9 @@ definition ok :: \<open>('v, 'e) result \<Rightarrow> ('s, 'v option, 'abort, 'i
 
 definition ok_contract ::  \<open>('v, 'e) result \<Rightarrow> ('s::{sepalg}, 'v option, 'abort) function_contract\<close> where
   [crush_contracts]: \<open>ok_contract res \<equiv>
-    let pre  = UNIV;
+    let pre  = emp;
         post = \<lambda>r. \<langle>r = (case res of Err(_) \<Rightarrow> None | Ok(k) \<Rightarrow> Some k)\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto ok_contract
 
 lemma ok_spec [crush_specs]:
   shows \<open>\<Gamma>; ok res \<Turnstile>\<^sub>F ok_contract res\<close>
@@ -187,7 +181,6 @@ definition result_as_mut_contract :: \<open>'b \<Rightarrow> ('a, 'b, ('v, 'e) r
                    else
                       Err (focus_result_err ref))\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto result_as_mut_contract
 
 lemma result_as_mut_spec [crush_specs]:
   shows \<open>\<Gamma>; result_as_mut ref \<Turnstile>\<^sub>F result_as_mut_contract g ref opt\<close>

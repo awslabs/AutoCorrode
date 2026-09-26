@@ -19,10 +19,8 @@ named_theorems crush_points_to_cond_crules
 
 declare points_to_aentails [crush_points_to_crules]
 
-(* Custom rules for working with the points-to predicates.
- *
- * Those are currently only gathered in the above named theorem lists,
- * but not applied by crush by default. *)
+(* Optional points-to conversions are kept in dedicated collections.
+ * Rules safe for generic entailment automation are registered below. *)
 lemma points_to_aentails_crule[crush_aentails_cond_crules]:
   shows \<open>r \<mapsto>\<langle>sh\<rangle> g0\<down>v0 
          [
@@ -34,11 +32,14 @@ lemma points_to_aentails_crule[crush_aentails_cond_crules]:
   unfolding aentails_conditional_crule_strong_def
   by (crush_base simp add: points_to_def)
 
-lemma points_to_aentails_crule_focusedL[crush_points_to_cond_crules]:
+lemma points_to_aentails_crule_focusedL[
+    crush_points_to_cond_crules,
+    crush_aentails_cond_crules
+  ]:
   shows \<open>focus_reference f r \<mapsto>\<langle>sh\<rangle> g1\<down>v1
          [
-            \<langle>g0 = g1\<rangle> 
-            \<star> \<langle>focus_view f v0 = Some v1\<rangle> 
+            \<langle>g0 = g1\<rangle>
+            \<star> \<langle>focus_view f v0 = Some v1\<rangle>
             \<star> \<langle>points_to_localizes r g0 v0\<rangle>
          ]\<longlongrightarrow>\<^sub>s[
             \<langle>points_to_localizes (focus_reference f r) g1 v1\<rangle>
@@ -60,6 +61,16 @@ lemma points_to_aentails_crule_focusedR[crush_aentails_cond_crules]:
   unfolding aentails_conditional_crule_strong_def
   by (crush_base simp add: points_to_def)
 
+text\<open>Generic entailment automation converts focused ownership to its
+parent reference without the legacy points-to tactic.\<close>
+lemma points_to_focusedL_crush_test:
+  assumes \<open>focus_view f v = Some w\<close>
+      and \<open>points_to_localizes r g v\<close>
+    shows \<open>focus_reference f r \<mapsto>\<langle>sh\<rangle> g\<down>w
+      \<longlongrightarrow> r \<mapsto>\<langle>sh\<rangle> g\<down>v\<close>
+  supply [[crush_enable_legacy_points_to_tactic = false]]
+  using assms by crush_base
+
 (*
 declare crush_points_to_crules[crush_aentails_crules]
 declare crush_points_to_cond_crules[crush_aentails_cond_crules]
@@ -78,10 +89,10 @@ using assms
   done
 
 lemma points_to_combine:
-  shows \<open>r \<mapsto>\<langle>sh1\<rangle> g1\<down>v1 \<star> r \<mapsto>\<langle>sh2\<rangle> g2\<down>v2 \<longlongrightarrow> r \<mapsto>\<langle>sh1+sh2\<rangle> g1\<down>v1 \<star> \<langle>g1 = g2\<rangle> \<star> \<langle>v1 = v2\<rangle>\<close>
-  apply (crush_base simp [prems, concls] add: points_to_def seplog drule add: points_to_raw_combine)
-  apply (simp add: aentails_def plus_share_def sup_aci(1))
-  done
+  shows \<open>r \<mapsto>\<langle>sh1\<rangle> g1\<down>v1 \<star> r \<mapsto>\<langle>sh2\<rangle> g2\<down>v2
+    \<longlongrightarrow> r \<mapsto>\<langle>sh1+sh2\<rangle> g1\<down>v1 \<star> \<langle>g1 = g2\<rangle> \<star> \<langle>v1 = v2\<rangle>\<close>
+  by (crush_base simp [prems, concls] add: points_to_def seplog drule
+      add: points_to_raw_combine[where ?sh1.0=sh1])
 
 lemma focus_compose_valid_dropE[focus_elims]:
   assumes \<open>is_valid_ref_for (focus_reference r l) P\<close>
@@ -120,10 +131,6 @@ lemma focus_is_view_modify_partial_guarded:
       and \<open>y = GUARD y' (focus_modify f1 op y')\<close>
     shows \<open>focus_is_view f0 (focus_modify (f0' \<diamondop> f1) op x) y\<close>
   using assms unfolding GUARD_def by (simp add: focus_is_view_modify_partial)
-
-ucincl_auto points_to update_raw_contract dereference_raw_contract reference_raw_contract
- update_contract modify_raw_contract modify_contract dereference_contract
- ro_dereference_contract reference_contract
 
 declare update_raw_spec[crush_specs]
 declare dereference_raw_spec[crush_specs]
@@ -223,12 +230,10 @@ definition transpose_contract :: \<open>(('a, 'b) ro_gref, 'b, 't option) focuse
                          \<star> ref \<mapsto> \<langle>\<top>\<rangle> g\<down>v_opt
      in make_function_contract pre post\<close>
 
-ucincl_auto transpose_contract 
-
 lemma transpose_spec[crush_specs]:
   shows \<open>\<Gamma> ; transpose ro_ref \<Turnstile>\<^sub>F transpose_contract ro_ref g v_opt\<close>
-  by (crush_boot f: transpose_def contract: transpose_contract_def)
-     (crush_base simp add: ro_ref_from_ref_def unsafe_ref_from_ro_ref_def
+  apply (crush_boot f: transpose_def contract: transpose_contract_def)
+  by (crush_base simp add: ro_ref_from_ref_def unsafe_ref_from_ro_ref_def
         intro!: focused.expand split!: ro_gref.splits option.splits)
 
 lemma prism_compose_allocatable:
@@ -318,7 +323,6 @@ definition ref_test_contract where
      let pre = can_alloc_reference in
      let post = \<lambda>r. can_alloc_reference \<star> \<langle>r = 12\<rangle> in
      make_function_contract pre post\<close>
-ucincl_auto ref_test_contract
 
 lemma ref_test_spec:
   shows \<open>\<Gamma>; ref_test \<Turnstile>\<^sub>F ref_test_contract\<close>

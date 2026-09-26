@@ -27,27 +27,26 @@ Function contracts \<^term>\<open>satisfies_function_contract\<close>
 \end{itemize*}\<close>
 
 subsection\<open>Low-level adequacy results\<close>
-text\<open>Note that the final \<^verbatim>\<open>shows\<close> clauses of all these theorems is of shape \<^term>\<open>\<phi> \<star> \<top>\<close>: the
-upward closedness requirements (\<^term>\<open>ucincl\<close>) is part of the definition of these triples.\<close>
+text\<open>Exact triples make each post-condition hold of the output state itself:\<close>
 lemma atriple_rel_eval_value_adequacy:
   assumes \<open>\<xi> \<turnstile> eval_value Y e \<stileturn>\<^sub>R \<phi>\<close>
       and \<open>\<sigma> \<Turnstile> \<xi>\<close>
       and \<open>continuation.Success v \<sigma>' \<in> deep_evaluates_nondet_basic Y e \<sigma>\<close>
-    shows \<open>\<sigma>' \<Turnstile> \<phi> v \<star> \<top>\<close>
+    shows \<open>\<sigma>' \<Turnstile> \<phi> v\<close>
   using assms by (auto simp add: atriple_rel_def eval_value_def urust_eval_predicate_defs)
 
 lemma atriple_rel_eval_return_adequacy:
   assumes \<open>\<xi> \<turnstile> eval_return Y e \<stileturn>\<^sub>R \<phi>\<close>
       and \<open>\<sigma> \<Turnstile> \<xi>\<close>
       and \<open>continuation.Return v \<sigma>' \<in> deep_evaluates_nondet_basic Y e \<sigma>\<close>
-    shows \<open>\<sigma>' \<Turnstile> \<phi> v \<star> \<top>\<close>
+    shows \<open>\<sigma>' \<Turnstile> \<phi> v\<close>
   using assms by (auto simp add: atriple_rel_def eval_return_def urust_eval_predicate_defs)
 
 lemma atriple_rel_eval_abort_adequacy:
   assumes \<open>\<xi> \<turnstile> eval_abort Y e \<stileturn>\<^sub>R \<phi>\<close>
       and \<open>\<sigma> \<Turnstile> \<xi>\<close>
       and \<open>continuation.Abort a \<sigma>' \<in> deep_evaluates_nondet_basic Y e \<sigma>\<close>
-    shows \<open>\<sigma>' \<Turnstile> \<phi> a \<star> \<top>\<close>
+    shows \<open>\<sigma>' \<Turnstile> \<phi> a\<close>
   using assms by (auto simp add: atriple_rel_def eval_abort_def urust_eval_predicate_defs)
 
 subsection\<open>Main adequacy results\<close>
@@ -56,9 +55,9 @@ lemma sstriple_adequacy:
       and \<open>\<sigma> \<Turnstile> \<xi>\<close>
       and \<open>c \<in> deep_evaluates_nondet_basic (yield_handler \<Gamma>) e \<sigma>\<close>
     shows \<open>case c of
-            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v \<star> \<top>
-          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v \<star> \<top>
-          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a \<star> \<top>
+            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v
+          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v
+          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
   \<comment> \<open>Evaluating with \<^term>\<open>deep_evaluates_nondet_basic\<close> will never terminate in \<^term>\<open>Yield\<close>\<close>
   using assms
@@ -71,15 +70,14 @@ corollary wp_adequacy:
       and \<open>\<sigma> \<Turnstile> \<xi>\<close>
       and \<open>c \<in> deep_evaluates_nondet_basic (yield_handler \<Gamma>) e \<sigma>\<close>
     shows \<open>case c of
-            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v \<star> \<top>
-          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v \<star> \<top>
-          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a \<star> \<top>
+            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v
+          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v
+          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
   using assms by (auto simp add: sstriple_adequacy dest!: wp_to_sstriple)
 
-text\<open>Function contracts (\<^term>\<open>satisfies_function_contract\<close>) additionaly require \<^term>\<open>ucincl\<close> on
-the pre-, post- and abort conditions. This means we can get rid of program logic connectives
-altogether, replacing \<^term>\<open>\<sigma> \<Turnstile> \<phi> \<star> \<top>\<close> with \<^term>\<open>\<sigma> \<in> \<phi>\<close>\<close>
+text\<open>Contract adequacy is stated directly in terms of assertion membership; contract
+conditions need not be upwards closed.\<close>
 corollary contract_adequacy:
   assumes \<open>\<Gamma>; body \<Turnstile>\<^sub>F contract\<close>
       and \<open>\<sigma> \<in> function_contract_pre contract\<close>
@@ -90,7 +88,7 @@ corollary contract_adequacy:
           | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<in> function_contract_abort contract a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
   using assms
-  by (auto simp add: asat_def asepconj_ident2 satisfies_function_contract_def
+  by (auto simp add: asat_def satisfies_function_contract_def
               split: continuation.splits dest!: sstriple_adequacy)
 
 definition is_yield :: \<open>('a, 'b, 'c, 'd, 'e, 'f) continuation \<Rightarrow> bool\<close> where
@@ -103,9 +101,9 @@ corollary wp_adequacy_deterministic:
       and \<open>\<sigma> \<Turnstile> \<xi>\<close>
       and \<open>\<not> is_yield (evaluate e \<sigma>)\<close>
     shows \<open>case evaluate e \<sigma> of
-            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v \<star> \<top>
-          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v \<star> \<top>
-          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a \<star> \<top>
+            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v
+          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v
+          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
   using assms(3) wp_adequacy[OF assms(1) assms(2), where c=\<open>evaluate e \<sigma>\<close>]
   by (auto simp add: deep_evaluate_basic_SuccessI deep_evaluate_basic_ReturnI
@@ -131,9 +129,9 @@ text\<open>These results could in principle be extended to use \<^term>\<open>de
 of \<^term>\<open>evaluate\<close>.\<close>
 lemma sstriple_from_evaluation:
   assumes \<open>\<And> \<sigma>. \<sigma> \<Turnstile> \<xi> \<Longrightarrow> case evaluate e \<sigma> of
-            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v \<star> \<top>
-          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v \<star> \<top>
-          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a \<star> \<top>
+            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v
+          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v
+          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
       and \<open>urust_is_local (yh \<Gamma>) e \<xi>\<close>
     shows \<open>\<Gamma> ; \<xi> \<turnstile> e \<stileturn> \<phi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
@@ -144,9 +142,9 @@ lemma sstriple_from_evaluation:
 
 lemma wp_from_evaluation:
   assumes \<open>\<And> \<sigma>. \<sigma> \<Turnstile> \<xi> \<Longrightarrow> case evaluate e \<sigma> of
-            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v \<star> \<top>
-          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v \<star> \<top>
-          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a \<star> \<top>
+            continuation.Success v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<phi> v
+          | continuation.Return v \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<rho> v
+          | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> \<theta> a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
       and \<open>urust_is_local (yh \<Gamma>) e \<xi>\<close>
     shows \<open>\<xi> \<longlongrightarrow> \<W>\<P> \<Gamma> e \<phi> \<rho> \<theta>\<close>
@@ -159,13 +157,10 @@ lemma contract_from_evaluation:
           | continuation.Abort a \<sigma>' \<Rightarrow> \<sigma>' \<Turnstile> function_contract_abort contract a
           | continuation.Yield _ _ _ \<Rightarrow> False\<close>
       and \<open>urust_is_local (yh \<Gamma>) (function_body func) (function_contract_pre contract)\<close>
-      and \<open>ucincl (function_contract_pre contract)\<close>
-      and \<open>\<forall> v. ucincl (function_contract_post contract v)\<close>
-      and \<open>\<forall> v. ucincl (function_contract_abort contract v)\<close>
     shows \<open>\<Gamma>; func \<Turnstile>\<^sub>F contract\<close>
-  using assms(2-)
-  by (auto intro!: sstriple_from_evaluation simp add: satisfies_function_contract_def asepconj_ident2
-      dest!: assms(1) split: continuation.splits)
+  using assms
+  by (auto intro!: sstriple_from_evaluation simp add: satisfies_function_contract_def
+      split: continuation.splits)
 
 subsection\<open>Evaluating pure functions\<close>
 text\<open>To start off, some technical results showing that \<^term>\<open>urust_is_local\<close> holds if evaluating
@@ -186,16 +181,16 @@ text\<open>Now, we can derive quite simple lemmas to derive \<^term>\<open>\<W>\
 contracts for such expressions\<close>
 corollary pure_function_derive_wp:
   assumes \<open>\<And> m. evaluate e m = continuation.Success v m\<close>
-    shows \<open>\<top> \<longlongrightarrow> \<W>\<P> \<Gamma> e (\<lambda> r. \<langle>r = v\<rangle>) \<bottom> \<bottom>\<close>
+    shows \<open>\<top> \<longlongrightarrow> \<W>\<P> \<Gamma> e (\<lambda> r. apure (r = v)) \<bottom> \<bottom>\<close>
   using assms
   by (auto intro!: wp_from_evaluation success_independent_of_machine_then_local
          simp add: asepconj_False_True asepconj_UNIV_idempotent)
 
 corollary pure_function_derive_contract:
   assumes \<open>\<And> m. evaluate (function_body func) m = continuation.Success v m\<close>
-    shows \<open>\<Gamma>; func \<Turnstile>\<^sub>F make_function_contract \<top> (\<lambda> r. \<langle>r = v\<rangle>)\<close>
+    shows \<open>\<Gamma>; func \<Turnstile>\<^sub>F make_function_contract \<top> (\<lambda> r. apure (r = v))\<close>
   using assms
-  by (auto intro!: contract_from_evaluation success_independent_of_machine_then_local ucincl_apure)
+  by (auto intro!: contract_from_evaluation success_independent_of_machine_then_local)
 
 text\<open>With these results, one can first prove that there exists some \<^term>\<open>v\<close> such that your
 expression evaluates to that value \<^term>\<open>v\<close>, and then define the 'pure' counterpart of your expression

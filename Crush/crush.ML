@@ -77,6 +77,7 @@ sig
   val crush_branch_aentails_cancel_tac : Proof.context -> int -> tactic
   val crush_branch_unfold_prems_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_core_tac : Proof.context -> int -> tactic
+  val crush_branch_aentails_aforall_assms_tac : Proof.context -> int -> tactic
   val crush_branch_determine_branch : Proof.context -> int -> tactic
   val crush_branch_aentails_drule_tac : Proof.context -> int -> tactic
   val crush_branch_aentails_crule_tac : Proof.context -> int -> tactic
@@ -355,8 +356,15 @@ struct
       Separation_Logic_Tactics.aentails_simp_core_tac ctxt
     ) )
 
+  val crush_branch_aentails_aforall_assms_tac : Proof.context -> int -> tactic = fn ctxt =>
+    IF' Separation_Logic_Tactics.is_entailment (
+      Separation_Logic_Tactics.aentails_simp_core_intro_aforall_assms_tac ctxt
+    )
+
   val crush_branch_aentails_cancel_tac : Proof.context -> int -> tactic = fn ctxt =>
-    IF' Separation_Logic_Tactics.is_entailment (Separation_Logic_Tactics.aentails_cancel_tac ctxt)
+    IF' Separation_Logic_Tactics.is_entailment (
+      Separation_Logic_Tactics.aentails_cancel_tac ctxt
+    )
 
   fun crush_branch_schematics_tac (ctxt: Proof.context) (unfold_contract_tac: int -> tactic) : int -> tactic =
     let val ex_intros = intro_tac (Named_Theorems.get ctxt @{named_theorems micro_rust_wp_ex_intros}) ctxt
@@ -494,7 +502,8 @@ struct
     end
 
   val crush_branch_intro_pure_aentails_tac : Proof.context -> int -> tactic = fn ctxt =>
-    Separation_Logic_Tactics.ucincl_discharge_tac ctxt (intro_tac @{thms apure_entailsR0} ctxt)
+    Separation_Logic_Tactics.ucincl_discharge_tac ctxt
+      (intro_tac @{thms apure_entailsR0 apure_precise_entailsR0} ctxt)
 
   val crush_branch_aentails_cond_crule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_cond_crule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_crules}) ctxt
@@ -518,6 +527,8 @@ struct
     val init = K {additional_tac = NONE, additional_method = NONE, abort_before_condition = NONE,
       post_step_tac = NONE }
   );
+
+  val crush_branch_discardable_in_tac = Separation_Logic_Tactics.discardable_in_tac
 
   val crush_branch_ucincl_tac = Separation_Logic_Tactics.ucincl_solve_tac
 
@@ -579,7 +590,10 @@ struct
             ("intro_pure_aentails_tac" , \<^here>, (fn _ => crush_branch_intro_pure_aentails_tac ctxt)),
             ("urust_simps_tac"         , \<^here>, (fn _ => crush_branch_urust_simps_tac ctxt)),
             ("clarsimp_tac"            , \<^here>, (fn _ => crush_branch_clarsimp_tac ctxt)),
+            ("aentails_aforall_assms_tac", \<^here>,
+              (fn _ => crush_branch_aentails_aforall_assms_tac ctxt)),
             ("misc_tac"                , \<^here>, (fn _ => crush_branch_misc_tac ctxt)),
+            ("discardable_in_tac"      , \<^here>, (fn _ => crush_branch_discardable_in_tac ctxt)),
             ("ucincl_tac"              , \<^here>, (fn _ => crush_branch_ucincl_tac ctxt)),
             ("additional_tac"          , \<^here>, (fn _ => crush_branch_additional_tactic ctxt)),
             ("additional_method"       , \<^here>, (fn _ => crush_branch_additional_method ctxt)),
@@ -808,6 +822,7 @@ struct
                      make_log_parser "clarsimp" Crush_Config.log_clarsimp,
                      make_log_parser "calls"    Crush_Config.log_calls,
                      make_log_parser "ucincl"   Crush_Config.log_ucincl,
+                     make_log_parser "discardable_in" Crush_Config.log_discardable_in,
                      make_log_parser "schematics" Crush_Config.log_schematics,
                      make_arg_parser' (Args.$$$ "ask" -- Args.$$$ "schematics")
                        Parser.parse_bool (Config.put Crush_Config.ask_schematics) \<^here>]

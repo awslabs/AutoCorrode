@@ -58,9 +58,8 @@ theorem precise_alt:
   shows \<open>precise \<xi> \<longleftrightarrow> (\<forall>\<sigma>1 \<sigma>2. \<sigma>1 \<Turnstile> \<xi> \<longrightarrow> \<sigma>2 \<Turnstile> \<xi> \<longrightarrow> \<sigma>1 \<noteq> \<sigma>2 \<longrightarrow> (\<up>\<^sub>s \<sigma>1) \<sqinter> (\<up>\<^sub>s \<sigma>2) = \<bottom>)\<close>
 by (auto simp add: precise_def asat_def derived_order_def uc_state_def)
 
-text \<open>It is important to note that while we are mostly working with upwards closed assertions,
-precise assertions in the above sense are rarely upwards closed. If they are, they can only consist
-of \<^verbatim>\<open>\<preceq>\<close>-maximal elements:\<close>
+text \<open>Precision and upwards closure pull in opposite directions: a precise assertion in the above
+sense is rarely upwards closed, and if it is, it can only consist of \<^verbatim>\<open>\<preceq>\<close>-maximal elements:\<close>
 
 lemma precise_ucincl:
   assumes \<open>ucincl \<phi>\<close>
@@ -88,6 +87,17 @@ by (auto simp add: precise_def derived_order_def asat_def)
 lemma empty_set_precise:
   shows \<open>precise {}\<close>
 by (auto simp add: precise_def)
+
+text \<open>The empty assertion has a unique satisfying substate.\<close>
+corollary emp_precise:
+  shows \<open>precise emp\<close>
+by (simp add: emp_def singleton_set_precise)
+
+text \<open>Semantic precision means uniqueness of satisfying substates and is
+independent of the zero-ownership convention in \<^term>\<open>apure_precise\<close>.\<close>
+corollary apure_precise_is_precise:
+  shows \<open>precise \<langle>P\<rangle>\<close>
+by (simp add: precise_def asat_apure_precise_characterisation)
 
 lemma conjunction_preserves_precise:
   assumes \<open>precise \<phi>\<close>

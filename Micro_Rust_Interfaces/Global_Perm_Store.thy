@@ -104,10 +104,8 @@ proof (rule aentailsI)
     by auto
   moreover from calculation have \<open>v1 = v2\<close>
     by (metis disjoint_sym option.inject sepalg_comm store_add_read)
-  moreover from calculation have \<open>ucincl (points_to_raw' r (sh1 + sh2) v1)\<close>
-    using ucincl_points_to_raw'I by blast
   ultimately show \<open>x \<Turnstile> r \<mapsto> \<langle>sh1 + sh2\<rangle> v1 \<star> \<langle>v1 = v2\<rangle>\<close>
-    by (simp add: asat_apure_distrib2)
+    by (simp add: asat_apure_precise_distrib2)
 qed
 
 lemma points_to_raw_split1:
@@ -274,8 +272,8 @@ next
 qed
 
 lemma asat_hoist_pure:
-  shows \<open>\<phi> \<Turnstile> \<langle>P\<rangle> \<star> \<xi> \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<top> \<star> \<xi>))\<close> (is ?g1)
-    and \<open>\<phi> \<Turnstile> \<xi> \<star> \<langle>P\<rangle> \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<top> \<star> \<xi>))\<close> (is ?g2)
+  shows \<open>\<phi> \<Turnstile> apure P \<star> \<xi> \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<top> \<star> \<xi>))\<close> (is ?g1)
+    and \<open>\<phi> \<Turnstile> \<xi> \<star> apure P \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<top> \<star> \<xi>))\<close> (is ?g2)
 proof -
   show ?g1
     by (simp add: apure_def asepconj_bot_zero)
@@ -362,7 +360,7 @@ lemma striple_dereference_raw:
   shows \<open>\<Gamma>; r \<mapsto>\<langle>sh\<rangle> v \<turnstile> store.dereference_by_value_raw r \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k (\<lambda>v'. r\<mapsto>\<langle>sh\<rangle> v \<star> \<langle>v = v'\<rangle>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
   apply (intro striple_localI)
   using urust_eval_predicate_dereference_raw_local
-  apply (auto simp: urust_eval_predicate_dereference_raw asat_hoist_pure ucincl_intros
+  apply (auto simp: urust_eval_predicate_dereference_raw asat_apure_precise_distrib2
      simp add: asepconj_simp)
   done
 
@@ -375,15 +373,27 @@ by (intro sstriple_from_stripleI, intro striple_dereference_raw) (auto simp add:
 lemma wp_dereference_raw:
     notes asat_simp [simp]
       and aentails_intro [intro]
-  assumes \<open>\<And>v. ucincl (\<psi> v)\<close>
     shows \<open>r\<mapsto>\<langle>sh\<rangle> g \<star> (r\<mapsto>\<langle>sh\<rangle> g \<Zsurj> \<psi> g) \<longlongrightarrow> \<W>\<P> \<Gamma> (store.dereference_by_value_raw r) \<psi> \<rho> \<theta>\<close>
 proof -
-  from assms have \<open>r \<mapsto>\<langle>sh\<rangle> g \<star> (\<Sqinter>g'. (r \<mapsto>\<langle>sh\<rangle> g \<star> \<langle>g = g'\<rangle>) \<Zsurj> \<psi> g') \<longlongrightarrow>
+  have \<open>r \<mapsto>\<langle>sh\<rangle> g \<star> (\<Sqinter>g'. (r \<mapsto>\<langle>sh\<rangle> g \<star> \<langle>g = g'\<rangle>) \<Zsurj> \<psi> g') \<longlongrightarrow>
                       \<W>\<P> \<Gamma> (store.dereference_by_value_raw r) \<psi> \<rho> \<theta>\<close>
     by (intro sstriple_straightline_to_wp sstriple_dereference_raw)
-  moreover have \<open>r \<mapsto>\<langle>sh\<rangle> g \<star> (r \<mapsto>\<langle>sh\<rangle> g \<Zsurj> \<psi> g) \<longlongrightarrow> r \<mapsto>\<langle>sh\<rangle> g \<star> (\<Sqinter>g'. (r \<mapsto>\<langle>sh\<rangle> g \<star> \<langle>g = g'\<rangle>) \<Zsurj> \<psi> g')\<close>
-    by (auto elim!: asepconjE awandE intro!: asepconjI awandI simp add:
-      asat_weaken ucincl_points_to_raw'I aentails_def)
+  moreover have \<open>r \<mapsto>\<langle>sh\<rangle> g \<star> (r \<mapsto>\<langle>sh\<rangle> g \<Zsurj> \<psi> g) \<longlongrightarrow>
+      r \<mapsto>\<langle>sh\<rangle> g \<star> (\<Sqinter>g'. (r \<mapsto>\<langle>sh\<rangle> g \<star> \<langle>g = g'\<rangle>) \<Zsurj> \<psi> g')\<close>
+  proof (intro asepconj_mono4 aentails_refl aforall_entailsR)
+    fix g'
+    show \<open>r \<mapsto>\<langle>sh\<rangle> g \<Zsurj> \<psi> g \<longlongrightarrow> (r \<mapsto>\<langle>sh\<rangle> g \<star> \<langle>g = g'\<rangle>) \<Zsurj> \<psi> g'\<close>
+    proof (cases \<open>g = g'\<close>)
+      \<comment>\<open>A precise-pure factor is a unit when true and an annihilator when false.\<close>
+      case True
+      then show ?thesis
+        by (simp add: asepconj_simp aentails_refl)
+    next
+      case False
+      then show ?thesis
+        by (simp add: asepconj_simp awand_bot aentails_true)
+    qed
+  qed
   ultimately show ?thesis
     by blast
 qed
@@ -409,7 +419,7 @@ proof -
     using sstriple_dereference_raw wp_sstriple_iff by blast
   then show ?thesis
     by (simp add: store.dereference_by_value_raw_fun_def satisfies_function_contract_def dereference_by_value_raw_contract'_def
-        ucincl_intros wp_sstriple_iff)
+        wp_sstriple_iff)
 qed
 
 subsection\<open>Modifications behind a reference\<close>
@@ -597,9 +607,6 @@ next
     using ref_raw_spec' by (simp add: reference_defs.reference_raw_contract_def
       reference_defs.points_to_raw_def reference_raw_contract'_def ucincl_can_alloc_referenceI
       asepconj_simp)
-next
-  show \<open>\<And>r sh g. ucincl (reference_defs.points_to_raw points_to_raw' r sh g)\<close>
-    by (simp add: ucincl_points_to_raw'I reference_defs.points_to_raw_def)
 next
   show \<open>ucincl can_alloc_reference\<close>
     by (simp add: ucincl_can_alloc_referenceI)

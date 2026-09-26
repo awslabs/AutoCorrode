@@ -81,10 +81,8 @@ definition iterator_find_contract :: \<open>'a list \<Rightarrow> ('a \<Rightarr
     let pre = \<langle>\<forall> i. \<Gamma>; pred_rust i \<Turnstile>\<^sub>F lift_pure_to_contract (pred_pure i)\<rangle> in
     let post = \<lambda> ret. \<langle>ret = List.find pred_pure vs\<rangle> in
     make_function_contract pre post\<close>
-ucincl_auto iterator_find_contract
 
 declare lift_pure_to_contract_def [crush_contracts]
-ucincl_auto lift_pure_to_contract
 
 lemma iterator_find_spec:
   shows \<open>\<Gamma> ; StdLib_Iterators.find (make_iterator_from_list vs) pred_rust \<Turnstile>\<^sub>F iterator_find_contract vs pred_pure \<Gamma> pred_rust\<close>
