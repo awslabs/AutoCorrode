@@ -640,22 +640,31 @@ struct
         fun wrap succeeded reported make =
           Seq.make (fn _ =>
             let
-              val (pull_timing, output) =
-                time_it (fn _ => Seq.pull (make ())) ()
+              val start = Timing.start ()
+              val pulled = Exn.capture (fn _ => Seq.pull (make ())) ()
+              val pull_timing = Timing.result start
               val _ =
                 Synchronized.change invocation_timing
                   (add_timing pull_timing)
-              val succeeded' =
-                succeeded orelse
-                  (case output of
-                    NONE => false
-                  | SOME (element, _) => element_success element)
-              val reported' = report succeeded' reported
             in
-              Option.map
-                (fn (element, tail) =>
-                  (element, wrap succeeded' reported' (fn _ => tail)))
-                output
+              case pulled of
+                Exn.Exn exn =>
+                  (report false reported;
+                   Exn.reraise exn)
+              | Exn.Res output =>
+                  let
+                    val succeeded' =
+                      succeeded orelse
+                        (case output of
+                          NONE => false
+                        | SOME (element, _) => element_success element)
+                    val reported' = report succeeded' reported
+                  in
+                    Option.map
+                      (fn (element, tail) =>
+                        (element, wrap succeeded' reported' (fn _ => tail)))
+                      output
+                  end
             end)
       in wrap false (~1, NONE, NONE) (fn _ => make_sequence ctxt') end
 

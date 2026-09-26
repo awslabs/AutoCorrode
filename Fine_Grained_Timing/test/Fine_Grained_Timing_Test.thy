@@ -257,6 +257,36 @@ ML \<open>
         end
     | _ => error "Timing-only pulls did not emit repeated snapshots")
 
+  (* Exceptions raised while pulling a profiled sequence must still publish
+     the samples gathered before the exception, then escape unchanged. *)
+  val raising_reports =
+    Synchronized.var "profile exception observer" ([]: Properties.T list)
+  val raising_context =
+    profile_context
+    |> Config.put Fine_Grained_Timing.timing_threshold_us 0
+    |> Fine_Grained_Timing.set_report_observer
+        (fn _ => fn properties => fn _ =>
+          Synchronized.change raising_reports (cons properties))
+  val raising_result =
+    Exn.capture (fn () =>
+      Fine_Grained_Timing.profile_seq (K true) "raising" raising_context
+        (fn ctxt =>
+          Seq.make (fn _ =>
+            (Fine_Grained_Timing.time_and_report
+               ctxt "before_raise" true (fn () => ());
+             error "profile test exception")))
+      |> Seq.pull) ()
+  val _ =
+    (case raising_result of
+      Exn.Exn _ => ()
+    | Exn.Res _ => error "Profiling swallowed a pull exception")
+  val _ =
+    (case Synchronized.value raising_reports of
+      properties :: _ =>
+        if Properties.get properties "success" = SOME "false" then ()
+        else error "An exception report was not marked as failed"
+    | [] => error "Profiling did not report a pull exception")
+
   (* `profile_method` distinguishes a failing method from one that yields no
      result at all, so the outcome predicate must see `Seq.Error`. *)
   val error_result =
