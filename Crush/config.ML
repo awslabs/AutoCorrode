@@ -13,8 +13,12 @@ sig
   val time_guards : bool Config.T
   (* profile time of ucincl discharge *)
   val time_ucincl : bool Config.T
+  (* profile time of discardability discharge *)
+  val time_discardable_in : bool Config.T
   (* profile time of separating entailment cancellation *)
   val time_aentails_cancel : bool Config.T
+  (* profile time of the \<top>-insertion which precedes cancellation *)
+  val time_insert_top : bool Config.T
   (* profile time of separating entailment core tactic *)
   val time_aentails_core : bool Config.T
   (* profile time simplification branch *)
@@ -46,6 +50,8 @@ sig
   val log_calls : bool Config.T
   (* log ucincl discharge *)
   val log_ucincl : bool Config.T
+  (* log discardability discharge *)
+  val log_discardable_in : bool Config.T
   (* log schematic variable instantiations performed by each crush branch *)
   val log_schematics : bool Config.T
   (* pause after each schematic instantiation and prompt the user *)
@@ -54,6 +60,8 @@ sig
   val log_transactions : bool Config.T
   (* log crush setup time *)
   val log_aentails_cancel : bool Config.T
+  (* log the \<top>-insertion which precedes cancellation *)
+  val log_insert_top : bool Config.T
   val log_aentails_core : bool Config.T
   val log_base_simps : bool Config.T
 
@@ -110,8 +118,10 @@ struct
   val time_steps = Attrib.setup_config_bool @{binding "crush_time_steps"} (K false)
   val time_guards = Attrib.setup_config_bool @{binding "crush_time_guards"} (K false)
   val time_ucincl = Attrib.setup_config_bool @{binding "crush_time_ucincl"} (K false)
+  val time_discardable_in = Attrib.setup_config_bool @{binding "crush_time_discardable_in"} (K false)
   val time_clarsimp = Attrib.setup_config_bool @{binding "crush_time_clarsimp"} (K false)
   val time_aentails_cancel = Attrib.setup_config_bool @{binding "crush_time_aentails_cancel"} (K false)
+  val time_insert_top = Attrib.setup_config_bool @{binding "crush_time_insert_top"} (K false)
   val time_aentails_core = Attrib.setup_config_bool @{binding "crush_time_aentails_core"} (K false)
   val time_unfold_prems = Attrib.setup_config_bool @{binding "crush_time_unfold_prems"} (K false)
   val time_calls = Attrib.setup_config_bool @{binding "crush_time_calls"} (K false)
@@ -127,9 +137,11 @@ struct
   val log_clarsimp = Attrib.setup_config_bool @{binding "crush_log_clarsimp"} (K false)
   val log_calls = Attrib.setup_config_bool @{binding "crush_log_calls"} (K true)
   val log_ucincl = Attrib.setup_config_bool @{binding "crush_log_ucincl"} (K false)
+  val log_discardable_in = Attrib.setup_config_bool @{binding "crush_log_discardable_in"} (K false)
   val log_schematics = Attrib.setup_config_bool @{binding "crush_log_schematics"} (K false)
   val ask_schematics = Attrib.setup_config_bool @{binding "crush_ask_schematics"} (K false)
   val log_aentails_cancel = Attrib.setup_config_bool @{binding "crush_log_aentails_cancel"} (K false)
+  val log_insert_top = Attrib.setup_config_bool @{binding "crush_log_insert_top"} (K false)
   val log_aentails_core = Attrib.setup_config_bool @{binding "crush_log_aentails_core"} (K false)
   val log_base_simps = Attrib.setup_config_bool @{binding "crush_log_base_simps"} (K false)
 

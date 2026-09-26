@@ -115,7 +115,8 @@ abbreviation points_to_localizes :: \<open>('a, 'b, 'v) Global_Store.ref \<Right
                                 \<and> focus_view (get_focus r) b = Some v\<close>
 
 definition points_to :: \<open>('a, 'b, 'v) Global_Store.ref \<Rightarrow> share \<Rightarrow> 'b \<Rightarrow> 'v \<Rightarrow> 's assert\<close> where
-  [all_reference_defs']: \<open>points_to r sh b v \<equiv> points_to_raw (unwrap_focused r) sh b \<star> \<langle>points_to_localizes r b v\<rangle>\<close>
+  [all_reference_defs']: \<open>points_to r sh b v \<equiv>
+    points_to_raw (unwrap_focused r) sh b \<star> \<langle>points_to_localizes r b v\<rangle>\<close>
 
 notation points_to ("(_) \<mapsto> \<langle>_\<rangle>/_/ \<down>/ _" [69,0,69,69]70)
 
@@ -160,7 +161,8 @@ definition ro_dereference_contract
 definition reference_contract :: \<open>('b, 'v) prism \<Rightarrow> 'v \<Rightarrow> ('s, ('a, 'b, 'v) Global_Store.ref, 'abort) function_contract\<close> where 
   [all_reference_defs']: \<open>reference_contract p v \<equiv>
      let pre = can_alloc_reference in
-     let post = \<lambda>r. points_to r \<top> (prism_embed p v) v \<star> \<langle>\<integral>r = prism_to_focus p\<rangle> \<star> can_alloc_reference in
+     let post = \<lambda>r. points_to r \<top> (prism_embed p v) v \<star>
+       \<langle>\<integral>r = prism_to_focus p\<rangle> \<star> can_alloc_reference in
      make_function_contract pre post\<close>
 
 lemmas all_reference_defs = all_reference_defs'
@@ -184,19 +186,19 @@ locale reference = reference_defs reference_types
       and dereference_raw_spec[all_reference_specs]: \<open>\<Gamma> ; dereference_raw_fun r \<Turnstile>\<^sub>F dereference_raw_contract r sh g\<close>
       and reference_raw_spec[all_reference_specs]:   \<open>\<Gamma> ; reference_raw_fun g   \<Turnstile>\<^sub>F reference_raw_contract g\<close>
 
-      and ucincl_points_to_raw[ucincl_intros, all_reference_specs]: \<open>\<And>r sh g. ucincl (points_to_raw r sh g)\<close>
+      \<comment>\<open>Points-to assertions account for concrete resource and carry no upwards-closure
+      assumption; allocator availability remains upwards closed.\<close>
       and ucincl_can_alloc_reference[ucincl_intros, all_reference_specs]: \<open>ucincl can_alloc_reference\<close>
 
-      and points_to_raw_combine[all_reference_specs]: 
-         \<open>\<And>r sh1 sh2 v1 v2. r \<mapsto>\<langle>sh1\<rangle> v1 \<star> r \<mapsto>\<langle>sh2\<rangle> v2 \<longlongrightarrow> r \<mapsto>\<langle>sh1+sh2\<rangle> v1 \<star> \<langle>v1 = v2\<rangle>\<close>
+      \<comment>\<open>Share combination returns value agreement as a precise-pure factor, preserving all
+      resource ownership.\<close>
+      and points_to_raw_combine[all_reference_specs]:
+         \<open>\<And>r sh1 sh2 v1 v2. r \<mapsto>\<langle>sh1\<rangle> v1 \<star> r \<mapsto>\<langle>sh2\<rangle> v2
+            \<longlongrightarrow> r \<mapsto>\<langle>sh1+sh2\<rangle> v1 \<star> \<langle>v1 = v2\<rangle>\<close>
       and points_to_raw_split[all_reference_specs]: 
          \<open>\<And>sh shA shB r v. sh = shA+shB \<Longrightarrow> shA \<sharp> shB \<Longrightarrow> 0 < shA \<Longrightarrow> 0 < shB \<Longrightarrow> 
             r \<mapsto>\<langle>sh\<rangle> v \<longlongrightarrow> r \<mapsto>\<langle>shA\<rangle> v \<star> r \<mapsto>\<langle>shB\<rangle> v\<close>
 begin
-
-lemma points_to_raw'_ucincl[ucincl_intros]:
-  shows \<open>\<And>r sh g. ucincl (points_to_raw' r sh g)\<close>
-  using ucincl_points_to_raw unfolding points_to_raw_def by simp
 
 lemma points_to_raw_aentails[intro]:
   assumes \<open>g0 = g1\<close>  
@@ -212,7 +214,7 @@ using assms by (auto intro!: aentails_refl)
 lemma aentails_split_single_points_to_assm:
   assumes \<open>points_to_localizes r g v \<Longrightarrow> \<flat> r \<mapsto>\<langle>sh\<rangle> g \<longlongrightarrow> \<phi>\<close>
   shows \<open>r\<mapsto>\<langle>sh\<rangle> g\<down>v \<longlongrightarrow> \<phi>\<close> 
-by (metis (full_types) apure_entailsL asepconj_comm assms points_to_def ucincl_points_to_raw)
+  by (metis apure_precise_entailsL asepconj_comm assms reference_defs.points_to_def)
 
 lemma aentails_split_top_points_to_assm:
   assumes \<open>points_to_localizes r g v \<Longrightarrow> \<flat> r \<mapsto>\<langle>sh\<rangle> g \<star> \<psi> \<longlongrightarrow> \<phi>\<close>
@@ -232,7 +234,7 @@ lemma aentails_cancel_points_to_raw_with_typed_0LR:
       and \<open>g' = g\<close>
       and \<open>points_to_localizes r g v\<close>
     shows \<open>rr'\<mapsto>\<langle>sh\<rangle> g' \<longlongrightarrow> r\<mapsto>\<langle>sh\<rangle> g\<down>v\<close>   
-using assms by (simp add: aentails_def points_to_def ucincl_points_to_raw)
+using assms by (simp add: aentails_def points_to_def asepconj_simp)
 
 lemma aentails_cancel_points_to_raw_with_typed_0L:
   assumes \<open>rr' = \<flat> r\<close>
@@ -244,9 +246,10 @@ using assms by (simp add: asepconj_mono points_to_def)
 lemma aentails_cancel_points_to_raw_with_typed_0R:
   assumes \<open>rr' = \<flat> r\<close>
       and \<open>g' = g\<close>
-      and \<open>\<top> \<longlongrightarrow> \<langle>points_to_localizes r g v\<rangle> \<star> \<psi>\<close>
-    shows \<open>rr'\<mapsto>\<langle>sh\<rangle> g' \<longlongrightarrow> r\<mapsto>\<langle>sh\<rangle> g\<down>v \<star> \<psi>\<close>   
-  using aentails_cancel_points_to_raw_with_typed by (metis asepconj_ident2 assms ucincl_points_to_raw) 
+      and \<open>emp \<longlongrightarrow> \<langle>points_to_localizes r g v\<rangle> \<star> \<psi>\<close>
+    shows \<open>rr'\<mapsto>\<langle>sh\<rangle> g' \<longlongrightarrow> r\<mapsto>\<langle>sh\<rangle> g\<down>v \<star> \<psi>\<close>
+  using aentails_cancel_points_to_raw_with_typed
+  by (simp add: asepconj_assoc asepconj_mono5 assms(1,2,3) points_to_def)
 
 declare reference_axioms [reference_axioms]
 (*<*)

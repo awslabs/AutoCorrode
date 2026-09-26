@@ -152,7 +152,7 @@ subsubsection\<open>Floating assumptions/conclusions\<close>
 
 text\<open>There is tactic support for floating pure assumptions and conclusions:\<close>
 
-schematic_goal \<open>\<delta> \<star> \<alpha> \<star> ?\<beta> r \<star> \<langle>\<gamma>\<rangle> \<longlongrightarrow> \<delta> \<star> \<langle>\<gamma>\<rangle> \<star> \<langle>\<beta> r\<rangle> \<star> \<alpha>\<close>
+schematic_goal \<open>\<delta> \<star> \<alpha> \<star> ?\<beta> r \<star> apure (\<gamma>) \<longlongrightarrow> \<delta> \<star> apure (\<gamma>) \<star> apure (\<beta> r) \<star> \<alpha>\<close>
   apply (asepconj_rotate_assms)
   apply (aentails_float_pure_concls)
   apply (aentails_float_pure_assms)
@@ -161,16 +161,16 @@ schematic_goal \<open>\<delta> \<star> \<alpha> \<star> ?\<beta> r \<star> \<lan
 notepad
 begin
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     by (aentails_float_pure_assms, aentails_float_pure_concls, rule aentails_refl)
 next
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     \<comment>\<open>Float assumptions and conclusions at the same time\<close>
     by (aentails_float_pure, rule aentails_refl)
 next
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     by (aentails_float_pure, rule aentails_refl)
 end
 
@@ -276,7 +276,7 @@ traversed using backtracking.\<close>
 notepad
 begin
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     apply aentails_float_pure_assms' \<comment>\<open>Happens to float \<^verbatim>\<open>R\<close>, but other options are available
                                         through backtracking\<close>
     back back
@@ -290,7 +290,7 @@ next
   a pure assumption to the front, but only one allows the subsequent application of the introduction
   rule \<^verbatim>\<open>asepconj_mono\<close>:\<close>
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>Q\<rangle> \<star> \<langle>P\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (Q) \<star> apure (P) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     \<comment>\<open>Backtracking forces floating of \<^verbatim>\<open>Q\<close>, which is not the first choice as we have seen above.\<close>
     apply (aentails_float_pure_assms'; intro asepconj_mono)
     apply aentails_float_pure_assms
@@ -317,8 +317,8 @@ begin
      fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close>
      and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<phi>\<close>
-     and 1: \<open>\<phi> \<star> \<phi>' \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
-  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+     and 1: \<open>\<phi> \<star> \<phi>' \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     apply aentails_hoist_pure_assms
     apply (rule 1)
     done
@@ -326,13 +326,36 @@ next
      fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close>
      and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<phi>\<close>
-     and 1: \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle>\<close>
-     and 2: \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>Q\<rangle>\<close>
-     and 2: \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>R\<rangle>\<close>
-     and \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<phi> \<star> \<phi>'\<close>
-  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+     and 1: \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P)\<close>
+     and 2: \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (Q)\<close>
+     and 2: \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (R)\<close>
+     and \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> \<phi> \<star> \<phi>'\<close>
+  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     apply aentails_hoist_pure_concls
     apply auto
+    done
+end
+
+text\<open>Ordinary pure-conclusion hoisting declines when the retained
+assertion has no closure licence.\<close>
+lemma
+  fixes \<alpha> \<beta> :: \<open>'s::sepalg assert\<close> and P :: bool
+  shows \<open>\<alpha> \<longlongrightarrow> apure (P) \<star> \<beta>\<close>
+  apply (fails \<open>aentails_hoist_pure_concls\<close>)
+  oops
+
+text\<open>Precise pure assumptions own zero, so their hoist needs no closure
+premise and leaves no residual resource. \<^verbatim>\<open>crush_boot\<close> applies this method
+to exact contract preconditions.\<close>
+
+notepad
+begin
+     fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close>
+     and P Q :: \<open>bool\<close>
+  assume 1: \<open>P \<Longrightarrow> Q \<Longrightarrow> \<phi> \<star> \<phi>' \<longlongrightarrow> \<xi>\<close>
+  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<longlongrightarrow> \<xi>\<close>
+    apply aentails_hoist_pure_precise_assms
+    apply (rule 1; assumption)
     done
 end
 
@@ -478,6 +501,375 @@ lemma
 
 end
 
+subsubsection\<open>Discarding assumptions during cancellation\<close>
+
+text\<open>Cancellation drops unmatched assumptions only under a closed
+\<^term>\<open>discardable_in\<close> obligation.  An upwards-closed retained context absorbs their resource:\<close>
+
+notepad
+begin
+  fix \<alpha> \<beta> :: \<open>'s::sepalg assert\<close>
+  assume \<open>ucincl \<alpha>\<close>
+  from this have \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>\<close>
+    by aentails_simp_basic
+next
+  \<comment>\<open>A factor entailing \<^term>\<open>emp\<close> owns no resource, so no closure property of
+  \<^term>\<open>\<alpha>\<close> is needed.\<close>
+  fix \<alpha> \<beta> :: \<open>'s::sepalg assert\<close>
+  assume \<open>\<beta> \<longlongrightarrow> emp\<close>
+  from this have \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>\<close>
+    by aentails_simp_basic
+next
+  \<comment>\<open>A precise pure factor supplies the zero-ownership licence directly.\<close>
+  fix \<alpha> :: \<open>'s::sepalg assert\<close> and P :: \<open>bool\<close>
+  have \<open>\<alpha> \<star> \<langle>P\<rangle> \<longlongrightarrow> \<alpha>\<close>
+    by aentails_simp_basic
+end
+
+text\<open>\<^verbatim>\<open>discardable_in_tac\<close> closes a disposal licence or fails; it never exposes a
+separating-entailment fallback to its caller.\<close>
+
+lemma
+  fixes \<delta> \<rho> :: \<open>'s::sepalg assert\<close>
+  shows \<open>discardable_in \<delta> \<rho>\<close>
+  apply (tactic \<open>Separation_Logic_Tactics.discardable_in_tac @{context} 1\<close>
+    | log "discardable_in_tac declined an unlicensed disposal")
+  oops
+
+subsubsection\<open>Cancellation policy regressions\<close>
+
+text\<open>The oracle is opaque to Crush.  Its destructor closes a control
+only when automation leaves the expected goal unchanged.\<close>
+definition crush_test_oracle :: \<open>bool \<Rightarrow> bool\<close> where
+  \<open>crush_test_oracle P \<equiv> P\<close>
+
+lemma crush_test_oracleD:
+  assumes expected: \<open>crush_test_oracle P\<close>
+  shows P
+  using expected unfolding crush_test_oracle_def .
+
+context
+  fixes \<alpha> \<beta> \<gamma> \<delta> :: \<open>'a::sepalg assert\<close>
+  assumes uc_gamma: \<open>ucincl \<gamma>\<close>
+begin
+
+text\<open>Each regression supplies only its local closure witness. Both
+conjunction orientations are registered globally, so Crush can find
+\<^term>\<open>\<gamma>\<close> in any retained factor position.\<close>
+
+lemma cancel_policy_refl_single:
+  shows \<open>\<gamma> \<longlongrightarrow> \<gamma>\<close>
+  by crush_base
+
+lemma cancel_policy_refl_three_factors:
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<beta> \<longlongrightarrow> \<gamma> \<star> \<alpha> \<star> \<beta>\<close>
+  by crush_base
+
+text\<open>A sole retained factor is itself the disposal context.\<close>
+lemma cancel_policy_absorb_into_sole_rhs_factor:
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<beta> \<longlongrightarrow> \<gamma>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+lemma cancel_policy_absorb_into_sole_rhs_factor_right:
+  shows \<open>\<alpha> \<star> \<gamma> \<longlongrightarrow> \<gamma>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+text\<open>\<^term>\<open>\<top>\<close> absorbs unmatched resource, including when it is
+already present on the right.\<close>
+lemma cancel_policy_everything_entails_top:
+  shows \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<top>\<close>
+  by crush_base
+
+lemma cancel_policy_rhs_already_has_top:
+  shows \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<top> \<star> \<beta>\<close>
+  by crush_base
+
+lemma cancel_policy_rhs_already_has_top_mixed:
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<beta> \<longlongrightarrow> \<top> \<star> \<gamma> \<star> \<beta>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+text\<open>The retained conjunction is upwards-closed through
+\<^term>\<open>\<gamma>\<close>, so cancellation can discard an extra factor independently
+of factor order.\<close>
+lemma cancel_policy_mixed_rhs_absorber_first:
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<beta> \<longlongrightarrow> \<gamma> \<star> \<beta>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+lemma cancel_policy_mixed_rhs_absorber_last:
+  shows \<open>\<gamma> \<star> \<alpha> \<star> \<beta> \<longlongrightarrow> \<beta> \<star> \<gamma>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+lemma cancel_policy_mixed_rhs_absorber_middle:
+  shows \<open>\<delta> \<star> \<alpha> \<star> \<gamma> \<star> \<beta> \<longlongrightarrow> \<alpha> \<star> \<gamma> \<star> \<beta>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+lemma cancel_policy_mixed_rhs_lhs_reordered:
+  shows \<open>\<alpha> \<star> \<gamma> \<star> \<beta> \<longlongrightarrow> \<gamma> \<star> \<beta>\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+text\<open>A schematic in another right-hand factor must not prevent the
+concrete upwards-closed factor from providing an absorber for cancellation.\<close>
+schematic_goal cancel_policy_rhs_schematic_after_absorber:
+  fixes F :: \<open>'b \<Rightarrow> 'a assert\<close> and witness :: 'b
+  shows \<open>\<gamma> \<star> F witness \<star> \<alpha> \<longlongrightarrow> \<gamma> \<star> F ?x\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+text\<open>If the selected factor itself is schematic, top insertion declines
+instead of asking closure search to choose the assertion's shape.\<close>
+schematic_goal cancel_policy_top_insertion_declines_unknown_factor:
+  shows \<open>\<alpha> \<longlongrightarrow> ?\<rho> \<star> \<beta>\<close>
+  apply (fails \<open>tactic \<open>Separation_Logic_Tactics.aentails_insert_top_tac
+    @{context} 1\<close>\<close>)
+  oops
+
+text\<open>The absorber remains available while Crush simplifies a selected branch,
+chooses its witness, and discharges exact pure results.\<close>
+lemma cancel_policy_mixed_rhs_exact_result:
+  fixes witness :: 'b and P :: \<open>'b \<Rightarrow> bool\<close>
+  assumes \<open>P witness\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<longlongrightarrow>
+    \<gamma> \<star> (if True then
+      (\<Squnion>x. \<langle>Some witness = Some x\<rangle> \<star> \<langle>P x\<rangle>)
+    else \<langle>False\<rangle>)\<close>
+  supply uc_gamma [ucincl_intros]
+  using assms by crush_base
+
+lemma cancel_policy_mixed_rhs_exact_error:
+  fixes witness :: 'b
+  shows \<open>\<gamma> \<star> \<alpha> \<longlongrightarrow>
+    \<gamma> \<star> (if False then \<langle>False\<rangle>
+    else \<langle>Some witness = Some witness\<rangle>)\<close>
+  supply uc_gamma [ucincl_intros]
+  by crush_base
+
+text\<open>These goals have no licence to discard or invent resource and must
+remain open.\<close>
+lemma cancel_policy_control_no_upwards_closed_factor:
+  assumes expected:
+    \<open>crush_test_oracle (\<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>)\<close>
+  shows \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<alpha>\<close>
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+lemma cancel_policy_control_no_upwards_closed_factor_right:
+  assumes expected:
+    \<open>crush_test_oracle (\<alpha> \<star> \<beta> \<longlongrightarrow> \<beta>)\<close>
+  shows \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<beta>\<close>
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+text\<open>Upwards-closure does not create a matching assertion on the left.\<close>
+lemma cancel_policy_control_nothing_to_cancel:
+  assumes expected: \<open>crush_test_oracle (\<alpha> \<longlongrightarrow> \<gamma>)\<close>
+  shows \<open>\<alpha> \<longlongrightarrow> \<gamma>\<close>
+  supply uc_gamma [ucincl_intros]
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+text\<open>Upwards closure can justify discarding unused resources from the
+left-hand side, but it cannot add an unrelated assertion to the right. If
+Crush inserts \<^term>\<open>\<top>\<close> while trying cancellation, a remaining right-hand
+\<^term>\<open>\<top>\<close> is left as a visible residual rather than removed by a final
+fallback.\<close>
+lemma cancel_policy_control_absorber_not_in_lhs:
+  assumes expected:
+    \<open>crush_test_oracle (\<alpha> \<longlongrightarrow> \<top> \<star> \<beta>)\<close>
+  shows \<open>\<gamma> \<star> \<alpha> \<longlongrightarrow> \<beta> \<star> \<gamma>\<close>
+  supply uc_gamma [ucincl_intros]
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+end
+
+subsubsection\<open>Conjunction weakening and disposal regressions\<close>
+
+text\<open>These regressions exercise conjunction weakening and disposal through
+the public Crush loop.  Distinct rule heads force the spatial crule path,
+including its transactional disposal check.\<close>
+
+context
+  fixes \<alpha> \<beta> \<delta> :: \<open>'a::sepalg assert\<close>
+begin
+
+lemma mono7_cancel_introduces_zero_owned_factor:
+  assumes P
+  shows \<open>\<alpha> \<longlongrightarrow> \<alpha> \<star> \<langle>P\<rangle>\<close>
+  using assms by crush_base
+
+lemma mono7_cancel_discards_nested_zero_owned_factor:
+  shows \<open>\<alpha> \<star> (\<langle>P\<rangle> \<star> emp) \<longlongrightarrow> \<alpha>\<close>
+  by crush_base
+
+lemma mono7_crule_introduces_zero_owned_factor:
+  assumes rewrite: \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>
+      and P
+  shows \<open>\<alpha> \<longlongrightarrow> \<beta> \<star> \<langle>P\<rangle>\<close>
+  using assms by (crush_base seplog crule add: rewrite)
+
+lemma mono7_crule_discards_zero_owned_factor:
+  assumes rewrite: \<open>Q \<Longrightarrow> \<alpha> \<longlongrightarrow> \<beta>\<close>
+      and Q
+  shows \<open>\<alpha> \<star> \<langle>P\<rangle> \<longlongrightarrow> \<beta>\<close>
+  using assms by (crush_base seplog crule add: rewrite)
+
+text\<open>An unlicensed disposal rejects the complete crule alternative.\<close>
+lemma mono7_crule_rejects_unlicensed_disposal:
+  assumes rewrite: \<open>Q \<Longrightarrow> \<alpha> \<longlongrightarrow> \<beta>\<close>
+      and Q
+      and expected: \<open>crush_test_oracle (\<alpha> \<star> \<delta> \<longlongrightarrow> \<beta>)\<close>
+  shows \<open>\<alpha> \<star> \<delta> \<longlongrightarrow> \<beta>\<close>
+  supply rewrite [crush_aentails_crules]
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+end
+
+text\<open>Rigid value expressions prevent generic unification from taking the
+positive goal, so it exercises legacy injective cancellation. When disposal
+is unlicensed, legacy splitting exposes the exact frame obligation while
+non-legacy cancellation leaves the original entailment.\<close>
+
+context reference
+begin
+
+lemma mono7_legacy_points_to_discards_zero_owned_factor:
+  assumes g_eq: \<open>g_left x = g_right y\<close>
+      and v_eq: \<open>v_left x = v_right y\<close>
+  shows \<open>points_to r sh (g_left x) (v_left x) \<star> \<langle>P\<rangle>
+    \<longlongrightarrow> points_to r sh (g_right y) (v_right y)\<close>
+  supply [[crush_enable_legacy_points_to_tactic = true]]
+  using assms by crush_base
+
+lemma mono7_legacy_points_to_leaves_exact_frame_residual:
+  assumes expected:
+    \<open>crush_test_oracle (A \<star> B \<longlongrightarrow> emp)\<close>
+  shows \<open>A \<star> points_to r sh g v \<star> B
+    \<longlongrightarrow> points_to r sh g v\<close>
+  supply [[crush_enable_legacy_points_to_tactic = true]]
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+lemma mono7_nonlegacy_points_to_leaves_original_residual:
+  assumes expected:
+    \<open>crush_test_oracle
+      (A \<star> points_to r sh g v \<star> B \<longlongrightarrow> points_to r sh g v)\<close>
+  shows \<open>A \<star> points_to r sh g v \<star> B
+    \<longlongrightarrow> points_to r sh g v\<close>
+  supply [[crush_enable_legacy_points_to_tactic = false]]
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+end
+
+subsubsection\<open>Upwards-closure search\<close>
+
+context
+  fixes \<alpha> \<beta> \<gamma> \<delta> :: \<open>'s::sepalg assert\<close>
+  assumes uc_gamma: \<open>ucincl \<gamma>\<close>
+begin
+
+text\<open>\<^verbatim>\<open>ucincl_solve\<close> searches both conjunction orientations and
+accepts only a branch that closes the selected goal.\<close>
+
+lemma ucincl_solve_left_factor:
+  shows \<open>ucincl (\<gamma> \<star> \<alpha>)\<close>
+  supply uc_gamma [ucincl_intros]
+  by ucincl_solve
+
+lemma ucincl_solve_right_factor:
+  shows \<open>ucincl (\<alpha> \<star> \<gamma>)\<close>
+  supply uc_gamma [ucincl_intros]
+  by ucincl_solve
+
+lemma ucincl_solve_nested_factor:
+  shows \<open>ucincl ((\<alpha> \<star> \<beta>) \<star> (\<delta> \<star> \<gamma>))\<close>
+  supply uc_gamma [ucincl_intros]
+  by ucincl_solve
+
+end
+
+subsubsection\<open>UNIV normalization and right-hand binder introduction\<close>
+
+context
+  fixes P :: \<open>'i \<Rightarrow> 's::sepalg assert\<close>
+    and \<alpha> \<beta> \<gamma> :: \<open>'s assert\<close>
+begin
+
+text\<open>Crush introduces a universal quantifier on the right before
+instantiating one on the left. This lets the left-hand witness depend on the
+variable introduced on the right.\<close>
+lemma aforall_dependency_after_emp:
+  shows \<open>(\<Sqinter>x. P x) \<longlongrightarrow> emp \<star> (\<Sqinter>y. P y)\<close>
+  by crush_base
+
+lemma aforall_factor_dependency_after_emp:
+  shows \<open>(\<Sqinter>x. P x) \<star> \<alpha> \<longlongrightarrow>
+    emp \<star> (\<Sqinter>y. P y \<star> \<alpha>)\<close>
+  by crush_base
+
+text\<open>When a universal quantifier on the right is preceded by
+\<^term>\<open>\<top>\<close>, Crush introduces the quantified variable without carrying the
+\<^term>\<open>\<top>\<close> into the new subgoal. This also works when several scattered
+\<^term>\<open>\<top>\<close> assertions must first be normalized to one leading
+\<^term>\<open>\<top>\<close>.\<close>
+lemma aforall_dependency_under_top:
+  shows \<open>(\<Sqinter>x. P x) \<longlongrightarrow> \<top> \<star> (\<Sqinter>y. P y)\<close>
+  by crush_base
+
+lemma aforall_dependency_under_scattered_tops:
+  shows \<open>(\<Sqinter>x. P x) \<longlongrightarrow> (\<Sqinter>y. P y) \<star> \<top> \<star> \<top>\<close>
+  by crush_base
+
+text\<open>An intersection preceded by \<^term>\<open>\<top>\<close> is split without
+carrying \<^term>\<open>\<top>\<close> into either subgoal.\<close>
+lemma aentails_int_intro_under_top:
+  assumes \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>
+      and \<open>\<alpha> \<longlongrightarrow> \<gamma>\<close>
+    shows \<open>\<alpha> \<longlongrightarrow> \<top> \<star> (\<beta> \<inter> \<gamma>)\<close>
+  using assms by crush_base
+
+text\<open>A dedicated rule likewise introduces a right-hand wand preceded by
+\<^term>\<open>\<top>\<close>, without carrying the \<^term>\<open>\<top>\<close> into the resulting
+subgoal.\<close>
+lemma awand_intro_under_top:
+  shows \<open>\<alpha> \<longlongrightarrow> \<top> \<star> (\<beta> \<Zsurj> (\<alpha> \<star> \<beta>))\<close>
+  by crush_base
+
+text\<open>Crush no longer removes a remaining right-hand \<^term>\<open>\<top>\<close> as a final
+fallback.\<close>
+lemma no_final_top_removal:
+  assumes expected:
+    \<open>crush_test_oracle (\<alpha> \<longlongrightarrow> \<top> \<star> \<beta>)\<close>
+  shows \<open>\<alpha> \<longlongrightarrow> \<top> \<star> \<beta>\<close>
+  apply (crush_base?)
+  by (rule crush_test_oracleD[OF expected])
+
+end
+
+subsubsection\<open>Undetermined witnesses in an upwards-closure obligation\<close>
+
+text\<open>\<^verbatim>\<open>ucincl_solve\<close> uses a final \<^verbatim>\<open>clarsimp\<close> only on schematic-free
+subgoals. A schematic surviving its bounded search is an undetermined witness,
+so the tactic leaves it to the caller. The conclusion of
+\<^verbatim>\<open>asepconj_multi_ucincl_member\<close> does not determine its factor witness; the
+test below requires \<^verbatim>\<open>ucincl_solve\<close> to decline that residual obligation:\<close>
+
+lemma
+  fixes \<Phi> :: \<open>'s::sepalg assert multiset\<close>
+  shows \<open>ucincl (\<star>\<star>\<Phi>)\<close>
+  apply (rule asepconj_multi_ucincl_member)
+  prefer 2 \<comment>\<open>the upwards-closure obligation on the factor still to be chosen\<close>
+  apply (fails \<open>ucincl_solve\<close>)
+  oops
+
 subsubsection\<open>Entailment simplification\<close>
 
 text\<open>\<^verbatim>\<open>aentails_simp_core\<close> attempts a single simplification step for a separating entailment.
@@ -488,8 +880,7 @@ notepad
 begin
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<phi>\<close>
-  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
-    apply aentails_simp_core \<comment>\<open>Floating assumptions and conclusions\<close>
+  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     apply aentails_simp_core \<comment>\<open>Hoisting pure assumptions\<close>
     apply aentails_simp_core \<comment>\<open>Splitting pure conclusions\<close>
     apply aentails_simp_core
@@ -503,7 +894,7 @@ begin
 next
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<phi>\<close>
-  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
     \<comment>\<open>The same again, but now in one step\<close>
     by aentails_simp_basic
 end
@@ -519,17 +910,39 @@ notepad
 begin
   fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<alpha>\<close>
-  from this have \<open>P \<Longrightarrow> \<alpha> \<star> \<langle>Q\<rangle> \<star> \<beta> \<star> \<langle>R\<rangle> \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<beta> \<star> \<alpha> \<star> \<langle>R\<rangle>\<close>
+  from this have \<open>P \<Longrightarrow> \<alpha> \<star> apure (Q) \<star> \<beta> \<star> apure (R) \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> apure (P) \<star> apure (Q) \<star> \<beta> \<star> \<alpha> \<star> apure (R)\<close>
     by aentails_simp_basic
 next
   \<comment>\<open>Note, however, that classical simplification is not performed:\<close>
   fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<alpha>\<close>
-  from this have \<open>P \<Longrightarrow> \<alpha> \<star> \<langle>Q\<rangle> \<star> \<beta> \<star> \<langle>R\<rangle> \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> \<langle>P \<and> Q\<rangle> \<star> \<beta> \<star> \<alpha> \<star> \<langle>R\<rangle>\<close>
+  from this have \<open>P \<Longrightarrow> \<alpha> \<star> apure (Q) \<star> \<beta> \<star> apure (R) \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> apure (P \<and> Q) \<star> \<beta> \<star> \<alpha> \<star> apure (R)\<close>
     apply aentails_simp_basic
     apply simp
     apply aentails_simp_basic
     done
+end
+
+subsubsection\<open>Precise pure assertions\<close>
+
+text\<open>The precise-pure hoists need no closure premise. On the conclusion
+side they leave a separating entailment against \<^term>\<open>apure (P)\<close>, allowing later
+spatial branches to continue. These examples exercise both directions through
+the public core method.\<close>
+
+notepad
+begin
+  fix \<alpha> :: \<open>'s::sepalg assert\<close> and P :: bool
+  have \<open>\<langle>P\<rangle> \<star> \<alpha> \<longlongrightarrow> \<alpha>\<close>
+    apply aentails_simp_core
+    by (simp add: aentails_refl)
+next
+  fix \<alpha> \<beta> :: \<open>'s::sepalg assert\<close> and P :: bool
+  assume \<open>P\<close>
+  have \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<alpha> \<star> \<beta>\<close>
+    apply aentails_simp_core
+     apply (rule apure_entailsR0[OF \<open>P\<close>])
+    by (rule aentails_refl)
 end
 
 subsubsection\<open>Spatial \<^verbatim>\<open>rule\<close>\<close>
@@ -595,6 +1008,11 @@ Conditional crules subsume ordinary spatial rules/drules and plain crules:
    \<open>UNIV [\<alpha>]\<longlongrightarrow>[R] \<beta>\<close>: no resource is matched on the LHS, while \<open>\<alpha>\<close> is
    consumed from the conclusions, \<open>\<beta>\<close> is produced as the result, and \<open>R\<close>
    is added alongside it on the RHS.
+
+The connective itself imposes no closure obligation on its result. A derived
+rule with no conclusion slot for produced resource must instead license that
+resource's disposal. For \<open>aentails_conditional_crule_R0\<close>, \<open>ucincl \<beta>\<close> is
+equivalent to disposing of the \<open>UNIV\<close> residue while retaining \<open>\<beta>\<close>.
 
 Below we demonstrate \<open>aentails_cond_crule\<close> in general form, then as a plain
 crule, and finally in the drule-like and rule-like degenerate forms.\<close>
@@ -686,7 +1104,7 @@ lemma
 subsubsection\<open>Strong conditional spatial \<open>crule\<close>\<close>
 
 text\<open>The \<^emph>\<open>strong\<close> variant \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close> is defined as
-\<open>\<alpha> \<longlongrightarrow> R \<star> (L \<Zsurj> \<beta>) \<and> ucincl \<beta>\<close>, internalising the \<open>L\<close>-to-\<open>R\<close> exchange using the
+\<open>\<alpha> \<longlongrightarrow> R \<star> (L \<Zsurj> \<beta>)\<close>, internalising the \<open>L\<close>-to-\<open>R\<close> exchange using the
 magic wand. Operationally, when the ordinary variant succeeds in closing the goal
 by producing \<open>R \<star> (L \<Zsurj> G)\<close> on the conclusions, the strong variant succeeds under
 the weaker condition that the \<open>L\<close>-consumption and the \<open>R\<close>-production can be
@@ -704,6 +1122,14 @@ The distinction only matters when \<^emph>\<open>both\<close> \<open>L\<close> a
     \<open>L\<close>-consumption vs \<open>R\<close>-production create a distinction, and the strong
     variant's wand-internalisation allows the residue to be closed more
     directly.\<close>
+
+lemma awand_mp_strong_crule_backward:
+  fixes \<alpha> \<beta> :: \<open>'s::sepalg assert\<close>
+  assumes uc_alpha: \<open>ucincl \<alpha>\<close>
+  shows \<open>(\<top> \<star> \<alpha>) \<star> (\<alpha> \<Zsurj> \<beta>) \<longlongrightarrow> \<beta>\<close>
+  supply uc_alpha [ucincl_intros]
+  by (crush_base
+    seplog cond crule add: awand_mp_strong_crule)
 
 subsection\<open>Saturating unfolding of definitions\<close>
 

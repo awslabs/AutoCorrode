@@ -85,7 +85,6 @@ definition poly_add_contract :: \<open>mlkem_poly \<Rightarrow> mlkem_poly \<Rig
                 \<langle>r = MLKEM_Specification.poly_add a b\<rangle> \<star>
                 \<langle>poly_wf r\<rangle>
       in make_function_contract pre post\<close>
-ucincl_auto poly_add_contract
 
 lemma poly_add_spec [crush_specs]:
   shows \<open>\<Gamma>; poly_add a b \<Turnstile>\<^sub>F poly_add_contract a b\<close>
@@ -96,8 +95,8 @@ lemma poly_add_spec [crush_specs]:
         rule_tac
           INV=\<open>\<lambda>_ i. \<Squnion> g.
             result_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>(array_splice i (MLKEM_Specification.poly_add a b) a)\<close>
-          and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-          and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+          and \<tau>=\<open>\<lambda>_. apure (False)\<close>
+          and \<theta>=\<open>\<lambda>_. apure (False)\<close>
         in wp_raw_for_loop_framedI'\<close>)
     using poly_add_splice_step poly_add_splice_full MLKEM_Specification.poly_add_wf
       apply (crush_base
@@ -138,7 +137,6 @@ definition poly_sub_contract :: \<open>mlkem_poly \<Rightarrow> mlkem_poly \<Rig
                 \<langle>r = MLKEM_Specification.poly_sub a b\<rangle> \<star>
                 \<langle>poly_wf r\<rangle>
       in make_function_contract pre post\<close>
-ucincl_auto poly_sub_contract
 
 lemma poly_sub_spec [crush_specs]:
   shows \<open>\<Gamma>; poly_sub a b \<Turnstile>\<^sub>F poly_sub_contract a b\<close>
@@ -149,8 +147,8 @@ lemma poly_sub_spec [crush_specs]:
         rule_tac
           INV=\<open>\<lambda>_ i. \<Squnion> g.
             result_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>(array_splice i (MLKEM_Specification.poly_sub a b) a)\<close>
-          and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
-          and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+          and \<tau>=\<open>\<lambda>_. apure (False)\<close>
+          and \<theta>=\<open>\<lambda>_. apure (False)\<close>
         in wp_raw_for_loop_framedI'\<close>)
     using poly_sub_splice_step poly_sub_splice_full MLKEM_Specification.poly_sub_wf
       apply (crush_base

@@ -116,7 +116,7 @@ qed
 corollary points_to_tagged_phys_byte_ucincl'':
   shows \<open>points_to_tagged_phys_byte pa \<pi> tag b \<star> UNIV = points_to_tagged_phys_byte pa \<pi> tag b\<close>
     and \<open>UNIV \<star> points_to_tagged_phys_byte pa \<pi> tag b = points_to_tagged_phys_byte pa \<pi> tag b\<close>
-    and \<open>points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>P\<rangle> = points_to_tagged_phys_byte pa \<pi> tag b \<sqinter> \<langle>P\<rangle>\<close>
+    and \<open>points_to_tagged_phys_byte pa \<pi> tag b \<star> apure P = points_to_tagged_phys_byte pa \<pi> tag b \<sqinter> apure P\<close>
 by (auto simp add: asepconj_comm asepconj_ident points_to_tagged_phys_byte_ucincl'
   asepconj_pure')
 
@@ -257,16 +257,16 @@ proof (ucincl_discharge \<open>intro satisfies_function_contractI\<close>; clars
     by (auto simp add: load_tagged_physical_address_core_is_local load_tagged_physical_address_def eval_abort_def)
   moreover from calculation have \<open>points_to_tagged_phys_byte pa \<pi> tag b \<turnstile>
       eval_value (yh \<Gamma>) (function_body (load_tagged_physical_address pa)) \<stileturn>\<^sub>R
-          (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<inter> \<langle>r = b\<rangle>)\<close>
+          (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>)\<close>
     by (force simp add: atriple_rel_def eval_value_def load_tagged_physical_address_def
       asepconj_False_True load_tagged_phys_byte_def urust_eval_predicate_load_tagged_physical_address_core)
   moreover from calculation have \<open>points_to_tagged_phys_byte pa \<pi> tag b \<turnstile> eval_return (yh \<Gamma>) (function_body (load_tagged_physical_address pa)) \<stileturn>\<^sub>R
-      (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<inter> \<langle>r = b\<rangle>)\<close>
+      (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>)\<close>
     by (clarsimp simp add: atriple_rel_def eval_return_def eval_value_def load_tagged_physical_address_def
       urust_eval_predicate_load_tagged_physical_address_core)
   moreover 
   have \<open>\<sigma> \<leadsto>\<^sub>a \<langle>yh \<Gamma>, function_body (load_tagged_physical_address pa)\<rangle> (a, \<sigma>') = False\<close>
-    if \<open>\<sigma> \<Turnstile> points_to_tagged_phys_byte pa \<pi> tag b \<star> \<top>\<close> for \<sigma> a \<sigma>'
+    if \<open>\<sigma> \<Turnstile> points_to_tagged_phys_byte pa \<pi> tag b\<close> for \<sigma> a \<sigma>'
     using that
     by (metis function_body.sel load_tagged_physical_address_def points_to_tagged_phys_byte_not_core 
         points_to_tagged_phys_byte_ucincl''(1)) 
@@ -274,7 +274,7 @@ proof (ucincl_discharge \<open>intro satisfies_function_contractI\<close>; clars
       eval_abort (yh \<Gamma>) (function_body (load_tagged_physical_address pa)) \<stileturn>\<^sub>R \<bottom>\<close>
     by (clarsimp simp add: eval_abort_def atriple_rel_def)
   ultimately show \<open>\<Gamma> ; points_to_tagged_phys_byte pa \<pi> tag b \<turnstile> function_body (load_tagged_physical_address pa) \<stileturn>
-    (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<inter> \<langle>r = b\<rangle>) \<bowtie> (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<inter> \<langle>r = b\<rangle>) \<bowtie> \<bottom>\<close>
+    (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>) \<bowtie> (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>) \<bowtie> \<bottom>\<close>
     by (intro sstripleI; clarsimp)
 qed
 
@@ -431,10 +431,8 @@ using assms proof (induction n arbitrary: \<sigma> pa)
     by force
   moreover from calculation have \<open>\<sigma> \<Turnstile> points_to_tagged_phys_byte pa \<top> tag (f pa)\<close>
     by (force intro: points_to_tagged_phys_byteI)
-  moreover from calculation have \<open>\<sigma> \<Turnstile> points_to_tagged_phys_byte pa \<top> tag (f pa) \<star> \<top>\<close>
-    by (subst asepconj_ident2) auto
   ultimately show \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.tagged_physical_block pa 0 tag f\<close>
-    by (clarsimp simp add: asepconj_simp)
+    by (clarsimp simp add: asepconj_simp asepconj_emp_unit)
 next
      fix n \<sigma> pa
   assume \<open>is_aligned pa (Suc n)\<close>
@@ -529,10 +527,8 @@ proof -
   qed 
   moreover  {
        fix \<sigma> e
-    assume \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.memset_tagged_block_pre pa n tag \<star> UNIV\<close>
+    assume \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.memset_tagged_block_pre pa n tag\<close>
        and \<open>physical_memory_memset_block \<sigma> pa n b = Inl e\<close>
-    moreover from this have \<open>ucincl (raw_tagged_pmem_defs.memset_tagged_block_pre pa n tag)\<close>
-      by ucincl_solve
     moreover from calculation have \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.memset_tagged_block_pre pa n tag\<close>
       by (auto simp add: asepconj_ident2)
     moreover from calculation have \<open>\<sigma> \<Turnstile> \<star>\<star> {# \<Union> (range (points_to_tagged_phys_byte a \<top> tag)) . a \<leftarrow> mset_set (block_range pa n) #}\<close>
@@ -544,10 +540,6 @@ proof -
     ultimately have \<open>False\<close>
       by clarsimp
   }
-  moreover have \<open>ucincl (\<star>\<star> {# \<Union> (range (points_to_tagged_phys_byte a \<top> tag)) . a \<leftarrow> mset_set (block_range pa n) #})\<close>
-    by ucincl_solve
-  moreover have \<open>ucincl (raw_tagged_pmem_defs.memset_tagged_block_post pa n tag b)\<close>
-    by ucincl_solve
   moreover from calculation assms have \<open>is_local (\<lambda>\<sigma> (x, y). \<sigma> \<leadsto>\<^sub>v \<langle>yh \<Gamma>, function_body (memset_tagged_phys_block pa n b)\<rangle> (x,y)) (\<star>\<star> {# \<Union> (range (points_to_tagged_phys_byte a \<top> tag)) . a \<leftarrow> mset_set (block_range pa n) #})\<close>
     by (simp add: memset_phys_block_core_is_local memset_tagged_phys_block_def)
   moreover from calculation assms have \<open>is_local (\<lambda>\<sigma> (x, y). \<sigma> \<leadsto>\<^sub>r \<langle>yh \<Gamma>,function_body (memset_tagged_phys_block pa n b)\<rangle> (x,y)) (\<star>\<star> {# \<Union> (range (points_to_tagged_phys_byte a \<top> tag)) . a \<leftarrow> mset_set (block_range pa n) #})\<close>
@@ -567,20 +559,6 @@ qed
 
 named_theorems asat_elims
 
-lemma asat_multiE:
-  assumes \<open>\<sigma> \<Turnstile> \<star>\<star> \<Phi>\<close>
-     and \<open>\<And>x. x \<in># \<Phi> \<Longrightarrow> ucincl x\<close>
-     and \<open>(\<And>\<phi>. \<phi> \<in># \<Phi> \<Longrightarrow> \<sigma> \<Turnstile> \<phi>) \<Longrightarrow> R\<close>
-   shows R 
-  by (metis aentailsE aentails_cancel_r asepconj_add_mset assms multi_member_split)
-
-corollary asat_multiE2[asat_elims]:
-  assumes \<open>\<sigma> \<Turnstile> \<star>\<star>{# \<xi> x . x \<leftarrow> ms #}\<close>
-     and \<open>\<And>x. x \<in># ms \<Longrightarrow> ucincl (\<xi> x)\<close>
-     and \<open>(\<And>x. x \<in># ms \<Longrightarrow> \<sigma> \<Turnstile> \<xi> x) \<Longrightarrow> R\<close>
-   shows R
-  using assms by (elim asat_multiE; clarsimp)
-
 lemma asat_asepconjE[asat_elims]:
   assumes \<open>\<sigma> \<Turnstile> \<alpha> \<star> \<beta>\<close>
      and \<open>ucincl \<alpha>\<close>
@@ -588,6 +566,16 @@ lemma asat_asepconjE[asat_elims]:
      and \<open>\<sigma> \<Turnstile> \<alpha> \<Longrightarrow> \<sigma> \<Turnstile> \<beta> \<Longrightarrow> R\<close>
    shows R
   using assms by (meson asepconj_strengthenE asepconj_strengthenE2)
+
+text\<open>An exact iterated conjunction yields each factor with the remaining state as a frame.\<close>
+lemma asat_multi_focusE:
+  assumes \<open>\<sigma> \<Turnstile> \<star>\<star> {# \<phi> x. x \<leftarrow> xs #}\<close>
+      and \<open>(\<And>x. x \<in># xs \<Longrightarrow> \<sigma> \<Turnstile> \<phi> x \<star> \<top>) \<Longrightarrow> R\<close>
+    shows \<open>R\<close>
+  using assms
+  apply (erule_tac meta_impE; simp?)
+  by (force simp add: asat_def asepconj_def asepconj_add_mset
+      dest!: multi_member_split)
 
 declare apureE[asat_elims]
   and asat_existsE[asat_elims]
@@ -599,10 +587,14 @@ lemma tagged_physical_block_byte_state:
       and \<open>x \<in> block_range pa n\<close>
     shows \<open>physical_memory_lookup \<sigma> x = Tagged \<top> tag (f x)\<close>
 proof -
-  have \<open>\<And>a. a \<in> block_range pa n \<Longrightarrow> \<sigma> \<Turnstile> points_to_tagged_phys_byte a \<top> tag (f a)\<close>
-    using assms by (auto simp: ucincl_intros elim!: asat_elims)
-  with \<open>x \<in> block_range pa n\<close> show ?thesis
-    using nonempty_share_top_eq top.extremum_unique by fastforce
+  from assms have \<open>a \<in> block_range pa n \<Longrightarrow> \<sigma> \<Turnstile> points_to_tagged_phys_byte a \<top> tag (f a) \<star> UNIV\<close> for a
+    apply (elim asat_multi_focusE)
+    apply (drule meta_spec[of _ a])
+    by (clarsimp simp add: asepconj_Inf_distrib asepconj_assoc)
+  from this[OF \<open>x \<in> block_range pa n\<close>] show ?thesis
+    apply (auto simp add: points_to_tagged_phys_byte_ucincl' elim!: asat_asepconjE)
+    using nonempty_share_top_eq top.extremum_unique
+    by (fastforce simp add: asat_def points_to_tagged_phys_byte_def)
 qed
 
 lemma taggable_physical_block_byte_state:
@@ -610,10 +602,22 @@ lemma taggable_physical_block_byte_state:
       and \<open>x \<in> block_range pa n\<close>
     shows \<open>\<exists>tag'. tag \<noteq> tag' \<and> physical_memory_lookup \<sigma> x = Tagged \<top> tag' (f x)\<close>
 proof -
-  obtain tag' where \<open>\<sigma> \<Turnstile> \<langle>tag' \<noteq> tag\<rangle> \<star> points_to_tagged_phys_byte x \<top> tag' (f x)\<close>
-    using assms by (force simp: ucincl_IntE ucincl_Un ucincl_apure ucincl_asepconjL elim!: asat_elims)
-  with \<open>x \<in> block_range pa n\<close> show ?thesis
-    by (auto simp: ucincl_apure nonempty_share_top_eq top.extremum_unique points_to_tagged_phys_byte_ucincl' elim!: asat_elims)
+  obtain tag' where sat:
+      \<open>\<sigma> \<Turnstile> \<langle>tag' \<noteq> tag\<rangle> \<star> points_to_tagged_phys_byte x \<top> tag' (f x) \<star> UNIV\<close>
+    using assms
+    apply (elim asat_multi_focusE)
+    apply (drule meta_spec[of _ x])
+    by (clarsimp simp add: asepconj_Inf_distrib asepconj_assoc)
+  \<comment>\<open>The precise-pure tag constraint separates without a closure premise.\<close>
+  from sat have ne: \<open>tag' \<noteq> tag\<close>
+    and byte: \<open>\<sigma> \<Turnstile> points_to_tagged_phys_byte x \<top> tag' (f x) \<star> UNIV\<close>
+    by (simp_all add: asat_apure_precise_distrib)
+  from byte have \<open>physical_memory_lookup \<sigma> x = Tagged \<top> tag' (f x)\<close>
+    apply (auto simp add: points_to_tagged_phys_byte_ucincl' elim!: asat_asepconjE)
+    using nonempty_share_top_eq top.extremum_unique
+    by (fastforce simp add: asat_def points_to_tagged_phys_byte_def)
+  with ne show ?thesis
+    by (intro exI[of _ tag']) auto
 qed
 
 lemma taggable_physical_block_byte_stateE:
@@ -708,10 +712,8 @@ proof (intro satisfies_function_contractI; clarsimp;  ucincl_solve?)
   moreover {
       note calculation_thus_far = this
        fix \<sigma> a \<sigma>'
-    assume \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.taggable_physical_block pa n tag f \<star> \<top>\<close>
+    assume \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.taggable_physical_block pa n tag f\<close>
        and \<open>\<sigma> \<leadsto>\<^sub>a \<langle>yh \<Gamma>,function_body (tag_physical_page pa n tag)\<rangle> (a, \<sigma>')\<close>
-    moreover have \<open>ucincl (raw_tagged_pmem_defs.taggable_physical_block pa n tag f)\<close>
-      by ucincl_solve
     moreover from calculation have \<open>\<sigma> \<Turnstile> raw_tagged_pmem_defs.taggable_physical_block pa n tag f\<close>
       using asepconj_strengthenE ucincl_UNIV by blast
     ultimately have \<open>False\<close>
@@ -729,12 +731,6 @@ proof (intro satisfies_function_contractI; clarsimp;  ucincl_solve?)
      \<stileturn> (\<lambda>_. raw_tagged_pmem_defs.tagged_physical_block pa n tag f) \<bowtie> (\<lambda>_. raw_tagged_pmem_defs.tagged_physical_block pa n tag f) \<bowtie> \<bottom>\<close>
     by (intro sstriple_from_stripleI) (auto simp add: eval_value_def eval_return_def eval_abort_def)
 qed
-
-lemma memset_phys_contract_ucincl:
-  shows [ucincl_intros]: \<open>ucincl (function_contract_pre (raw_tagged_pmem_defs.memset_tagged_phys_contract pa l tag b))\<close>
-     and [ucincl_intros]: \<open>ucincl (function_contract_post (raw_tagged_pmem_defs.memset_tagged_phys_contract pa l tag b) r)\<close>
-     and [ucincl_intros]: \<open>ucincl (function_contract_abort (raw_tagged_pmem_defs.memset_tagged_phys_contract pa l tag b) r')\<close> 
-  by (ucincl_solve simp: raw_tagged_pmem_defs.memset_tagged_phys_contract_def)
 
 lemma block_range_to_page_range:
   assumes \<open>is_aligned adr l\<close>
@@ -813,14 +809,14 @@ lemma memset_phys_spec[raw_tagged_pmem_spec_specs]:
     and wp_cong'[crush_cong del]
   shows \<open>\<Gamma>; memset_tagged_phys pa l b \<Turnstile>\<^sub>F raw_tagged_pmem_defs.memset_tagged_phys_contract pa l tag b\<close>
   apply (crush_boot f: memset_tagged_phys_def contract: raw_tagged_pmem_defs.memset_tagged_phys_contract_def)
-  apply (clarsimp simp add: range_to_aligned_blocks_block_range)
+  apply (clarsimp simp add: range_to_aligned_blocks_block_range mset_set_empty_iff)
   apply (crush_base simp add: list_into_iter_def)
   apply (rule_tac \<tau>=\<open>\<bottom>\<close> and
           INV=\<open>\<lambda>ls i.
             \<star>\<star> {# \<Union> (range
                  (points_to_tagged_phys_byte a \<top> tag)) . a \<leftarrow> mset_set (\<Union>an\<in>set (List.drop i ls). block_range (fst an) (snd an)) #} \<star>
             \<star>\<star> {# points_to_tagged_phys_byte a \<top> tag b . a \<leftarrow> mset_set (\<Union>an\<in>set (List.take i ls). block_range (fst an) (snd an)) #}\<close>
-      in wp_raw_for_loop_framedI', ucincl_solve)
+      in wp_raw_for_loop_framedI')
    apply (fastcrush_base split: prod.splits simp add: take_Suc_conv_app_nth drop_Suc_nth)
   subgoal for i
     apply (rule wp_callI[OF memset_phys_block_spec]; (simp add: PMEM_TRIE_ADDRESS_WIDTH_def)?)
@@ -838,7 +834,7 @@ lemma memset_phys_spec[raw_tagged_pmem_spec_specs]:
     apply (subst mset_set_Union; (simp add: finite_block_range)?) 
      apply (safe; clarsimp simp add: raw_tagged_pmem_defs.is_within_bounds_def in_set_conv_nth)
      apply (case_tac \<open>range_to_aligned_blocks pa l ! i\<close>; clarsimp)
-     apply (meson order_less_trans range_to_aligned_blocks_disjoint)
+     using range_to_aligned_blocks_disjoint [where j=i] apply force
     apply fastcrush_base
     done
   done
@@ -934,7 +930,8 @@ lemma physical_memory_singleton_tagged_split_alt'':
     fixes sh1 sh2 :: nonempty_share
   assumes \<open>pa < PMEM_TRIE_ADDRESS_LIMIT\<close>
     shows \<open>{PSINGLE pa v sh1 tag} \<star> {PSINGLE pa v' sh2 tag'} \<star> \<top> =
-             {PSINGLE pa v (sh1 + sh2) tag} \<star> \<langle>tag = tag'\<rangle> \<star> \<langle>v = v'\<rangle> \<star> \<langle>\<epsilon> sh1 \<sharp> \<epsilon> sh2\<rangle>\<close>
+             {PSINGLE pa v (sh1 + sh2) tag} \<star> apure (tag = tag') \<star> apure (v = v') \<star>
+               apure (\<epsilon> sh1 \<sharp> \<epsilon> sh2)\<close>
   using assms by (cases \<open>v = v'\<close>; cases \<open>tag = tag'\<close>; cases \<open>\<epsilon> sh1 \<sharp> \<epsilon> sh2\<close>)
   (auto simp flip: asepconj_assoc simp add:
     physical_memory_singleton_tagged_split_alt' simp add: asepconj_simp apure_def)
@@ -1055,10 +1052,6 @@ next
       by (metis Abs_nonempty_share_inverse less_supI1 mem_Collect_eq plus_share_def zero_share_def)
     moreover from this have \<open>shA + shB = \<epsilon> (shA' + shB')\<close>
       by (simp add: plus_nonempty_share.rep_eq plus_share_def)
-    moreover from calculation and points_to_tagged_phys_byte_singleton have
-        \<open>P(pa:(shA + shB):tag:b)  = {PSINGLE pa b (shA' + shB') tag } \<star> \<top>\<close> and
-        \<open>P(pa:shA:tag:b) = {PSINGLE pa b shA' tag} \<star> \<top>\<close> and \<open>P(pa:shB:tag':b') = {PSINGLE pa b' shB' tag'} \<star> \<top>\<close>
-      by (metis less)+
     ultimately show ?thesis
       using less
       apply (simp add: points_to_tagged_phys_byte_singleton)
@@ -1067,10 +1060,8 @@ next
       apply (aentails_pick_assm 1, clarsimp simp add: physical_memory_singleton_tagged_split_alt'')
       apply (aentails_cancel, clarsimp simp add: asepconj_simp ucincl_intros aentails_simp is_sat_pure 
         intro!: apure_entailsR0)
-      apply (aentails_pick_concl 2, clarsimp simp add: asepconj_simp)
-      apply (aentails_pick_concl 1, clarsimp simp add: physical_memory_singleton_tagged_split_alt'')
-      apply (aentails_cancel, clarsimp simp add: asepconj_simp ucincl_intros aentails_simp is_sat_pure 
-        intro!: apure_entailsR0)
+      apply (crush_base seplog drule add:
+        physical_memory_singleton_tagged_split_alt[THEN aentails_refl_eq])
       done
    qed
  qed
@@ -1087,7 +1078,7 @@ using assms by (fastcrush_base simp add: points_to_tagged_phys_byte_split_core)
 lemma points_to_tagged_phys_byte_combine [raw_tagged_pmem_spec_specs]:
   fixes pa shA shB b b'
   shows \<open>P(pa:shA:tag:b) \<star> P(pa:shB:tag':b') \<longlongrightarrow> P(pa:(shA + shB):tag:b) \<star> \<langle>tag = tag'\<rangle> \<star> \<langle>b = b'\<rangle> \<star> \<langle>shA \<sharp> shB\<rangle>\<close>
-by (clarsimp simp add: points_to_tagged_phys_byte_split_core) fastcrush_base
+  by (clarsimp simp add: points_to_tagged_phys_byte_split_core) fastcrush_base
 
 no_notation physical_memory_singleton_tagged ("PSINGLE")
 no_notation points_to_tagged_phys_byte ("P'(_:_:_')")

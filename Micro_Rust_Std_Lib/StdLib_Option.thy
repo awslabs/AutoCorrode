@@ -22,7 +22,6 @@ definition option_expect_contract :: \<open>'a option \<Rightarrow> String.liter
      let pre  = \<langle>opt \<noteq> None\<rangle>;
          post = \<lambda>r. \<langle>r = the opt\<rangle>
       in make_function_contract pre post\<close>
-ucincl_auto option_expect_contract
 
 lemma option_expect_spec [crush_specs]:
   shows \<open>\<Gamma>; option_expect res m \<Turnstile>\<^sub>F option_expect_contract res v\<close>
@@ -40,7 +39,6 @@ definition option_unwrap_contract ::
   where [crush_contracts]: \<open>option_unwrap_contract self v \<equiv>
     let pre = \<langle>self = Some v\<rangle>; post = \<lambda>r. \<langle>r = v\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto option_unwrap_contract
 
 lemma option_unwrap_spec [crush_specs]:
   shows \<open>\<Gamma>; option_unwrap res \<Turnstile>\<^sub>F option_unwrap_contract res v\<close>
@@ -59,9 +57,8 @@ micro_rust_notation (call) urust_func_option_is_none ("is_none")
 definition option_is_none_contract :: 
   \<open>'a option \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>option_is_none_contract res \<equiv>
-    let pre = UNIV; post = \<lambda>r. \<langle>r = Option.is_none res\<rangle>
+    let pre = emp; post = \<lambda>r. \<langle>r = Option.is_none res\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto option_is_none_contract
 
 lemma option_is_none_spec [crush_specs]:
   shows \<open>\<Gamma>; urust_func_option_is_none res \<Turnstile>\<^sub>F option_is_none_contract res\<close>
@@ -80,10 +77,9 @@ micro_rust_notation (call) urust_func_option_is_some ("is_some")
 definition option_is_some_contract :: 
   \<open>'a option \<Rightarrow> ('s::{sepalg}, bool, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>option_is_some_contract res \<equiv>
-    let pre  = UNIV;
+    let pre  = emp;
         post = \<lambda>r. \<langle>r \<longleftrightarrow> \<not>Option.is_none res\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto option_is_some_contract
 
 lemma option_is_some_spec [crush_specs]:
   shows \<open>\<Gamma>; urust_func_option_is_some res \<Turnstile>\<^sub>F option_is_some_contract res\<close>
@@ -108,10 +104,9 @@ by (auto simp add: ok_or_pure_def)
 
 definition option_ok_or_contract :: \<open>'v option \<Rightarrow> 'e \<Rightarrow> ('s::{sepalg}, ('v, 'e) result, 'abort) function_contract\<close>
   where [crush_contracts]: \<open>option_ok_or_contract opt e \<equiv>
-    let pre = UNIV;
+    let pre = emp;
         post = \<lambda>r. \<langle>r = ok_or_pure opt e\<rangle>
      in make_function_contract pre post\<close>
-ucincl_auto option_ok_or_contract
 
 lemma option_ok_or_spec [crush_specs]:
   shows \<open>\<Gamma>; ok_or opt e \<Turnstile>\<^sub>F option_ok_or_contract opt e\<close>
@@ -140,7 +135,6 @@ definition option_as_mut_contract :: \<open>'b \<Rightarrow> ('a, 'b, 'v option)
         post = \<lambda>res. ref \<mapsto>\<langle>\<top>\<rangle> g\<down>opt \<star> \<langle>res = 
            (if opt = None then None else Some (focus_option ref))\<rangle>
     in make_function_contract pre post\<close>
-ucincl_auto option_as_mut_contract
 
 lemma option_as_mut_spec [crush_specs]:
   shows \<open>\<Gamma>; option_as_mut ref \<Turnstile>\<^sub>F option_as_mut_contract g ref opt\<close>
@@ -163,7 +157,6 @@ definition take_mut_ref_option_contract :: \<open>('a, 'b, 'v option) Global_Sto
     let pre = ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v;
         post = \<lambda>r. (\<langle>r=v\<rangle> \<star> ptr \<mapsto>\<langle>\<top>\<rangle> (\<lambda>_. None)\<sqdot>(g\<down>v))
      in make_function_contract pre post\<close>
-ucincl_auto take_mut_ref_option_contract
 
 lemma take_mut_ref_option_spec[crush_specs]:
   shows \<open>\<Gamma>; take_mut_ref_option ptr \<Turnstile>\<^sub>F take_mut_ref_option_contract ptr g v\<close>

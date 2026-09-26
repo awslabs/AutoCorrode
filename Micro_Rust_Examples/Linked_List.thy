@@ -89,11 +89,9 @@ fun ll_points_to :: \<open>'t list         \<comment> \<open>abstracted prefix o
 
 lemma ll_points_to_None:
   shows \<open>ll_points_to ds None rem = \<langle>ds = []\<rangle> \<star> \<langle>rem = None\<rangle>\<close>
-by (cases ds; clarsimp simp add: asepconj_simp apure_def)
+by (cases ds; clarsimp simp add: asepconj_simp HOL.eq_commute)
 
-lemma ucincl_ll_points_to [ucincl_intros]:
-  shows \<open>ucincl (ll_points_to ds ll rem)\<close>
-by (induction ds; cases ll; auto intro: ucincl_intros)
+\<comment>\<open>The predicate owns exactly the represented list and is not upwards closed.\<close>
 
 definition reverse_unlink_contract ::
    \<open>64 word
@@ -115,8 +113,6 @@ definition reverse_unlink_contract ::
        \<star> \<langle>b = rem\<rangle> \<comment>\<open>Tail of initial list\<close>
        \<star> ll_points_to (rev ts) a None \<comment>\<open>Reversed head of initial list\<close>
     ) in  make_function_contract pre post\<close>
-ucincl_proof reverse_unlink_contract
-  by (auto split!: prod.splits intro: ucincl_intros)
 
 lemma reverse_unlink_spec [crush_specs]:
   shows \<open>\<Gamma>; reverse_unlink n ll tmp0 tmp1 \<Turnstile>\<^sub>F reverse_unlink_contract n ll tmp0 tmp1 ts rem\<close>
@@ -124,12 +120,13 @@ lemma reverse_unlink_spec [crush_specs]:
   apply crush_base
   apply (ucincl_discharge\<open>
     rule_tac INV=\<open>\<lambda>_ i.
+       can_alloc_reference \<star>
        (\<Squnion>g_last g_cur v_last v_cur.
            tmp1\<mapsto>\<langle>\<top>\<rangle> g_last\<down>v_last \<star>
            tmp0\<mapsto>\<langle>\<top>\<rangle> g_cur\<down>v_cur \<star>
            ll_points_to (rev (take i ts)) v_last None \<star>
            ll_points_to (drop i ts) v_cur rem
-    )\<close> and \<tau>=\<open>\<lambda>_.\<langle>False\<rangle>\<close>
+    )\<close> and \<tau>=\<open>\<lambda>_.apure (False)\<close>
     in wp_raw_for_loop_framedI'\<close>)
   apply (fastcrush_base simp add: Many_More.drop_Suc_nth) 
   apply (fastcrush_base split!: option.splits simp add: take_suc_rev')
@@ -169,14 +166,12 @@ definition reverse_unlink'_contract ::
    \<Rightarrow> ('caddr, 'gv) gref option
    \<Rightarrow> ('s, ('caddr, 'gv) gref option \<times> ('caddr, 'gv) gref option \<times> tnil, 'abort) function_contract\<close> where
   \<open>reverse_unlink'_contract n ll ts rem \<equiv>
-     let pre = can_alloc_reference \<star> ll_points_to ts ll rem \<star> \<langle>unat n = length ts\<rangle> in
+     let pre = can_alloc_reference \<star> ll_points_to ts ll rem \<star> apure (unat n = length ts) in
      let post = (\<lambda>r. let (a,b,_) = r in
          can_alloc_reference
-       \<star> \<langle>b = rem\<rangle> \<comment>\<open>Tail of initial list\<close>
+       \<star> apure (b = rem) \<comment>\<open>Tail of initial list\<close>
        \<star> ll_points_to (rev ts) a None \<comment>\<open>Reversed head of initial list\<close>
     ) in  make_function_contract pre post\<close>
-ucincl_proof reverse_unlink'_contract
-  by (auto split!: prod.splits intro: ucincl_intros)
 
 lemma reverse_unlink'_spec:
   shows \<open>\<Gamma>; reverse_unlink' n ll \<Turnstile>\<^sub>F reverse_unlink'_contract n ll ts rem\<close>

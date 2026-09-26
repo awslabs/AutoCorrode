@@ -471,6 +471,25 @@ lemma asepconj_ident2 [asepconj_simp]:
     shows \<open>\<phi> \<star> \<top> = \<phi>\<close>
 using assms ucincl_alt by simp
 
+text \<open>The empty assertion owns exactly the empty machine state and is the
+unconditional unit of separating conjunction.\<close>
+definition emp :: \<open>'a assert\<close> where
+  \<open>emp \<equiv> {0}\<close>
+
+lemma asat_emp [asat_simp, simp]:
+  shows \<open>x \<Turnstile> emp \<longleftrightarrow> x = 0\<close>
+by (simp add: asat_def emp_def)
+
+lemma asepconj_emp_unit [asepconj_simp]:
+  shows \<open>\<phi> \<star> emp = \<phi>\<close> and \<open>emp \<star> \<phi> = \<phi>\<close>
+proof -
+  show \<open>\<phi> \<star> emp = \<phi>\<close>
+    by (intro asat_semequivI) (auto simp add: asat_emp elim!: asepconjE
+      intro!: asepconjI [where ?z=0])
+  from this show \<open>emp \<star> \<phi> = \<phi>\<close>
+    by (simp add: asepconj_comm)
+qed
+
 text \<open>The Boolean truth value is \<^emph>\<open>idempotent\<close> with respect to the separating conjunction:\<close>
 lemma asepconj_UNIV_idempotent [asepconj_simp]:
   shows \<open>\<top> \<star> \<top> = \<top>\<close>
@@ -507,10 +526,21 @@ lemma ucincl_asepconjL [ucincl_intros]:
     shows \<open>ucincl (\<phi> \<star> \<psi>)\<close>
 using assms by (simp only: ucincl_alt) (metis asepconj_assoc asepconj_comm)
 
-lemma ucincl_asepconjR:
+\<comment>\<open>Both orientations participate in closure search. Each leaves a strictly smaller
+\<^const>\<open>ucincl\<close> goal, and the left-oriented rule is tried first.\<close>
+lemma ucincl_asepconjR [ucincl_intros]:
   assumes \<open>ucincl \<psi>\<close>
     shows \<open>ucincl (\<phi> \<star> \<psi>)\<close>
 using assms asepconj_comm ucincl_asepconjL by force
+
+notepad
+begin
+  \<comment>\<open>The theorem bundle closes a right-oriented conjunction.\<close>
+  fix \<phi> \<psi> :: \<open>'a assert\<close>
+  assume \<open>ucincl \<psi>\<close>
+  then have \<open>ucincl (\<phi> \<star> \<psi>)\<close>
+    by (intro ucincl_intros)
+end
 
 \<comment>\<open>TODO: Remove this\<close>
 lemmas ucincl_asepconj = ucincl_asepconjL
@@ -633,28 +663,27 @@ proof (intro aentailsI)
     by (auto intro: asepconjI)
 qed
 
+text \<open>Appending \<^term>\<open>\<psi>'\<close> without consuming resource requires it to hold on the
+empty state:\<close>
 lemma asepconj_mono6:
   assumes \<open>\<phi> \<longlongrightarrow> \<phi>'\<close>
-      and \<open>\<top> \<longlongrightarrow> \<psi>'\<close>
+      and \<open>emp \<longlongrightarrow> \<psi>'\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<phi>' \<star> \<psi>'\<close>
-using assms asepconj_mono4 by (simp add: aentails_def asepconj_weakenI)
+using assms by (simp add: aentails_def asepconj_weakenI)
 
-lemma asepconj_mono7:
-  assumes \<open>\<phi> \<longlongrightarrow> \<phi>'\<close>
-    and \<open>ucincl \<phi>'\<close>
-  shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<phi>'\<close>
-using assms by (metis aentails_true asepconj_ident2 asepconj_mono4)
+\<comment>\<open>\<^verbatim>\<open>asepconj_mono7\<close> is stated with the disposal rules below.\<close>
 
 lemma asepconj_mono:
   assumes \<open>\<psi> \<longlongrightarrow> \<xi>\<close>
     shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<phi> \<star> \<xi>\<close>
 using asepconj_mono4 aentails_refl assms by blast
 
+text \<open>Weakening \<^term>\<open>\<phi>\<close> to \<^term>\<open>\<phi> \<star> \<xi>\<close> can append only a factor
+satisfied by the empty state:\<close>
 lemma asepconj_mono5:
-  assumes \<open>ucincl \<phi>\<close>
-      and \<open>\<top> \<longlongrightarrow> \<xi>\<close>
+  assumes \<open>emp \<longlongrightarrow> \<xi>\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<phi> \<star> \<xi>\<close>
-using assms by (metis aentails_refl asepconj_mono4 asepconj_ident2)
+using assms by (metis asepconj_emp_unit(1) asepconj_mono)
 
 lemma asepconj_mono3:
   assumes \<open>\<phi> = \<phi>'\<close>
@@ -678,17 +707,134 @@ lemma asepconj_mono_sym:
     shows \<open>\<phi> \<star> \<xi> \<longlongrightarrow> \<pi> \<star> \<psi>\<close>
 using assms by (metis asepconj_comm asepconj_mono4)
 
-text \<open>The following are primitive \<^emph>\<open>cancellation\<close> lemmas allowing us to appeal directly to an
-assumption appearing within our set of assumption in an entailment:\<close>
+text \<open>Discardability is the explicit licence required to forget a resource.\<close>
+definition discardable_in :: \<open>'a assert \<Rightarrow> 'a assert \<Rightarrow> bool\<close> where
+  \<open>discardable_in \<delta> \<rho> \<equiv> \<delta> \<star> \<rho> \<longlongrightarrow> \<rho>\<close>
+
+named_theorems discardable_in_intros
+
+text \<open>\<^term>\<open>discardable_in \<delta> \<rho>\<close> means that \<^term>\<open>\<delta>\<close> may be dropped
+while \<^term>\<open>\<rho>\<close> is retained. The relation is contextual because the retained
+assertion may absorb resource owned by the discarded one. Generic rules that
+produce entailment or closure obligations stay outside
+\<^verbatim>\<open>discardable_in_intros\<close>.\<close>
+lemma discardable_in_aentails_empI:
+  assumes \<open>\<delta> \<longlongrightarrow> emp\<close>
+    shows \<open>discardable_in \<delta> \<rho>\<close>
+proof -
+  from assms have \<open>\<delta> \<star> \<rho> \<longlongrightarrow> emp \<star> \<rho>\<close>
+    by (rule asepconj_mono2)
+  then show ?thesis
+    by (simp add: discardable_in_def asepconj_emp_unit(2))
+qed
+
+lemma discardable_in_empI [discardable_in_intros]:
+  shows \<open>discardable_in emp \<rho>\<close>
+by (rule discardable_in_aentails_empI[OF aentails_refl])
+
+text \<open>Discardability composes over separating conjunction.\<close>
+lemma discardable_in_conj [discardable_in_intros]:
+  assumes \<open>discardable_in \<phi> \<rho>\<close>
+      and \<open>discardable_in \<psi> \<rho>\<close>
+    shows \<open>discardable_in (\<phi> \<star> \<psi>) \<rho>\<close>
+proof -
+  from assms(2) have \<open>\<phi> \<star> \<psi> \<star> \<rho> \<longlongrightarrow> \<phi> \<star> \<rho>\<close>
+    by (simp add: discardable_in_def asepconj_mono)
+  with assms(1) show ?thesis
+    by (simp add: discardable_in_def asepconj_assoc aentails_trans')
+qed
+
+lemma discardable_in_ucinclI:
+  assumes \<open>ucincl \<rho>\<close>
+    shows \<open>discardable_in \<delta> \<rho>\<close>
+proof -
+  have \<open>\<delta> \<star> \<rho> \<longlongrightarrow> \<top> \<star> \<rho>\<close>
+    by (intro asepconj_mono2 aentails_true)
+  then show ?thesis
+    by (simp add: discardable_in_def asepconj_ident assms)
+qed
+
+text \<open>Retaining an assertion while discarding arbitrary resource is exactly
+upwards-closure.\<close>
+lemma discardable_in_univ_iff_ucincl:
+  shows \<open>discardable_in \<top> \<rho> \<longleftrightarrow> ucincl \<rho>\<close>
+proof
+  assume \<open>discardable_in \<top> \<rho>\<close>
+  have \<open>\<rho> \<longlongrightarrow> \<rho> \<star> \<top>\<close>
+    by (rule asepconj_mono6[OF aentails_refl aentails_true])
+  moreover from \<open>discardable_in \<top> \<rho>\<close> have \<open>\<rho> \<star> \<top> \<longlongrightarrow> \<rho>\<close>
+    by (simp add: discardable_in_def asepconj_comm)
+  ultimately have \<open>\<rho> = \<rho> \<star> \<top>\<close>
+    by (rule aentails_eq)
+  then show \<open>ucincl \<rho>\<close>
+    by (simp add: ucincl_alt)
+next
+  assume \<open>ucincl \<rho>\<close>
+  then show \<open>discardable_in \<top> \<rho>\<close>
+    by (rule discardable_in_ucinclI)
+qed
+
+text \<open>Cancellation consumes a discardability licence for the removed factor.\<close>
+lemma aentails_cancel_r_discardable:
+  assumes \<open>discardable_in \<psi> \<phi>\<close>
+    shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<phi>\<close>
+proof -
+  from assms have \<open>\<psi> \<star> \<phi> \<longlongrightarrow> \<phi>\<close>
+    by (simp add: discardable_in_def)
+  then show ?thesis
+    by (simp add: asepconj_comm)
+qed
+
+lemma aentails_cancel_l_discardable:
+  assumes \<open>discardable_in \<phi> \<psi>\<close>
+    shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<psi>\<close>
+using assms by (simp add: discardable_in_def)
+
+text \<open>Upwards-closed retention is the unrestricted disposal instance.\<close>
 lemma aentails_cancel_r:
   assumes \<open>ucincl \<phi>\<close>
     shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<phi>\<close>
-using assms by (metis aentails_true asepconj_ident2 asepconj_mono)
+using assms by (intro aentails_cancel_r_discardable discardable_in_ucinclI)
 
 lemma aentails_cancel_l:
   assumes \<open>ucincl \<psi>\<close>
     shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<psi>\<close>
-using assms by (metis aentails_cancel_r asepconj_comm)
+using assms by (intro aentails_cancel_l_discardable discardable_in_ucinclI)
+
+text \<open>For an upwards-closed retained assertion, a leading \<^term>\<open>\<top>\<close> is semantically neutral
+and gives cancellation an absorber independent of factor order.  The introduction form avoids
+using \<^verbatim>\<open>asepconj_ident\<close> backwards, which would repeatedly insert \<^term>\<open>\<top>\<close>:\<close>
+lemma aentails_insert_top:
+  assumes \<open>ucincl \<psi>\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<top> \<star> \<psi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
+using assms by (simp add: asepconj_ident)
+
+text \<open>Once an upwards-closed right-hand factor has been selected for
+cancellation, \<^term>\<open>\<top>\<close> can be inserted immediately after that factor.
+This needs upwards closure of the selected factor only, not of the remaining
+right-hand conjunction.\<close>
+lemma aentails_insert_top_after_ucincl:
+  assumes \<open>ucincl \<psi>\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi> \<star> (\<top> \<star> \<xi>)\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<psi> \<star> \<xi>\<close>
+using assms by (simp only: asepconj_assoc[symmetric] asepconj_ident2)
+
+text \<open>This rule weakens the retained factor and discards \<^term>\<open>\<psi>\<close>. The
+\<^term>\<open>discardable_in \<psi> \<phi>'\<close> premise is the required disposal licence and remains
+second so callers can compose a rule into the entailment premise.\<close>
+lemma asepconj_mono7:
+  assumes \<open>\<phi> \<longlongrightarrow> \<phi>'\<close>
+      and \<open>discardable_in \<psi> \<phi>'\<close>
+    shows \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<phi>'\<close>
+proof -
+  from assms(1) have \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<phi>' \<star> \<psi>\<close>
+    by (rule asepconj_mono2)
+  moreover from assms(2) have \<open>\<phi>' \<star> \<psi> \<longlongrightarrow> \<phi>'\<close>
+    by (rule aentails_cancel_r_discardable)
+  ultimately show ?thesis
+    by (rule aentails_trans)
+qed
 
 text \<open>The following lemmas characterise how Boolean conjunction interacts with entailment:\<close>
 lemma aentails_int [aentails_simp]:
@@ -795,6 +941,12 @@ lemma awand_adjointI:
     shows \<open>\<phi> \<longlongrightarrow> (\<psi> \<Zsurj> \<xi>)\<close>
 using assms awand_adjoint by auto
 
+text \<open>A wand from the empty assertion needs no closure condition.\<close>
+lemma awand_emp_adjointI:
+  assumes \<open>\<psi> \<longlongrightarrow> \<xi>\<close>
+    shows \<open>emp \<longlongrightarrow> (\<psi> \<Zsurj> \<xi>)\<close>
+using assms by (simp add: awand_adjoint asepconj_emp_unit)
+
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma aimplies_implies_awand:
   assumes \<open>ucincl \<phi>\<close>
@@ -857,10 +1009,14 @@ proof -
     by simp
 qed
 
+text \<open>A conditional crule rewrites \<^term>\<open>\<alpha>\<close> into \<^term>\<open>\<beta>\<close> while
+exchanging \<^term>\<open>C0\<close> for \<^term>\<open>C1\<close>. The strong form internalises consumption
+of \<^term>\<open>C0\<close> in a wand. Closure is not part of either connective; derived
+rules that discard an exchange residue carry their own disposal premise.\<close>
 definition aentails_conditional_crule ("_ [_]\<longlongrightarrow>[_] _")
-  where \<open>aentails_conditional_crule \<alpha> C0 C1 \<beta> \<equiv> C0 \<star> \<alpha> \<longlongrightarrow> C1 \<star> \<beta> \<and> ucincl \<beta>\<close>
+  where \<open>aentails_conditional_crule \<alpha> C0 C1 \<beta> \<equiv> C0 \<star> \<alpha> \<longlongrightarrow> C1 \<star> \<beta>\<close>
 definition aentails_conditional_crule_strong ("_ [_]\<longlongrightarrow>\<^sub>s[_] _")
-  where \<open>aentails_conditional_crule_strong \<alpha> C0 C1 \<beta> \<equiv> \<alpha> \<longlongrightarrow> C1 \<star> (C0 \<Zsurj> \<beta>) \<and> ucincl \<beta>\<close>
+  where \<open>aentails_conditional_crule_strong \<alpha> C0 C1 \<beta> \<equiv> \<alpha> \<longlongrightarrow> C1 \<star> (C0 \<Zsurj> \<beta>)\<close>
 
 lemma aentails_forallL:
   shows \<open>(\<Sqinter>x. \<alpha> x) \<longlongrightarrow> \<alpha> x\<close>
@@ -875,7 +1031,6 @@ lemma awand_lambda_crule_any:
         \<open>(\<Sqinter>x0 x1 x2 x3 x4. (\<alpha>4 x0 x1 x2 x3 x4 \<Zsurj> \<beta>4 x0 x1 x2 x3 x4)) [\<alpha>4 x0 x1 x2 x3 x4]\<longlongrightarrow>[\<beta>4 x0 x1 x2 x3 x4] UNIV\<close>
         \<open>(\<Sqinter>x0 x1 x2 x3 x4 x5. (\<alpha>5 x0 x1 x2 x3 x4 x5 \<Zsurj> \<beta>5 x0 x1 x2 x3 x4 x5)) [\<alpha>5 x0 x1 x2 x3 x4 x5]\<longlongrightarrow>[\<beta>5 x0 x1 x2 x3 x4 x5] UNIV\<close>
    unfolding aentails_conditional_crule_def
-   apply (simp_all add: ucincl_UNIV)
    apply (all \<open>rule asepconj_mono6[OF _ aentails_true]\<close>)
    by (all \<open>((rule aentails_trans, rule asepconj_mono[OF aentails_forallL])+)?, rule awand_counit\<close>)
 
@@ -894,21 +1049,35 @@ lemma aentails_conditional_crule_L0:
   assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
       and \<open>UNIV \<longlongrightarrow> L \<star> R \<Zsurj> G\<close>
     shows \<open>\<alpha> \<longlongrightarrow> \<beta> \<star> G\<close>
-  using aentails_conditional_crule aentails_refl aentails_trans' asepconj_mono6 assms(1,2)
-  by blast
+  by (rule aentails_trans'[OF aentails_conditional_crule[OF assms]
+        asepconj_mono6[OF aentails_refl aentails_true]])
 
+text \<open>These rules collapse the exchange residue to \<^term>\<open>UNIV\<close>. Their
+\<^term>\<open>ucincl \<beta>\<close> premise is exactly the licence
+\<^term>\<open>discardable_in \<top> \<beta>\<close> for dropping that residue.\<close>
 lemma aentails_conditional_crule_R0:
   assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
       and \<open>H \<longlongrightarrow> L \<star> R \<Zsurj> UNIV\<close>
+      and \<open>ucincl \<beta>\<close>
     shows \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta>\<close>
-  by (metis aentails_conditional_crule aentails_conditional_crule_def assms(1,2)
-      local.ucincl_alt)
+proof -
+  from assms(1,2) have \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta> \<star> UNIV\<close>
+    by (rule aentails_conditional_crule)
+  with \<open>ucincl \<beta>\<close> show ?thesis
+    by (simp add: asepconj_ident2)
+qed
 
 lemma aentails_conditional_crule_LR0:
   assumes \<open>\<alpha> [L]\<longlongrightarrow>[R] \<beta>\<close>
       and \<open>UNIV \<longlongrightarrow> L \<star> R \<Zsurj> UNIV\<close>
+      and \<open>ucincl \<beta>\<close>
     shows \<open>\<alpha> \<longlongrightarrow> \<beta>\<close>
-  by (metis aentails_conditional_crule_L0 aentails_conditional_crule_def asepconj_ident2 assms(1,2))
+proof -
+  from assms(1,2) have \<open>\<alpha> \<longlongrightarrow> \<beta> \<star> UNIV\<close>
+    by (rule aentails_conditional_crule_L0)
+  with \<open>ucincl \<beta>\<close> show ?thesis
+    by (simp add: asepconj_ident2)
+qed
 
 lemmas aentails_conditional_crules =
   aentails_conditional_crule
@@ -935,9 +1104,11 @@ lemma aentails_conditional_crule_Luniv:
 proof -
   from \<open>UNIV [L]\<longlongrightarrow>[R] \<beta>\<close> have \<open>UNIV \<star> L \<longlongrightarrow> \<beta> \<star> R\<close>
     unfolding aentails_conditional_crule_def by (simp add: asepconj_comm)
-  from aentails_conditional_crule'[OF this] and assms show ?thesis
-    using aentails_conditional_crule_def local.ucincl_alt'
-      ucincl_asepconjL by blast
+  from aentails_conditional_crule'[OF this assms(2)] have \<open>H \<star> UNIV \<longlongrightarrow> \<beta> \<star> G\<close> .
+  moreover have \<open>H \<longlongrightarrow> H \<star> UNIV\<close>
+    by (rule asepconj_mono6[OF aentails_refl aentails_true])
+  ultimately show ?thesis
+    by (rule aentails_trans[rotated])
 qed
 
 lemma aentails_conditional_crule_L0_Runiv:
@@ -947,11 +1118,19 @@ lemma aentails_conditional_crule_L0_Runiv:
     shows \<open>\<alpha> \<longlongrightarrow> G\<close>
   by (metis aentails_conditional_crule_L0 asepconj_ident assms(1,2,3))
 
+text \<open>This rule discards a \<^term>\<open>UNIV\<close> residue. The \<^verbatim>\<open>Runiv\<close>
+variants use \<^term>\<open>ucincl G\<close> for the same disposal licence.\<close>
 lemma aentails_conditional_crule_R0_Luniv:
   assumes \<open>UNIV [L]\<longlongrightarrow>[R] \<beta>\<close>
       and \<open>H \<longlongrightarrow> L \<star> R \<Zsurj> UNIV\<close>
+      and \<open>ucincl \<beta>\<close>
     shows \<open>H \<longlongrightarrow> \<beta>\<close>
-  by (metis aentails_conditional_crule_Luniv aentails_conditional_crule_def asepconj_ident2 assms(1,2))
+proof -
+  from assms(1,2) have \<open>H \<longlongrightarrow> \<beta> \<star> UNIV\<close>
+    by (rule aentails_conditional_crule_Luniv)
+  with \<open>ucincl \<beta>\<close> show ?thesis
+    by (simp add: asepconj_ident2)
+qed
 
 lemmas aentails_conditional_crules_univ =
   aentails_conditional_crule_Luniv
@@ -970,20 +1149,29 @@ proof -
     by (simp add: asepconj_comm)
 qed
 
+text \<open>Strong crules reconcile the exchange inside the wand. A degenerate
+residue is therefore \<^term>\<open>emp\<close> and needs no disposal premise.\<close>
 lemma aentails_conditional_crule_strong_L0:
   assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
       and \<open>R \<longlongrightarrow> L \<star> G\<close>
     shows \<open>\<alpha> \<longlongrightarrow> \<beta> \<star> G\<close>
-  by (smt (verit, best) aentails_conditional_crule_strong aentails_conditional_crule_strong_def
-      asepconj_UNIV_idempotent asepconj_ident2 asepconj_mono3 asepconj_swap_top assms(1,2)
-      local.ucincl_alt' ucincl_asepconjL)
+proof -
+  from \<open>R \<longlongrightarrow> L \<star> G\<close> have \<open>emp \<star> R \<longlongrightarrow> L \<star> G\<close>
+    by (simp add: asepconj_emp_unit)
+  from aentails_conditional_crule_strong[OF assms(1) this] show ?thesis
+    by (simp add: asepconj_emp_unit)
+qed
 
 lemma aentails_conditional_crule_strong_R0:
   assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
       and \<open>H \<star> R \<longlongrightarrow> L\<close>
     shows \<open>\<alpha> \<star> H \<longlongrightarrow> \<beta>\<close>
-  using aentails_conditional_crule_strong aentails_conditional_crule_strong_def aentails_refl
-    asepconj_ident2 asepconj_mono6 assms(1,2) by fastforce
+proof -
+  from \<open>H \<star> R \<longlongrightarrow> L\<close> have \<open>H \<star> R \<longlongrightarrow> L \<star> emp\<close>
+    by (simp add: asepconj_emp_unit)
+  from aentails_conditional_crule_strong[OF assms(1) this] show ?thesis
+    by (simp add: asepconj_emp_unit)
+qed
 
 lemma aentails_conditional_crule_strong_LR0:
   assumes \<open>\<alpha> [L]\<longlongrightarrow>\<^sub>s[R] \<beta>\<close>
@@ -1165,84 +1353,122 @@ subsubsection\<open>Pure assertions\<close>
 
 text \<open>Moreing the other way, a \<^emph>\<open>pure\<close> assertion is completely independent of the underlying
 machine.  This can be modelled as an \<^emph>\<open>embedding\<close> of a HOL formula into our separation logic:\<close>
-definition apure :: \<open>bool \<Rightarrow> 'a assert\<close> (\<open>\<langle>_\<rangle>\<close> [0]1000) where
-  \<open>\<langle>P\<rangle> \<equiv> {s. P}\<close>
+definition apure :: \<open>bool \<Rightarrow> 'a assert\<close> where
+  \<open>apure P \<equiv> {s. P}\<close>
+
+text \<open>A precise pure assertion carries a HOL fact while owning exactly the
+empty machine state.\<close>
+definition apure_precise :: \<open>bool \<Rightarrow> 'a assert\<close> (\<open>\<langle>_\<rangle>\<close> [0]1000) where
+  \<open>\<langle>P\<rangle> \<equiv> {s. s = 0 \<and> P}\<close>
+
+text \<open>It is the ordinary pure assertion restricted to \<^term>\<open>emp\<close>.\<close>
+lemma apure_precise_alt:
+  shows \<open>\<langle>P\<rangle> = (apure (P) \<inter> emp)\<close>
+by (simp add: apure_precise_def apure_def emp_def)
+
+text \<open>A precise pure assertion owns zero and is therefore discardable in
+every context. A dedicated rule complements the syntactically distinct
+\<^term>\<open>emp\<close> rule.\<close>
+lemma discardable_in_apure_preciseI [discardable_in_intros]:
+  shows \<open>discardable_in \<langle>P\<rangle> \<rho>\<close>
+proof (rule discardable_in_aentails_empI)
+  show \<open>\<langle>P\<rangle> \<longlongrightarrow> emp\<close>
+    unfolding apure_precise_alt by (rule aentails_inter_weaken[OF aentails_refl])
+qed
 
 
 text \<open>The following series of lemmas describe how pure assertions interact with entailments and
 spatial assertions of our Separation Logic:\<close>
 lemma all_aentails_true:
-  shows \<open>\<phi> \<longlongrightarrow> \<langle>True\<rangle>\<close>
+  shows \<open>\<phi> \<longlongrightarrow> apure (True)\<close>
 by (simp add: asepconj_simp apure_def aentails_true)
 
 lemma asepconj_ident3 [asepconj_simp]:
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>\<phi> \<star> \<langle>True\<rangle> = \<phi>\<close>
+    shows \<open>\<phi> \<star> apure (True) = \<phi>\<close>
 by (simp add: asepconj_simp apure_def assms)
 
 lemma asepconj_ident4 [asepconj_simp]:
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>\<langle>True\<rangle> \<star> \<phi> = \<phi>\<close>
+    shows \<open>apure (True) \<star> \<phi> = \<phi>\<close>
 by (simp add: asepconj_simp apure_def assms)
 
 lemma asepconj_pure [asepconj_simp]:
-  shows \<open>\<langle>P\<rangle> \<star> \<langle>Q\<rangle> = \<langle>P \<and> Q\<rangle>\<close>
+  shows \<open>apure (P) \<star> apure (Q) = apure (P \<and> Q)\<close>
 by (simp add: asepconj_simp apure_def)
 
 lemma asepconj_pure2 [asepconj_simp]:
-  shows \<open>\<langle>P\<rangle> \<star> (\<langle>Q\<rangle> \<star> \<phi>) = \<langle>P \<and> Q\<rangle> \<star> \<phi>\<close>
+  shows \<open>apure (P) \<star> (apure (Q) \<star> \<phi>) = apure (P \<and> Q) \<star> \<phi>\<close>
 using asepconj_assoc asepconj_pure by metis
 
+text \<open>Precise pure factors combine without absorbing resource.\<close>
+lemma asepconj_pure_precise [asepconj_simp]:
+  shows \<open>\<langle>P\<rangle> \<star> \<langle>Q\<rangle> = \<langle>P \<and> Q\<rangle>\<close>
+by (auto simp add: apure_precise_def asepconj_def asat_def)
+
+lemma asepconj_pure2_precise [asepconj_simp]:
+  shows \<open>\<langle>P\<rangle> \<star> (\<langle>Q\<rangle> \<star> \<phi>) = \<langle>P \<and> Q\<rangle> \<star> \<phi>\<close>
+using asepconj_assoc asepconj_pure_precise by metis
+
 lemma aentails_asepconjL_pureI:
-  assumes \<open>\<langle>P \<and> Q\<rangle> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<longlongrightarrow> \<psi>\<close>
+  assumes \<open>apure (P \<and> Q) \<longlongrightarrow> \<psi>\<close>
+    shows \<open>apure (P) \<star> apure (Q) \<longlongrightarrow> \<psi>\<close>
 using assms asepconj_pure by auto
 
 lemma aentails_asepconjL_pure2I:
-  assumes \<open>\<langle>P \<and> Q\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
+  assumes \<open>apure (P \<and> Q) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>apure (P) \<star> apure (Q) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
 using assms asepconj_pure2 by auto
 
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma aentails_asepconjR_pureI:
-  assumes \<open>\<phi> \<longlongrightarrow> \<langle>P \<and> Q\<rangle>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle>\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> apure (P \<and> Q)\<close>
+    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> apure (Q)\<close>
 using assms asepconj_pure by auto
 
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma aentails_asepconjR_pure2I:
-  assumes \<open>\<phi> \<longlongrightarrow> \<langle>P \<and> Q\<rangle> \<star> \<psi>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<psi>\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> apure (P \<and> Q) \<star> \<psi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<psi>\<close>
 using assms asepconj_pure2 by auto
 
 lemma asepconj_pure_UNIV:
-  shows \<open>\<langle>P\<rangle> \<star> UNIV = \<langle>P\<rangle>\<close> and \<open>UNIV \<star> \<langle>P\<rangle> = \<langle>P\<rangle>\<close>
+  shows \<open>apure (P) \<star> UNIV = apure (P)\<close> and \<open>UNIV \<star> apure (P) = apure (P)\<close>
 by (metis (full_types) UNIV_def apure_def asepconj_pure)+
 
 text \<open>The following provides an alternative characterisation of a pure assertion, allowing us to
 reflect ``back and forth'' between our Separation Logic and standard HOL reasoning for pure
 assertions:\<close>
 lemma asat_apure_characterisation [asat_simp, simp]:
-  shows \<open>x \<Turnstile> \<langle>P\<rangle> \<longleftrightarrow> P\<close>
+  shows \<open>x \<Turnstile> apure (P) \<longleftrightarrow> P\<close>
 by (auto simp add: apure_def)
 
 corollary is_sat_pure [is_sat_simp, simp]:
-  shows \<open>is_sat \<langle>P\<rangle> = P\<close>
+  shows \<open>is_sat (apure P) = P\<close>
 by (simp add: asat_apure_characterisation is_sat_def)
+
+text \<open>Satisfaction records both the pure fact and ownership of zero.\<close>
+lemma asat_apure_precise_characterisation [asat_simp, simp]:
+  shows \<open>x \<Turnstile> \<langle>P\<rangle> \<longleftrightarrow> x = 0 \<and> P\<close>
+by (simp add: apure_precise_def asat_def)
+
+corollary is_sat_pure_precise [is_sat_simp, simp]:
+  shows \<open>is_sat \<langle>P\<rangle> = P\<close>
+by (simp add: asat_apure_precise_characterisation is_sat_def)
 
 text \<open>A pure assertion is always upwards-closed:\<close>
 lemma ucincl_apure [ucincl_intros]:
-  shows \<open>ucincl \<langle>P\<rangle>\<close>
+  shows \<open>ucincl (apure P)\<close>
 by (auto simp add: apure_def intro: ucincl_intros)
 
 text \<open>The following are technical introduction and elimination rules for working with pure assertions:\<close>
 lemma apureI:
   assumes \<open>P\<close>
-    shows \<open>s \<Turnstile> \<langle>P\<rangle>\<close>
+    shows \<open>s \<Turnstile> apure (P)\<close>
 using assms by (auto simp add: apure_def)
 
 lemma apureE:
-  assumes \<open>s \<Turnstile> \<langle>P\<rangle>\<close>
+  assumes \<open>s \<Turnstile> apure (P)\<close>
       and \<open>P \<Longrightarrow> R\<close>
     shows \<open>R\<close>
 using assms by (clarsimp simp add: asat_simp split: if_splits)
@@ -1250,52 +1476,82 @@ using assms by (clarsimp simp add: asat_simp split: if_splits)
 lemma asat_apure_distrib [asat_simp]:
     notes asat_simp [simp]
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>s \<Turnstile> \<langle>P\<rangle> \<star> \<phi> \<longleftrightarrow> P \<and> s \<Turnstile> \<phi>\<close>
+    shows \<open>s \<Turnstile> apure (P) \<star> \<phi> \<longleftrightarrow> P \<and> s \<Turnstile> \<phi>\<close>
 proof
-  assume \<open>s \<Turnstile> \<langle>P\<rangle> \<star> \<phi>\<close>
-  then obtain t u where \<open>s = t + u\<close> and \<open>t \<sharp> u\<close> and \<open>t \<Turnstile> \<langle>P\<rangle>\<close> and \<open>u \<Turnstile> \<phi>\<close>
+  assume \<open>s \<Turnstile> apure (P) \<star> \<phi>\<close>
+  then obtain t u where \<open>s = t + u\<close> and \<open>t \<sharp> u\<close> and \<open>t \<Turnstile> apure (P)\<close> and \<open>u \<Turnstile> \<phi>\<close>
     by (auto elim: asepconjE)
   then show \<open>P \<and> s \<Turnstile> \<phi>\<close>
-    using \<open>s \<Turnstile> \<langle>P\<rangle> \<star> \<phi>\<close> asepconj_ident3 assms local.asepconj_comm by force
+    using \<open>s \<Turnstile> apure (P) \<star> \<phi>\<close> asepconj_ident3 assms local.asepconj_comm by force
 next
-  assume \<open>P \<and> s \<Turnstile> \<phi>\<close> then show \<open>s \<Turnstile> \<langle>P\<rangle> \<star> \<phi>\<close>
+  assume \<open>P \<and> s \<Turnstile> \<phi>\<close> then show \<open>s \<Turnstile> apure (P) \<star> \<phi>\<close>
     using asepconj_ident4 assms by auto
 qed
 
 lemma asat_apure_distrib2 [asat_simp]:
     notes asat_simp [simp]
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>s \<Turnstile> \<phi> \<star> \<langle>P\<rangle> \<longleftrightarrow> s \<Turnstile> \<phi> \<and> P\<close>
+    shows \<open>s \<Turnstile> \<phi> \<star> apure (P) \<longleftrightarrow> s \<Turnstile> \<phi> \<and> P\<close>
   using asat_apure_distrib assms local.asepconj_comm by force
 
+text \<open>Precise-pure factors own zero, so satisfaction distributes unconditionally on either side.\<close>
+lemma asat_apure_precise_distrib [asat_simp]:
+  shows \<open>s \<Turnstile> \<langle>P\<rangle> \<star> \<phi> \<longleftrightarrow> P \<and> s \<Turnstile> \<phi>\<close>
+by (simp add: apure_precise_def asepconj_def asat_def)
+
+lemma asat_apure_precise_distrib2 [asat_simp]:
+  shows \<open>s \<Turnstile> \<phi> \<star> \<langle>P\<rangle> \<longleftrightarrow> s \<Turnstile> \<phi> \<and> P\<close>
+using asat_apure_precise_distrib local.asepconj_comm by force
+
 lemma asat_apure_distrib':
-  shows \<open>s \<Turnstile> \<phi> \<star> \<langle>P\<rangle> \<longleftrightarrow> s \<Turnstile> \<phi> \<star> UNIV \<and> P\<close> and \<open>s \<Turnstile> \<langle>P\<rangle> \<star> \<phi> \<longleftrightarrow> s \<Turnstile> UNIV \<star> \<phi> \<and> P\<close>
+  shows \<open>s \<Turnstile> \<phi> \<star> apure (P) \<longleftrightarrow> s \<Turnstile> \<phi> \<star> UNIV \<and> P\<close> and \<open>s \<Turnstile> apure (P) \<star> \<phi> \<longleftrightarrow> s \<Turnstile> UNIV \<star> \<phi> \<and> P\<close>
 using apure_def asepconj_bot_zero2 asepconj_bot_zero by auto
 
 lemma asat_apure_distrib3 [asat_simp]:
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>s \<Turnstile> (\<phi> \<star> \<langle>P\<rangle>) \<star> \<psi> \<longleftrightarrow> s \<Turnstile> \<phi> \<star> \<psi> \<and> P\<close>
+    shows \<open>s \<Turnstile> (\<phi> \<star> apure (P)) \<star> \<psi> \<longleftrightarrow> s \<Turnstile> \<phi> \<star> \<psi> \<and> P\<close>
 using assms by (simp add: asepconj_simp asat_simp apure_def asepconj_comm)
 
 lemma asepconj_False_True:
-  shows \<open>\<langle>False\<rangle> = \<bottom>\<close> and \<open>\<langle>True\<rangle> = \<top>\<close>
+  shows \<open>apure (False) = \<bottom>\<close> and \<open>apure (True) = \<top>\<close>
 by (simp add: apure_def)+
+
+text \<open>Truth yields the empty assertion; falsehood remains impossible.\<close>
+lemma apure_precise_True [asepconj_simp]:
+  shows \<open>\<langle>True\<rangle> = emp\<close>
+by (simp add: apure_precise_def emp_def)
+
+lemma apure_precise_False [asepconj_simp]:
+  shows \<open>\<langle>False\<rangle> = \<bottom>\<close>
+by (simp add: apure_precise_def)
 
 lemma apure_entails_iff [aentails_simp]:
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>(\<langle>P\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>) = (P \<longrightarrow> \<phi> \<longlongrightarrow> \<psi>)\<close>
+    shows \<open>(apure (P) \<star> \<phi> \<longlongrightarrow> \<psi>) = (P \<longrightarrow> \<phi> \<longlongrightarrow> \<psi>)\<close>
   using aentails_def asat_apure_distrib assms by blast
 
 lemma apure_entailsL0:
   assumes \<open>P \<Longrightarrow> \<top> \<longlongrightarrow> \<phi>\<close>
-    shows \<open>\<langle>P\<rangle> \<longlongrightarrow> \<phi>\<close>
+    shows \<open>apure (P) \<longlongrightarrow> \<phi>\<close>
 using assms by (simp add: asat_simp aentails_def)
 
 lemma apure_entailsL:
   assumes \<open>ucincl \<phi>\<close>
       and \<open>P \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<langle>P\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>apure (P) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
 using assms by (simp add: asat_simp aentails_def)
+
+text \<open>Pure assumptions can be hoisted without a closure premise; a standalone
+factor leaves \<^term>\<open>emp\<close> behind.\<close>
+lemma apure_precise_entailsL0:
+  assumes \<open>P \<Longrightarrow> emp \<longlongrightarrow> \<psi>\<close>
+    shows \<open>\<langle>P\<rangle> \<longlongrightarrow> \<psi>\<close>
+using assms by (simp add: asat_simp aentails_def)
+
+lemma apure_precise_entailsL:
+  assumes \<open>P \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>\<langle>P\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
+using assms by (auto simp add: asat_simp aentails_def elim!: asepconjE)
 
 text \<open>The following is a variant of @\<open>thm apure_entailsL\<close> which avoids an upwards-closure
 side-condition. The swapping of pure factors is deliberate: we typically float pure assumptions to
@@ -1304,19 +1560,25 @@ conjunction \<^verbatim>\<open>\<top> \<star> \<top> \<star> ... \<star> \<top>\
 to \<^verbatim>\<open>\<top> \<star> \<top>=\<top>\<close>.\<close>
 lemma apure_entailsL':
   assumes \<open>P \<Longrightarrow> \<phi> \<star> \<top> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<langle>P\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>apure (P) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
 using apure_def asepconj_comm assms bot_aentails_all by (fastforce simp add: asepconj_simp)
 
 lemma apure_entailsR0:
   assumes \<open>is_sat \<phi> \<Longrightarrow> P\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
 using assms by (simp add: asat_simp aentails_def is_sat_def)
 
 lemma apure_entailsR0_revE:
   assumes \<open>is_sat \<phi>\<close>
-      and \<open>\<phi> \<longlongrightarrow> \<langle>R\<rangle>\<close>
+      and \<open>\<phi> \<longlongrightarrow> apure (R)\<close>
     shows \<open>R\<close>
 using assms by (clarsimp simp add: asat_simp aentails_def is_sat_def)
+
+text \<open>Only empty resource can entail a standalone precise pure assertion.\<close>
+lemma apure_precise_entailsR0:
+  assumes \<open>P\<close>
+    shows \<open>emp \<longlongrightarrow> \<langle>P\<rangle>\<close>
+using assms by (simp add: asat_simp aentails_def)
 
 text \<open>The following results describe how the Boolean quantifiers interact with respect to
 satisfiability, and can be seen as restricted forms of our previous characterisation lemma, above:\<close>
@@ -1396,15 +1658,53 @@ lemma aentails_top_L':
     shows \<open>\<phi> \<star> \<top> \<longlongrightarrow> \<psi>\<close>
 using assms aentails_top_L asepconj_comm by (auto intro: aentails_intro)
 
+\<comment>\<open>An upwards-closed conclusion can absorb a trailing \<^term>\<open>\<top>\<close>. The rule stays outside
+\<^verbatim>\<open>aentails_intro\<close> because the sibling and conclusion licences are ambiguous from the goal.\<close>
+lemma aentails_drop_univ_ucincl:
+  assumes \<open>ucincl \<psi>\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>\<phi> \<star> \<top> \<longlongrightarrow> \<psi>\<close>
+using assms ucincl_alt' by blast
+
 lemma aentails_top_R [aentails_intro]:
   assumes \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<top> \<star> \<psi>\<close>
 using assms by (metis asepconj_comm aentails_true asepconj_mono6)
 
+lemma aentails_top_R_refl [simp]:
+  shows \<open>\<phi> \<longlongrightarrow> \<top> \<star> \<phi>\<close>
+by (rule aentails_top_R[OF aentails_refl])
+
 lemma aentails_top_R':
   assumes \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<psi> \<star> \<top>\<close>
 using assms aentails_top_R asepconj_comm by (auto intro: aentails_intro)
+
+text \<open>These rules are intended for backward use. They match a right-hand
+intersection, universal, or wand preceded by \<^term>\<open>\<top>\<close> and reduce it to
+the usual introduction premises without \<^term>\<open>\<top>\<close>. They are more
+specific than using \<^verbatim>\<open>aentails_top_R\<close> as a generic final
+fallback.\<close>
+lemma aentails_intI_top:
+  assumes \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
+      and \<open>\<phi> \<longlongrightarrow> \<xi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<top> \<star> (\<psi> \<inter> \<xi>)\<close>
+using assms by (intro aentails_top_R aentails_intI)
+
+lemma aforall_entailsR_top:
+  assumes \<open>\<And>x. \<phi> \<longlongrightarrow> \<psi> x\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<top> \<star> (\<Sqinter>x. \<psi> x)\<close>
+using assms by (intro aentails_top_R aforall_entailsR)
+
+lemma awand_adjointI_top:
+  assumes \<open>\<phi> \<star> \<psi> \<longlongrightarrow> \<xi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<top> \<star> (\<psi> \<Zsurj> \<xi>)\<close>
+using assms by (intro aentails_top_R awand_adjointI)
+
+lemma awand_emp_adjointI_top:
+  assumes \<open>\<psi> \<longlongrightarrow> \<xi>\<close>
+    shows \<open>emp \<longlongrightarrow> \<top> \<star> (\<psi> \<Zsurj> \<xi>)\<close>
+using assms by (intro aentails_top_R awand_emp_adjointI)
 
 lemma aentails_disj_distR [asepconj_simp]:
   shows \<open>(a \<squnion> b) \<star> \<phi> = (a \<star> \<phi>) \<squnion> (b \<star> \<phi>)\<close>
@@ -1451,6 +1751,11 @@ lemma awand_mp:
   shows \<open>(\<phi> \<Zsurj> \<psi>) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
 by (clarsimp elim!: asepconjE awandE simp add: aentails_def)
 
+lemma awand_mp_strong_crule:
+  shows \<open>(\<phi> \<Zsurj> \<psi>) [\<phi>]\<longlongrightarrow>\<^sub>s[emp] \<psi>\<close>
+unfolding aentails_conditional_crule_strong_def
+by (simp add: asepconj_emp_unit aentails_refl)
+
 lemma awand_curry:
   shows \<open>(\<phi> \<star> \<psi>) \<Zsurj> \<chi> = \<phi> \<Zsurj> \<psi> \<Zsurj> \<chi>\<close>
 by (metis (no_types, lifting) aentails_eq asepconj_AC(2) awand_adjoint awand_mp)
@@ -1476,6 +1781,22 @@ proof -
     by blast
 qed
 
+text \<open>A quantified wand family discharges one matching assertion even when carried under an
+intersection with unrelated resource.  Both intersection orders support symmetric call sites:\<close>
+lemma awand_forall_inter_counit:
+  shows \<open>\<phi> r \<star> ((\<Sqinter>v. \<phi> v \<Zsurj> \<psi> v) \<sqinter> \<chi>) \<longlongrightarrow> \<psi> r\<close>
+    and \<open>\<phi> r \<star> (\<chi> \<sqinter> (\<Sqinter>v. \<phi> v \<Zsurj> \<psi> v)) \<longlongrightarrow> \<psi> r\<close>
+proof -
+  have wand: \<open>(\<Sqinter>v. \<phi> v \<Zsurj> \<psi> v) \<sqinter> \<chi> \<longlongrightarrow> \<phi> r \<Zsurj> \<psi> r\<close>
+    by (intro aentails_inter_weaken2 aforall_entailsL) (rule aentails_refl)
+  from wand have \<open>\<phi> r \<star> ((\<Sqinter>v. \<phi> v \<Zsurj> \<psi> v) \<sqinter> \<chi>) \<longlongrightarrow> \<phi> r \<star> (\<phi> r \<Zsurj> \<psi> r)\<close>
+    by (rule asepconj_mono3[OF refl])
+  from this show \<open>\<phi> r \<star> ((\<Sqinter>v. \<phi> v \<Zsurj> \<psi> v) \<sqinter> \<chi>) \<longlongrightarrow> \<psi> r\<close>
+    using awand_counit by (rule aentails_trans)
+  from this show \<open>\<phi> r \<star> (\<chi> \<sqinter> (\<Sqinter>v. \<phi> v \<Zsurj> \<psi> v)) \<longlongrightarrow> \<psi> r\<close>
+    by (simp add: inf_commute)
+qed
+
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma awand_int:
   shows \<open>\<phi> \<Zsurj> (\<xi> \<inter> \<psi>) = (\<phi> \<Zsurj> \<xi>) \<inter> (\<phi> \<Zsurj> \<psi>)\<close>
@@ -1494,17 +1815,17 @@ qed
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma awand_pure_commute:
   assumes \<open>ucincl \<psi>\<close>
-    shows \<open>\<langle>\<tau>\<rangle> \<star> (\<phi> \<Zsurj> \<psi>) \<longlongrightarrow> \<phi> \<Zsurj> (\<langle>\<tau>\<rangle> \<star> \<psi>)\<close>
+    shows \<open>apure (\<tau>) \<star> (\<phi> \<Zsurj> \<psi>) \<longlongrightarrow> \<phi> \<Zsurj> (apure (\<tau>) \<star> \<psi>)\<close>
 using assms by (metis (full_types) apure_entailsL aentails_cancel_l asepconj_comm asepconj_ident3
     ucincl_awand)
 
 lemma awand_pure_false [asepconj_simp]:
-  shows \<open>\<langle>False\<rangle> \<Zsurj> \<psi> = \<top>\<close>
+  shows \<open>apure (False) \<Zsurj> \<psi> = \<top>\<close>
   by (subst asepconj_False_True, rule awand_bot)
 
 lemma awand_pure_true:
   assumes \<open>ucincl \<psi>\<close>
-  shows \<open>\<langle>True\<rangle> \<Zsurj> \<psi> = \<psi>\<close>
+  shows \<open>apure (True) \<Zsurj> \<psi> = \<psi>\<close>
   using assms by (subst asepconj_False_True) (rule awand_univ, auto)
 
 lemma awand_curry_drule:
@@ -1519,22 +1840,60 @@ using assms by (auto simp add: aentails_def intro!: asepconjI)
 
 lemma asepconj_pure':
   assumes \<open>ucincl \<phi>\<close>
-    shows \<open>\<langle>\<tau>\<rangle> \<star> \<phi> = \<langle>\<tau>\<rangle> \<sqinter> \<phi>\<close>
+    shows \<open>apure (\<tau>) \<star> \<phi> = apure (\<tau>) \<sqinter> \<phi>\<close>
 using assms by (simp add: asepconj_simp apure_def)
 
-lemma apure_entailsR [intro]:
-  assumes \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle>\<close>
+lemma apure_entailsR:
+  assumes \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
       and \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<psi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> \<psi>\<close>
 using assms by (metis aentails_def aentails_empty_R asat_apure_characterisation)
+
+text \<open>Splitting off an ordinary pure factor can absorb resource. The
+restricted rule permits this only when the retained assertion is
+upwards-closed; its closure premise is a policy guard, not proof input.
+Neither ordinary rule is an introduction rule, so automation cannot discard
+resource implicitly.\<close>
+lemma apure_entailsR_restricted:
+  assumes pure: \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
+      and ent: \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
+      and \<open>ucincl \<psi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> \<psi>\<close>
+using pure ent by (rule apure_entailsR)
+
+text \<open>A precise pure factor splits off without receiving any resource, so
+this rule remains available to introduction search.\<close>
+lemma apure_precise_entailsR [intro]:
+  assumes \<open>is_sat \<phi> \<Longrightarrow> P\<close>
+      and ent: \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<psi>\<close>
+proof (rule aentails_is_sat)
+  assume \<open>is_sat \<phi>\<close>
+  with assms(1) have \<open>0 \<Turnstile> \<langle>P\<rangle>\<close>
+    by simp
+  from this and ent show \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<psi>\<close>
+    by (rule aentails_empty_R)
+qed
+
+text \<open>This variant leaves the pure premise as a separating entailment, so
+later spatial drule and rule branches can continue solving it.\<close>
+lemma apure_precise_entailsR':
+  assumes pure: \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
+      and ent: \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<psi>\<close>
+proof (rule apure_precise_entailsR[OF _ ent])
+  assume \<open>is_sat \<phi>\<close>
+  from this and pure show \<open>P\<close>
+    by (rule apure_entailsR0_revE)
+qed
 
 lemma aentails_asepconj_split_true:
   assumes \<open>ucincl \<xi>\<close>
       and \<open>\<xi> \<longlongrightarrow> \<psi>\<close>
-      and \<open>\<langle>True\<rangle> \<longlongrightarrow> \<pi>\<close>
+      and \<open>apure (True) \<longlongrightarrow> \<pi>\<close>
     shows \<open>\<xi> \<longlongrightarrow> \<psi> \<star> \<pi>\<close>
 proof -
-  from assms have \<open>\<xi> \<star> \<langle>True\<rangle> \<longlongrightarrow> \<psi> \<star> \<pi>\<close>
+  from assms have \<open>\<xi> \<star> apure (True) \<longlongrightarrow> \<psi> \<star> \<pi>\<close>
     using asepconj_mono4 by blast
   from assms this show ?thesis
     using asepconj_ident3 by auto
@@ -1562,14 +1921,14 @@ qed
 text \<open>The following are technical results that allow fine-grained control over proof-steps in
 Separation Logic entailment proofs:\<close>
 lemma aentails_cut_pure:
-  assumes \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle>\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
       and \<open>P \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi>\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
 using assms by (clarsimp simp add: aentails_def apure_def asat_def split: if_splits)
 
 lemma aentails_frulify_pure:
-  assumes \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<phi> \<star> \<langle>P\<rangle>\<close>
+  assumes \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
+    shows \<open>\<phi> \<longlongrightarrow> \<phi> \<star> apure (P)\<close>
 by (metis aentails_refl apure_entailsR asepconj_comm assms)
 
 lemma aentails_fold_def:
@@ -1592,7 +1951,10 @@ definition asepconj_multi' :: \<open>'a assert multiset \<Rightarrow> 'a assert 
   \<open>asepconj_multi' \<Phi> \<tau> \<equiv> fold_mset asepconj \<tau> \<Phi>\<close>
 
 definition asepconj_multi :: \<open>'a assert multiset \<Rightarrow> 'a assert\<close> ("\<star>\<star>")  where
-  \<open>asepconj_multi \<Phi> \<equiv> asepconj_multi' \<Phi> UNIV\<close>
+  \<open>asepconj_multi \<Phi> \<equiv> asepconj_multi' \<Phi> emp\<close>
+
+text \<open>The \<^term>\<open>emp\<close> fold unit makes an iterated conjunction own exactly its factors; the empty
+iteration owns zero.\<close>
 
 text \<open>Iterated separating conjunction preserves upwards-closure:\<close>
 lemma asepconj_multi'_ucincl [ucincl_intros]:
@@ -1601,11 +1963,33 @@ lemma asepconj_multi'_ucincl [ucincl_intros]:
     shows \<open>ucincl (\<Phi> \<star>\<star>\<star> \<tau>)\<close>
   using 1 by (induction \<Phi>) (auto simp: 2 asepconj_multi'_def local.ucincl_asepconjL)
 
+text \<open>A non-empty iteration of upwards-closed factors is upwards closed. Both premises are
+determined by the conclusion, so the rule participates in closure search.\<close>
 corollary asepconj_multi_ucincl [ucincl_intros]:
     fixes \<Phi> :: \<open>'a assert multiset\<close>
-  assumes \<open>\<And>\<phi>. \<phi> \<in># \<Phi> \<Longrightarrow> ucincl \<phi>\<close>
+  assumes \<open>\<Phi> \<noteq> {#}\<close>
+      and \<open>\<And>\<phi>. \<phi> \<in># \<Phi> \<Longrightarrow> ucincl \<phi>\<close>
     shows \<open>ucincl (\<star>\<star>\<Phi>)\<close>
-using assms by (auto simp add: ucincl_UNIV asepconj_multi_def asepconj_multi'_ucincl)
+proof -
+  from assms(1) obtain \<phi> \<Psi> where \<open>\<Phi> = add_mset \<phi> \<Psi>\<close>
+    by (metis multiset_cases)
+  with assms(2) show ?thesis
+    by (simp add: asepconj_multi_def asepconj_multi'_def local.ucincl_asepconjL)
+qed
+
+text \<open>One upwards-closed member suffices, but its witness is not determined by the conclusion, so
+this sharper rule stays outside \<^verbatim>\<open>ucincl_intros\<close>.\<close>
+corollary asepconj_multi_ucincl_member:
+    fixes \<Phi> :: \<open>'a assert multiset\<close>
+  assumes \<open>\<phi> \<in># \<Phi>\<close>
+      and \<open>ucincl \<phi>\<close>
+    shows \<open>ucincl (\<star>\<star>\<Phi>)\<close>
+proof -
+  from assms(1) obtain \<Psi> where \<open>\<Phi> = add_mset \<phi> \<Psi>\<close>
+    by (metis multi_member_split)
+  with assms(2) show ?thesis
+    by (simp add: asepconj_multi_def asepconj_multi'_def local.ucincl_asepconjL)
+qed
 
 text \<open>The following are generalisations of identity, symmetric, and associativity results for the
 standard separating conjunction to the iterated separating conjunction:\<close>
@@ -1614,8 +1998,12 @@ lemma asepconj_multi'_empty [asepconj_simp]:
   shows \<open>{#} \<star>\<star>\<star> \<tau> = \<tau>\<close>
 by (auto simp add: asepconj_multi_def asepconj_multi'_def)
 
+lemma asepconj_multi'_add_mset [asepconj_simp]:
+  shows \<open>(add_mset \<phi> \<Phi>) \<star>\<star>\<star> \<tau> = \<phi> \<star> (\<Phi> \<star>\<star>\<star> \<tau>)\<close>
+by (simp add: asepconj_multi'_def ASepConjComm.fold_mset_add_mset)
+
 lemma asepconj_multi_empty [asepconj_simp]:
-  shows \<open>\<star>\<star>{#} = UNIV\<close>
+  shows \<open>\<star>\<star>{#} = emp\<close>
 by (auto simp add: asepconj_multi_def asepconj_multi'_def)
 
 lemma asepconj_multi_split:
@@ -1631,32 +2019,47 @@ lemma asepconj_multi_single [asepconj_simp]:
   shows \<open>{# \<phi> #} \<star>\<star>\<star> \<psi> = \<phi> \<star> \<psi>\<close>
 by (clarsimp simp add: asepconj_multi_def asepconj_multi'_def; auto)
 
-text \<open>An upwards-closed, singleton assertion can be ``projected out'' of an iterated separating
-conjunction\<close>
+text \<open>A singleton iteration is exactly its factor.\<close>
 lemma asepconj_multi_single' [asepconj_simp]:
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>\<star>\<star>{# \<phi> #} = \<phi>\<close>
-using assms by (simp add: asepconj_simp asepconj_multi_def)
+  shows \<open>\<star>\<star>{# \<phi> #} = \<phi>\<close>
+by (simp add: asepconj_simp asepconj_multi_def)
 
 lemma asepconj_multi_assoc0:
   shows \<open>(\<Phi> \<star>\<star>\<star> \<tau>) \<star> \<rho> = \<Phi> \<star>\<star>\<star> (\<tau> \<star> \<rho>)\<close>
   by (force simp add: ASepConjComm.fold_mset_fun_left_comm asepconj_comm asepconj_multi'_def)
 
+text \<open>An explicit starting value is a trailing conjunct of the exact fold.\<close>
 lemma asepconj_multi_multi':
-  assumes \<open>ucincl \<tau>\<close>
-    shows \<open>(\<star>\<star> \<Phi>) \<star> \<tau> = \<Phi> \<star>\<star>\<star> \<tau>\<close> (is ?Goal)
-  by (simp add: asepconj_multi_assoc0 asepconj_multi_def assms local.asepconj_ident)
+  shows \<open>(\<star>\<star> \<Phi>) \<star> \<tau> = \<Phi> \<star>\<star>\<star> \<tau>\<close>
+  by (simp add: asepconj_multi_assoc0 asepconj_multi_def local.asepconj_emp_unit(2))
 
 lemma asepconj_multi_split' [asepconj_simp]:
   shows \<open>\<star>\<star> (\<Phi> + \<Psi>) = \<star>\<star> \<Phi> \<star> \<star>\<star> \<Psi>\<close>
-by (simp add: asepconj_simp ASepConjComm.fold_mset_fun_left_comm asepconj_comm asepconj_multi'_def
-    asepconj_multi_def)
+by (metis asepconj_multi_def asepconj_multi_multi' asepconj_multi_split)
 
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma asepconj_multi_split'':
   assumes \<open>\<Phi> \<subseteq># \<Psi>\<close>
     shows \<open>\<star>\<star> \<Psi> = \<star>\<star> \<Phi> \<star> \<star>\<star> (\<Psi> - \<Phi>)\<close>
 by (metis asepconj_multi_split' assms subset_mset.add_diff_inverse)
+
+text \<open>An iterated conjunction is discardable when every factor is discardable.\<close>
+lemma discardable_in_multi [discardable_in_intros]:
+  assumes \<open>\<And>\<phi>. \<phi> \<in># \<Phi> \<Longrightarrow> discardable_in \<phi> \<rho>\<close>
+    shows \<open>discardable_in (\<star>\<star>\<Phi>) \<rho>\<close>
+using assms proof (induction \<Phi>)
+  case empty
+  then show ?case
+    by (simp add: asepconj_simp discardable_in_empI)
+next
+  case (add \<phi> \<Phi>)
+  from add have 1: \<open>discardable_in \<phi> \<rho>\<close> and 2: \<open>discardable_in (\<star>\<star>\<Phi>) \<rho>\<close>
+    by auto
+  have \<open>\<star>\<star>(add_mset \<phi> \<Phi>) = \<phi> \<star> \<star>\<star>\<Phi>\<close>
+    by (simp add: asepconj_multi_def asepconj_multi'_add_mset)
+  with 1 2 show ?case
+    by (simp add: discardable_in_conj)
+qed
 
 lemma is_sat_multiE[is_sat_elim]:
   assumes \<open>is_sat (\<star>\<star>{# \<xi> . ms #})\<close>
@@ -1672,9 +2075,18 @@ context sepalg begin
 (*>*)
 
 corollary asepconj_multi_mapped_ucincl [ucincl_intros]:
-  assumes \<open>\<And>r. ucincl (e r)\<close>
+  assumes \<open>m \<noteq> {#}\<close>
+      and \<open>\<And>r. ucincl (e r)\<close>
     shows \<open>ucincl (\<star>\<star> {# e . m #})\<close>
-by (metis assms local.asepconj_multi_ucincl msed_map_invR multi_member_split)
+using assms by (intro asepconj_multi_ucincl) auto
+
+\<comment>\<open>This sharper form stays outside \<^verbatim>\<open>ucincl_intros\<close> because its witness is not
+determined by the conclusion.\<close>
+corollary asepconj_multi_mapped_ucincl_member:
+  assumes \<open>r \<in># m\<close>
+      and \<open>ucincl (e r)\<close>
+    shows \<open>ucincl (\<star>\<star> {# e . m #})\<close>
+using assms by (intro asepconj_multi_ucincl_member[where \<phi>=\<open>e r\<close>]) auto
 
 text \<open>The following technical result is at the heart of the cancellation tactic for iterated
 separating conjunctions.  Before it is applied, it should be ensured that all separating
@@ -1683,9 +2095,10 @@ conjunction components of the form \<^term>\<open>\<star>\<star>{# e . ms #}\<cl
 lemma aentails_multi_subset:
   assumes \<open>ms' \<subseteq># ms\<close>
      and \<open>\<And>r. ucincl (e r)\<close>
+     and \<open>ms' \<noteq> {#}\<close>
    shows \<open>\<star>\<star> {# e . ms #} \<longlongrightarrow> \<star>\<star> {# e . ms' #}\<close>
 using assms by (metis aentails_cancel_r asepconj_multi_mapped_ucincl asepconj_multi_split'
-      image_mset_union subset_mset.le_iff_add)
+      image_mset_is_empty_iff image_mset_union subset_mset.le_iff_add)
 
 text \<open>The following results are useful when trying to show entailments between iterated separating
 conjunctions:\<close>
@@ -1718,12 +2131,12 @@ qed
 lemma aentails_cancel_multi_0L:
   assumes \<open>\<star>\<star>{# e . ms' - ms #} \<longlongrightarrow> \<star>\<star>{# e . (ms - ms') #} \<star> \<phi>'\<close>
     shows \<open>\<star>\<star>{# e . ms' #} \<longlongrightarrow> \<star>\<star>{# e . ms #} \<star> \<phi>'\<close>
-using aentails_cancel_multi by (metis assms asepconj_multi_def asepconj_multi_multi' ucincl_UNIV)
+using aentails_cancel_multi by (metis assms local.asepconj_emp_unit(1))
 
 lemma aentails_cancel_multi_0R:
   assumes \<open>\<star>\<star>{# e . ms' - ms #} \<star> \<phi> \<longlongrightarrow> \<star>\<star>{# e . (ms - ms') #}\<close>
     shows \<open>\<star>\<star>{# e . ms' #} \<star> \<phi> \<longlongrightarrow> \<star>\<star>{# e . ms #}\<close>
-using aentails_cancel_multi by (metis assms asepconj_multi_def asepconj_multi_multi' ucincl_UNIV)
+using aentails_cancel_multi by (metis assms local.asepconj_emp_unit(1))
 
 lemma asepconj_add_mset [simp]:
   shows \<open>\<star>\<star>(add_mset x xs) = x \<star> \<star>\<star>xs\<close>
@@ -1739,18 +2152,21 @@ lemma asepconj_multi_mapped_pick:
     shows \<open>\<star>\<star>{# \<xi> \<Colon> lst #} = \<xi> (lst ! i) \<star>  \<star>\<star>{# \<xi> \<Colon> drop_nth i lst #}\<close>
 using assms by (metis asepconj_multi_cons list_update_id mset.simps(2) mset_drop_nth' mset_update)
 
+text \<open>An iteration of ordinary pure assertions collapses to \<^term>\<open>emp\<close> when empty and to one pure
+assertion otherwise.\<close>
+lemma asepconj_multi_pure:
+  shows \<open>\<star>\<star>{# apure (P x) . x\<leftarrow>ms #} = (if ms = {#} then emp else apure (\<forall>x \<in># ms. P x))\<close>
+by (induction ms; auto simp add: asepconj_simp apure_def)
+
+text \<open>Precise-pure assertions collapse uniformly because \<^term>\<open>\<langle>True\<rangle> = emp\<close>.\<close>
+lemma asepconj_multi_pure_precise:
+  shows \<open>\<star>\<star>{# \<langle>P x\<rangle> . x\<leftarrow>ms #} = \<langle>\<forall>x \<in># ms. P x\<rangle>\<close>
+by (induction ms; simp add: asepconj_simp)
+
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma aentails_multi_list_pure:
-  shows \<open>\<star>\<star>{# \<langle>f x\<rangle> \<Colon> x \<leftarrow> xs #} = \<langle>\<forall>x \<in> set xs. f x\<rangle>\<close>
-proof (induction xs)
-  case Nil
-  then show ?case
-    using local.apure_def local.asepconj_multi_empty by force
-next
-  case (Cons a xs)
-  then show ?case
-    by (simp add: asepconj_simp local.apure_def)
-qed
+  shows \<open>\<star>\<star>{# apure (f x) \<Colon> x \<leftarrow> xs #} = (if xs = [] then emp else apure (\<forall>x \<in> set xs. f x))\<close>
+by (simp add: asepconj_multi_pure)
 
 lemma aentails_multi_list_pointwise:
     notes asepconj_simp [simp] aentails_intro [intro]
@@ -1823,27 +2239,28 @@ lemma aentails_multi_list_pointwise_fixed_indexing':
   shows \<open>\<star>\<star>{# f . xs #} \<longlongrightarrow> \<star>\<star>{# g . xs #}\<close>
   using assms by (induction xs) (auto intro: asepconj_mono4 aentails_intro)
 
+text \<open>Dropping factors requires the retained iteration to be non-empty and upwards closed.\<close>
 lemma aentails_multi_list_pointwise_fixed_indexing'':
   assumes \<open>ys \<subseteq># xs\<close>
       and \<open>\<And>x. x \<in># xs \<Longrightarrow> f x \<longlongrightarrow> g x\<close>
+      and \<open>ys \<noteq> {#}\<close>
+      and \<open>\<And>y. ucincl (g y)\<close>
     shows \<open>\<star>\<star>{# f . xs #} \<longlongrightarrow> \<star>\<star>{# g . ys #}\<close>
 using assms proof -
   have \<open>\<star>\<star>{# f . xs #} \<longlongrightarrow> \<star>\<star>{# g . xs #}\<close>
     using assms by (simp add: aentails_multi_list_pointwise_fixed_indexing')
   also have \<open>\<dots> \<longlongrightarrow> \<star>\<star>{# g . ys #}\<close>
-    using assms by (metis image_mset_union local.aentails_cancel_r local.asepconj_ident4
-      local.asepconj_multi_assoc0 local.asepconj_multi_def local.asepconj_multi_split'
-        local.ucincl_UNIV local.ucincl_asepconjR subset_mset.less_eqE)
+    using assms by (intro aentails_multi_subset)
   finally show ?thesis
     by blast
 qed
 
 lemma aentails_multi_list_pointwise_fixed_indexing''':
   assumes \<open>\<And>x. x\<in># xs \<Longrightarrow> f x \<longlongrightarrow> g x\<close>
-      and \<open>\<langle>True\<rangle> \<longlongrightarrow> \<psi>\<close>
+      and \<open>emp \<longlongrightarrow> \<psi>\<close>
     shows \<open>\<star>\<star>{# f . xs #} \<longlongrightarrow> \<star>\<star>{# g . xs #} \<star> \<psi>\<close>
-using assms by (metis aentails_eq aentails_multi_list_pointwise_fixed_indexing'
-    all_aentails_true apure_entailsR asepconj_comm)
+using assms by (meson aentails_multi_list_pointwise_fixed_indexing' aentails_trans'
+    local.asepconj_mono5)
 
 lemma aentails_multi_mapped_pick:
   assumes \<open>i < length lst\<close>
@@ -1857,69 +2274,59 @@ lemma aentails_multi_mapped_pick_0L:
     shows \<open>\<star>\<star>{# \<xi> \<Colon> lst #} \<longlongrightarrow> \<psi>\<close>
 using asepconj_multi_mapped_pick assms asepconj_assoc by metis
 
-\<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
-lemma asepconj_multi_hoist_pure:
-  assumes 0: \<open>\<And>x. ucincl (\<xi> x)\<close>
-      and 1: \<open>ms \<noteq> {#}\<close>
-    shows \<open>\<langle>P\<rangle> \<star> \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} = \<star>\<star>{# (\<xi> x \<star> \<langle>P\<rangle>) . x \<leftarrow> ms #}\<close>
-  using 1
-proof (induction ms)
-  case empty
-  then show ?case by auto
-next
-  case (add x ms)
-  then show ?case
-  proof (cases \<open>ms = {#}\<close>)
-    case True
-    then show ?thesis
-      by (simp add: local.asepconj_comm local.asepconj_swap_top)
-  next
-    case False
-    with add have \<open>\<langle>P\<rangle> \<star> \<star>\<star> {# \<xi> . ms #} = \<star>\<star> {# \<xi> x \<star> \<langle>P\<rangle> . x \<leftarrow> ms #}\<close>
-      by linarith
-    with 0 have \<open>\<langle>P\<rangle> \<star> \<star>\<star> {# \<xi> . add_mset x ms #} = \<star>\<star> {# \<xi> x \<star> \<langle>P\<rangle> . x \<leftarrow> add_mset x ms #}\<close>
-      by (auto simp: asepconj_simp asepconj_swap_top apure_def asepconj_multi_mapped_ucincl)
-    then show ?thesis
-      by blast
-  qed
-qed
-
 lemma asepconj_multi_split_body:
   shows \<open>\<star>\<star>{# \<lambda>s. (\<xi> s \<star> \<tau> s) . ms #} = \<star>\<star>{# \<xi> s . s \<leftarrow> ms #} \<star> \<star>\<star>{# \<tau> s . s \<leftarrow> ms #}\<close>
 proof (induction ms)
   case empty
   then show ?case
-    by (simp add: asepconj_UNIV_idempotent asepconj_multi_empty)
+    by (simp add: local.asepconj_emp_unit(1) asepconj_multi_empty)
 next
   case (add x ms)
   then show ?case
     by (simp add: asepconj_assoc asepconj_swap_top)
 qed
 
+text \<open>An ordinary pure factor can be copied into every member of a non-empty iteration because it
+is idempotent under \<^term>\<open>(\<star>)\<close>.\<close>
+lemma asepconj_multi_hoist_pure:
+  assumes \<open>ms \<noteq> {#}\<close>
+    shows \<open>apure (P) \<star> \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} = \<star>\<star>{# (\<xi> x \<star> apure (P)) . x \<leftarrow> ms #}\<close>
+proof -
+  have nonempty: \<open>\<exists>x. x \<in># ms\<close>
+    using assms by auto
+  have \<open>\<star>\<star>{# (\<xi> x \<star> apure (P)) . x \<leftarrow> ms #} =
+      \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} \<star> \<star>\<star>{# apure (P) . x \<leftarrow> ms #}\<close>
+    by (rule asepconj_multi_split_body)
+  also from nonempty have \<open>\<star>\<star>{# apure (P) . x \<leftarrow> ms #} = apure (P)\<close>
+    by (simp add: asepconj_multi_pure assms)
+  finally show ?thesis
+    by (simp add: local.asepconj_comm)
+qed
+
 lemma asepconj_union_singleton:
   assumes \<open>\<And>x. ucincl (\<xi> x)\<close>
-    shows \<open>(\<Union>x. (\<langle>x = y\<rangle> \<star> \<xi> x)) = \<xi> y\<close>
+    shows \<open>(\<Union>x. (apure (x = y) \<star> \<xi> x)) = \<xi> y\<close>
 proof (intro aentails_eq)
-  show \<open>(\<Union>x. \<langle>x = y\<rangle> \<star> \<xi> x) \<longlongrightarrow> \<xi> y\<close>
+  show \<open>(\<Union>x. apure (x = y) \<star> \<xi> x) \<longlongrightarrow> \<xi> y\<close>
     by (simp add: aentails_refl assms aexists_entailsL
         apure_def asepconj_bot_zero asepconj_ident bot_aentails_all)
 next
   have \<open>\<xi> y \<longlongrightarrow> \<xi> y\<close>
     by (rule aentails_refl)
-  moreover from this assms have \<open>\<xi> y \<longlongrightarrow> \<langle>y = y\<rangle> \<star> \<xi> y\<close>
+  moreover from this assms have \<open>\<xi> y \<longlongrightarrow> apure (y = y) \<star> \<xi> y\<close>
     using local.asepconj_ident4 by auto
-  ultimately show \<open>\<xi> y \<longlongrightarrow> (\<Union>x. \<langle>x = y\<rangle> \<star> \<xi> x)\<close>
+  ultimately show \<open>\<xi> y \<longlongrightarrow> (\<Union>x. apure (x = y) \<star> \<xi> x)\<close>
     using local.aexists_entailsR by fastforce
 qed
 
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma asepconj_union_singleton':
   assumes \<open>\<And>x y. ucincl (\<xi> x y)\<close>
-    shows \<open>(\<Union>a b. (\<langle>a=t\<rangle> \<star> \<xi> a b)) = (\<Union>b. \<xi> t b)\<close>
+    shows \<open>(\<Union>a b. (apure (a=t) \<star> \<xi> a b)) = (\<Union>b. \<xi> t b)\<close>
 proof -
   from assms have A: \<open>\<And>a. ucincl (\<Union>b. \<xi> a b)\<close>
     by (intro ucincl_intros) blast
-  moreover have \<open>(\<Union>a b. (\<langle>a=t\<rangle> \<star> \<xi> a b)) = (\<Union>a. (\<langle>a=t\<rangle> \<star> (\<Union>b. \<xi> a b)))\<close>
+  moreover have \<open>(\<Union>a b. (apure (a=t) \<star> \<xi> a b)) = (\<Union>a. (apure (a=t) \<star> (\<Union>b. \<xi> a b)))\<close>
     using asepconj_Inf_distrib2 asepconj_comm
     by (clarsimp simp add: local.asepconj_Inf_distrib2)
   moreover from A have \<open>... = (\<Union>b. \<xi> t b)\<close>
@@ -1929,7 +2336,7 @@ proof -
 qed
 
 lemma asepconj_Union_pure:
-  shows \<open>(\<Squnion>x. \<langle>P x\<rangle>) = \<langle>\<exists>x. P x\<rangle>\<close>
+  shows \<open>(\<Squnion>x. apure (P x)) = apure (\<exists>x. P x)\<close>
 by (clarsimp simp add: apure_def)
 
 lemma aentails_multi_map_core:
@@ -1971,78 +2378,64 @@ lemma aentails_multi_map_core':
 using aentails_multi_map_core by metis
 
 corollary asepconj_mset_map_sum_lift_single:
-  shows \<open>\<langle>add_mset x ms0 = (f `# ms')\<rangle> = (\<Squnion>x' ms0'. \<langle>ms' = add_mset x' ms0'\<rangle> \<star> \<langle>x = f x'\<rangle> \<star>
-            \<langle>ms0 = (f `# ms0')\<rangle>)\<close>
+  shows \<open>apure (add_mset x ms0 = (f `# ms')) = (\<Squnion>x' ms0'. apure (ms' = add_mset x' ms0') \<star> apure (x = f x') \<star>
+            apure (ms0 = (f `# ms0')))\<close>
 by (clarsimp simp add: asepconj_simp asepconj_Union_pure mset_map_sum_lift_single)
 
+text \<open>Distributing existential choices records one witness per index. The index constraint is
+precise-pure so both sides own the same resource.\<close>
 lemma asepconj_multi_Union:
-  assumes \<open>\<And>x y. ucincl (\<xi> x y)\<close>
-    shows \<open>\<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> idxs #} =
-         (\<Union>idxs'. \<langle>idxs = (fst `# idxs')\<rangle> \<star> \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
+  shows \<open>\<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> idxs #} =
+       (\<Union>idxs'. \<langle>idxs = (fst `# idxs')\<rangle> \<star> \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
 proof (induction idxs)
   case empty
-  then show ?case
-    using local.apure_def local.asepconj_multi_empty local.asepconj_multi_single' by auto
-next
-  case IH: (add x idxs)
-  have \<open>\<xi> x u \<star> \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> idxs #} \<longlongrightarrow>
-        (\<Union>idxs'. \<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close> for u
-  proof -
-    have \<open>\<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u \<longlongrightarrow>
-          (\<Union>idxs'. \<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close> for v
-    proof -
-      have \<open>\<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u \<longlongrightarrow>
-              \<langle>add_mset (x, u) v = add_mset (x, u) v \<and> idxs = {# fst . v #}\<rangle> \<star>
-              \<xi> x u \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #}\<close>
-        by (clarsimp simp add: aentails_refl asepconj_comm)
-      then have \<open>\<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u \<longlongrightarrow> (\<Union>xc xd.
-              \<langle>add_mset (x, u) v = add_mset xc xd \<and> x = fst xc \<and> idxs = {# fst . xd #}\<rangle> \<star>
-              \<xi> x u \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #})\<close>
-        by (smt (verit) fst_conv local.aexists_entailsR)
-      then have \<open>\<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u \<longlongrightarrow> (
-          (\<Union>x' ms0'. \<langle>v + {# (x, u) #} = add_mset x' ms0'\<rangle> \<star> \<langle>x = fst x'\<rangle> \<star> \<langle>idxs = {# fst . ms0' #}\<rangle>) \<star>
-            \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v + {# (x, u) #} #})\<close>
-        by (clarsimp simp add: asepconj_simp)
-      then have \<open>\<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u \<longlongrightarrow> (\<Union>idxs'.
-          (\<Union>x' ms0'. \<langle>idxs' = add_mset x' ms0'\<rangle> \<star> \<langle>x = fst x'\<rangle> \<star> \<langle>idxs = {# fst . ms0' #}\<rangle>) \<star>
-            \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
-        by (rule aexists_entailsR)
-      then show ?thesis
-        by (force simp add: asepconj_mset_map_sum_lift_single)
+  show ?case
+  proof (intro aentails_eq)
+    show \<open>\<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> {#} #} \<longlongrightarrow>
+        (\<Union>idxs'. \<langle>{#} = (fst `# idxs')\<rangle> \<star> \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
+      by (rule aexists_entailsR[of _ _ \<open>{#}\<close>]) (simp add: asepconj_simp aentails_refl)
+  next
+    show \<open>(\<Union>idxs'. \<langle>{#} = (fst `# idxs')\<rangle> \<star> \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #}) \<longlongrightarrow>
+        \<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> {#} #}\<close>
+    proof (intro aexists_entailsL)
+      fix idxs' show \<open>\<langle>{#} = (fst `# idxs')\<rangle> \<star> \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #} \<longlongrightarrow>
+          \<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> {#} #}\<close>
+        by (cases \<open>idxs' = {#}\<close>)
+           (auto simp add: asepconj_simp aentails_refl bot_aentails_all)
     qed
-    then have \<open>\<xi> x u \<star> (\<Union>idxs'. \<langle>idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})
-      \<longlongrightarrow> (\<Union>idxs'. \<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
-      by (simp add: local.aexists_entailsL local.asepconj_Inf_distrib3 local.asepconj_assoc)
-    with IH show ?thesis
-      by auto
   qed
-  then have \<open>(\<Union>u. \<xi> x u \<star> \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> idxs #}) \<longlongrightarrow>
-        (\<Union>idxs'. \<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
-    by (intro aexists_entailsL)
-  moreover
-  have \<open>\<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #} \<longlongrightarrow>
-       (\<Union>xa. \<xi> x xa \<star> \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> idxs #})\<close> for idxs'
-  proof -
-    have \<open>\<langle>idxs' = add_mset u v \<and> x = fst u \<and> idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #} \<longlongrightarrow>
-                (\<Union>u v. \<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u)\<close> for u v
-      by (force simp add: asepconj_simp apure_def aentails_refl asepconj_comm bot_aentails_all intro: aentails_refl local.aexists_entailsR)
-    then have \<open>(\<Union>u v. \<langle>idxs' = add_mset u v \<and> x = fst u \<and> idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #}) \<longlongrightarrow>
-            (\<Union>u v. \<langle>idxs = {# fst . v #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> v #} \<star> \<xi> x u)\<close>
-      by (force intro: aexists_entailsL)
-    then have \<open>\<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #} \<longlongrightarrow>
-       (\<Union>xa. \<xi> x xa \<star> (\<Union>idxs'. \<langle>idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #}))\<close>
-      by (subst asepconj_mset_map_sum_lift_single) (clarsimp simp add: asepconj_simp)
-    with IH show ?thesis
-      by auto
+next
+  case IH: (add s idxs)
+  show ?case (is \<open>?lhs = ?rhs\<close>)
+  proof (intro aentails_eq, goal_cases)
+    case 1
+    have step1: \<open>?lhs \<longlongrightarrow> (\<Union>x. \<xi> s x) \<star>
+        (\<Union>r. \<langle>idxs = (fst `# r)\<rangle> \<star> \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> r #})\<close>
+      by (simp add: IH aentails_refl asepconj_add_mset)
+    have step2: \<open>\<xi> s x \<star> \<langle>idxs = (fst `# r)\<rangle> \<star>
+        \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> r #} \<longlongrightarrow> ?rhs\<close> for x r
+      using asepconj_assoc asepconj_comm
+      by (rule_tac aexists_entailsR[of _ _ \<open>add_mset (s, x) r\<close>]) (simp add: aentails_refl)
+    show ?case
+      by (rule aentails_trans[OF step1])
+         (auto intro!: aexists_entailsL aentails_trans[OF step2] aentails_refl
+          simp add: asepconj_Inf_distrib_right asepconj_Inf_distrib)
+  next
+    case 2
+    have step: \<open>\<langle>add_mset s idxs = (fst `# idxs')\<rangle> \<star>
+        \<star>\<star>{# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #} \<longlongrightarrow> ?lhs\<close> for idxs'
+    proof (cases \<open>(fst `# idxs') = add_mset s idxs\<close>)
+      case True
+      then obtain w r where \<open>idxs' = add_mset (s, w) r\<close> and \<open>(fst `# r) = idxs\<close>
+        using msed_map_invR by fastforce
+      then show ?thesis
+        by (auto simp add: asepconj_simp IH asepconj_Inf_distrib asepconj_Inf_distrib_right
+                    aentails_refl
+                 intro!: aexists_entailsR[of _ _ r] aexists_entailsR[of _ _ w])
+    qed (simp add: asepconj_simp bot_aentails_all)
+    show ?case
+      by (auto intro!: aexists_entailsL step simp only:)
   qed
-  then have \<open>(\<Union>idxs'. \<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #}) \<longlongrightarrow>
-    (\<Union>xa. \<xi> x xa \<star> \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> idxs #})\<close>
-    by (intro aexists_entailsL)
-  ultimately have \<open>(\<Union>xa. \<xi> x xa \<star> \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> idxs #}) =
-    (\<Union>idxs'. \<langle>add_mset x idxs = {# fst . idxs' #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> idxs' #})\<close>
-    by (force intro!: aentails_eq)
-  then show ?case
-    by (auto simp add: asepconj_simp)
 qed
 
 lemma aentails_multi_map:
@@ -2051,82 +2444,65 @@ lemma aentails_multi_map:
     shows \<open>\<star>\<star>{# \<xi> . ms #} = \<star>\<star>{# \<xi>' . ms' #}\<close>
 using assms aentails_multi_map_core by blast
 
-text\<open>This is an \<^emph>\<open>Axiom of Choice\<close> style result for iterated separating conjunctions:\<close>
-\<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
-lemma asepconj_multi_Union_set:
-  assumes \<open>finite idxs\<close>
-      and \<open>\<And>x y. ucincl (\<xi> x y)\<close>
-    shows \<open>\<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> mset_set idxs #} = (\<Union>f. \<star>\<star>{# \<xi> s (f s) . s \<leftarrow> mset_set idxs #})\<close>
-proof -
-  have \<open>(\<Union>x. \<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #}) =
-          (\<Union>x. \<langle>idxs = fst ` x\<rangle> \<star> \<langle>inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #})\<close>
-    by (clarsimp simp add: asepconj_simp)
-  also have \<open>\<dots> = (\<Union>x xa. \<langle>xa = mset_set x\<rangle> \<star> \<langle>idxs = fst ` x\<rangle> \<star> \<langle>inj_on fst x\<rangle> \<star>
-        \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> xa #})\<close>
-    by (force simp add: asepconj_union_singleton ucincl_intros)
-  also have \<open>\<dots> = (\<Union>x xa. \<langle>x = mset_set xa\<rangle> \<star> \<langle>idxs = fst ` xa\<rangle> \<star> \<langle>inj_on fst xa\<rangle> \<star>
-      \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> x #})\<close>
-    by (subst set_Union_flip, rule refl)
-  also have \<open>\<dots> = (\<Union>x xa. \<langle>x = mset_set xa \<and> idxs = fst ` xa \<and> inj_on fst xa\<rangle> \<star>
-      \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> x #})\<close>
-    by (clarsimp simp flip: asepconj_pure asepconj_assoc)
-  also have \<open>\<dots> = (\<Union>x. (\<Union>xa. \<langle>x = mset_set xa \<and> idxs = fst ` xa \<and> inj_on fst xa\<rangle>) \<star>
-      \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> x #})\<close>
-    by (clarsimp simp add: asepconj_simp)
-  also have \<open>\<dots> = (\<Union>x. \<langle>mset_set idxs = {# fst . x #}\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> x #})\<close>
-    using assms by (force simp add: asepconj_Union_pure mset_set_tagged)
-  also have \<open>\<dots> = \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> mset_set idxs #}\<close>
-    using assms by (clarsimp simp add: asepconj_multi_Union)
-  finally have A: \<open>(\<Union>x. \<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star>
-      \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #}) = \<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> mset_set idxs #}\<close>
+text\<open>The following says that a multiset of pairs whose first components exhaust a \<^emph>\<open>set\<close> is in fact
+``functional'': it is the graph of a function on that set.\<close>
+lemma multi_set_set_functionality:
+    fixes M ME
+  assumes \<open>mset_set M = (fst `# ME)\<close>
+    shows \<open>\<exists>f. ME = {# (m, f m) . m \<leftarrow> mset_set M #}\<close>
+using assms proof (induction ME arbitrary: M)
+  case empty
+  then show ?case
+    by simp
+next
+  case (add x ME)
+  note IH = this
+  have \<open>finite M \<or> infinite M\<close>
+    by simp
+  then have \<open>finite M\<close>
+    using IH(2) by force
+  then have dist: \<open>mset_set M = add_mset (fst x) (mset_set (M - {fst x}))\<close>
+    using IH(2) elem_mset_set Multiset.mset_set.remove by fastforce
+  then have IHprem: \<open>mset_set (M - {fst x}) = (fst `# ME)\<close>
+    by (simp add: IH(2))
+  with \<open>finite M\<close> have \<open>fst ` set_mset ME = M - {fst x}\<close>
+    by (metis finite_Diff finite_set_mset_mset_set multiset.set_map)
+  then have fst_ineq: \<open>\<And>y. y \<in> fst ` set_mset ME \<Longrightarrow> y \<noteq> fst x\<close>
     by blast
-  have B: \<open>\<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #} \<longlongrightarrow>
-        \<star>\<star> {# \<xi> s (map_from_graph x s) . s \<leftarrow> mset_set (fst ` x) #}\<close>
-    if x: \<open>idxs = fst ` x\<close> \<open>inj_on fst x\<close>
-    for x :: \<open>('b \<times> 'c) set\<close>
-    proof -
-      have \<open>mset_set (fst ` x) = (fst `# mset_set x)\<close>
-        using that by (simp add: image_mset_mset_set)
-    moreover
-    have \<open>\<xi> (fst y) (snd y) \<longlongrightarrow> \<xi> (fst y) (map_from_graph x (fst y))\<close>
-      if \<open>y \<in># mset_set x\<close> for y
-      by (metis x aentails_refl assms(1) finite_imageD
-          finite_set_mset_mset_set map_from_graph_eval' that)
-    then have \<open>\<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #} \<longlongrightarrow>
-               \<star>\<star> {# \<xi> (fst xa) (map_from_graph x (fst xa)) . xa \<leftarrow> mset_set x #}\<close>
-      by (intro aentails_multi_list_pointwise_fixed_indexing')
-    then have \<open>\<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #} \<longlongrightarrow>
-               \<star>\<star> {# \<xi> s (map_from_graph x s) . s \<leftarrow> {# fst . mset_set x #} #}\<close>
-      by (simp add: aentails_multi_map_core')
-    ultimately show ?thesis
-      by clarsimp
-  qed
-  have \<open>\<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #} \<longlongrightarrow>
-            (\<Union>f. \<star>\<star> {# \<xi> s (f s) . s \<leftarrow> mset_set idxs #})\<close> for x
-  proof -
-    have \<open>\<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #} \<longlongrightarrow>
-            \<star>\<star> {# \<xi> s (map_from_graph x s) . s \<leftarrow> mset_set idxs #}\<close>
-      using B local.apure_entailsL' local.asepconj_multi_def local.asepconj_multi_multi' by auto
+  obtain f where \<open>ME = {# (m, f m) . m \<leftarrow> mset_set (M - {fst x}) #}\<close>
+    using IH IHprem by force
+  moreover let ?f' = \<open>\<lambda>y. if y \<noteq> fst x then f y else snd x\<close>
+  from calculation have \<open>add_mset x ME = {# (m, ?f' m) . m \<leftarrow> mset_set M #}\<close>
+    by (simp add: dist) (force intro!: image_mset_cong simp add: IHprem fst_ineq)
+  ultimately show ?case
+    by force
+qed
+
+text\<open>The set-indexed choice law follows by representing the witness multiset as a function
+graph.\<close>
+lemma asepconj_multi_Union_set:
+  shows \<open>\<star>\<star>{# (\<Union>x. \<xi> s x) . s \<leftarrow> mset_set idxs #} =
+      (\<Union>f. \<star>\<star>{# \<xi> s (f s) . s \<leftarrow> mset_set idxs #})\<close>
+proof (simp add: asepconj_multi_Union, intro aentails_eq aexists_entailsL, goal_cases)
+  case (1 x)
+  show ?case
+  proof (cases \<open>(fst `# x) = mset_set idxs\<close>)
+    case True
+    obtain f where \<open>x = {# (m, f m) . m \<leftarrow> mset_set idxs #}\<close>
+      using multi_set_set_functionality[OF True[symmetric]] by blast
     then show ?thesis
-      by (auto intro: aexists_entailsR)
-  qed
-  then have C: \<open>(\<Union>x. \<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star>
-      \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #}) \<longlongrightarrow> (\<Union>f. \<star>\<star> {# \<xi> s (f s) . s \<leftarrow> mset_set idxs #})\<close>
-    by (auto intro: aexists_entailsL)
-  moreover
-  have \<open>\<star>\<star> {# \<xi> s (f s) . s \<leftarrow> mset_set idxs #} \<longlongrightarrow>
-         (\<Union>x. \<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #})\<close>
-    for f :: \<open>'b \<Rightarrow> 'c\<close>
-   by (metis (no_types, lifting) A aentails_multi_list_pointwise_fixed_indexing' aentails_refl aexists_entailsR)
-  then have \<open>(\<Union>f. \<star>\<star> {# \<xi> s (f s) . s \<leftarrow> mset_set idxs #}) \<longlongrightarrow>
-      (\<Union>x. \<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #})\<close>
-    by (intro aexists_entailsL)
-  then have \<open>(\<Union>f. \<star>\<star> {# \<xi> s (f s) . s \<leftarrow> mset_set idxs #}) =
-      (\<Union>x. \<langle>idxs = fst ` x \<and> inj_on fst x\<rangle> \<star> \<star>\<star> {# \<xi> (fst t) (snd t) . t \<leftarrow> mset_set x #})\<close>
-    by (simp add: aentails_eq C)
-  ultimately show \<open>\<star>\<star> {# \<Union> (range (\<xi> s)) . s \<leftarrow> mset_set idxs #} =
-      (\<Union>f. \<star>\<star> {# \<xi> s (f s) . s \<leftarrow> mset_set idxs #})\<close>
-    using A by auto
+      apply (simp only: True[symmetric] HOL.refl apure_precise_True asepconj_emp_unit)
+      apply (rule aexists_entailsR[of _ _ f])
+      by (metis (mono_tags, lifting) aentails_multi_map aentails_refl_eq split_pairs)
+  qed (simp add: asepconj_simp bot_aentails_all)
+next
+  case (2 f)
+  have \<open>mset_set idxs = (fst `# {# (s, f s) . s \<leftarrow> mset_set idxs #})\<close>
+    by (simp add: multiset_map_comp')
+  then show ?case
+    apply (rule_tac aexists_entailsR[of _ _ \<open>{# (s, f s). s \<leftarrow> mset_set idxs #}\<close>])
+    apply (simp add: apure_precise_True asepconj_emp_unit)
+    by (metis (mono_tags, lifting) aentails_multi_map_core aentails_refl fst_conv snd_conv)
 qed
 
 lemma asepconj_multi_flatten:
@@ -2187,12 +2563,9 @@ lemma asepconj_multi_flatten_constant_indexing_set:
               \<star>\<star>{# \<xi> y x . (y, x) \<leftarrow> mset_set (B \<times> A) #}\<close>
 using assms by (clarsimp simp add: asepconj_multi_flatten set_product_sum)
 
-lemma asepconj_multi_pure:
-  shows \<open>\<star>\<star>{# \<langle>P x\<rangle> . x\<leftarrow>ms #} = \<langle>\<forall>x \<in># ms. P x\<rangle>\<close>
-by (induction ms; auto simp add: asepconj_simp apure_def)
-
-lemma asepconj_multi_true_collapse [simp]: "\<star>\<star> {# UNIV . x \<leftarrow> M #} = UNIV"
-  using asepconj_multi_pure[of \<open>\<lambda>x. True\<close>]
+lemma asepconj_multi_true_collapse [simp]:
+  "\<star>\<star> {# UNIV . x \<leftarrow> M #} = (if M = {#} then emp else UNIV)"
+  using asepconj_multi_pure[of \<open>\<lambda>x. True\<close> M]
   by (force simp: asepconj_False_True)
 
 (*<*)

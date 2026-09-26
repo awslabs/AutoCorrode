@@ -38,24 +38,41 @@ named_theorems lifted_defs
 definition [lifted_defs]: \<open>update_raw_fun r g \<equiv> l\<inverse> (update_raw_fun_lo r g)\<close>
 definition [lifted_defs]: \<open>dereference_raw_fun r \<equiv> l\<inverse> (dereference_raw_fun_lo r)\<close>
 definition [lifted_defs]: \<open>reference_raw_fun r \<equiv> l\<inverse> (reference_raw_fun_lo r)\<close>
+\<comment>\<open>Points-to assertions transfer precisely, while the upwards-closed allocator assertion
+transfers framed.\<close>
 definition [lifted_defs]: \<open>points_to_raw' r sh g \<equiv> l\<inverse> (points_to_raw'_lo r sh g)\<close>
-definition [lifted_defs]: \<open>can_alloc_reference \<equiv> l\<inverse> can_alloc_reference_lo\<close>
+definition [lifted_defs]: \<open>can_alloc_reference \<equiv>
+  pull_back_assertion_framed l can_alloc_reference_lo\<close>
 
 interpretation Defs: reference_defs \<open>\<lambda>(_::'s) (_::'a) (_::'b) (_ :: 'abort) (_:: 'i prompt) (_::'o prompt_output). ()\<close>
    update_raw_fun dereference_raw_fun reference_raw_fun points_to_raw'
    gref_can_store_lo new_gref_can_store_lo can_alloc_reference .
 
-text\<open>Since \<^verbatim>\<open>l\<inverse>\<close> commutes with all constructions carried out in the reference locale, all derived
-definitions of functions and contracts are the pullbacks of their counterparts in the source type.\<close>
+text\<open>Reference transfer uses precise pullbacks for exact points-to assertions and framed
+pullbacks for allocator assertions.\<close>
 lemma reference_transfer_def_simps:
   shows \<open>Defs.update_raw_contract rr g0 g = l\<inverse> (R.update_raw_contract rr g0 g)\<close>
     and \<open>Defs.dereference_raw_contract rr sh g = l\<inverse> (R.dereference_raw_contract rr sh g)\<close>
-    and \<open>Defs.reference_raw_contract v = l\<inverse> (R.reference_raw_contract v)\<close>
+    and \<open>Defs.reference_raw_contract v =
+      pull_back_contract_framed l (R.reference_raw_contract v)\<close>
     and \<open>Defs.points_to_raw rr sh g = l\<inverse> (R.points_to_raw rr sh g)\<close>
     and \<open>Defs.points_to r sh g v = l\<inverse> (R.points_to r sh g v)\<close>
-  by (clarsimp simp add: lifted_defs pull_back_contract_def comp_def slens_pull_back_simps
+  apply (clarsimp simp add: lifted_defs pull_back_contract_framed_def pull_back_contract_def
+      comp_def slens_pull_back_precise_simps
+      pull_back_assertion_framed_apure_precise_asepconj
+      pull_back_assertion_framed_asepconj_apure_precise
+      pull_back_assertion_framed_asepconj_apure_precise_asepconj
+      pull_back_assertion_framed_false
+      pull_back_assertion_mixed_asepconj
+      pull_back_assertion_mixed_asepconj'
     (* All definitions in the reference locale *)
       reference_defs.all_reference_defs bot_fun_def)+
+  \<comment>\<open>The framed allocator factor absorbs the lens kernel in the mixed contract.\<close>
+  apply (simp only: pull_back_assertion_framed_absorbs_precise)
+  apply (simp add: lifted_defs reference_defs.points_to_raw_def)
+  apply (simp add: lifted_defs reference_defs.points_to_def reference_defs.points_to_raw_def
+    slens_pull_back_precise_simps)
+  done
 
 text\<open>Applying the various (non-trivial) theorems for transporting specs along pullbacks, we now
 formally derive the correctness of the pulled back reference implementation:\<close>
@@ -71,8 +88,18 @@ lemma reference_lifted: \<open>reference
    gref_can_store_lo new_gref_can_store_lo can_alloc_reference\<close>
   using R.all_reference_specs apply -
   apply (standard; simp add: reference_transfer_def_simps)
-  by (auto simp add: reference_contracts_no_abort pull_back_spec_universal lifted_defs
-    intro!: slens_pull_back_intros simp flip: slens_pull_back_simps)
+  \<comment>\<open>Framed obligations use only framed rules backwards; precise rules are oriented inward.\<close>
+  apply (auto simp add: reference_contracts_no_abort pull_back_spec_universal lifted_defs
+    intro!: slens_pull_back_intros
+    simp flip: pull_back_assertion_framed_asepconj
+      pull_back_assertion_framed_apure_precise_asepconj
+      pull_back_assertion_framed_asepconj_apure_precise)
+  \<comment>\<open>Exact points-to obligations use precise transport.\<close>
+  apply (auto simp add: reference_contracts_no_abort intro!: pull_back_spec_universal_precise)
+  apply (metis R.points_to_raw_combine pull_back_aentailsI pull_back_asepconj
+    pull_back_assertion_apure_precise)
+  apply (metis R.points_to_raw_split pull_back_aentailsI pull_back_asepconj)
+  done
 
 end
 

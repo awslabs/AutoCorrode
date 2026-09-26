@@ -183,11 +183,16 @@ definition sltriple (\<open>\<lbrace>_\<rbrace>/ _/ \<lbrace>_\<rbrace>\<close>)
    \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace> \<equiv> 
       \<forall>s x s'. \<comment>\<open>For all states @{term s}, @{term s'} and return values @{term x} ...\<close>
       s \<leadsto>\<langle>e\<rangle> (x, s') \<comment>\<open>... if @{term e} can tranform @{term s} into @{term s'}, producing @{term x} ...\<close>
-      \<longrightarrow> (\<forall>\<pi>. ucincl \<pi> \<longrightarrow> \<comment>\<open>then for any predicate @{term \<pi>} (disjoint from P)\<close> 
+      \<longrightarrow> (\<forall>\<pi>. \<comment>\<open>then for \<^emph>\<open>any\<close> predicate @{term \<pi>} (disjoint from P)\<close>
           \<comment>\<open>if @{term s} satisfies the precondition and, disjointly, @{term \<pi>}\<close>
           s \<Turnstile> P \<star> \<pi> \<longrightarrow> 
           \<comment>\<open>then @{term s'} satisfies the postcondition and, disjointly, still @{term \<pi>}\<close>
           s' \<Turnstile> Q x \<star> \<pi>)\<close>
+
+text\<open>\<^bold>\<open>Note\<close> the frame @{term \<pi>} is \<^emph>\<open>unrestricted\<close>. An upwards-closed frame
+could absorb resources omitted by @{term \<open>Q x\<close>}. Quantifying over \<^emph>\<open>all\<close>
+frames, including those owning nothing, makes the post-condition account for
+the resulting state \<^bold>\<open>exactly\<close>.\<close>
 
 text\<open>By definition, we obtain the \<^bold>\<open>frame rule\<close>, which we saw failing in the previous session:\<close>
 
@@ -197,11 +202,9 @@ lemma frame_rule:
   unfolding sltriple_def
 proof (intro allI impI)
   fix h x h' \<pi>
-  assume step: \<open>h \<leadsto>\<langle>e\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                and pre: \<open>h \<Turnstile> (P \<star> S) \<star> \<pi>\<close>
+  assume step: \<open>h \<leadsto>\<langle>e\<rangle> (x, h')\<close> and pre: \<open>h \<Turnstile> (P \<star> S) \<star> \<pi>\<close>
   have \<open>h \<Turnstile> P \<star> (S \<star> \<pi>)\<close> using pre by (simp add: asepconj_assoc)
-  moreover have \<open>ucincl (S \<star> \<pi>)\<close> using uc by (rule ucincl_asepconjR)
-  ultimately have \<open>h' \<Turnstile> Q x \<star> (S \<star> \<pi>)\<close>
+  hence \<open>h' \<Turnstile> Q x \<star> (S \<star> \<pi>)\<close>
     using assms step by (force simp: sltriple_def)
   thus \<open>h' \<Turnstile> (\<lambda>x. Q x \<star> S) x \<star> \<pi>\<close>
     by (simp add: asepconj_assoc)
@@ -218,23 +221,38 @@ text \<open>\<open>P \<star> UNIV\<close> holds on a heap that has \<^emph>\<ope
 
 text \<open>@{thm [display, show_question_marks=false] ucincl_alt}\<close>
 
-text \<open>The main practical relevance of \<open>ucincl\<close> is that we can \<^bold>\<open>hoist
-  pure assertions\<close> out of an entailment, on either side:\<close>
+text \<open>Absorbing resource is the same thing as \<^bold>\<open>forgetting\<close> it, so \<open>ucincl\<close> is
+  what licenses \<^emph>\<open>dropping\<close> a conjunct. AutoCorrode names that licence in
+  general, as a relation between what is thrown away and what is kept:\<close>
 
 text \<open>
-\<^item> @{thm [show_question_marks=false] apure_entails_iff}
-\<^item> @{thm [show_question_marks=false] apure_entailsR}\<close>
+\<^item> @{thm [show_question_marks=false] discardable_in_def}
+\<^item> @{thm [show_question_marks=false] aentails_cancel_l_discardable}
+\<^item> @{thm [show_question_marks=false] discardable_in_univ_iff_ucincl}\<close>
+
+text \<open>The last line is the point: \<open>ucincl \<rho>\<close> says exactly ``\<^emph>\<open>anything at all\<close>
+  may be discarded into \<open>\<rho>\<close>''. Upwards closure is the extreme case of disposal,
+  and disposal is the role \<open>ucincl\<close> plays. At the other extreme, discarding
+  \<^emph>\<open>nothing\<close> asks nothing of \<open>\<rho>\<close> -- which is why a pure side-condition is best
+  carried by \<open>\<langle>P\<rangle>\<close>, owning nothing, and is then hoisted with no side-condition
+  at all:\<close>
+
+text \<open>
+\<^item> @{thm [show_question_marks=false] apure_precise_entailsL} \<comment>\<open>Hoist out of the LHS\<close>
+\<^item> @{thm [show_question_marks=false] apure_precise_entailsR} \<comment>\<open>\<open>is_sat \<phi>\<close>: some state satisfies \<open>\<phi>\<close>\<close>\<close>
 
 text \<open>AutoCorrode tracks \<open>ucincl\<close> via a named-theorems bundle
-  \<open>ucincl_intros\<close>; the \<open>ucincl_solve\<close> tactic discharges such side-conditions
-  automatically.\<close>
+  \<open>ucincl_intros\<close>; the \<open>ucincl_solve\<close> tactic discharges most such side-conditions
+  automatically. \<^bold>\<open>Not all\<close>: a weakest precondition is upwards closed only when
+  all three of its post-conditions are, so there \<open>ucincl_solve\<close> needs those
+  supplied to it.\<close>
 
 end_slide
 
 slide \<open>Common operations on entailments\<close>
 
 text \<open>Working with \<open>\<longlongrightarrow>\<close> and \<open>\<star>\<close> feels similar to working in Pure logic, with \<^term>\<open>(\<longlongrightarrow>)\<close> corresponding to \<^term>\<open>(\<Longrightarrow>)\<close> and \<^term>\<open>(\<star>)\<close> 
-corresponding \<^term>\<open>(\<and>)\<close>; \<^emph>\<open>except\<close> that assertions are \<^bold>\<open>resourceful\<close> and cannot be duplicated (but they can be dropped under \<^term>\<open>ucincl\<close>!).\<close>
+corresponding \<^term>\<open>(\<and>)\<close>; \<^emph>\<open>except\<close> that assertions are \<^bold>\<open>resourceful\<close> and cannot be duplicated (but they can be dropped where \<^const>\<open>discardable_in\<close> licenses it, \<open>ucincl\<close> being the extreme case!).\<close>
 
 text \<open>\<^bold>\<open>Cancellation\<close> (drop a shared conjunct on LHS and RHS):\<close>
 text \<open>
@@ -301,15 +319,14 @@ next
   show \<open>\<lbrace>P\<rbrace> e \<lbrace>Q\<rbrace>\<close> unfolding sltriple_def
   proof (intro allI impI)
     fix h x h' \<pi>
-    assume st: \<open>h \<leadsto>\<langle>e\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                  and pre: \<open>h \<Turnstile> P \<star> \<pi>\<close>
+    assume st: \<open>h \<leadsto>\<langle>e\<rangle> (x, h')\<close> and pre: \<open>h \<Turnstile> P \<star> \<pi>\<close>
     from pre obtain t u where \<open>h = t + u\<close> \<open>t \<sharp> u\<close> \<open>t \<Turnstile> P\<close> \<open>u \<Turnstile> \<pi>\<close>
       by (auto simp: asepconj_def asat_def)
     moreover from \<open>t \<Turnstile> P\<close> H obtain P' where \<open>\<lbrace>P'\<rbrace> e \<lbrace>Q\<rbrace>\<close> \<open>t \<Turnstile> P'\<close>
       by (auto simp: aentails_def wp_sl_def asat_def)
     ultimately have \<open>h \<Turnstile> P' \<star> \<pi>\<close>
       by (auto simp: asepconj_def asat_def)
-    with \<open>\<lbrace>P'\<rbrace> e \<lbrace>Q\<rbrace>\<close> st uc show \<open>h' \<Turnstile> Q x \<star> \<pi>\<close>
+    with \<open>\<lbrace>P'\<rbrace> e \<lbrace>Q\<rbrace>\<close> st show \<open>h' \<Turnstile> Q x \<star> \<pi>\<close>
       by (force simp: sltriple_def)
   qed
 qed
@@ -455,6 +472,8 @@ text \<open>Each operation gets a contract that mentions \<^emph>\<open>only\<cl
   frame rule will absorb whatever else is in the heap.\<close>
 
 (*<*)
+\<comment>\<open>Points-to leaves the rest of the toy heap unconstrained. Registering its
+upwards closure supports extensions to the worked example.\<close>
 lemma ucincl_pto[ucincl_intros]: \<open>ucincl (f \<mapsto> v)\<close>
   unfolding pto_def ucincl_def ucpred_def derived_order_def
   by (clarsimp simp: plus_fun_def plus_option_def disjoint_fun_def disjoint_option_def
@@ -464,8 +483,7 @@ lemma get_x_triple: \<open>\<lbrace>FX \<mapsto> v\<rbrace> get_x \<lbrace>\<lam
   unfolding sltriple_def
 proof (intro allI impI)
   fix h x h' \<pi>
-  assume step: \<open>h \<leadsto>\<langle>get_x\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                       and pre: \<open>h \<Turnstile> FX \<mapsto> v \<star> \<pi>\<close>
+  assume step: \<open>h \<leadsto>\<langle>get_x\<rangle> (x, h')\<close> and pre: \<open>h \<Turnstile> FX \<mapsto> v \<star> \<pi>\<close>
   from step have h_eq: \<open>h' = h\<close> and x_eq: \<open>x = the (h FX)\<close>
     by (auto simp: evals_def get_x_def)
   from pre obtain t u where \<open>h = t + u\<close> \<open>t \<sharp> u\<close> \<open>t FX = Some v\<close> \<open>u \<Turnstile> \<pi>\<close>
@@ -473,19 +491,17 @@ proof (intro allI impI)
   hence \<open>h FX = Some v\<close>
     by (auto simp: plus_fun_def plus_option_def
                    disjoint_fun_def disjoint_option_def split: option.splits)
-  hence pure_eq: \<open>\<langle>x = v\<rangle> = (UNIV :: twoint_sl assert)\<close>
-    using x_eq by (simp add: apure_def)
-  have \<open>ucincl ((FX \<mapsto> v) :: twoint_sl assert)\<close> by (rule ucincl_pto)
-  thus \<open>h' \<Turnstile> (\<langle>x = v\<rangle> \<star> FX \<mapsto> v) \<star> \<pi>\<close>
-    using pre h_eq pure_eq by (simp add: asepconj_simp asepconj_assoc)
+  hence pure_eq: \<open>\<langle>x = v\<rangle> = (emp :: twoint_sl assert)\<close>
+    using x_eq by (simp add: apure_precise_def emp_def)
+  show \<open>h' \<Turnstile> (\<langle>x = v\<rangle> \<star> FX \<mapsto> v) \<star> \<pi>\<close>
+    using pre h_eq pure_eq by (simp add: asepconj_emp_unit)
 qed
 
 lemma put_x_triple: \<open>\<lbrace>FX \<mapsto> u\<rbrace> put_x v \<lbrace>\<lambda>_. FX \<mapsto> v\<rbrace>\<close>
   unfolding sltriple_def
 proof (intro allI impI)
   fix h x h' \<pi>
-  assume step: \<open>h \<leadsto>\<langle>put_x v\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                         and pre: \<open>h \<Turnstile> FX \<mapsto> u \<star> \<pi>\<close>
+  assume step: \<open>h \<leadsto>\<langle>put_x v\<rangle> (x, h')\<close> and pre: \<open>h \<Turnstile> FX \<mapsto> u \<star> \<pi>\<close>
   from step have h'_eq: \<open>h' = h(FX \<mapsto> v)\<close>
     by (auto simp: evals_def put_x_def)
   from pre obtain t r where split: \<open>h = t + r\<close> and disj: \<open>t \<sharp> r\<close>
@@ -511,8 +527,7 @@ lemma get_y_triple: \<open>\<lbrace>FY \<mapsto> v\<rbrace> get_y \<lbrace>\<lam
   unfolding sltriple_def
 proof (intro allI impI)
   fix h x h' \<pi>
-  assume step: \<open>h \<leadsto>\<langle>get_y\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                       and pre: \<open>h \<Turnstile> FY \<mapsto> v \<star> \<pi>\<close>
+  assume step: \<open>h \<leadsto>\<langle>get_y\<rangle> (x, h')\<close> and pre: \<open>h \<Turnstile> FY \<mapsto> v \<star> \<pi>\<close>
   from step have h_eq: \<open>h' = h\<close> and x_eq: \<open>x = the (h FY)\<close>
     by (auto simp: evals_def get_y_def)
   from pre obtain t u where \<open>h = t + u\<close> \<open>t \<sharp> u\<close> \<open>t FY = Some v\<close> \<open>u \<Turnstile> \<pi>\<close>
@@ -520,19 +535,17 @@ proof (intro allI impI)
   hence \<open>h FY = Some v\<close>
     by (auto simp: plus_fun_def plus_option_def
                    disjoint_fun_def disjoint_option_def split: option.splits)
-  hence pure_eq: \<open>\<langle>x = v\<rangle> = (UNIV :: twoint_sl assert)\<close>
-    using x_eq by (simp add: apure_def)
-  have \<open>ucincl ((FY \<mapsto> v) :: twoint_sl assert)\<close> by (rule ucincl_pto)
-  thus \<open>h' \<Turnstile> (\<langle>x = v\<rangle> \<star> FY \<mapsto> v) \<star> \<pi>\<close>
-    using pre h_eq pure_eq by (simp add: asepconj_simp asepconj_assoc)
+  hence pure_eq: \<open>\<langle>x = v\<rangle> = (emp :: twoint_sl assert)\<close>
+    using x_eq by (simp add: apure_precise_def emp_def)
+  show \<open>h' \<Turnstile> (\<langle>x = v\<rangle> \<star> FY \<mapsto> v) \<star> \<pi>\<close>
+    using pre h_eq pure_eq by (simp add: asepconj_emp_unit)
 qed
 
 lemma put_y_triple: \<open>\<lbrace>FY \<mapsto> u\<rbrace> put_y v \<lbrace>\<lambda>_. FY \<mapsto> v\<rbrace>\<close>
   unfolding sltriple_def
 proof (intro allI impI)
   fix h x h' \<pi>
-  assume step: \<open>h \<leadsto>\<langle>put_y v\<rangle> (x, h')\<close> and uc: \<open>ucincl \<pi>\<close>
-                                         and pre: \<open>h \<Turnstile> FY \<mapsto> u \<star> \<pi>\<close>
+  assume step: \<open>h \<leadsto>\<langle>put_y v\<rangle> (x, h')\<close> and pre: \<open>h \<Turnstile> FY \<mapsto> u \<star> \<pi>\<close>
   from step have h'_eq: \<open>h' = h(FY \<mapsto> v)\<close>
     by (auto simp: evals_def put_y_def)
   from pre obtain t r where split: \<open>h = t + r\<close> and disj: \<open>t \<sharp> r\<close>
@@ -595,25 +608,19 @@ lemma %visible foo_spec: \<open>\<lbrace>FX \<mapsto> v\<rbrace> foo \<lbrace>\<
   apply (rule wp_sl_bindI)
   apply (rule get_x_wp[where v=v])
   apply (rule asepconj_mono5)
-  apply (rule ucincl_pto)
   apply (rule aentails_intro(10))
   apply (subst awand_adjoint)
-  apply (subst asepconj_swap_top)
-  apply (rule apure_entailsL)
+  apply (simp only: asepconj_emp_unit)
+  apply (rule apure_precise_entailsL)
   \<comment>\<open>...\<close>
   (*<*)
-  subgoal by (auto intro: ucincl_intros)
   apply simp
-  apply (subst asepconj_comm)
-  apply (subst asepconj_ident2)
-  apply (rule ucincl_pto)
   apply (rule put_x_wp[where u=v])
   apply (rule asepconj_mono5)
-  apply (rule ucincl_pto)
   apply (rule aentails_intro(10))
   apply (subst awand_adjoint)
-  apply (rule aentails_cancel_l)
-  apply (rule ucincl_pto)
+  apply (simp only: asepconj_emp_unit)
+  apply (rule aentails_refl)
   done
   (*>*)
 

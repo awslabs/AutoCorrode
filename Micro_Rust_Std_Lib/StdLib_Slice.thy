@@ -9,10 +9,9 @@ begin
 
 definition range_new_contract :: \<open>'a \<Rightarrow> 'a \<Rightarrow> ('s::sepalg, 'a range, 'abort) function_contract\<close> where
   [crush_contracts]: \<open>range_new_contract b e \<equiv>
-     let pre  = \<langle>True\<rangle>;
+     let pre  = emp;
          post = \<lambda>r. \<langle>r = make_range b e False\<rangle>
       in make_function_contract pre post\<close>
-ucincl_auto range_new_contract
 
 lemma range_new_spec [crush_specs]:
   shows \<open>\<Gamma> ; range_new b e \<Turnstile>\<^sub>F range_new_contract b e\<close>
@@ -25,7 +24,6 @@ definition list_index_contract where [crush_contracts]:
      let pre = \<langle>unat idx < length lst\<rangle> in
      let post = \<lambda>r. \<langle>r = lst ! (unat idx)\<rangle> in
        make_function_contract pre post\<close>
-ucincl_auto list_index_contract
 
 lemma list_index_spec [crush_specs]:
   shows \<open>\<Gamma> ; list_index lst idx \<Turnstile>\<^sub>F list_index_contract lst idx\<close>
@@ -38,7 +36,6 @@ definition array_index_contract where [crush_contracts]:
      let pre = \<langle>unat idx < LENGTH('l)\<rangle> in
      let post = \<lambda>r. \<langle>r = array_nth lst (unat idx)\<rangle> in
        make_function_contract pre post\<close>
-ucincl_auto array_index_contract
 
 lemma array_index_spec [crush_specs]:
   shows \<open>\<Gamma> ; array_index lst idx \<Turnstile>\<^sub>F array_index_contract lst idx\<close>
@@ -63,7 +60,6 @@ definition slice_index_contract :: \<open>(('a, 'b) gref, 'b, 'c list) focused \
               \<langle>unat idx < length ls\<rangle> in
     let post = \<lambda>r. (ptr \<mapsto>\<langle>sh\<rangle> g\<down>ls \<star> \<langle>r = focus_nth (unat idx) ptr\<rangle>) in
       make_function_contract pre post\<close>
-ucincl_auto slice_index_contract
 
 lemma slice_index_spec [crush_specs]:
   shows \<open>\<Gamma> ; slice_index ptr idx \<Turnstile>\<^sub>F slice_index_contract ptr g ls idx sh\<close>
@@ -86,7 +82,6 @@ definition slice_index_array_contract :: \<open>(('a, 'b) gref, 'b, ('t, 'l::{le
               \<langle>unat idx < LENGTH('l)\<rangle> in
     let post = \<lambda>r. (ptr \<mapsto>\<langle>sh\<rangle> g\<down>ls \<star> \<langle>r = focus_nth_array (unat idx) ptr\<rangle>) in
       make_function_contract pre post\<close>
-ucincl_auto slice_index_array_contract
 
 lemma slice_index_array_spec [crush_specs]:
   shows \<open>\<Gamma> ; slice_index_array ptr idx \<Turnstile>\<^sub>F slice_index_array_contract ptr g ls idx sh\<close>
@@ -111,7 +106,6 @@ definition slice_index_vector_contract :: \<open>(('a, 'b) gref, 'b, ('t, 'l::{l
               \<langle>unat idx < vector_len ls\<rangle> in
     let post = \<lambda>r. (ptr \<mapsto>\<langle>sh\<rangle> g\<down>ls \<star> \<langle>r = focus_nth_vector (unat idx) ptr\<rangle>) in
       make_function_contract pre post\<close>
-ucincl_auto slice_index_vector_contract
 
 lemma slice_index_vector_spec [crush_specs]:
   shows \<open>\<Gamma> ; slice_index_vector ptr idx \<Turnstile>\<^sub>F slice_index_vector_contract ptr g ls idx sh\<close>
@@ -159,7 +153,6 @@ definition list_index_range_contract :: \<open>'t list \<Rightarrow> 'w::{len} w
                              res = List.take (unat (end r) - unat (start r))
                                (List.drop (unat (start r)) xs))\<rangle>
       in make_function_contract pre post\<close>
-ucincl_auto list_index_range_contract
 
 lemma list_index_range_spec [crush_specs]:
   shows \<open>\<Gamma> ; list_index_range xs r \<Turnstile>\<^sub>F list_index_range_contract xs r\<close>
