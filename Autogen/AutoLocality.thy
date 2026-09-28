@@ -4267,12 +4267,22 @@ ML\<open>
     locality_cancellation_for_entry_with
       (locality_direct_counter ctxt) rec_name attribute ctxt ctm
 
+  fun locality_simproc_decline_ambiguity f =
+    (case Exn.capture f () of
+       Exn.Res result => result
+     | Exn.Exn exn =>
+         if Exn.is_interrupt exn then Exn.reraise exn
+         else (case exn of
+           Locality_Registry_Ambiguity _ => NONE
+         | _ => Exn.reraise exn))
+
   fun locality_cancellation_simproc_for_entry rec_name attribute ctxt ctm =
     if not (Config.get ctxt locality_cancel_enabled) then NONE
     else
-      locality_with_callback ctxt (fn count =>
-        locality_cancellation_for_entry_with count
-          rec_name attribute ctxt ctm)
+      locality_simproc_decline_ambiguity (fn () =>
+        locality_with_callback ctxt (fn count =>
+          locality_cancellation_for_entry_with count
+            rec_name attribute ctxt ctm))
 
   \<comment>\<open>Compatibility entry point used by the ML regression harness. Simprocs installed by
      declarations close over only their family dispatch key and do not use this
@@ -4280,8 +4290,9 @@ ML\<open>
   fun locality_cancellation_simproc rec_name attr_name idx ctxt ctm =
     if not (Config.get ctxt locality_cancel_enabled) then NONE
     else
-      locality_with_callback ctxt (fn count =>
-        let
+      locality_simproc_decline_ambiguity (fn () =>
+        locality_with_callback ctxt (fn count =>
+          let
           val context = Context.Proof ctxt
           val parsed_const =
             try (Syntax.read_term ctxt #> extract_const) attr_name
@@ -4330,7 +4341,7 @@ ML\<open>
                   (locality_specialize_entry_with count ctxt actual entry)
                   ctxt ctm
               end
-        end)
+          end))
 
   fun locality_prove_cancellation_fact ctxt (rec_name0 : string)
         (operation_pattern : term) (attribute_pattern : term)
@@ -4470,8 +4481,9 @@ ML\<open>
 
           fun try_entries [] = NONE
             | try_entries (entry :: entries) =
-                (case locality_cancellation_for_entry_with count
-                        (locality_entry_record_name entry) entry ctxt ctm of
+                (case locality_simproc_decline_ambiguity (fn () =>
+                         locality_cancellation_for_entry_with count
+                           (locality_entry_record_name entry) entry ctxt ctm) of
                    NONE => try_entries entries
                  | result => result)
 
@@ -4814,8 +4826,13 @@ ML\<open>
          with its own, deliberately broader, test. *)
       fun baked_const_unfoldable (c, T) =
         let
+          val rec_ty_name =
+            (case rec_ty of
+               Type (name, _) => name
+             | _ => rec_name)
           val mentions_record =
-            T |> Term.exists_subtype (fn Type (n, _) => n = rec_name | _ => false)
+            T |> Term.exists_subtype
+              (fn Type (n, _) => n = rec_ty_name | _ => false)
           val declaring_theory =
             try (Name_Space.theory_name {long = true}
                   (Consts.space_of (Proof_Context.consts_of ctxt))) c
