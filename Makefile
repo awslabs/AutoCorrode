@@ -34,9 +34,11 @@ define ensure_registered
 	 system_comp='$(ISABELLE_SYSTEM_COMPONENTS)'; \
 	 user_comp='$(ISABELLE_USER_COMPONENTS)'; \
 	 component_entries() { \
-	   for comp in "$$system_comp" "$$user_comp"; do \
-	     [ ! -f "$$comp" ] || cat "$$comp"; \
-	   done; \
+		   for comp in "$$system_comp" "$$user_comp"; do \
+		     [ ! -f "$$comp" ] || while IFS= read -r entry; do \
+		       [ -d "$$entry" ] && printf '%s\n' "$$entry"; \
+		     done < "$$comp"; \
+		   done; \
 	 }; \
 	 dir=""; \
 	 if [ -n "$$cand" ]; then dir=$$(cd "$$cand" 2>/dev/null && pwd || true); fi; \
