@@ -28,9 +28,19 @@ definition std_set_c :: \<open>nat \<Rightarrow> standard_ext \<Rightarrow> stan
 definition std_has_b :: \<open>standard_ext \<Rightarrow> bool\<close> where
   \<open>std_has_b R \<equiv> std_b R > 0\<close>
 
+definition std_apply_policy ::
+    \<open>(standard_ext \<Rightarrow> nat) \<Rightarrow> standard_ext \<Rightarrow> standard_ext\<close> where
+  \<open>std_apply_policy policy R \<equiv>
+     std_a_update (\<lambda>_. policy R) R\<close>
+
+definition std_policy :: \<open>standard_ext \<Rightarrow> nat\<close> where
+  \<open>std_policy R \<equiv> std_b R\<close>
+
 locality_lemma for standard_ext: \<open>std_bump_a\<close> footprint [std_a] .
 locality_lemma for standard_ext: \<open>std_set_c\<close> footprint [std_c] .
 locality_lemma for standard_ext: \<open>std_has_b\<close> footprint [std_b] .
+locality_lemma for standard_ext:
+  \<open>std_apply_policy std_policy\<close> footprint [std_a, std_b] .
 
 lemma \<open>std_has_b (std_bump_a (std_set_c n R)) = std_has_b R\<close>
   by simp
@@ -42,6 +52,9 @@ lemma \<open>std_c (std_bump_a R) = std_c R\<close>
   by simp
 
 lemma \<open>std_c (std_a_update f R) = std_c R\<close>
+  by simp
+
+lemma \<open>std_c (std_apply_policy std_policy R) = std_c R\<close>
   by simp
 
 ML\<open>
