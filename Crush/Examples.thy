@@ -40,6 +40,50 @@ lemma \<open>\<And>t x y z. P x z\<close>
   (* \<And>x z. P x z *)
   oops
 
+subsubsection\<open>Order fallback\<close>
+
+lemma crush_base_order:
+  assumes \<open>(a :: 64 word) \<le> b\<close>
+      and \<open>b < a\<close>
+    shows False
+  using assms by crush_base
+
+lemma crush_base_order_premises:
+  assumes \<open>\<not> (s :: nat) < e\<close>
+      and \<open>\<not> e \<le> s\<close>
+    shows \<open>P s e\<close>
+  using assms by crush_base
+
+lemma crush_base_order_disequality:
+  assumes \<open>(a :: 16 word) \<noteq> b\<close>
+      and \<open>\<not> a < b\<close>
+    shows \<open>b < a\<close>
+  using assms by crush_base
+
+lemma crush_base_order_arith:
+  assumes \<open>(n :: nat) \<le> 6\<close>
+      and \<open>0 < n\<close>
+    shows \<open>n - Suc 0 < 6\<close>
+  using assms by crush_base
+
+ML_val \<open>
+  fun assert_order_rejects name prop =
+    let
+      val goal = Goal.init (Thm.cterm_of \<^context> prop)
+    in
+      (case Seq.pull (Crush.crush_branch_order_tac \<^context> 1 goal) of
+         NONE => ()
+       | SOME _ => error ("order tactic accepted " ^ quote name))
+    end
+
+  val _ = assert_order_rejects "unrelated assumption"
+    \<^prop>\<open>True \<Longrightarrow> True\<close>
+  val _ = assert_order_rejects "reflexive equality"
+    \<^prop>\<open>(x :: nat) = x\<close>
+  val _ = assert_order_rejects "bound only under a quantifier"
+    \<^prop>\<open>\<forall>i<(n :: nat). P i \<Longrightarrow> P 0\<close>
+\<close>
+
 subsection\<open>Separation logic\<close>
 
 subsubsection\<open>Normalizing associativity of separating conjunctions\<close>
