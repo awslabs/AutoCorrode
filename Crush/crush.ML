@@ -94,6 +94,7 @@ sig
   val crush_branch_urust_simps_tac : Proof.context -> int -> tactic
   val crush_branch_misc_tac : Proof.context -> int -> tactic
   val crush_branch_ucincl_tac : Proof.context -> int -> tactic
+  val crush_branch_order_tac : Proof.context -> int -> tactic
   val crush_branch_additional_tactic : Proof.context -> int -> tactic
   val crush_branch_additional_method : Proof.context -> int -> tactic
   val crush_branch_safe_tac : Proof.context -> int -> tactic
@@ -387,6 +388,59 @@ struct
       else
         K no_tac
 
+  fun is_order_relation (Const (@{const_name less}, _) $ _ $ _) = true
+    | is_order_relation (Const (@{const_name less_eq}, _) $ _ $ _) = true
+    | is_order_relation _ = false
+
+  fun is_order_literal (Const (@{const_name Not}, _) $ t) = is_order_relation t
+    | is_order_literal t = is_order_relation t
+
+  fun is_order_prem (Const (@{const_name Trueprop}, _) $ t) = is_order_literal t
+    | is_order_prem _ = false
+
+  fun is_disequality (Const (@{const_name Not}, _) $
+        (Const (@{const_name HOL.eq}, Type (_, [T, _])) $ _ $ _)) = T <> @{typ bool}
+    | is_disequality _ = false
+
+  fun is_order_fact (Const (@{const_name Trueprop}, _) $ t) =
+        is_order_literal t orelse is_disequality t
+    | is_order_fact _ = false
+
+  fun is_order_concl
+        (Const (@{const_name Trueprop}, _) $ Const (@{const_name False}, _)) = true
+    | is_order_concl t = is_order_prem t
+
+  (* Close order and linear-arithmetic side conditions such as
+     `n \<le> 6 \<Longrightarrow> 0 < n \<Longrightarrow> n - Suc 0 < 6`, or refute contradictory
+     bounds such as `a < b \<Longrightarrow> b \<le> a \<Longrightarrow> P`. The goal qualifies if its
+     conclusion or some top-level premise is a possibly negated `<` or
+     `\<le>`. The order and arithmetic tactics then see only such
+     premises and disequalities `a \<noteq> b`, as needed for
+     `a \<noteq> b \<Longrightarrow> \<not> a < b \<Longrightarrow> b < a`. Crush goals carry many
+     unrelated premises, and searching all of them made most failed
+     attempts expensive. Unlike HOL's simpset solvers, this never
+     instantiates schematics by `refl`. *)
+  val crush_branch_order_tac: Proof.context -> int -> tactic = fn ctxt =>
+    let
+      fun core ctxt' prems =
+        HOL_Order_Tac.tac prems ctxt' 1
+        ORELSE (Method.insert_tac ctxt' prems 1 THEN Lin_Arith.simple_tac ctxt' 1)
+      fun focused concl_is_order {context = ctxt', prems, ...} =
+        let val prems' = filter (is_order_fact o Thm.prop_of) prems in
+          (if concl_is_order then all_tac else resolve_tac ctxt' @{thms FalseE} 1)
+          THEN core ctxt' prems'
+        end
+    in
+      SUBGOAL (fn (t, i) =>
+        let
+          val concl_is_order = is_order_concl (Logic.strip_assums_concl t)
+        in
+          if concl_is_order orelse exists is_order_prem (Logic.strip_assums_hyp t)
+          then SOLVED' (Subgoal.FOCUS (focused concl_is_order) ctxt) i
+          else no_tac
+        end)
+    end
+
   val update_guards_tac = Crush_Guards.update_guards_shallow_tac
 
   val crush_branch_reduced_clarsimp_tac : Proof.context -> int -> tactic =
@@ -599,6 +653,7 @@ struct
             ("additional_method"       , \<^here>, (fn _ => crush_branch_additional_method ctxt)),
             ("wp_case_split_tac"       , \<^here>, (fn _ => crush_branch_wp_case_split_tac ctxt)),
             ("safe_tac"                , \<^here>, (fn _ => crush_branch_safe_tac ctxt)),
+            ("order"                   , \<^here>, (fn _ => crush_branch_order_tac ctxt)),
             ("clarsimp_filtered"       , \<^here>, (fn _ => crush_branch_filtered_clarsimp_tac ctxt)),
             ("clarsimp_fallback"       , \<^here>, (fn _ => crush_branch_clarsimp_fallback_tac ctxt))
            ] |>
