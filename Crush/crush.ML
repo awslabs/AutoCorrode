@@ -570,10 +570,18 @@ struct
            |> Pretty.block |> Pretty.string_of |> Output.warning
          end
       else () end)
+     val max_facts = Config.get ctxt Crush_Config.relevance_filter_max_facts
+     (* `clarsimp_filtered` is the branch before this one. If MePo ignored no
+        premise of the goal, it has already run this clarsimp call on this goal,
+        and failed. *)
+     val after_filtered = Config.get ctxt Crush_Config.enable_branch_filtered_clarsimp
+     fun repeats_filtered i st =
+       after_filtered andalso null (snd (MePo_Core.irrelevant_prems_in_goal ctxt max_facts NONE i st))
    in
      if Config.get ctxt Crush_Config.enable_branch_clarsimp then
-       strip_shyps_tac'
-         (DEBUG_BEFORE_AFTER' log_before_after (CHANGED_PROP o clarsimp_tac ctxt))
+       let val clarsimp = DEBUG_BEFORE_AFTER' log_before_after (CHANGED_PROP o clarsimp_tac ctxt) in
+         strip_shyps_tac' (fn i => fn st => if repeats_filtered i st then Seq.empty else clarsimp i st)
+       end
      else K no_tac
    end
 

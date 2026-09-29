@@ -677,8 +677,11 @@ fun relevance_filter_generic (prem_prep : prem_prep) ctxt thres0 decay max_facts
   fun relevant_prems_in_goal ctxt max_facts fudge i thm =
     let
       val subgoal = Thm.cprem_of thm i |> Thm.term_of
+      val nprems = subgoal |> Term.strip_all_body |> Logic.strip_imp_prems |> length
     in
-      relevant_prems ctxt max_facts fudge subgoal |> apsnd (List.map fst)
+      (* Same short cut as `relevant_prems`, but without constifying the goal. *)
+      if nprems <= max_facts then (nprems, 0 upto nprems - 1)
+      else relevant_prems ctxt max_facts fudge subgoal |> apsnd (List.map fst)
     end
     handle THM _ => (0, [])
 
