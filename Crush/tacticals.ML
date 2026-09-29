@@ -300,7 +300,8 @@ struct
      val debug_level = Config.get ctxt Crush_Config.debug_level
      fun debug lvl msg = if lvl <= debug_level then tracing (msg ()) else ()
      val prioritize_changed_goals = Config.get ctxt Crush_Config.prioritize_changed_goals
-     val m = if Config.get ctxt Crush_Config.do_big_steps then DWELL o m else m
+     val big_steps = Config.get ctxt Crush_Config.do_big_steps
+     val m = if big_steps then DWELL o m else m
      val gas = Config.get ctxt Crush_Config.gas
 
      fun error msg = msg |> tracing
@@ -339,27 +340,7 @@ struct
                              SOME ((st, false), Seq.empty)) else
              case res of
                NONE => (* If it didn't work, we proceed with the rest of the goals *)
-                 if aggressive then
-                    Seq.pull (run_smart count st is)
-                 else let
-                   (* Check if the current goal contains a schematic *)
-                   fun get_schematics t = Term.add_var_names t []
-                   val prems = Thm.prems_of st
-                   val cur_goal = hd prems
-                   val cur_schematics = get_schematics cur_goal
-                   in
-                     if List.length cur_schematics = 0 then SOME ((st, false), Seq.empty)
-                     else let
-                       fun lists_intersect [] _ = false
-                         | lists_intersect (x::xs) ys = (* improve perf? *)
-                             exists (fn y => x=y) ys orelse lists_intersect xs ys
-                       fun share_schematic i =
-                          lists_intersect (i - 1 |> curry List.nth prems |> get_schematics) (cur_goal |> get_schematics)
-                       val is' = List.filter share_schematic is
-                       in
-                         Seq.pull (run_smart count st is')
-                       end
-                    end
+                 Seq.pull (run_after_failure count st is)
              | SOME (st', _) => let (* Success case *)
                  val nprems_old  = Thm.nprems_of st
                  val nprems_new  = Thm.nprems_of st'
@@ -385,15 +366,58 @@ struct
                             else
                                (range_of_nats_base 1 (n_new_goals+1)) @ changed @ is'
 
+                 (* A big step that does not reduce the number of goals stops
+                    because its last step failed on the first goal of its
+                    result. If that goal heads the new worklist, running the
+                    step on it again, in the same state, would repeat the
+                    failure of every branch: go on as after that failure. *)
+                 val known_failure =
+                   big_steps andalso nprems_new >= nprems_old andalso
+                   (case is'' of 1 :: _ => true | _ => false)
                  val _ = debug 1 (fn () => "Goals before: " ^ (nprems_old |> Int.toString))
                  val _ = debug 1 (fn () => "Goals after: " ^ (nprems_new |> Int.toString))
                  val _ = debug 1 (fn () => "Worklist: " ^ (intlist_to_string is))
                  val _ = debug 1 (fn () => "Worklist shifted: " ^ (intlist_to_string is'))
                  val _ = debug 1 (fn () => "New worklist: " ^ (intlist_to_string is''))
+                 val next =
+                   if not known_failure then run_smart (count+1) st' is''
+                   else if count + 1 >= gas then Seq.empty
+                   else Seq.make (fn _ =>
+                     (debug 0 (fn () =>
+                        "step: "     ^ (count + 1 |> Int.toString)              ^ ", " ^
+                        "goal: 1 (the big step just failed on it), " ^
+                        "goals: "    ^ (st' |> Thm.nprems_of |> Int.toString)   ^ ", " ^
+                        "worklist: " ^ (intlist_to_string (tl is'')));
+                      Seq.pull (run_after_failure (count+1) st' (tl is''))))
                  in
-                   SOME ((st', true), run_smart (count+1) st' is'')
+                   SOME ((st', true), next)
                  end
            end)
+     (* The step failed on the first goal of st; `is` is the rest of the
+        worklist. In aggressive mode, go on with it. Otherwise stop, unless
+        the goal contains schematic variables; then go on with the goals
+        that share one of them. *)
+     and run_after_failure count st is =
+       if aggressive then run_smart count st is
+       else let
+         (* Check if the current goal contains a schematic *)
+         fun get_schematics t = Term.add_var_names t []
+         val prems = Thm.prems_of st
+         val cur_goal = hd prems
+         val cur_schematics = get_schematics cur_goal
+       in
+         if List.length cur_schematics = 0 then Seq.single (st, false)
+         else let
+           fun lists_intersect [] _ = false
+             | lists_intersect (x::xs) ys = (* improve perf? *)
+                 exists (fn y => x=y) ys orelse lists_intersect xs ys
+           fun share_schematic i =
+              lists_intersect (i - 1 |> curry List.nth prems |> get_schematics) (cur_goal |> get_schematics)
+           val is' = List.filter share_schematic is
+         in
+           run_smart count st is'
+         end
+       end
    in
      fn st => let
        val initial_worklist = range_of_nats_base 1 (Thm.nprems_of st)
