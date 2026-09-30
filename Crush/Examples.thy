@@ -196,7 +196,7 @@ subsubsection\<open>Floating assumptions/conclusions\<close>
 
 text\<open>There is tactic support for floating pure assumptions and conclusions:\<close>
 
-schematic_goal \<open>\<delta> \<star> \<alpha> \<star> ?\<beta> r \<star> apure (\<gamma>) \<longlongrightarrow> \<delta> \<star> apure (\<gamma>) \<star> apure (\<beta> r) \<star> \<alpha>\<close>
+schematic_goal \<open>\<delta> \<star> \<alpha> \<star> ?\<beta> r \<star> \<langle>\<gamma>\<rangle> \<longlongrightarrow> \<delta> \<star> \<langle>\<gamma>\<rangle> \<star> \<langle>\<beta> r\<rangle> \<star> \<alpha>\<close>
   apply (asepconj_rotate_assms)
   apply (aentails_float_pure_concls)
   apply (aentails_float_pure_assms)
@@ -205,16 +205,16 @@ schematic_goal \<open>\<delta> \<star> \<alpha> \<star> ?\<beta> r \<star> apure
 notepad
 begin
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     by (aentails_float_pure_assms, aentails_float_pure_concls, rule aentails_refl)
 next
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     \<comment>\<open>Float assumptions and conclusions at the same time\<close>
     by (aentails_float_pure, rule aentails_refl)
 next
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     by (aentails_float_pure, rule aentails_refl)
 end
 
@@ -320,7 +320,7 @@ traversed using backtracking.\<close>
 notepad
 begin
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     apply aentails_float_pure_assms' \<comment>\<open>Happens to float \<^verbatim>\<open>R\<close>, but other options are available
                                         through backtracking\<close>
     back back
@@ -334,7 +334,7 @@ next
   a pure assumption to the front, but only one allows the subsequent application of the introduction
   rule \<^verbatim>\<open>asepconj_mono\<close>:\<close>
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (Q) \<star> apure (P) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>Q\<rangle> \<star> \<langle>P\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     \<comment>\<open>Backtracking forces floating of \<^verbatim>\<open>Q\<close>, which is not the first choice as we have seen above.\<close>
     apply (aentails_float_pure_assms'; intro asepconj_mono)
     apply aentails_float_pure_assms
@@ -361,32 +361,22 @@ begin
      fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close>
      and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<phi>\<close>
-     and 1: \<open>\<phi> \<star> \<phi>' \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
-  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+     and 1: \<open>\<phi> \<star> \<phi>' \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     apply aentails_hoist_pure_assms
     apply (rule 1)
     done
 next
      fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close>
      and P Q R :: \<open>bool\<close>
-  assume \<open>ucincl \<phi>\<close>
-     and 1: \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P)\<close>
-     and 2: \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (Q)\<close>
-     and 2: \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (R)\<close>
-     and \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> \<phi> \<star> \<phi>'\<close>
-  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
+  assume \<open>P\<close> and \<open>Q\<close> and \<open>R\<close>
+     and spatial: \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star>
+       \<langle>R\<rangle> \<longlongrightarrow> \<phi> \<star> \<phi>'\<close>
+  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
     apply aentails_hoist_pure_concls
-    apply auto
+    apply crush_base
     done
 end
-
-text\<open>Ordinary pure-conclusion hoisting declines when the retained
-assertion has no closure licence.\<close>
-lemma
-  fixes \<alpha> \<beta> :: \<open>'s::sepalg assert\<close> and P :: bool
-  shows \<open>\<alpha> \<longlongrightarrow> apure (P) \<star> \<beta>\<close>
-  apply (fails \<open>aentails_hoist_pure_concls\<close>)
-  oops
 
 text\<open>Precise pure assumptions own zero, so their hoist needs no closure
 premise and leaves no residual resource. \<^verbatim>\<open>crush_boot\<close> applies this method
@@ -398,7 +388,7 @@ begin
      and P Q :: \<open>bool\<close>
   assume 1: \<open>P \<Longrightarrow> Q \<Longrightarrow> \<phi> \<star> \<phi>' \<longlongrightarrow> \<xi>\<close>
   have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<longlongrightarrow> \<xi>\<close>
-    apply aentails_hoist_pure_precise_assms
+    apply aentails_hoist_pure_assms
     apply (rule 1; assumption)
     done
 end
@@ -918,29 +908,17 @@ subsubsection\<open>Entailment simplification\<close>
 
 text\<open>\<^verbatim>\<open>aentails_simp_core\<close> attempts a single simplification step for a separating entailment.
 It is rarely used on its own but as part of more complex tactics repeating, such as
-\<^verbatim>\<open>aentails_simp_basic\<close>:\<close>
+\<^verbatim>\<open>aentails_simp_basic\<close>. Precise-pure conclusions become opaque scheduling
+obligations which full Crush discharges through its late pure-introduction branch:\<close>
 
 notepad
 begin
   fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<phi>\<close>
-  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
-    apply aentails_simp_core \<comment>\<open>Hoisting pure assumptions\<close>
-    apply aentails_simp_core \<comment>\<open>Splitting pure conclusions\<close>
-    apply aentails_simp_core
-    apply aentails_simp_core
-    apply aentails_simp_core
-    apply aentails_simp_core
-    apply aentails_simp_core
-    apply aentails_simp_core
-    apply aentails_simp_core
+  from this have \<open>\<phi> \<star> \<langle>P\<rangle> \<star> \<phi>' \<star> \<langle>Q\<rangle> \<star> \<langle>R\<rangle> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<phi> \<star> \<phi>' \<star> \<langle>R\<rangle>\<close>
+    apply aentails_simp_basic
+    apply crush_base
     done
-next
-  fix \<phi> \<phi>' \<xi> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
-  assume \<open>ucincl \<phi>\<close>
-  from this have \<open>\<phi> \<star> apure (P) \<star> \<phi>' \<star> apure (Q) \<star> apure (R) \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<phi> \<star> \<phi>' \<star> apure (R)\<close>
-    \<comment>\<open>The same again, but now in one step\<close>
-    by aentails_simp_basic
 end
 
 text\<open>The method \<^verbatim>\<open>aentails_simp_basic\<close> combines entailment simplification with entailment
@@ -954,25 +932,27 @@ notepad
 begin
   fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<alpha>\<close>
-  from this have \<open>P \<Longrightarrow> \<alpha> \<star> apure (Q) \<star> \<beta> \<star> apure (R) \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> apure (P) \<star> apure (Q) \<star> \<beta> \<star> \<alpha> \<star> apure (R)\<close>
-    by aentails_simp_basic
+  from this have \<open>P \<Longrightarrow> \<alpha> \<star> \<langle>Q\<rangle> \<star> \<beta> \<star> \<langle>R\<rangle> \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> \<langle>P\<rangle> \<star> \<langle>Q\<rangle> \<star> \<beta> \<star> \<alpha> \<star> \<langle>R\<rangle>\<close>
+    apply aentails_simp_basic
+    apply crush_base
+    done
 next
-  \<comment>\<open>Note, however, that classical simplification is not performed:\<close>
+  \<comment>\<open>The late Crush branch also discharges compound pure obligations after the spatial
+  simplifier has finished:\<close>
   fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close> and P Q R :: \<open>bool\<close>
   assume \<open>ucincl \<alpha>\<close>
-  from this have \<open>P \<Longrightarrow> \<alpha> \<star> apure (Q) \<star> \<beta> \<star> apure (R) \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> apure (P \<and> Q) \<star> \<beta> \<star> \<alpha> \<star> apure (R)\<close>
+  from this have \<open>P \<Longrightarrow> \<alpha> \<star> \<langle>Q\<rangle> \<star> \<beta> \<star> \<langle>R\<rangle> \<star> \<gamma> \<longlongrightarrow> \<gamma> \<star> \<langle>P \<and> Q\<rangle> \<star> \<beta> \<star> \<alpha> \<star> \<langle>R\<rangle>\<close>
     apply aentails_simp_basic
-    apply simp
-    apply aentails_simp_basic
+    apply crush_base
     done
 end
 
 subsubsection\<open>Precise pure assertions\<close>
 
 text\<open>The precise-pure hoists need no closure premise. On the conclusion
-side they leave a separating entailment against \<^term>\<open>apure (P)\<close>, allowing later
-spatial branches to continue. These examples exercise both directions through
-the public core method.\<close>
+side they leave the Boolean obligation as a spatial entailment, allowing later
+spatial branches to establish it. These examples exercise both directions
+through the public core method.\<close>
 
 notepad
 begin
@@ -985,8 +965,17 @@ next
   assume \<open>P\<close>
   have \<open>\<alpha> \<star> \<beta> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<alpha> \<star> \<beta>\<close>
     apply aentails_simp_core
-     apply (rule apure_entailsR0[OF \<open>P\<close>])
-    by (rule aentails_refl)
+    apply (crush_base simp add: \<open>P\<close>)
+    done
+next
+  fix \<alpha> \<beta> \<gamma> :: \<open>'s::sepalg assert\<close>
+  have \<open>\<alpha> \<star> \<langle>False\<rangle> \<star> \<beta> \<longlongrightarrow> \<gamma>\<close>
+    by crush_base
+next
+  fix P :: bool
+  assume \<open>is_sat (\<langle>False\<rangle> :: 's::sepalg assert)\<close>
+  then have P
+    by crush_base
 end
 
 subsubsection\<open>Spatial \<^verbatim>\<open>rule\<close>\<close>

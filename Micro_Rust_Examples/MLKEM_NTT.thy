@@ -187,10 +187,10 @@ definition ntt_contract ::
      ('s::{sepalg}, unit, 'b) function_contract\<close> where
   [crush_contracts]: \<open>ntt_contract f_ref g p \<equiv>
      let pre  = f_ref \<mapsto>\<langle>\<top>\<rangle> g\<down>p \<star>
-                apure (poly_wf p) \<star>
+                \<langle>poly_wf p\<rangle> \<star>
                 can_alloc_reference;
          post = \<lambda>_. (\<Squnion> g'. f_ref \<mapsto>\<langle>\<top>\<rangle> g'\<down>(MLKEM_Specification.ntt p)) \<star>
-                apure (poly_wf (MLKEM_Specification.ntt p)) \<star>
+                \<langle>poly_wf (MLKEM_Specification.ntt p)\<rangle> \<star>
                 can_alloc_reference
       in make_function_contract pre post\<close>
 
@@ -453,7 +453,7 @@ proof (crush_boot f: ntt_def contract: ntt_contract_def, goal_cases)
              = MLKEM_Specification.ntt_outer_loop 1 7 p\<rangle>
           \<star> \<langle>poly_wf p_cur\<rangle>
           \<star> \<langle>k_val \<le> 2 ^ layer\<rangle>\<close>
-        and \<tau>=\<open>\<lambda>_. apure (False)\<close> and \<theta>=\<open>\<lambda>_. apure (False)\<close>
+        and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close> and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
       in wp_raw_for_loop_framedI'\<close>)
        subgoal \<comment> \<open>Init/frame: establish INV[0] and frame INV[7] to postcondition\<close>
          apply (crush_base simp add: MLKEM_Specification.ntt_def)
@@ -475,8 +475,8 @@ proof (crush_boot f: ntt_def contract: ntt_contract_def, goal_cases)
                     (2 ^ (7 - layer)) (2 ^ layer) (2 ^ layer) p_cur\<rangle>
                \<star> \<langle>poly_wf p_mid\<rangle>
                \<star> \<langle>k_val + 2 ^ layer \<le> 128\<rangle>\<close>
-             and \<tau>=\<open>\<lambda>_. apure (False)\<close>
-             and \<theta>=\<open>\<lambda>_. apure (False)\<close>
+             and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
+             and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
            in wp_raw_for_loop_framedI'\<close>)
           subgoal \<comment> \<open>middle init/frame\<close>
             apply (crush_base no_schematics
@@ -515,7 +515,7 @@ proof (crush_boot f: ntt_def contract: ntt_contract_def, goal_cases)
                     (2 ^ (7 - layer))
                     j_off
                     p_mid)\<rangle>\<close>
-                and \<tau>=\<open>\<lambda>_. apure (False)\<close> and \<theta>=\<open>\<lambda>_. apure (False)\<close>
+                and \<tau>=\<open>\<lambda>_. \<langle>False\<rangle>\<close> and \<theta>=\<open>\<lambda>_. \<langle>False\<rangle>\<close>
               in wp_raw_for_loop_framedI'\<close>)
               subgoal \<comment> \<open>inner init/frame\<close>
                 apply (crush_base simp add: simp add: ntt_inner_len_val unat_of_nat_eq unat_power_lower)

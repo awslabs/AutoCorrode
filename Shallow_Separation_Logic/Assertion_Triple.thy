@@ -142,23 +142,6 @@ proof -
       local.sepalg_apart_plus_distrib local.sepalg_assoc local.sepalg_comm that)
 qed
 
-text \<open>The pure assertion \<^term>\<open>apure (P)\<close> may absorb arbitrary resource, so hoisting it
-leaves \<^term>\<open>\<phi> \<star> \<top>\<close>. Use \<^term>\<open>\<langle>P\<rangle>\<close> when the pure factor must own no
-resource.\<close>
-lemma atriple_hoist_pure:
-  shows \<open>(\<phi> \<star> apure (P) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
-           (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
-    and \<open>(apure (P) \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
-           (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
-proof -
-  show \<open>(\<phi> \<star> apure (P) \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
-          (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
-    by (clarsimp simp add: atriple_def apure_def asepconj_simp)
-  from this show \<open>(apure (P) \<star> \<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>) \<longleftrightarrow>
-          (P \<longrightarrow> (\<phi> \<star> \<top> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi>))\<close>
-    by (simp add: asepconj_comm)
-qed
-
 lemma atriple_direct:
   assumes \<open>ucincl \<alpha>\<close>
       and \<open>ucincl \<beta>\<close>
@@ -389,33 +372,6 @@ lemma atriple_local:
       and \<open>R \<sigma> (v, \<sigma>')\<close>
     shows \<open>\<phi> \<tturnstile> (\<sigma>, \<sigma>') \<stileturn>\<^sub>w\<^sub>e\<^sub>a\<^sub>k \<psi> v\<close>
 using assms by (clarsimp simp add: is_local_def atriple_def asat_def asepconj_def) (metis local.disjoint_sym)
-
-text \<open>Hoisting an absorbing pure factor from an \<^term>\<open>atriple_rel\<close> leaves
-\<^term>\<open>\<phi> \<star> \<top>\<close>:\<close>
-lemma atriple_rel_hoist_pure:
-  shows \<open>(\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
-    and \<open>(apure (P) \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
-proof -
-  {
-    assume \<open>\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-       and \<open>P\<close>
-    from this have \<open>\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-      by (simp add: atriple_rel_def local.asepconj_False_True(2) local.asepconj_comm
-        local.asepconj_weaken2I local.is_local_upwards_closure(2))
-  } moreover {
-    assume \<open>\<not> P\<close>
-    from this have \<open>\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-      by (simp add: atriple_rel_def local.asat_apure_distrib'(1) local.is_local_hoist_pure)
-  } moreover {
-    assume \<open>\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-    from this have \<open>\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>\<close>
-      by (clarsimp simp add: atriple_rel_def apure_def asepconj_simp) (metis local.is_local_empty)
-  }
-  ultimately show \<open>(\<phi> \<star> apure (P) \<turnstile> R \<stileturn>\<^sub>R \<psi>) = (P \<longrightarrow> \<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>)\<close>
-    by auto
-  from this show \<open>(apure (P) \<star> \<phi> \<turnstile> R \<stileturn>\<^sub>R \<psi>) \<longleftrightarrow> (P \<longrightarrow> (\<phi> \<star> \<top> \<turnstile> R \<stileturn>\<^sub>R \<psi>))\<close>
-    by (simp add: asepconj_comm)
-qed
 
 lemma atriple_rel_bind:
     fixes \<phi> :: \<open>'a assert\<close>

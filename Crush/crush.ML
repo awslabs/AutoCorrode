@@ -556,8 +556,7 @@ struct
     end
 
   val crush_branch_intro_pure_aentails_tac : Proof.context -> int -> tactic = fn ctxt =>
-    Separation_Logic_Tactics.ucincl_discharge_tac ctxt
-      (intro_tac @{thms apure_entailsR0 apure_precise_entailsR0} ctxt)
+    intro_tac @{thms apure_precise_entailsR0 apure_crush_obligation_entailsR0} ctxt
 
   val crush_branch_aentails_cond_crule_tac =
      fn ctxt => Separation_Logic_Tactics.aentails_cond_crule_tac (Named_Theorems.get ctxt @{named_theorems crush_aentails_cond_crules}) ctxt

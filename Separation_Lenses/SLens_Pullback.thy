@@ -148,13 +148,6 @@ lemma pull_back_assertion_emp[slens_pull_back_precise_simps]:
   using slens_lens_laws(2)[of 0] slens_view_zero[OF slens_valid]
   by (simp add: pull_back_assertion_def emp_def asat_def)
 
-text\<open>Ordinary pure assertions permit arbitrary ownership, so their precise pullback also carries
-the zero-complement restriction \<^term>\<open>l\<inverse> UNIV\<close>. Precise-pure assertions already own only zero
-and are fixed.\<close>
-lemma pull_back_assertion_pure[slens_pull_back_precise_simps]:
-  shows \<open>l\<inverse> (apure P) = apure P \<inter> l\<inverse> UNIV\<close>
-  by (simp add: apure_def pull_back_assertion_def)
-
 lemma pull_back_assertion_apure_precise[slens_pull_back_precise_simps]:
   shows \<open>l\<inverse> \<langle>P\<rangle> = \<langle>P\<rangle>\<close>
   by (simp add: apure_precise_def pull_back_assertion_def asat_def
@@ -302,16 +295,12 @@ lemma pull_back_assertion_framed_false[slens_pull_back_simps]:
   shows \<open>pull_back_assertion_framed l {} = {}\<close>
   by (simp add: pull_back_assertion_framed_def)
 
-lemma pull_back_assertion_framed_pure[slens_pull_back_simps]:
-  shows \<open>pull_back_assertion_framed l (apure P) = apure P\<close>
-  by (simp add: apure_def pull_back_assertion_framed_def)
-
 text\<open>A framed pullback enforces zero ownership only in the viewed component. Its complement is
 therefore the lens kernel rather than \<^term>\<open>emp\<close>:\<close>
 lemma pull_back_assertion_framed_apure_precise:
   shows \<open>pull_back_assertion_framed l \<langle>P\<rangle> =
       apure P \<inter> pull_back_assertion_framed l emp\<close>
-  by (auto simp add: pull_back_assertion_framed_def apure_precise_def apure_def emp_def asat_def)
+  by (cases P; simp add: asepconj_simp pull_back_assertion_framed_false)
 
 lemma pull_back_assertion_framed_asepconj[slens_pull_back_simps]:
   fixes \<xi> \<tau> :: \<open>'t assert\<close>

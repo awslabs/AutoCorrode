@@ -167,10 +167,6 @@ proof -
     by auto
 qed
 
-lemma is_local_hoist_pure:
-  shows \<open>is_local R (\<phi> \<star> apure (P)) \<longleftrightarrow> P \<longrightarrow> is_local R \<phi>\<close>
-  by (simp add: apure_def is_local_empty is_local_upwards_closure(1) local.asepconj_bot_zero2)
-
 lemma is_local_False:
   shows \<open>is_local (\<lambda>x (v, y). False) \<phi>\<close>
 by (clarsimp simp add: is_local_def)

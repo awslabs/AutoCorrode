@@ -24,14 +24,14 @@ definition read_shareable_value_core :: \<open>('v shareable_value, 'v, 'r, 'abo
   )\<close>
 
 definition shareable_value_is :: \<open>share \<Rightarrow> 'v \<Rightarrow> 'v shareable_value assert\<close> where
-  \<open>shareable_value_is sh v \<equiv> apure (0 < sh) \<star> \<up>\<^sub>s (Shared_Value (Abs_nonempty_share sh) v)\<close>
+  \<open>shareable_value_is sh v \<equiv> \<langle>0 < sh\<rangle> \<star> \<up>\<^sub>s (Shared_Value (Abs_nonempty_share sh) v)\<close>
 
 lemma ucincl_shareable_value_is [simp, ucincl_intros]: \<open>ucincl (shareable_value_is sh v)\<close>
   unfolding shareable_value_is_def by (simp add: uc_state_ucincl ucincl_intros)
 
 lemma shareable_value_is_alt:
   \<open>\<sigma> \<in> shareable_value_is sh v \<longleftrightarrow> 0 < sh \<and> \<sigma> \<in> \<up>\<^sub>s (Shared_Value (Abs_nonempty_share sh) v)\<close>
-  by (simp add: shareable_value_is_def uc_state_ucincl asepconj_pure', simp add: apure_def)
+  by (simp flip: asat_def add: shareable_value_is_def asat_apure_precise_distrib)
 
 lemma shareable_value_is_top_alt:
   shows \<open>shareable_value_is \<top> v = {Shared_Value \<top> v}\<close>
@@ -44,9 +44,9 @@ lemma ucincl_shared_value_top[simp, ucincl_intros]:
   by (simp flip: shareable_value_is_top_alt add: ucincl_intros)
 
 lemma asepconj_float_pure:
-  shows \<open>\<alpha> \<star> apure P = apure P \<star> \<alpha>\<close>
-    and \<open>\<alpha> \<star> apure P \<star> \<beta> = apure P \<star> \<alpha> \<star> \<beta>\<close>
-  by (simp add: asepconj_comm asepconj_swap_top asepconj_pure)+
+  shows \<open>\<alpha> \<star> \<langle>P\<rangle> = \<langle>P\<rangle> \<star> \<alpha>\<close>
+    and \<open>\<alpha> \<star> \<langle>P\<rangle> \<star> \<beta> = \<langle>P\<rangle> \<star> \<alpha> \<star> \<beta>\<close>
+  by (simp add: asepconj_comm asepconj_swap_top)+
 
 lemma shareable_value_split:
   assumes \<open>sh0 \<sharp> sh1\<close>
@@ -73,15 +73,15 @@ proof (intro apure_precise_entailsR)
         non_is_sat_empty shareable_value_uc_state_asepconj_general)
 next
   assume \<section>: "is_sat (shareable_value_is sh0 v0 \<star> shareable_value_is sh1 v1)"
-  then obtain "is_sat (apure (0 < sh1))" "is_sat (apure (0 < sh0))"
-    by (metis is_sat_pure is_sat_splitE shareable_value_is_def)
+  then obtain "is_sat (\<langle>0 < sh1\<rangle>)" "is_sat (\<langle>0 < sh0\<rangle>)"
+    by (metis is_sat_pure_precise is_sat_splitE shareable_value_is_def)
   with \<section> show "sh0 \<sharp> sh1"
     apply (simp add: shareable_value_is_def asepconj_float_pure)
     by (simp add: asepconj_simp asepconj_uc_state_general Abs_nonempty_share_inverse zero_share_def split: if_splits)
 next
   show "shareable_value_is sh0 v0 \<star> shareable_value_is sh1 v1 \<longlongrightarrow> shareable_value_is (sh0 + sh1) v0"
     apply (simp add: shareable_value_is_def asepconj_float_pure)
-    apply (intro apure_entailsL assocL_entails apure_entailsR apure_entailsR0)
+    apply (intro apure_precise_entailsL assocL_entails apure_precise_entailsR apure_precise_entailsR0)
      apply (simp_all add: ucincl_intros uc_state_ucincl plus_share_def less_supI2)
     by (simp add: aentails_def eq_onp_same_args plus_nonempty_share.abs_eq shareable_value_uc_state_asepconj_general zero_share_def)
 qed 

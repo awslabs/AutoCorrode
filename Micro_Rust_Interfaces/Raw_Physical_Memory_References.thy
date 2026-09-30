@@ -24,11 +24,11 @@ proof -
   { assume \<open>shA = 0\<close>
     from this have ?thesis
       by (auto simp add: points_to_tagged_phys_byte_empty_share asepconj_simp
-        asepconj_False_True) }
+        apure_precise_True apure_precise_False) }
   moreover { assume \<open>shB = 0\<close>
     from this have ?thesis
       by (auto simp add: points_to_tagged_phys_byte_empty_share asepconj_simp
-        asepconj_False_True) }
+        apure_precise_True apure_precise_False) }
   moreover { assume \<open>0 < shA\<close> and \<open>0 < shB\<close>
     then have ?thesis
       by (fastcrush_base intro!: aentails_eq seplog drule add: points_to_tagged_phys_byte_combine
@@ -183,7 +183,7 @@ proof -
   show ?thesis
   apply (crush_boot f: dereference_raw_fun_def contract: reference_defs.dereference_raw_contract_def)
   apply (crush_base simp add: Rust_Iterator.map_def collect_def reference_defs.points_to_raw_def
-    points_to_raw'_def Let_def asepconj_False_True)
+    points_to_raw'_def Let_def apure_precise_True apure_precise_False)
   apply (rule_tac \<tau>=\<open>\<lambda>_. {}\<close> and INV=\<open>\<lambda>i ls.
      \<langle>ls = List.take i g\<rangle> \<star> points_to_tagged_phys_bytes (raw_pmem_region_base (gref_address r)) sh tag g
   \<close> in wp_gather_framedI')
@@ -207,10 +207,6 @@ lemma reference_raw_fun_spec:
   apply (crush_boot f: reference_raw_fun_def contract: reference_defs.reference_raw_contract_def)
   apply (fastcrush_base simp add: can_alloc_reference_def)
   done
-
-lemma is_sat_splitD[is_sat_destruct]:
-  shows \<open>is_sat (\<phi> \<star> \<psi>) \<Longrightarrow> (is_sat \<phi> \<and> is_sat \<psi>)\<close>
-  by is_sat_destruct
 
 lemma points_to_tagged_bytes_join:
   shows \<open>\<And>r sh1 sh2 v1 v2.

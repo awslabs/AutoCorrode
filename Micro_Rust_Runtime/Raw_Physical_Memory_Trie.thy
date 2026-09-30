@@ -116,9 +116,10 @@ qed
 corollary points_to_tagged_phys_byte_ucincl'':
   shows \<open>points_to_tagged_phys_byte pa \<pi> tag b \<star> UNIV = points_to_tagged_phys_byte pa \<pi> tag b\<close>
     and \<open>UNIV \<star> points_to_tagged_phys_byte pa \<pi> tag b = points_to_tagged_phys_byte pa \<pi> tag b\<close>
-    and \<open>points_to_tagged_phys_byte pa \<pi> tag b \<star> apure P = points_to_tagged_phys_byte pa \<pi> tag b \<sqinter> apure P\<close>
+    and \<open>points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>P\<rangle> =
+      (if P then points_to_tagged_phys_byte pa \<pi> tag b else {})\<close>
 by (auto simp add: asepconj_comm asepconj_ident points_to_tagged_phys_byte_ucincl'
-  asepconj_pure')
+  asepconj_simp split: if_splits)
 
 lemma points_to_tagged_phys_byteE [elim]:
   assumes \<open>\<sigma> \<Turnstile> points_to_tagged_phys_byte pa sh tag b\<close>
@@ -259,7 +260,8 @@ proof (ucincl_discharge \<open>intro satisfies_function_contractI\<close>; clars
       eval_value (yh \<Gamma>) (function_body (load_tagged_physical_address pa)) \<stileturn>\<^sub>R
           (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>)\<close>
     by (force simp add: atriple_rel_def eval_value_def load_tagged_physical_address_def
-      asepconj_False_True load_tagged_phys_byte_def urust_eval_predicate_load_tagged_physical_address_core)
+      apure_precise_True apure_precise_False load_tagged_phys_byte_def
+      urust_eval_predicate_load_tagged_physical_address_core)
   moreover from calculation have \<open>points_to_tagged_phys_byte pa \<pi> tag b \<turnstile> eval_return (yh \<Gamma>) (function_body (load_tagged_physical_address pa)) \<stileturn>\<^sub>R
       (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>)\<close>
     by (clarsimp simp add: atriple_rel_def eval_return_def eval_value_def load_tagged_physical_address_def
@@ -274,8 +276,9 @@ proof (ucincl_discharge \<open>intro satisfies_function_contractI\<close>; clars
       eval_abort (yh \<Gamma>) (function_body (load_tagged_physical_address pa)) \<stileturn>\<^sub>R \<bottom>\<close>
     by (clarsimp simp add: eval_abort_def atriple_rel_def)
   ultimately show \<open>\<Gamma> ; points_to_tagged_phys_byte pa \<pi> tag b \<turnstile> function_body (load_tagged_physical_address pa) \<stileturn>
-    (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>) \<bowtie> (\<lambda>r. points_to_tagged_phys_byte pa \<pi> tag b \<star> \<langle>r = b\<rangle>) \<bowtie> \<bottom>\<close>
-    by (intro sstripleI; clarsimp)
+    (\<lambda>r. if r = b then points_to_tagged_phys_byte pa \<pi> tag b else {}) \<bowtie>
+    (\<lambda>r. if r = b then points_to_tagged_phys_byte pa \<pi> tag b else {}) \<bowtie> \<bottom>\<close>
+    by (intro sstripleI; simp_all add: points_to_tagged_phys_byte_ucincl'')
 qed
 
 lemma urust_eval_predicate_store_tagged_physical_address_core [urust_eval_predicate_simps]:
@@ -577,8 +580,13 @@ lemma asat_multi_focusE:
   by (force simp add: asat_def asepconj_def asepconj_add_mset
       dest!: multi_member_split)
 
-declare apureE[asat_elims]
-  and asat_existsE[asat_elims]
+lemma asat_apure_preciseE [asat_elims]:
+  assumes \<open>s \<Turnstile> \<langle>P\<rangle>\<close>
+      and \<open>P \<Longrightarrow> R\<close>
+    shows \<open>R\<close>
+using assms by simp
+
+declare asat_existsE[asat_elims]
   and asat_existsE'[asat_elims]
   and asat_forallE[asat_elims]
 
@@ -930,11 +938,11 @@ lemma physical_memory_singleton_tagged_split_alt'':
     fixes sh1 sh2 :: nonempty_share
   assumes \<open>pa < PMEM_TRIE_ADDRESS_LIMIT\<close>
     shows \<open>{PSINGLE pa v sh1 tag} \<star> {PSINGLE pa v' sh2 tag'} \<star> \<top> =
-             {PSINGLE pa v (sh1 + sh2) tag} \<star> apure (tag = tag') \<star> apure (v = v') \<star>
-               apure (\<epsilon> sh1 \<sharp> \<epsilon> sh2)\<close>
+             {PSINGLE pa v (sh1 + sh2) tag} \<star> \<langle>tag = tag'\<rangle> \<star> \<langle>v = v'\<rangle> \<star>
+               \<langle>\<epsilon> sh1 \<sharp> \<epsilon> sh2\<rangle> \<star> \<top>\<close>
   using assms by (cases \<open>v = v'\<close>; cases \<open>tag = tag'\<close>; cases \<open>\<epsilon> sh1 \<sharp> \<epsilon> sh2\<close>)
   (auto simp flip: asepconj_assoc simp add:
-    physical_memory_singleton_tagged_split_alt' simp add: asepconj_simp apure_def)
+    physical_memory_singleton_tagged_split_alt' simp add: asepconj_simp)
 
 lemma physical_memory_take_byte:
   assumes \<open>pa < PMEM_TRIE_ADDRESS_LIMIT\<close>
@@ -1041,7 +1049,8 @@ next
    proof (cases \<open>shA = 0 \<or> shB = 0\<close>)
      case True
      then show ?thesis
-       by (auto simp: points_to_tagged_phys_byte_empty_share asepconj_simp asepconj_False_True)
+       by (auto simp: points_to_tagged_phys_byte_empty_share asepconj_simp
+         apure_precise_True apure_precise_False)
    next
      case False
      then have \<open>0 \<noteq> shA\<close> and \<open>0 \<noteq> shB\<close> 
@@ -1058,8 +1067,8 @@ next
       apply (intro aentails_eq; clarsimp simp add: asepconj_simp)
       apply (aentails_pick_assm 2, clarsimp simp add: asepconj_simp)
       apply (aentails_pick_assm 1, clarsimp simp add: physical_memory_singleton_tagged_split_alt'')
-      apply (aentails_cancel, clarsimp simp add: asepconj_simp ucincl_intros aentails_simp is_sat_pure 
-        intro!: apure_entailsR0)
+      apply (aentails_cancel, clarsimp simp add: asepconj_simp ucincl_intros aentails_simp
+        is_sat_pure_precise intro!: apure_precise_entailsR0)
       apply (crush_base seplog drule add:
         physical_memory_singleton_tagged_split_alt[THEN aentails_refl_eq])
       done
