@@ -78,6 +78,11 @@ sig
  val relevant_prems_in_goal : Proof.context -> int ->
     relevance_fudge option -> int -> thm -> int * (int list)
 
+ (* Whether the conclusion of the i-th subgoal of `thm` contains a constant
+    MePo can rank by (parameters and free variables count). Without one,
+    e.g. for `False`, no premise can be ranked relevant. *)
+ val conclusion_has_constants : Proof.context -> int -> thm -> bool
+
  (* `irrelevant_prems_in_goal ctxt max_facts fudge i thm`
 
     The COMPLEMENT of `relevant_prems_in_goal`: indices of premises that should
@@ -684,6 +689,15 @@ fun relevance_filter_generic (prem_prep : prem_prep) ctxt thres0 decay max_facts
       else relevant_prems ctxt max_facts fudge subgoal |> apsnd (List.map fst)
     end
     handle THM _ => (0, [])
+
+  fun conclusion_has_constants ctxt i thm =
+    let
+      val goal = Thm.cprem_of thm i |> Thm.term_of
+        |> dest_all_constify' |> subst_Frees_constify
+    in
+      not (null (pconsts_in_fact (Proof_Context.theory_of ctxt) (Logic.strip_imp_concl goal)))
+    end
+    handle THM _ => true
 
   (* [a,a+1,...,b] without elements from `exclude`.
      `exclude` must be in ascending order. *)
