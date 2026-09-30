@@ -496,15 +496,30 @@ struct
         K no_tac
     end
 
+  (* The premises that `clarsimp_filtered` hides. If the conclusion has no
+     constant, such as `False`, MePo would hide every premise, since none
+     can be related to it; hide none then instead. *)
+  fun filtered_clarsimp_hidden ctxt max_facts i st =
+    if MePo_Core.conclusion_has_constants ctxt i st then
+      snd (MePo_Core.irrelevant_prems_in_goal ctxt max_facts NONE i st)
+    else []
+
   val crush_branch_filtered_clarsimp_tac : Proof.context -> int -> tactic =
     fn ctxt => let fun NOTE msg =  TIME' ctxt (Config.get ctxt Crush_Config.time_clarsimp) msg
                                 #> LOG' ctxt  (Config.get ctxt Crush_Config.log_clarsimp) msg
     in
       if Config.get ctxt Crush_Config.enable_branch_filtered_clarsimp then
-        strip_shyps_tac' (
-            NOTE "lazy_clarsimp_relevance_filter_ignore" (MePo_Prem.ignore_irrelevant_prems_tac ctxt (Config.get ctxt Crush_Config.relevance_filter_max_facts))
-            THEN' NOTE "lazy_clarsimp_filtered_clarsimp" (CHANGED_PROP o clarsimp_tac ctxt)
-            THEN_ALL_NEW (MePo_Prem.unignore_tac ctxt))
+        let val max_facts = Config.get ctxt Crush_Config.relevance_filter_max_facts
+          val hidden = filtered_clarsimp_hidden ctxt max_facts
+          fun ignore i st =
+            MePo_Prem.ignore_tac_idxs ctxt (hidden i st) i st
+            handle THM _ => all_tac st
+        in
+          strip_shyps_tac' (
+              NOTE "lazy_clarsimp_relevance_filter_ignore" ignore
+              THEN' NOTE "lazy_clarsimp_filtered_clarsimp" (CHANGED_PROP o clarsimp_tac ctxt)
+              THEN_ALL_NEW (MePo_Prem.unignore_tac ctxt))
+        end
       else
         K no_tac
     end
@@ -571,12 +586,12 @@ struct
          end
       else () end)
      val max_facts = Config.get ctxt Crush_Config.relevance_filter_max_facts
-     (* `clarsimp_filtered` is the branch before this one. If MePo ignored no
+     (* `clarsimp_filtered` is the branch before this one. If it hid no
         premise of the goal, it has already run this clarsimp call on this goal,
         and failed. *)
      val after_filtered = Config.get ctxt Crush_Config.enable_branch_filtered_clarsimp
      fun repeats_filtered i st =
-       after_filtered andalso null (snd (MePo_Core.irrelevant_prems_in_goal ctxt max_facts NONE i st))
+       after_filtered andalso null (filtered_clarsimp_hidden ctxt max_facts i st)
    in
      if Config.get ctxt Crush_Config.enable_branch_clarsimp then
        let val clarsimp = DEBUG_BEFORE_AFTER' log_before_after (CHANGED_PROP o clarsimp_tac ctxt) in
