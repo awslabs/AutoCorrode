@@ -2330,8 +2330,11 @@ struct
                       #> Crush_Tacticals.LOG' ctxt (Config.get ctxt Crush_Config.log_insert_top) msg
      in
        Crush_Tacticals.IF' wants_inserted_top (NOTE "aentails_insert_top" (
-         (* The insertion is available only when closure of the selected factor is proved. *)
-         ucincl_must_discharge_tac ctxt
+         (* The insertion is available only when closure of the selected factor is proved.
+            Commit to the first closure proof: alternative proofs of the same ucincl fact
+            yield the same goal, so backtracking into them only repeats a failing
+            continuation. *)
+         DETERM o ucincl_must_discharge_tac ctxt
            (resolve_tac ctxt @{thms aentails_insert_top_after_ucincl})))
      end
 
