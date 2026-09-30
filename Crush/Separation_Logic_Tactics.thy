@@ -433,8 +433,8 @@ method aentails_cancel_points_to_raw_with_typed = guard \<open>K Separation_Logi
            (rule refl | simp)?)
 \<close>
 
-\<comment>\<open>Ordinary pure conclusions can be split only when the retained
-conclusion absorbs the separated resource.\<close>
+\<comment>\<open>Split a zero-owning pure conclusion from the retained spatial
+conclusion.\<close>
 method_setup aentails_hoist_pure_concls = \<open>
   Scan.succeed
     (SIMPLE_METHOD' o Separation_Logic_Tactics.aentails_hoist_pure_concls_tac)
@@ -462,15 +462,12 @@ method contract uses f contract =
      subst wp_sstriple_iff,
    ( simp (no_asm) only: contract )? )
 
-\<comment>\<open>Run the ordinary hoist first so it can consolidate its factors, then
-hoist precise-pure factors. Both are optional, allowing mixed contract
-preconditions.\<close>
+\<comment>\<open>Hoist precise-pure factors from contract preconditions.\<close>
 method crush_boot uses f contract simp =
   (contract f:f contract:contract,
    micro_rust_ssa_wp_normalize,
    (clarsimp simp add: Let_def simp)?,
-   aentails_hoist_pure_assms?,
-   aentails_hoist_pure_precise_assms?)
+   aentails_hoist_pure_assms?)
 
 section\<open>\<^verbatim>\<open>crush\<close>\<close>
 
@@ -482,7 +479,6 @@ declare asepconj_multi_split'   [crush_asepconj_simp]
 declare asepconj_Inf_distrib    [crush_asepconj_simp]
 declare asepconj_Inf_distrib2   [crush_asepconj_simp]
 declare asepconj_UNIV_idempotent[crush_asepconj_simp]
-declare awand_pure_false        [crush_asepconj_simp]
 declare asepconj_emp_unit       [crush_asepconj_simp]
 \<comment>\<open>Do not normalize precise falsehood here: the core hoist turns that
 factor directly into a \<^term>\<open>False\<close> premise, while \<^term>\<open>\<bottom> \<star> \<phi>\<close> would stall the loop.\<close>

@@ -1351,20 +1351,20 @@ using assms by (auto intro!: ucinclI ucpredI simp add: derived_order_def has_def
 
 subsubsection\<open>Pure assertions\<close>
 
-text \<open>Moreing the other way, a \<^emph>\<open>pure\<close> assertion is completely independent of the underlying
-machine.  This can be modelled as an \<^emph>\<open>embedding\<close> of a HOL formula into our separation logic:\<close>
-definition apure :: \<open>bool \<Rightarrow> 'a assert\<close> where
-  \<open>apure P \<equiv> {s. P}\<close>
-
-text \<open>A precise pure assertion carries a HOL fact while owning exactly the
-empty machine state.\<close>
+text \<open>A precise pure assertion carries a HOL fact while owning exactly the empty machine state.\<close>
 definition apure_precise :: \<open>bool \<Rightarrow> 'a assert\<close> (\<open>\<langle>_\<rangle>\<close> [0]1000) where
   \<open>\<langle>P\<rangle> \<equiv> {s. s = 0 \<and> P}\<close>
 
-text \<open>It is the ordinary pure assertion restricted to \<^term>\<open>emp\<close>.\<close>
-lemma apure_precise_alt:
-  shows \<open>\<langle>P\<rangle> = (apure (P) \<inter> emp)\<close>
-by (simp add: apure_precise_def apure_def emp_def)
+text \<open>The legacy spelling denotes a precise pure fact framed by arbitrary resource. It remains a
+compatibility abbreviation rather than a second primitive assertion.\<close>
+abbreviation apure :: \<open>bool \<Rightarrow> 'a assert\<close> where
+  \<open>apure P \<equiv> UNIV \<star> \<langle>P\<rangle>\<close>
+
+text \<open>This internal wrapper keeps Crush's generated pure conclusion opaque. It is needed to make
+sure spatial drules trigger before the late introduction rule turns the separation-logic entailment
+into a pure HOL goal.\<close>
+definition apure_crush_obligation :: \<open>bool \<Rightarrow> 'a assert\<close> where
+  \<open>apure_crush_obligation P \<equiv> apure P\<close>
 
 text \<open>A precise pure assertion owns zero and is therefore discardable in
 every context. A dedicated rule complements the syntactically distinct
@@ -1373,33 +1373,8 @@ lemma discardable_in_apure_preciseI [discardable_in_intros]:
   shows \<open>discardable_in \<langle>P\<rangle> \<rho>\<close>
 proof (rule discardable_in_aentails_empI)
   show \<open>\<langle>P\<rangle> \<longlongrightarrow> emp\<close>
-    unfolding apure_precise_alt by (rule aentails_inter_weaken[OF aentails_refl])
+    by (simp add: aentails_def asat_def apure_precise_def emp_def)
 qed
-
-
-text \<open>The following series of lemmas describe how pure assertions interact with entailments and
-spatial assertions of our Separation Logic:\<close>
-lemma all_aentails_true:
-  shows \<open>\<phi> \<longlongrightarrow> apure (True)\<close>
-by (simp add: asepconj_simp apure_def aentails_true)
-
-lemma asepconj_ident3 [asepconj_simp]:
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>\<phi> \<star> apure (True) = \<phi>\<close>
-by (simp add: asepconj_simp apure_def assms)
-
-lemma asepconj_ident4 [asepconj_simp]:
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>apure (True) \<star> \<phi> = \<phi>\<close>
-by (simp add: asepconj_simp apure_def assms)
-
-lemma asepconj_pure [asepconj_simp]:
-  shows \<open>apure (P) \<star> apure (Q) = apure (P \<and> Q)\<close>
-by (simp add: asepconj_simp apure_def)
-
-lemma asepconj_pure2 [asepconj_simp]:
-  shows \<open>apure (P) \<star> (apure (Q) \<star> \<phi>) = apure (P \<and> Q) \<star> \<phi>\<close>
-using asepconj_assoc asepconj_pure by metis
 
 text \<open>Precise pure factors combine without absorbing resource.\<close>
 lemma asepconj_pure_precise [asepconj_simp]:
@@ -1410,43 +1385,6 @@ lemma asepconj_pure2_precise [asepconj_simp]:
   shows \<open>\<langle>P\<rangle> \<star> (\<langle>Q\<rangle> \<star> \<phi>) = \<langle>P \<and> Q\<rangle> \<star> \<phi>\<close>
 using asepconj_assoc asepconj_pure_precise by metis
 
-lemma aentails_asepconjL_pureI:
-  assumes \<open>apure (P \<and> Q) \<longlongrightarrow> \<psi>\<close>
-    shows \<open>apure (P) \<star> apure (Q) \<longlongrightarrow> \<psi>\<close>
-using assms asepconj_pure by auto
-
-lemma aentails_asepconjL_pure2I:
-  assumes \<open>apure (P \<and> Q) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>apure (P) \<star> apure (Q) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
-using assms asepconj_pure2 by auto
-
-\<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
-lemma aentails_asepconjR_pureI:
-  assumes \<open>\<phi> \<longlongrightarrow> apure (P \<and> Q)\<close>
-    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> apure (Q)\<close>
-using assms asepconj_pure by auto
-
-\<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
-lemma aentails_asepconjR_pure2I:
-  assumes \<open>\<phi> \<longlongrightarrow> apure (P \<and> Q) \<star> \<psi>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> apure (Q) \<star> \<psi>\<close>
-using assms asepconj_pure2 by auto
-
-lemma asepconj_pure_UNIV:
-  shows \<open>apure (P) \<star> UNIV = apure (P)\<close> and \<open>UNIV \<star> apure (P) = apure (P)\<close>
-by (metis (full_types) UNIV_def apure_def asepconj_pure)+
-
-text \<open>The following provides an alternative characterisation of a pure assertion, allowing us to
-reflect ``back and forth'' between our Separation Logic and standard HOL reasoning for pure
-assertions:\<close>
-lemma asat_apure_characterisation [asat_simp, simp]:
-  shows \<open>x \<Turnstile> apure (P) \<longleftrightarrow> P\<close>
-by (auto simp add: apure_def)
-
-corollary is_sat_pure [is_sat_simp, simp]:
-  shows \<open>is_sat (apure P) = P\<close>
-by (simp add: asat_apure_characterisation is_sat_def)
-
 text \<open>Satisfaction records both the pure fact and ownership of zero.\<close>
 lemma asat_apure_precise_characterisation [asat_simp, simp]:
   shows \<open>x \<Turnstile> \<langle>P\<rangle> \<longleftrightarrow> x = 0 \<and> P\<close>
@@ -1455,44 +1393,6 @@ by (simp add: apure_precise_def asat_def)
 corollary is_sat_pure_precise [is_sat_simp, simp]:
   shows \<open>is_sat \<langle>P\<rangle> = P\<close>
 by (simp add: asat_apure_precise_characterisation is_sat_def)
-
-text \<open>A pure assertion is always upwards-closed:\<close>
-lemma ucincl_apure [ucincl_intros]:
-  shows \<open>ucincl (apure P)\<close>
-by (auto simp add: apure_def intro: ucincl_intros)
-
-text \<open>The following are technical introduction and elimination rules for working with pure assertions:\<close>
-lemma apureI:
-  assumes \<open>P\<close>
-    shows \<open>s \<Turnstile> apure (P)\<close>
-using assms by (auto simp add: apure_def)
-
-lemma apureE:
-  assumes \<open>s \<Turnstile> apure (P)\<close>
-      and \<open>P \<Longrightarrow> R\<close>
-    shows \<open>R\<close>
-using assms by (clarsimp simp add: asat_simp split: if_splits)
-
-lemma asat_apure_distrib [asat_simp]:
-    notes asat_simp [simp]
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>s \<Turnstile> apure (P) \<star> \<phi> \<longleftrightarrow> P \<and> s \<Turnstile> \<phi>\<close>
-proof
-  assume \<open>s \<Turnstile> apure (P) \<star> \<phi>\<close>
-  then obtain t u where \<open>s = t + u\<close> and \<open>t \<sharp> u\<close> and \<open>t \<Turnstile> apure (P)\<close> and \<open>u \<Turnstile> \<phi>\<close>
-    by (auto elim: asepconjE)
-  then show \<open>P \<and> s \<Turnstile> \<phi>\<close>
-    using \<open>s \<Turnstile> apure (P) \<star> \<phi>\<close> asepconj_ident3 assms local.asepconj_comm by force
-next
-  assume \<open>P \<and> s \<Turnstile> \<phi>\<close> then show \<open>s \<Turnstile> apure (P) \<star> \<phi>\<close>
-    using asepconj_ident4 assms by auto
-qed
-
-lemma asat_apure_distrib2 [asat_simp]:
-    notes asat_simp [simp]
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>s \<Turnstile> \<phi> \<star> apure (P) \<longleftrightarrow> s \<Turnstile> \<phi> \<and> P\<close>
-  using asat_apure_distrib assms local.asepconj_comm by force
 
 text \<open>Precise-pure factors own zero, so satisfaction distributes unconditionally on either side.\<close>
 lemma asat_apure_precise_distrib [asat_simp]:
@@ -1503,19 +1403,6 @@ lemma asat_apure_precise_distrib2 [asat_simp]:
   shows \<open>s \<Turnstile> \<phi> \<star> \<langle>P\<rangle> \<longleftrightarrow> s \<Turnstile> \<phi> \<and> P\<close>
 using asat_apure_precise_distrib local.asepconj_comm by force
 
-lemma asat_apure_distrib':
-  shows \<open>s \<Turnstile> \<phi> \<star> apure (P) \<longleftrightarrow> s \<Turnstile> \<phi> \<star> UNIV \<and> P\<close> and \<open>s \<Turnstile> apure (P) \<star> \<phi> \<longleftrightarrow> s \<Turnstile> UNIV \<star> \<phi> \<and> P\<close>
-using apure_def asepconj_bot_zero2 asepconj_bot_zero by auto
-
-lemma asat_apure_distrib3 [asat_simp]:
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>s \<Turnstile> (\<phi> \<star> apure (P)) \<star> \<psi> \<longleftrightarrow> s \<Turnstile> \<phi> \<star> \<psi> \<and> P\<close>
-using assms by (simp add: asepconj_simp asat_simp apure_def asepconj_comm)
-
-lemma asepconj_False_True:
-  shows \<open>apure (False) = \<bottom>\<close> and \<open>apure (True) = \<top>\<close>
-by (simp add: apure_def)+
-
 text \<open>Truth yields the empty assertion; falsehood remains impossible.\<close>
 lemma apure_precise_True [asepconj_simp]:
   shows \<open>\<langle>True\<rangle> = emp\<close>
@@ -1524,22 +1411,6 @@ by (simp add: apure_precise_def emp_def)
 lemma apure_precise_False [asepconj_simp]:
   shows \<open>\<langle>False\<rangle> = \<bottom>\<close>
 by (simp add: apure_precise_def)
-
-lemma apure_entails_iff [aentails_simp]:
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>(apure (P) \<star> \<phi> \<longlongrightarrow> \<psi>) = (P \<longrightarrow> \<phi> \<longlongrightarrow> \<psi>)\<close>
-  using aentails_def asat_apure_distrib assms by blast
-
-lemma apure_entailsL0:
-  assumes \<open>P \<Longrightarrow> \<top> \<longlongrightarrow> \<phi>\<close>
-    shows \<open>apure (P) \<longlongrightarrow> \<phi>\<close>
-using assms by (simp add: asat_simp aentails_def)
-
-lemma apure_entailsL:
-  assumes \<open>ucincl \<phi>\<close>
-      and \<open>P \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>apure (P) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
-using assms by (simp add: asat_simp aentails_def)
 
 text \<open>Pure assumptions can be hoisted without a closure premise; a standalone
 factor leaves \<^term>\<open>emp\<close> behind.\<close>
@@ -1552,27 +1423,6 @@ lemma apure_precise_entailsL:
   assumes \<open>P \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi>\<close>
     shows \<open>\<langle>P\<rangle> \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
 using assms by (auto simp add: asat_simp aentails_def elim!: asepconjE)
-
-text \<open>The following is a variant of @\<open>thm apure_entailsL\<close> which avoids an upwards-closure
-side-condition. The swapping of pure factors is deliberate: we typically float pure assumptions to
-the left and then hoist them out one by one.  With the swapping, we will have a separating
-conjunction \<^verbatim>\<open>\<top> \<star> \<top> \<star> ... \<star> \<top>\<close> accumulating on the right which can then be simplified by repeated appeal
-to \<^verbatim>\<open>\<top> \<star> \<top>=\<top>\<close>.\<close>
-lemma apure_entailsL':
-  assumes \<open>P \<Longrightarrow> \<phi> \<star> \<top> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>apure (P) \<star> \<phi> \<longlongrightarrow> \<psi>\<close>
-using apure_def asepconj_comm assms bot_aentails_all by (fastforce simp add: asepconj_simp)
-
-lemma apure_entailsR0:
-  assumes \<open>is_sat \<phi> \<Longrightarrow> P\<close>
-    shows \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
-using assms by (simp add: asat_simp aentails_def is_sat_def)
-
-lemma apure_entailsR0_revE:
-  assumes \<open>is_sat \<phi>\<close>
-      and \<open>\<phi> \<longlongrightarrow> apure (R)\<close>
-    shows \<open>R\<close>
-using assms by (clarsimp simp add: asat_simp aentails_def is_sat_def)
 
 text \<open>Only empty resource can entail a standalone precise pure assertion.\<close>
 lemma apure_precise_entailsR0:
@@ -1812,22 +1662,6 @@ next
     by (meson asat_connectives_characterisation(3) awandE awandI)
 qed
 
-\<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
-lemma awand_pure_commute:
-  assumes \<open>ucincl \<psi>\<close>
-    shows \<open>apure (\<tau>) \<star> (\<phi> \<Zsurj> \<psi>) \<longlongrightarrow> \<phi> \<Zsurj> (apure (\<tau>) \<star> \<psi>)\<close>
-using assms by (metis (full_types) apure_entailsL aentails_cancel_l asepconj_comm asepconj_ident3
-    ucincl_awand)
-
-lemma awand_pure_false [asepconj_simp]:
-  shows \<open>apure (False) \<Zsurj> \<psi> = \<top>\<close>
-  by (subst asepconj_False_True, rule awand_bot)
-
-lemma awand_pure_true:
-  assumes \<open>ucincl \<psi>\<close>
-  shows \<open>apure (True) \<Zsurj> \<psi> = \<psi>\<close>
-  using assms by (subst asepconj_False_True) (rule awand_univ, auto)
-
 lemma awand_curry_drule:
   shows \<open>(\<alpha> \<star> \<beta>) \<Zsurj> \<gamma> \<longlongrightarrow> \<alpha> \<Zsurj> (\<beta> \<Zsurj> \<gamma>)\<close>
   by (simp add: awand_adjointI awand_curry awand_mp)
@@ -1837,29 +1671,6 @@ lemma aentails_empty_R:
       and \<open>\<phi> \<longlongrightarrow> \<rho>\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<psi> \<star> \<rho>\<close>
 using assms by (auto simp add: aentails_def intro!: asepconjI)
-
-lemma asepconj_pure':
-  assumes \<open>ucincl \<phi>\<close>
-    shows \<open>apure (\<tau>) \<star> \<phi> = apure (\<tau>) \<sqinter> \<phi>\<close>
-using assms by (simp add: asepconj_simp apure_def)
-
-lemma apure_entailsR:
-  assumes \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
-      and \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> \<psi>\<close>
-using assms by (metis aentails_def aentails_empty_R asat_apure_characterisation)
-
-text \<open>Splitting off an ordinary pure factor can absorb resource. The
-restricted rule permits this only when the retained assertion is
-upwards-closed; its closure premise is a policy guard, not proof input.
-Neither ordinary rule is an introduction rule, so automation cannot discard
-resource implicitly.\<close>
-lemma apure_entailsR_restricted:
-  assumes pure: \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
-      and ent: \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
-      and \<open>ucincl \<psi>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> apure (P) \<star> \<psi>\<close>
-using pure ent by (rule apure_entailsR)
 
 text \<open>A precise pure factor splits off without receiving any resource, so
 this rule remains available to introduction search.\<close>
@@ -1875,28 +1686,32 @@ proof (rule aentails_is_sat)
     by (rule aentails_empty_R)
 qed
 
-text \<open>This variant leaves the pure premise as a separating entailment, so
-later spatial drule and rule branches can continue solving it.\<close>
-lemma apure_precise_entailsR':
-  assumes pure: \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
+text \<open>Crush discharges its opaque pure obligation only after spatial proof search is complete.\<close>
+lemma apure_crush_obligation_entailsR0:
+  assumes \<open>is_sat \<phi> \<Longrightarrow> P\<close>
+    shows \<open>\<phi> \<longlongrightarrow> apure_crush_obligation P\<close>
+proof -
+  have \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> UNIV\<close>
+    using assms aentails_true by (rule apure_precise_entailsR)
+  then show ?thesis
+    by (simp add: apure_crush_obligation_def asepconj_comm)
+qed
+
+text \<open>This automation variant keeps the Boolean obligation spatial, as an entailment to a
+dedicated opaque assertion. Spatial destruction and cancellation rules can therefore establish the
+fact before proof search crosses into HOL.\<close>
+lemma apure_precise_entailsR_spatial:
+  assumes pure: \<open>\<phi> \<longlongrightarrow> apure_crush_obligation P\<close>
       and ent: \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
     shows \<open>\<phi> \<longlongrightarrow> \<langle>P\<rangle> \<star> \<psi>\<close>
 proof (rule apure_precise_entailsR[OF _ ent])
   assume \<open>is_sat \<phi>\<close>
-  from this and pure show \<open>P\<close>
-    by (rule apure_entailsR0_revE)
-qed
-
-lemma aentails_asepconj_split_true:
-  assumes \<open>ucincl \<xi>\<close>
-      and \<open>\<xi> \<longlongrightarrow> \<psi>\<close>
-      and \<open>apure (True) \<longlongrightarrow> \<pi>\<close>
-    shows \<open>\<xi> \<longlongrightarrow> \<psi> \<star> \<pi>\<close>
-proof -
-  from assms have \<open>\<xi> \<star> apure (True) \<longlongrightarrow> \<psi> \<star> \<pi>\<close>
-    using asepconj_mono4 by blast
-  from assms this show ?thesis
-    using asepconj_ident3 by auto
+  then obtain s where sat: \<open>s \<Turnstile> \<phi>\<close>
+    by (auto simp add: is_sat_def)
+  from pure sat have \<open>s \<Turnstile> UNIV \<star> \<langle>P\<rangle>\<close>
+    by (auto simp add: aentails_def apure_crush_obligation_def)
+  then show \<open>P\<close>
+    by (auto elim!: asepconjE)
 qed
 
 text \<open>Given an arbitrary entailment goal, this rule lets you perform forward reasoning from an
@@ -1917,19 +1732,6 @@ proof (intro aentailsI)
     unfolding aentails_def using asepconjE awandE asepconj_comm
     by metis
 qed
-
-text \<open>The following are technical results that allow fine-grained control over proof-steps in
-Separation Logic entailment proofs:\<close>
-lemma aentails_cut_pure:
-  assumes \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
-      and \<open>P \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi>\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<psi>\<close>
-using assms by (clarsimp simp add: aentails_def apure_def asat_def split: if_splits)
-
-lemma aentails_frulify_pure:
-  assumes \<open>\<phi> \<longlongrightarrow> apure (P)\<close>
-    shows \<open>\<phi> \<longlongrightarrow> \<phi> \<star> apure (P)\<close>
-by (metis aentails_refl apure_entailsR asepconj_comm assms)
 
 lemma aentails_fold_def:
   shows \<open>x \<equiv> y \<Longrightarrow> \<phi> \<longlongrightarrow> y \<star> (x \<Zsurj> \<psi>) \<Longrightarrow>  \<phi> \<longlongrightarrow> \<psi>\<close>
@@ -2152,21 +1954,15 @@ lemma asepconj_multi_mapped_pick:
     shows \<open>\<star>\<star>{# \<xi> \<Colon> lst #} = \<xi> (lst ! i) \<star>  \<star>\<star>{# \<xi> \<Colon> drop_nth i lst #}\<close>
 using assms by (metis asepconj_multi_cons list_update_id mset.simps(2) mset_drop_nth' mset_update)
 
-text \<open>An iteration of ordinary pure assertions collapses to \<^term>\<open>emp\<close> when empty and to one pure
-assertion otherwise.\<close>
-lemma asepconj_multi_pure:
-  shows \<open>\<star>\<star>{# apure (P x) . x\<leftarrow>ms #} = (if ms = {#} then emp else apure (\<forall>x \<in># ms. P x))\<close>
-by (induction ms; auto simp add: asepconj_simp apure_def)
-
 text \<open>Precise-pure assertions collapse uniformly because \<^term>\<open>\<langle>True\<rangle> = emp\<close>.\<close>
 lemma asepconj_multi_pure_precise:
   shows \<open>\<star>\<star>{# \<langle>P x\<rangle> . x\<leftarrow>ms #} = \<langle>\<forall>x \<in># ms. P x\<rangle>\<close>
 by (induction ms; simp add: asepconj_simp)
 
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
-lemma aentails_multi_list_pure:
-  shows \<open>\<star>\<star>{# apure (f x) \<Colon> x \<leftarrow> xs #} = (if xs = [] then emp else apure (\<forall>x \<in> set xs. f x))\<close>
-by (simp add: asepconj_multi_pure)
+lemma aentails_multi_list_pure_precise:
+  shows \<open>\<star>\<star>{# \<langle>f x\<rangle> \<Colon> x \<leftarrow> xs #} = \<langle>\<forall>x \<in> set xs. f x\<rangle>\<close>
+by (simp add: asepconj_multi_pure_precise)
 
 lemma aentails_multi_list_pointwise:
     notes asepconj_simp [simp] aentails_intro [intro]
@@ -2286,58 +2082,36 @@ next
     by (simp add: asepconj_assoc asepconj_swap_top)
 qed
 
-text \<open>An ordinary pure factor can be copied into every member of a non-empty iteration because it
+text \<open>A precise pure factor can be copied into every member of a non-empty iteration because it
 is idempotent under \<^term>\<open>(\<star>)\<close>.\<close>
-lemma asepconj_multi_hoist_pure:
+lemma asepconj_multi_hoist_pure_precise:
   assumes \<open>ms \<noteq> {#}\<close>
-    shows \<open>apure (P) \<star> \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} = \<star>\<star>{# (\<xi> x \<star> apure (P)) . x \<leftarrow> ms #}\<close>
+    shows \<open>\<langle>P\<rangle> \<star> \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} =
+      \<star>\<star>{# (\<xi> x \<star> \<langle>P\<rangle>) . x \<leftarrow> ms #}\<close>
 proof -
   have nonempty: \<open>\<exists>x. x \<in># ms\<close>
     using assms by auto
-  have \<open>\<star>\<star>{# (\<xi> x \<star> apure (P)) . x \<leftarrow> ms #} =
-      \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} \<star> \<star>\<star>{# apure (P) . x \<leftarrow> ms #}\<close>
+  have \<open>\<star>\<star>{# (\<xi> x \<star> \<langle>P\<rangle>) . x \<leftarrow> ms #} =
+      \<star>\<star>{# \<xi> x . x \<leftarrow> ms #} \<star> \<star>\<star>{# \<langle>P\<rangle> . x \<leftarrow> ms #}\<close>
     by (rule asepconj_multi_split_body)
-  also from nonempty have \<open>\<star>\<star>{# apure (P) . x \<leftarrow> ms #} = apure (P)\<close>
-    by (simp add: asepconj_multi_pure assms)
+  also from nonempty have \<open>\<star>\<star>{# \<langle>P\<rangle> . x \<leftarrow> ms #} = \<langle>P\<rangle>\<close>
+    by (simp add: asepconj_multi_pure_precise assms)
   finally show ?thesis
     by (simp add: local.asepconj_comm)
 qed
 
 lemma asepconj_union_singleton:
-  assumes \<open>\<And>x. ucincl (\<xi> x)\<close>
-    shows \<open>(\<Union>x. (apure (x = y) \<star> \<xi> x)) = \<xi> y\<close>
-proof (intro aentails_eq)
-  show \<open>(\<Union>x. apure (x = y) \<star> \<xi> x) \<longlongrightarrow> \<xi> y\<close>
-    by (simp add: aentails_refl assms aexists_entailsL
-        apure_def asepconj_bot_zero asepconj_ident bot_aentails_all)
-next
-  have \<open>\<xi> y \<longlongrightarrow> \<xi> y\<close>
-    by (rule aentails_refl)
-  moreover from this assms have \<open>\<xi> y \<longlongrightarrow> apure (y = y) \<star> \<xi> y\<close>
-    using local.asepconj_ident4 by auto
-  ultimately show \<open>\<xi> y \<longlongrightarrow> (\<Union>x. apure (x = y) \<star> \<xi> x)\<close>
-    using local.aexists_entailsR by fastforce
-qed
+  shows \<open>(\<Union>x. (\<langle>x = y\<rangle> \<star> \<xi> x)) = \<xi> y\<close>
+by (auto simp add: apure_precise_def asepconj_def asat_def)
 
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma asepconj_union_singleton':
-  assumes \<open>\<And>x y. ucincl (\<xi> x y)\<close>
-    shows \<open>(\<Union>a b. (apure (a=t) \<star> \<xi> a b)) = (\<Union>b. \<xi> t b)\<close>
-proof -
-  from assms have A: \<open>\<And>a. ucincl (\<Union>b. \<xi> a b)\<close>
-    by (intro ucincl_intros) blast
-  moreover have \<open>(\<Union>a b. (apure (a=t) \<star> \<xi> a b)) = (\<Union>a. (apure (a=t) \<star> (\<Union>b. \<xi> a b)))\<close>
-    using asepconj_Inf_distrib2 asepconj_comm
-    by (clarsimp simp add: local.asepconj_Inf_distrib2)
-  moreover from A have \<open>... = (\<Union>b. \<xi> t b)\<close>
-    by (simp add: asepconj_union_singleton)
-  ultimately show ?thesis
-    by presburger
-qed
+  shows \<open>(\<Union>a b. (\<langle>a=t\<rangle> \<star> \<xi> a b)) = (\<Union>b. \<xi> t b)\<close>
+by (auto simp add: apure_precise_def asepconj_def asat_def)
 
 lemma asepconj_Union_pure:
-  shows \<open>(\<Squnion>x. apure (P x)) = apure (\<exists>x. P x)\<close>
-by (clarsimp simp add: apure_def)
+  shows \<open>(\<Squnion>x. \<langle>P x\<rangle>) = \<langle>\<exists>x. P x\<rangle>\<close>
+by (auto simp add: apure_precise_def)
 
 lemma aentails_multi_map_core:
   assumes \<open>\<And>x.  x \<in># ms \<Longrightarrow> \<xi>' (f x) = \<xi> x\<close>
@@ -2378,8 +2152,9 @@ lemma aentails_multi_map_core':
 using aentails_multi_map_core by metis
 
 corollary asepconj_mset_map_sum_lift_single:
-  shows \<open>apure (add_mset x ms0 = (f `# ms')) = (\<Squnion>x' ms0'. apure (ms' = add_mset x' ms0') \<star> apure (x = f x') \<star>
-            apure (ms0 = (f `# ms0')))\<close>
+  shows \<open>\<langle>add_mset x ms0 = (f `# ms')\<rangle> =
+    (\<Squnion>x' ms0'. \<langle>ms' = add_mset x' ms0'\<rangle> \<star> \<langle>x = f x'\<rangle> \<star>
+      \<langle>ms0 = (f `# ms0')\<rangle>)\<close>
 by (clarsimp simp add: asepconj_simp asepconj_Union_pure mset_map_sum_lift_single)
 
 text \<open>Distributing existential choices records one witness per index. The index constraint is
@@ -2565,8 +2340,7 @@ using assms by (clarsimp simp add: asepconj_multi_flatten set_product_sum)
 
 lemma asepconj_multi_true_collapse [simp]:
   "\<star>\<star> {# UNIV . x \<leftarrow> M #} = (if M = {#} then emp else UNIV)"
-  using asepconj_multi_pure[of \<open>\<lambda>x. True\<close> M]
-  by (force simp: asepconj_False_True)
+by (induction M; simp add: asepconj_simp)
 
 (*<*)
 end

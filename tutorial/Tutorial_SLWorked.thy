@@ -170,7 +170,7 @@ text \<open>\<^bold>\<open>Some algebraic laws\<close>:\<close>
 text \<open>
 \<^item> @{thm [show_question_marks=false] asepconj_comm} \<comment>\<open>Commutativity\<close>
 \<^item> @{thm [show_question_marks=false] asepconj_assoc} \<comment>\<open>Associativity\<close>
-\<^item> @{thm [show_question_marks=false] asepconj_pure} \<comment>\<open>Ordinary conjunction on pure assertions\<close>\<close>
+\<^item> @{thm [show_question_marks=false] asepconj_pure_precise} \<comment>\<open>Conjunction on precise pure assertions\<close>\<close>
 
 end_slide
 

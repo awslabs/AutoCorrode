@@ -563,9 +563,9 @@ lemma wp_get:
   assumes \<open>ucincl (has f v)\<close>
     shows \<open>has f v \<star> (has f v \<Zsurj> \<psi> v) \<longlongrightarrow> \<W>\<P> \<Gamma> (get f) \<psi> \<rho> \<theta>\<close>
 proof -
-  have \<open>has f v \<star> (\<Sqinter>x. (apure (x=v) \<star> has f v) \<Zsurj> \<psi> x) \<longlongrightarrow> \<W>\<P> \<Gamma> (get f) \<psi> \<rho> \<theta>\<close>
+  have \<open>has f v \<star> (\<Sqinter>x. (\<langle>x=v\<rangle> \<star> has f v) \<Zsurj> \<psi> x) \<longlongrightarrow> \<W>\<P> \<Gamma> (get f) \<psi> \<rho> \<theta>\<close>
     using assms by (auto intro!: sstriple_straightline_to_wp sstriple_getI)
-  moreover from assms have \<open>has f v \<star> (has f v \<Zsurj> \<psi> v) \<longlongrightarrow> has f v \<star> (\<Sqinter>x. (apure (x=v) \<star> has f v) \<Zsurj> \<psi> x)\<close>
+  moreover from assms have \<open>has f v \<star> (has f v \<Zsurj> \<psi> v) \<longlongrightarrow> has f v \<star> (\<Sqinter>x. (\<langle>x=v\<rangle> \<star> has f v) \<Zsurj> \<psi> x)\<close>
     by (clarsimp simp add: aentails_def elim!: awandE asepconjE) (force intro: asepconjI awandI)
   ultimately show ?thesis
     using aentails_trans by force
@@ -918,11 +918,10 @@ lemma wp_word_shift_rightI [micro_rust_wp_intros]:
     shows \<open>\<phi> \<longlongrightarrow> \<W>\<P> \<Gamma> \<lbrakk> x >> y \<rbrakk> \<psi> \<rho> \<theta>\<close>
 using assms wp_word_shift_right aentails_trans' by blast
 
-\<comment>\<open>Exact-accounting automation uses \<^verbatim>\<open>apure_precise_entailsR\<close>, whose pure
-factor owns nothing, and \<^verbatim>\<open>apure_entailsR_restricted\<close>, whose remaining conjunct is
-upwards closed.\<close>
-declare aexists_entailsL aexists_entailsR aforall_entailsL aforall_entailsR apure_entails_iff
-  apure_precise_entailsR apure_entailsR_restricted [micro_rust_wp_intros]
+\<comment>\<open>Exact-accounting automation splits precise pure conclusions without assigning them
+resource.\<close>
+declare aexists_entailsL aexists_entailsR aforall_entailsL aforall_entailsR
+  apure_precise_entailsR [micro_rust_wp_intros]
 
 subsection\<open>Loops\<close>
 

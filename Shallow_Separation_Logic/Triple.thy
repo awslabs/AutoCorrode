@@ -244,21 +244,18 @@ lemma sstriple_skipI:
   by (auto intro!: sstriple_from_stripleI striple_skipI
       simp add: eval_value_def eval_return_def eval_abort_def urust_eval_predicate_skip is_local_def)
 
-text\<open>Executing a literal does not modify the state in anyway way, but does return the literal value.
-It also always succeeds:\<close>
+text\<open>Executing a literal does not modify the state and returns the literal value. Its exact
+introduction rule therefore starts from \<^term>\<open>emp\<close> and returns only the precise equality:\<close>
 lemma sstriple_literalI:
-  shows \<open>\<Gamma> ; \<top> \<turnstile> \<up>v \<stileturn> (\<lambda>rv. apure (rv = v)) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> \<up>v \<stileturn>
+    (\<lambda>rv. \<langle>rv = v\<rangle>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
   by (auto intro: sstriple_from_stripleI striple_literalI 
       simp add: urust_eval_predicate_literal is_local_def eval_value_def eval_return_def eval_abort_def)
 
 lemma sstriple_literal:
   shows \<open>(\<Gamma> ; \<phi> \<turnstile> \<up>v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>) \<longleftrightarrow> (\<phi> \<longlongrightarrow> \<psi> v)\<close>
-proof (intro iffI)
-  show \<open>\<Gamma> ; \<phi> \<turnstile> \<up>v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta> \<Longrightarrow> \<phi> \<longlongrightarrow> \<psi> v\<close>
-    by (simp add: local.striple_literal sstriple_striple')
-  show \<open>\<phi> \<longlongrightarrow> \<psi> v \<Longrightarrow> \<Gamma> ; \<phi> \<turnstile> \<up>v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
-  by (meson aentails_true is_local_weaken striple_literal sstriple_literalI sstriple_striple)
-qed
+  by (auto simp add: sstriple_striple striple_literal urust_eval_predicate_literal
+      is_local_def eval_value_def eval_return_def eval_abort_def)
 
 lemma sstriple_assert_val:
   shows \<open>(\<Gamma> ; \<phi> \<turnstile> assert_val v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>) \<longleftrightarrow>
@@ -277,26 +274,25 @@ lemma sstriple_assert_eq:
       (v=w \<longrightarrow> \<phi> \<longlongrightarrow> \<psi> ()) \<and> (v \<noteq> w \<longrightarrow> \<phi> \<longlongrightarrow> \<theta> AssertionFailed)\<close>
   by (simp add: assert_eq_def assert_eq_val_def sstriple_assert_val micro_rust_simps)
 
-text\<open>The \<^verbatim>\<open>return_func\<close> command always succeeds and returns the given value:\<close>
+text\<open>The \<^verbatim>\<open>return_val\<close> command returns early with the given value without modifying
+the state:\<close>
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma sstriple_return_valI:
-  shows \<open>\<Gamma> ; \<top> \<turnstile> return_val v \<stileturn> \<psi> \<bowtie> (\<lambda>rv. apure (rv = v)) \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> return_val v \<stileturn> \<psi> \<bowtie>
+    (\<lambda>rv. \<langle>rv = v\<rangle>) \<bowtie> \<theta>\<close>
   by (auto intro!: sstriple_from_stripleI striple_return_valI
       simp add: urust_eval_predicate_return is_local_def eval_value_def eval_return_def eval_abort_def)
 
 lemma sstriple_return_val:
   shows \<open>(\<Gamma> ; \<phi> \<turnstile> return_val v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>) \<longleftrightarrow> (\<phi> \<longlongrightarrow> \<rho> v)\<close>
-proof
-  show \<open>\<Gamma> ; \<phi> \<turnstile> return_val v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta> \<Longrightarrow> \<phi> \<longlongrightarrow> \<rho> v\<close>
-    by (simp add: striple_return_val sstriple_striple)
-  show \<open>\<phi> \<longlongrightarrow> \<rho> v \<Longrightarrow> \<Gamma> ; \<phi> \<turnstile> return_val v \<stileturn> \<psi> \<bowtie> \<rho> \<bowtie> \<theta>\<close>
-    by (meson aentails_true is_local_weaken striple_return_val sstriple_return_valI sstriple_striple)
-qed
+  by (auto simp add: sstriple_striple striple_return_val urust_eval_predicate_return
+      is_local_def eval_value_def eval_return_def eval_abort_def)
 
 text\<open>The \<^verbatim>\<open>return_func\<close> command always succeeds and returns the given value:\<close>
 \<comment>\<open>NOTE: This lemma is not used at present, but seems worth keeping.\<close>
 lemma sstriple_returnI:
-  shows \<open>\<Gamma> ; \<top> \<turnstile> return_func (\<up>v) \<stileturn> \<psi> \<bowtie> (\<lambda>rv. apure (rv = v)) \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> return_func (\<up>v) \<stileturn> \<psi> \<bowtie>
+    (\<lambda>rv. \<langle>rv = v\<rangle>) \<bowtie> \<theta>\<close>
   by (simp add: bind_literal_unit return_func_def sstriple_return_valI)
 
 lemma sstriple_return:
@@ -304,20 +300,24 @@ lemma sstriple_return:
   by (simp add: bind_literal_unit return_func_def sstriple_return_val)
 
 corollary sstriple_noneI:
-  shows \<open>\<Gamma> ; \<top> \<turnstile> `None \<stileturn> (\<lambda>rv. apure (rv = None)) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> `None \<stileturn>
+    (\<lambda>rv. \<langle>rv = None\<rangle>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
   unfolding none_def by (rule sstriple_literalI)
 
 corollary sstriple_trueI:
-  shows \<open>\<Gamma> ; \<top> \<turnstile> `True \<stileturn> (\<lambda>rv. apure (rv = True)) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> `True \<stileturn>
+    (\<lambda>rv. \<langle>rv = True\<rangle>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
   unfolding true_def by (rule sstriple_literalI)
 
 corollary sstriple_falseI:
-  shows \<open>\<Gamma> ; \<top> \<turnstile> `False \<stileturn> (\<lambda>rv. apure (rv = False)) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> `False \<stileturn>
+    (\<lambda>rv. \<langle>rv = False\<rangle>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
   unfolding false_def by (rule sstriple_literalI)
 
 corollary sstriple_someI:
   notes asepconj_simp [simp]
-  shows \<open>\<Gamma> ; \<top> \<turnstile> `Some (\<up>x) \<stileturn> (\<lambda>rv. apure (rv = Some x)) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+  shows \<open>\<Gamma> ; emp \<turnstile> `Some (\<up>x) \<stileturn>
+    (\<lambda>rv. \<langle>rv = Some x\<rangle>) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
   apply (intro sstriple_from_stripleI striple_someI)
   apply (auto simp add: return_func_def urust_eval_predicate_literal urust_eval_predicate_return
     micro_rust_simps some_def is_local_def eval_value_def eval_return_def eval_abort_def)
@@ -423,7 +423,7 @@ lemma sstriple_call_funliteral:
 machine state.\<close>
 lemma sstriple_getI:
   assumes \<open>ucincl (has f v)\<close>
-    shows \<open>\<Gamma>; has f v \<turnstile> get f \<stileturn> (\<lambda>x. apure (x = v) \<star> has f v) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
+    shows \<open>\<Gamma>; has f v \<turnstile> get f \<stileturn> (\<lambda>x. \<langle>x = v\<rangle> \<star> has f v) \<bowtie> \<rho> \<bowtie> \<theta>\<close>
 proof -
   from \<open>ucincl (has f v)\<close> have \<open>\<And>x y. x \<sharp> y \<Longrightarrow> x \<Turnstile> has f v \<Longrightarrow> (x + y) \<Turnstile> has f v\<close>
     by (simp add: local.asat_weaken)

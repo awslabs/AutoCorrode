@@ -71,8 +71,8 @@ definition clamp :: \<open>nat \<Rightarrow> nat \<Rightarrow> nat \<Rightarrow>
 
 definition clamp_contract where
   \<open>clamp_contract lo hi x \<equiv>
-    let pre  = apure (lo \<le> hi) in
-    let post = \<lambda>r. apure (r \<ge> lo \<and> r \<le> hi) in
+    let pre  = \<langle>lo \<le> hi\<rangle> in
+    let post = \<lambda>r. \<langle>r \<ge> lo \<and> r \<le> hi\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>TODO: Replace \<^verbatim>\<open>oops\<close> with a proof.
@@ -103,8 +103,8 @@ value \<open>max (0::nat) (1::nat)\<close>
 
 definition max_of_contract where
   \<open>max_of_contract a b \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>TODO: Prove the specification once your contract is correct.\<close>
@@ -119,8 +119,8 @@ Hints:
 thm wp_two_armed_conditionalI
 thm wp_literalI
 text \<open>After that, the following separation logic simplifications may be helpful\<close>
-thm asepconj_pure_UNIV
-thm asepconj_False_True
+thm apure_precise_True
+thm apure_precise_False
 thm aentails_refl
 thm asepconj_UNIV_idempotent
 
@@ -152,8 +152,8 @@ definition abs_diff :: \<open>nat \<Rightarrow> nat \<Rightarrow> ('s, nat, 'abo
 text\<open>TODO: Write the contract\<close>
 definition abs_diff_contract where
   \<open>abs_diff_contract a b \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>TODO: Prove the specification.\<close>
@@ -177,8 +177,8 @@ definition double :: \<open>nat \<Rightarrow> ('s, nat, 'abort, 'i prompt, 'o pr
 
 definition double_contract where
   \<open>double_contract n \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (r = 2 * n) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>r = 2 * n\<rangle> in
     make_function_contract pre post\<close>
 
 lemma double_spec:
@@ -196,8 +196,8 @@ definition quadruple :: \<open>nat \<Rightarrow> ('s, nat, 'abort, 'i prompt, 'o
 text\<open>TODO: Write the contract for \<^term>\<open>quadruple\<close>.\<close>
 definition quadruple_contract where
   \<open>quadruple_contract n \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>TODO: Prove the specification using \<^term>\<open>double_spec\<close>.
@@ -226,8 +226,8 @@ definition bvec_is_empty :: \<open>('a, 'l::len) bounded_vec \<Rightarrow> ('s, 
 text\<open>TODO: Write the contract\<close>
 definition bvec_is_empty_contract :: \<open>('a, 'l::len) bounded_vec \<Rightarrow> ('s::sepalg, bool, 'b) function_contract\<close> where
   \<open>bvec_is_empty_contract v \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>This lemma may be useful. TODO: Complete the proof\<close>
@@ -260,8 +260,8 @@ Hints:
 \<^item> Postcondition: the result is \<^verbatim>\<open>Some (bvec_abs v ! unat idx)\<close>.\<close>
 definition bvec_get_contract :: \<open>('a, 'l::len) bounded_vec \<Rightarrow> 64 word \<Rightarrow> ('s::sepalg, 'a option, 'b) function_contract\<close> where
   \<open>bvec_get_contract v idx \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>TODO: Prove the specification.\<close>
@@ -290,8 +290,8 @@ definition bvec_contains :: \<open>(nat, 'l::len) bounded_vec \<Rightarrow> nat 
 
 definition bvec_contains_contract :: \<open>(nat, 'l::len) bounded_vec \<Rightarrow> nat \<Rightarrow> ('s::sepalg, bool, 'b) function_contract\<close> where
   \<open>bvec_contains_contract v needle \<equiv>
-    let pre  = can_alloc_reference \<star> apure (bvec_well_formed v) \<star> apure (unat (bvec_len v) = LENGTH('l)) in
-    let post = \<lambda>r. can_alloc_reference \<star> apure (bvec_well_formed v) \<star> apure (r \<longleftrightarrow> needle \<in> set (bvec_abs v)) in
+    let pre  = can_alloc_reference \<star> \<langle>bvec_well_formed v\<rangle> \<star> \<langle>unat (bvec_len v) = LENGTH('l)\<rangle> in
+    let post = \<lambda>r. can_alloc_reference \<star> \<langle>bvec_well_formed v\<rangle> \<star> \<langle>r \<longleftrightarrow> needle \<in> set (bvec_abs v)\<rangle> in
     make_function_contract pre post\<close>
 
 text\<open>TODO: Write the loop invariant
@@ -326,7 +326,7 @@ text\<open>So far, the bounded vector was passed by value. In this exercise, we 
 
 The contract now uses \<^emph>\<open>points-to\<close> predicates: \<^verbatim>\<open>ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v\<close> says that \<^term>\<open>ptr\<close>
 currently points to value \<^term>\<open>v\<close>. After mutation, we existentially quantify over the
-new state: \<^verbatim>\<open>\<Squnion>g' v'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>v' \<star> apure (...)\<close>.
+new state: \<^verbatim>\<open>\<Squnion>g' v'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>v' \<star> \<langle>...\<rangle>\<close>.
 
 This function clears the vector by setting its length to zero.\<close>
 
@@ -337,14 +337,14 @@ definition bvec_clear :: \<open>('addr, 'gv, (nat, 'l::len) bounded_vec) ref \<R
 
 text\<open>TODO: Write the contract and prove the specification.
 Hints:
-\<^item> Precondition: \<^verbatim>\<open>ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> apure (bvec_well_formed v)\<close>
+\<^item> Precondition: \<^verbatim>\<open>ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> \<langle>bvec_well_formed v\<rangle>\<close>
 \<^item> Postcondition: the pointer still exists, the new value is well-formed and its
-  abstract list is empty. Use \<^verbatim>\<open>\<Squnion>g' v'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>v' \<star> apure (...)\<close>.
+  abstract list is empty. Use \<^verbatim>\<open>\<Squnion>g' v'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>v' \<star> \<langle>...\<rangle>\<close>.
 \<^item> For the proof, add \<^verbatim>\<open>micro_rust_record_simps\<close> to the simp set.\<close>
 definition bvec_clear_contract :: \<open>(('addr, 'gv) gref, 'gv, (nat, 'l::len) bounded_vec) focused \<Rightarrow> 'gv \<Rightarrow> (nat, 'l) bounded_vec \<Rightarrow> ('s::sepalg, unit, 'abort) function_contract\<close> where
   \<open>bvec_clear_contract ptr g v \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>_. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>_. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 lemma bvec_clear_spec:
@@ -377,10 +377,10 @@ definition bvec_push :: \<open>('addr, 'gv, (nat, 'l::len) bounded_vec) ref \<Ri
 
 text\<open>TODO: Write the contract and prove the specification.
 Hints:
-\<^item> Precondition: \<^verbatim>\<open>ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> apure (unat (bvec_len v) \<le> LENGTH('l)) \<star> apure (LENGTH('l) < 2 ^ LENGTH(64))\<close>
+\<^item> Precondition: \<^verbatim>\<open>ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> \<langle>unat (bvec_len v) \<le> LENGTH('l)\<rangle> \<star> \<langle>LENGTH('l) < 2 ^ LENGTH(64)\<rangle>\<close>
 \<^item> Ok postcondition: assert capacity wasn't full, and existentially quantify over
   the new global value, stating the pointer now holds the updated record:
-  @{verbatim \<open>apure (unat (bvec_len v) < LENGTH('l)) \<star>
+  @{verbatim \<open>\<langle>unat (bvec_len v) < LENGTH('l)\<rangle> \<star>
   (\<Squnion>g'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>(make_bounded_vec (bvec_len v + 1)
     (array_update (bvec_values v) (unat (bvec_len v)) (Some elem))))\<close>}
 \<^item> Err postcondition: capacity was full, error carries the element back, pointer unchanged.
@@ -388,8 +388,8 @@ Hints:
   followed by \<^verbatim>\<open>cases v; simp add: nth_focus_array_components micro_rust_record_simps\<close>.\<close>
 definition bvec_push_contract :: \<open>(('addr, 'gv) gref, 'gv, (nat, 'l::len) bounded_vec) focused \<Rightarrow> 'gv \<Rightarrow> (nat, 'l) bounded_vec \<Rightarrow> nat \<Rightarrow> ('s::sepalg, (unit, nat) result, 'abort) function_contract\<close> where
   \<open>bvec_push_contract ptr g v elem \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>_. apure (True) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>_. \<langle>True\<rangle> in
     make_function_contract pre post\<close>
 
 lemma bvec_push_spec:
@@ -418,8 +418,8 @@ lemma clamp_spec_solution:
 paragraph\<open>Exercise 2\<close>
 definition max_of_contract_solution where
   \<open>max_of_contract_solution a b \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (r = max a b) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>r = max a b\<rangle> in
     make_function_contract pre post\<close>
 
 lemma max_of_spec_solution:
@@ -433,16 +433,16 @@ lemma max_of_spec_manual_solution:
   apply (crush_boot f: max_of_def contract: max_of_contract_solution_def)
   apply (intro wp_two_armed_conditionalI)
   apply (intro wp_literalI)
-  apply (simp add: asepconj_False_True asepconj_UNIV_idempotent aentails_refl)
+  apply (simp add: apure_precise_True apure_precise_False asepconj_UNIV_idempotent aentails_refl)
   apply (intro wp_literalI)
-  apply (simp add: asepconj_False_True asepconj_UNIV_idempotent aentails_refl)
+  apply (simp add: apure_precise_True apure_precise_False asepconj_UNIV_idempotent aentails_refl)
   done
 
 paragraph\<open>Exercise 3\<close>
 definition abs_diff_contract_solution where
   \<open>abs_diff_contract_solution a b \<equiv>
     let pre  = can_alloc_reference in
-    let post = \<lambda>r. can_alloc_reference \<star> apure (r = (max a b) - (min a b)) in
+    let post = \<lambda>r. can_alloc_reference \<star> \<langle>r = (max a b) - (min a b)\<rangle> in
     make_function_contract pre post\<close>
 
 lemma abs_diff_spec_solution:
@@ -459,8 +459,8 @@ definition quadruple_solution :: \<open>nat \<Rightarrow> ('s, nat, 'abort, 'i p
 
 definition quadruple_contract_solution where
   \<open>quadruple_contract_solution n \<equiv>
-    let pre  = apure (True) in
-    let post = \<lambda>r. apure (r = 4 * n) in
+    let pre  = \<langle>True\<rangle> in
+    let post = \<lambda>r. \<langle>r = 4 * n\<rangle> in
     make_function_contract pre post\<close>
 
 lemma quadruple_spec_solution:
@@ -472,8 +472,8 @@ lemma quadruple_spec_solution:
 paragraph\<open>Exercise 5\<close>
 definition bvec_is_empty_contract_solution :: \<open>('a, 'l::len) bounded_vec \<Rightarrow> ('s::sepalg, bool, 'b) function_contract\<close> where
   \<open>bvec_is_empty_contract_solution v \<equiv>
-    let pre  = apure (bvec_well_formed v) in
-    let post = \<lambda>r. apure (bvec_well_formed v \<and> (r \<longleftrightarrow> bvec_abs v = [])) in
+    let pre  = \<langle>bvec_well_formed v\<rangle> in
+    let post = \<lambda>r. \<langle>bvec_well_formed v \<and> (r \<longleftrightarrow> bvec_abs v = [])\<rangle> in
     make_function_contract pre post\<close>
 
 lemma bvec_is_empty_solution:
@@ -490,8 +490,8 @@ lemma bvec_is_empty_spec_solution:
 paragraph\<open>Exercise 6\<close>
 definition bvec_get_contract_solution :: \<open>('a, 'l::len) bounded_vec \<Rightarrow> 64 word \<Rightarrow> ('s::sepalg, 'a option, 'b) function_contract\<close> where
   \<open>bvec_get_contract_solution v idx \<equiv>
-    let pre  = apure (bvec_well_formed v) \<star> apure (unat idx < unat (bvec_len v)) in
-    let post = \<lambda>r. apure (bvec_well_formed v) \<star> apure (r = Some (bvec_abs v ! unat idx)) in
+    let pre  = \<langle>bvec_well_formed v\<rangle> \<star> \<langle>unat idx < unat (bvec_len v)\<rangle> in
+    let post = \<lambda>r. \<langle>bvec_well_formed v\<rangle> \<star> \<langle>r = Some (bvec_abs v ! unat idx)\<rangle> in
     make_function_contract pre post\<close>
 
 lemma bvec_get_spec_solution:
@@ -527,8 +527,8 @@ qed
 paragraph\<open>Exercise 8\<close>
 definition bvec_clear_contract_solution :: \<open>(('addr, 'gv) gref, 'gv, (nat, 'l::len) bounded_vec) focused \<Rightarrow> 'gv \<Rightarrow> (nat, 'l) bounded_vec \<Rightarrow> ('s::sepalg, unit, 'abort) function_contract\<close> where
   \<open>bvec_clear_contract_solution ptr g v \<equiv>
-    let pre  = ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> apure (bvec_well_formed v) in
-    let post = \<lambda>_. \<Squnion>g' v'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>v' \<star> apure (bvec_well_formed v' \<and> bvec_abs v' = []) in
+    let pre  = ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star> \<langle>bvec_well_formed v\<rangle> in
+    let post = \<lambda>_. \<Squnion>g' v'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>v' \<star> \<langle>bvec_well_formed v' \<and> bvec_abs v' = []\<rangle> in
     make_function_contract pre post\<close>
 
 lemma bvec_clear_spec_solution:
@@ -541,12 +541,12 @@ paragraph\<open>Exercise 9\<close>
 definition bvec_push_contract_solution :: \<open>(('addr, 'gv) gref, 'gv, (nat, 'l::len) bounded_vec) focused \<Rightarrow> 'gv \<Rightarrow> (nat, 'l) bounded_vec \<Rightarrow> nat \<Rightarrow> ('s::sepalg, (unit, nat) result, 'abort) function_contract\<close> where
   \<open>bvec_push_contract_solution ptr g v elem \<equiv>
     let pre  = ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v \<star>
-               apure (unat (bvec_len v) \<le> LENGTH('l)) \<star> apure (LENGTH('l) < 2 ^ LENGTH(64)) in
+               \<langle>unat (bvec_len v) \<le> LENGTH('l)\<rangle> \<star> \<langle>LENGTH('l) < 2 ^ LENGTH(64)\<rangle> in
     let post = \<lambda>r. case r of
-      Ok _ \<Rightarrow> apure (unat (bvec_len v) < LENGTH('l)) \<star>
+      Ok _ \<Rightarrow> \<langle>unat (bvec_len v) < LENGTH('l)\<rangle> \<star>
              (\<Squnion>g'. ptr \<mapsto>\<langle>\<top>\<rangle> g'\<down>(make_bounded_vec (bvec_len v + 1)
                (array_update (bvec_values v) (unat (bvec_len v)) (Some elem))))
-    | Err e \<Rightarrow> apure (unat (bvec_len v) = LENGTH('l)) \<star> apure (e = elem) \<star>
+    | Err e \<Rightarrow> \<langle>unat (bvec_len v) = LENGTH('l)\<rangle> \<star> \<langle>e = elem\<rangle> \<star>
                ptr \<mapsto>\<langle>\<top>\<rangle> g\<down>v in
     make_function_contract pre post\<close>
 

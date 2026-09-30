@@ -53,7 +53,7 @@ definition read_atomic_value :: \<open>('v option, 'v, 'abort, 'i, 'o) function_
 definition read_atomic_value_contract :: \<open>'v \<Rightarrow> ('v option, 'v, 'abort) function_contract\<close>
   where \<open>read_atomic_value_contract \<equiv> \<lambda>v.
      let pre = atomic_value_is v in
-     let post = \<lambda>r. atomic_value_is v \<star> apure (r = v) in
+     let post = \<lambda>r. atomic_value_is v \<star> \<langle>r = v\<rangle> in
      make_function_contract pre post\<close>
 
 lemma read_atomic_value_contract_no_abort:
@@ -65,7 +65,7 @@ lemma read_atomic_value_spec:
   apply (intro satisfies_function_contractI;
     clarsimp intro!: ucincl_intros simp add: read_atomic_value_contract_def)
   apply (intro sstripleI; clarsimp simp add: read_atomic_value_def atriple_rel_def
-    asat_apure_distrib2 ucincl_intros asepconj_simp eval_read_atomic_value_core_local; safe?)
+    asat_apure_precise_distrib2 ucincl_intros asepconj_simp eval_read_atomic_value_core_local; safe?)
   apply (auto simp add: eval_read_atomic_value_core eval_return_def eval_abort_def eval_value_def
     asat_def atomic_value_is_def)
   done
@@ -140,7 +140,7 @@ lemma write_atomic_value_spec:
   apply (intro satisfies_function_contractI;
     clarsimp intro!: ucincl_intros simp add: write_atomic_value_contract_def)
   apply (intro sstripleI; clarsimp simp add: atomic_value_is_writable_alt write_atomic_value_def 
-    asat_apure_distrib2 ucincl_intros asepconj_simp eval_write_atomic_value_core_local atriple_rel_def; safe?)
+    asat_apure_precise_distrib2 ucincl_intros asepconj_simp eval_write_atomic_value_core_local atriple_rel_def; safe?)
   apply (auto simp add: eval_write_atomic_value_core atomic_value_is_def zero_share_def
     eval_return_def eval_value_def eval_abort_def asat_def) 
   done

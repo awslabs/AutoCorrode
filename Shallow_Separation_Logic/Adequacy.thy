@@ -181,16 +181,19 @@ text\<open>Now, we can derive quite simple lemmas to derive \<^term>\<open>\<W>\
 contracts for such expressions\<close>
 corollary pure_function_derive_wp:
   assumes \<open>\<And> m. evaluate e m = continuation.Success v m\<close>
-    shows \<open>\<top> \<longlongrightarrow> \<W>\<P> \<Gamma> e (\<lambda> r. apure (r = v)) \<bottom> \<bottom>\<close>
+    shows \<open>emp \<longlongrightarrow> \<W>\<P> \<Gamma> e
+      (\<lambda> r. \<langle>r = v\<rangle>) \<bottom> \<bottom>\<close>
   using assms
   by (auto intro!: wp_from_evaluation success_independent_of_machine_then_local
-         simp add: asepconj_False_True asepconj_UNIV_idempotent)
+         simp add: apure_precise_True apure_precise_False asepconj_simp)
 
 corollary pure_function_derive_contract:
   assumes \<open>\<And> m. evaluate (function_body func) m = continuation.Success v m\<close>
-    shows \<open>\<Gamma>; func \<Turnstile>\<^sub>F make_function_contract \<top> (\<lambda> r. apure (r = v))\<close>
+    shows \<open>\<Gamma>; func \<Turnstile>\<^sub>F make_function_contract \<top>
+      (\<lambda> r. \<langle>r = v\<rangle> \<star> \<top>)\<close>
   using assms
-  by (auto intro!: contract_from_evaluation success_independent_of_machine_then_local)
+  by (auto intro!: contract_from_evaluation success_independent_of_machine_then_local
+      simp add: apure_precise_True apure_precise_False asepconj_simp)
 
 text\<open>With these results, one can first prove that there exists some \<^term>\<open>v\<close> such that your
 expression evaluates to that value \<^term>\<open>v\<close>, and then define the 'pure' counterpart of your expression

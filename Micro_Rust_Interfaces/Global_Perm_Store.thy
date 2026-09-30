@@ -271,14 +271,14 @@ next
     by (metis option.distinct(1) store.allocate_write_succeeds store_add_alloc)
 qed
 
-lemma asat_hoist_pure:
-  shows \<open>\<phi> \<Turnstile> apure P \<star> \<xi> \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<top> \<star> \<xi>))\<close> (is ?g1)
-    and \<open>\<phi> \<Turnstile> \<xi> \<star> apure P \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<top> \<star> \<xi>))\<close> (is ?g2)
+lemma asat_hoist_pure_precise:
+  shows \<open>\<phi> \<Turnstile> \<langle>P\<rangle> \<star> \<xi> \<longleftrightarrow> (P \<and> (\<phi> \<Turnstile> \<xi>))\<close> (is ?g1)
+    and \<open>\<phi> \<Turnstile> \<xi> \<star> \<langle>P\<rangle> \<longleftrightarrow> ((\<phi> \<Turnstile> \<xi>) \<and> P)\<close> (is ?g2)
 proof -
   show ?g1
-    by (simp add: apure_def asepconj_bot_zero)
-  from this show ?g2
-    by (simp add: asepconj_comm)
+    by (rule asat_apure_precise_distrib)
+  show ?g2
+    by (rule asat_apure_precise_distrib2)
 qed
 
 lemma is_local_store_reference_raw:
@@ -490,7 +490,7 @@ next
     by (metis option.distinct(1) points_to_raw'E top.extremum_unique urust_eval_predicate_modify_raw(3)
         write_perm_succeeds)
   with \<sigma> show \<open>\<sigma>' \<Turnstile> \<theta> a\<close>
-    by (simp add: urust_eval_predicate_modify_raw asat_hoist_pure ucincl_intros points_to_raw'_def asat_def)
+    by (simp add: urust_eval_predicate_modify_raw asat_hoist_pure_precise ucincl_intros points_to_raw'_def asat_def)
 qed (use urust_eval_predicate_modify_raw_local in fastforce)+
 
 lemma sstriple_modify_raw:
