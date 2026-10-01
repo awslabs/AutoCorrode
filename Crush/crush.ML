@@ -410,6 +410,11 @@ struct
         (Const (@{const_name Trueprop}, _) $ Const (@{const_name False}, _)) = true
     | is_order_concl t = is_order_prem t
 
+  fun is_unat (Const (@{const_name unsigned}, _)) = true
+    | is_unat _ = false
+
+  val has_unat = Term.exists_subterm is_unat
+
   (* Close order and linear-arithmetic side conditions such as
      `n \<le> 6 \<Longrightarrow> 0 < n \<Longrightarrow> n - Suc 0 < 6`, or refute contradictory
      bounds such as `a < b \<Longrightarrow> b \<le> a \<Longrightarrow> P`. The goal qualifies if its
@@ -419,24 +424,55 @@ struct
      `a \<noteq> b \<Longrightarrow> \<not> a < b \<Longrightarrow> b < a`. Crush goals carry many
      unrelated premises, and searching all of them made most failed
      attempts expensive. Unlike HOL's simpset solvers, this never
-     instantiates schematics by `refl`. *)
+     instantiates schematics by `refl`.
+
+     Natural-number goals containing unat first derive only unat_mono or
+     unat_ucast_lt consequences from the filtered facts. Each consequence is
+     simplified once before matching it against the goal. The enclosing
+     SOLVED' guard makes all branches transactional. *)
   val crush_branch_order_tac: Proof.context -> int -> tactic = fn ctxt =>
     let
-      fun core ctxt' prems =
+      fun order_core ctxt' prems =
         HOL_Order_Tac.tac prems ctxt' 1
         ORELSE (Method.insert_tac ctxt' prems 1 THEN Lin_Arith.simple_tac ctxt' 1)
-      fun focused concl_is_order {context = ctxt', prems, ...} =
-        let val prems' = filter (is_order_fact o Thm.prop_of) prems in
+
+      fun derive_word_bound rule prem =
+        SOME (rule OF [prem])
+        handle THM _ => NONE
+
+      fun word_bound_core ctxt' prems =
+        let
+          val rules = @{thms unat_mono unat_ucast_lt}
+          val bounds =
+            maps (fn prem =>
+              map_filter (fn rule => derive_word_bound rule prem) rules) prems
+            |> map (Simplifier.simplify ctxt')
+        in
+          resolve_tac ctxt' bounds 1
+        end
+
+      fun focused concl_is_order concl_has_unat
+          {context = ctxt', prems, ...} =
+        let
+          val prems' = filter (is_order_fact o Thm.prop_of) prems
+          val close =
+            (if concl_has_unat then word_bound_core ctxt' prems' else no_tac)
+            ORELSE order_core ctxt' prems'
+        in
           (if concl_is_order then all_tac else resolve_tac ctxt' @{thms FalseE} 1)
-          THEN core ctxt' prems'
+          THEN close
         end
     in
       SUBGOAL (fn (t, i) =>
         let
-          val concl_is_order = is_order_concl (Logic.strip_assums_concl t)
+          val concl = Logic.strip_assums_concl t
+          val concl_is_order = is_order_concl concl
         in
           if concl_is_order orelse exists is_order_prem (Logic.strip_assums_hyp t)
-          then SOLVED' (Subgoal.FOCUS (focused concl_is_order) ctxt) i
+          then
+            SOLVED'
+              (Subgoal.FOCUS
+                (focused concl_is_order (has_unat concl)) ctxt) i
           else no_tac
         end)
     end

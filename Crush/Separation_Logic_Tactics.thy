@@ -300,11 +300,6 @@ ML_file "crush.ML"
 ML\<open>open Crush_Tacticals\<close>
 ML\<open>open Fine_Grained_Timing\<close>
 
-subsection\<open>Arithmetic\<close>
-
-ML_file "arith.ML"
-ML\<open>open Crush_Arith\<close>
-
 subsection\<open>Debugging\<close>
 
 ML_file "debug.ML"
