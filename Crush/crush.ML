@@ -774,7 +774,12 @@ struct
         IF_ANY_GOAL' crush_abort_condition (K (fn _ => raise SMART "abort condition hit"))
         ORELSE' (NOTE_CHECK' check_schematic_equality_tac'
            THEN' NOTE_GUARD' guards_tac'
-           THEN' ucincl_tac' (NOTE_STEP' step_tac')
+           (* A goal whose conclusion is still guarded cannot be closed until another goal fixes
+              the guarded schematic. Fail the step at once instead of running every branch on
+              it; the worklist moves on to goals sharing the schematic and re-queues this goal
+              once it changes. *)
+           THEN' IF' (not o Crush_Guards.has_pending_guard_conclusion)
+                   (ucincl_tac' (NOTE_STEP' step_tac'))
         )
       end
     end
