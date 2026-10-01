@@ -27,6 +27,11 @@ sig
   val update_guards_deep_tac : Proof.context -> int -> tactic
   val update_guards_tac : bool -> Proof.context -> int -> tactic
 
+  \<comment>\<open>Whether a goal's conclusion is a guard that is still needed, i.e. whose guarded term
+     has a schematic head. Such a goal cannot be closed before another goal fixes that
+     schematic.\<close>
+  val has_pending_guard_conclusion : term -> bool
+
   \<comment>\<open>Succeeds without change on guards, fails otherwise.\<close>
   val is_guard_conv : conv
   \<comment>\<open>Fails on guards, succeeds without change otherwise.\<close>
@@ -69,6 +74,11 @@ struct
             \<comment>\<open>LHS is neither schematic nor bound -- guard not needed.\<close>
             false
       | _ => true
+
+  fun has_pending_guard_conclusion (t : term) : bool =
+    case find_metaimp_conclusion t of
+      (Const (@{const_name GUARD}, _)) $ lhs $ _ => lhs |> Term.strip_comb |> fst |> Term.is_Var
+    | _ => false
 
   \<comment>\<open>Checks if a term is a guard\<close>
   fun is_guard (t : cterm) : bool =
