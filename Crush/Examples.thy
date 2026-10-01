@@ -66,6 +66,16 @@ lemma crush_base_order_arith:
     shows \<open>n - Suc 0 < 6\<close>
   using assms by crush_base
 
+lemma crush_base_order_word_to_nat:
+  assumes \<open>(a :: 16 word) < b\<close>
+    shows \<open>unat a < unat b\<close>
+  using assms by crush_base
+
+lemma crush_base_order_word_ucast:
+  assumes \<open>(a :: 64 word) < 385\<close>
+    shows \<open>unat (ucast a :: 16 word) < 385\<close>
+  using assms by crush_base
+
 ML_val \<open>
   fun assert_order_rejects name prop =
     let
@@ -82,6 +92,9 @@ ML_val \<open>
     \<^prop>\<open>(x :: nat) = x\<close>
   val _ = assert_order_rejects "bound only under a quantifier"
     \<^prop>\<open>\<forall>i<(n :: nat). P i \<Longrightarrow> P 0\<close>
+  val _ = assert_order_rejects "unfinished word bound"
+    \<^prop>\<open>(a :: 64 word) < b \<Longrightarrow>
+      unat (ucast a :: 16 word) < unat c\<close>
 \<close>
 
 subsection\<open>Separation logic\<close>
