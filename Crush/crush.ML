@@ -479,6 +479,12 @@ struct
 
   val update_guards_tac = Crush_Guards.update_guards_shallow_tac
 
+  (* Rule resolution can leave unused sort hypotheses in the proof state.
+     Strip them before expensive simplifier branches, but inside their
+     progress checks, so stripping alone cannot count as a successful step. *)
+  fun strip_shyps_tac' tac i st =
+    tac i (Thm.strip_shyps st)
+
   val crush_branch_reduced_clarsimp_tac : Proof.context -> int -> tactic =
     fn ctxt => let fun NOTE msg =  TIME' ctxt (Config.get ctxt Crush_Config.time_clarsimp) msg
                                 #> LOG' ctxt  (Config.get ctxt Crush_Config.log_clarsimp) msg
@@ -495,9 +501,10 @@ struct
                                 #> LOG' ctxt  (Config.get ctxt Crush_Config.log_clarsimp) msg
     in
       if Config.get ctxt Crush_Config.enable_branch_filtered_clarsimp then
-          NOTE "lazy_clarsimp_relevance_filter_ignore" (MePo_Prem.ignore_irrelevant_prems_tac ctxt (Config.get ctxt Crush_Config.relevance_filter_max_facts))
-          THEN' NOTE "lazy_clarsimp_filtered_clarsimp" (CHANGED_PROP o clarsimp_tac ctxt)
-          THEN_ALL_NEW (MePo_Prem.unignore_tac ctxt)
+        strip_shyps_tac' (
+            NOTE "lazy_clarsimp_relevance_filter_ignore" (MePo_Prem.ignore_irrelevant_prems_tac ctxt (Config.get ctxt Crush_Config.relevance_filter_max_facts))
+            THEN' NOTE "lazy_clarsimp_filtered_clarsimp" (CHANGED_PROP o clarsimp_tac ctxt)
+            THEN_ALL_NEW (MePo_Prem.unignore_tac ctxt))
       else
         K no_tac
     end
@@ -510,14 +517,15 @@ struct
           |> put_simpset crush_base_simpset
           |> fold Raw_Simplifier.add_cong congs
       in
-              NOTE "lazy_clarsimp_reduced"            (crush_branch_reduced_clarsimp_tac ctxt)
-      ORELSE' NOTE "lazy_clarsimp_simp"               (CHANGED_PROP o safe_full_simp_tac ctxt)
-      ORELSE' NOTE "lazy_clarsimp_clarsimp_hol_ss"    (CHANGED_PROP o safe_asm_full_simp_tac ctxt_hol_ss)
-      ORELSE'
-      (if Config.get ctxt Crush_Config.enable_branch_clarsimp then
-         NOTE "lazy_clarsimp_clarify" (CHANGED_PROP o clarify_tac ctxt)
-       else
-         K no_tac)
+        strip_shyps_tac' (
+                NOTE "lazy_clarsimp_reduced"            (crush_branch_reduced_clarsimp_tac ctxt)
+        ORELSE' NOTE "lazy_clarsimp_simp"               (CHANGED_PROP o safe_full_simp_tac ctxt)
+        ORELSE' NOTE "lazy_clarsimp_clarsimp_hol_ss"    (CHANGED_PROP o safe_asm_full_simp_tac ctxt_hol_ss)
+        ORELSE'
+        (if Config.get ctxt Crush_Config.enable_branch_clarsimp then
+           NOTE "lazy_clarsimp_clarify" (CHANGED_PROP o clarify_tac ctxt)
+         else
+           K no_tac))
     end
 
   val crush_branch_focus_core_tac : Proof.context -> int -> tactic = fn ctxt =>
@@ -564,7 +572,8 @@ struct
       else () end)
    in
      if Config.get ctxt Crush_Config.enable_branch_clarsimp then
-       DEBUG_BEFORE_AFTER' log_before_after (CHANGED_PROP o clarsimp_tac ctxt)
+       strip_shyps_tac'
+         (DEBUG_BEFORE_AFTER' log_before_after (CHANGED_PROP o clarsimp_tac ctxt))
      else K no_tac
    end
 
