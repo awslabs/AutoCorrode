@@ -289,6 +289,12 @@ ML\<open>
   val _ = AutoLocality_Assert.run_suite "Wide/lemmas-registered"
     [ ("concat attr lemma",   fn () => AutoLocality_Assert.assert_attr_lemmas ctxt rec_id "wide_concat_lists" 0),
       ("opaque op lemmas",    fn () => AutoLocality_Assert.assert_op_lemmas ctxt rec_id "wide_bump_f01"),
+      ("opaque op core card", fn () => AutoLocality_Assert.assert_fact_card ctxt
+          (rec_id ^ "_local_op_wide_bump_f01_core") 20),
+      ("opaque op disjoint card", fn () => AutoLocality_Assert.assert_fact_card ctxt
+          (rec_id ^ "_local_op_wide_bump_f01_disjoint") 20),
+      ("opaque op local card", fn () => AutoLocality_Assert.assert_fact_card ctxt
+          (rec_id ^ "_local_op_wide_bump_f01_local") 1),
       ("no quadratic bundle", fn () => AutoLocality_Assert.assert_no_quadratic ctxt rec_id) ]
 \<close>
 

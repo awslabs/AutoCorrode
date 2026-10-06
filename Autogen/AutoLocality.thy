@@ -4912,13 +4912,11 @@ ML\<open>
 
       fun field_proj field = field_selector_for field
 
-      \<comment>\<open>Build a no-op telescope of field updates: each field is rewritten to its own current
-         projection, so the telescoped record is provably equal to the original. Used by the
-         disjointness proof to introduce the disjoint fields under a no-op update before pushing
-         them past the operation via commutativity.\<close>
-      fun make_noop_iterated_field_update fields arg =
-         let val fields_with_vals = List.map (fn f => (f, field_proj f ^ " (" ^ arg ^ ")")) fields
-         in make_iterated_field_update fields_with_vals arg end
+      \<comment>\<open>Refresh one field with its current projection. The resulting update is a no-op,
+         and commuting the operation through it proves that this field is unchanged.\<close>
+      fun make_noop_field_update field arg =
+        make_iterated_field_update
+          [(field, field_proj field ^ " (" ^ arg ^ ")")] arg
 
       (* Build statements of 'local action' lemmas *)
       fun local_action_str (prop : string) =
@@ -5027,23 +5025,46 @@ ML\<open>
                |> Pretty.breaks |> Pretty.block |> Pretty.string_of |> warning; ctxt)
          end
 
-      \<comment>\<open>The disjointness lemmas (field projections not in the footprint are unaffected by the
-         operation) are proved by the old \<^verbatim>\<open>subgoal_tac\<close>+\<^verbatim>\<open>simp\<close>+\<^verbatim>\<open>subst commutativity\<close> trick: rewrite
-         the operation to a record where the disjoint field has been refreshed by a no-op update,
-         then push that update past the operation via the freshly-proved commutativity lemma, and
-         simplify. As with the core proof we use the method-string form to avoid eager ML simpset
-         construction.\<close>
+      \<comment>\<open>Each disjointness lemma follows from the corresponding field-update commutativity
+         lemma alone. Instantiating that commutativity lemma with a no-op update for the selected
+         field and projecting the resulting equality proves that the field is unchanged.
+
+         Keep the two theorem lists aligned and discharge one projection with one commutativity
+         certificate. The previous proof introduced a telescope containing every disjoint field
+         for every projection, so a record with \<^verbatim>\<open>d\<close> disjoint fields performed roughly
+         \<^verbatim>\<open>d * d\<close> update crossings even though it exported only \<^verbatim>\<open>d\<close> projection theorems.\<close>
       fun derive_disjointness cont ctxt =
-        let val subgoal = p_op_str ^ " " ^ argsA ^ " = " ^
-               p_op_str ^ " " ^ arglist_with ("(" ^ make_noop_iterated_field_update disjoint_fields "R" ^ ")")
+        let
+          val commutativity_thms =
+            Proof_Context.get_thms ctxt commutativity_thm_name
+          val _ =
+            if length commutativity_thms = length disjoint_stms then ()
+            else
+              error ("Expected one commutativity theorem per disjoint field for "
+                ^ p_name)
+          fun prove_one (index, field) state =
+            let
+              val subgoal =
+                p_op_str ^ " " ^ argsA ^ " = " ^
+                p_op_str ^ " " ^
+                  arglist_with
+                    ("(" ^ make_noop_field_update field "R" ^ ")")
+              val commutativity_thm =
+                commutativity_thm_name ^ "(" ^
+                  Int.toString (index + 1) ^ ")"
+            in
+            state
+            |> apply_txt ctxt
+                 ("(subgoal_tac\<open>" ^ subgoal ^ "\<close>"
+                  ^ ", simp only:"
+                  ^ ", subst " ^ commutativity_thm
+                  ^ ", simp, simp)")
+            end
         in
            (  ctxt
            |> Proof.theorem NONE (after_qed true NONE disjointness_thm_name cont) [map (fn t => (t,[])) disjoint_stms]
            |> apply_method (SIMPLE_METHOD all_tac)
-           |> apply_txt ctxt ("(subgoal_tac\<open>" ^ subgoal ^ "\<close>"
-                      ^ ", " ^ "simp only:"
-                      ^ ", " ^ "(subst " ^ commutativity_thm_name ^ ")+"
-                      ^ ", " ^ "simp, simp)+")
+           |> fold prove_one (map_index I disjoint_fields)
            |> Proof.global_done_proof)
            handle ERROR e => (
               [Pretty.text "Something went wrong proving disjointness theorem:" |> Pretty.block]
