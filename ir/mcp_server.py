@@ -160,14 +160,16 @@ _ASCII_TO_UNICODE = {}  # populated by _load_symbols below
 def _load_mcp_symbols():
     """Load symbol table for MCP server."""
     import os, subprocess
+    from win_compat import isabelle_argv, from_cygwin_path
     isabelle = os.environ.get("ISABELLE",
-        os.path.expanduser("~/Isabelle2025-2-experimental.app/bin/isabelle"))
+        os.path.expanduser("~/Isabelle2025-2/bin/isabelle" if os.name == "nt"
+                           else "~/Isabelle2025-2-experimental.app/bin/isabelle"))
     try:
-        isabelle_home = subprocess.check_output(
-            [isabelle, "getenv", "-b", "ISABELLE_HOME"],
-            text=True, timeout=10).strip()
+        isabelle_home = from_cygwin_path(subprocess.check_output(
+            isabelle_argv(isabelle, ["getenv", "-b", "ISABELLE_HOME"]),
+            text=True, timeout=10).strip())
         symbols_path = os.path.join(isabelle_home, "etc", "symbols")
-        with open(symbols_path) as f:
+        with open(symbols_path, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -516,6 +518,11 @@ async def raw_ml(ml_code: str, ctx: Context = None) -> str:
 # ---------------------------------------------------------------------------
 
 def main():
+    # Spawned as its own process, so it needs the same cp1252 guard repl.py
+    # applies -- otherwise a "●" in a log line kills the MCP server on Windows.
+    from win_compat import force_utf8_stdio
+    force_utf8_stdio()
+
     import argparse
     p = argparse.ArgumentParser(description="I/R MCP server")
     p.add_argument("--transport", choices=["stdio", "sse", "streamable-http"],
