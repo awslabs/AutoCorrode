@@ -13,3 +13,5 @@ __pycache__/
 
 # Other
 Conformance_Testing/
+.DS_Store
+.idea/

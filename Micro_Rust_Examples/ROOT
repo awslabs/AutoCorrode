@@ -2,6 +2,7 @@ session Micro_Rust_Examples = HOL +
   options [document = pdf, document_output = "output"]
   sessions
     "HOL-Library"
+    "HOL-Number_Theory"
     Separation_Lenses
     Shallow_Micro_Rust
     Shallow_Separation_Logic
@@ -21,6 +22,7 @@ session Micro_Rust_Examples = HOL +
     Linked_List_Executable_Physical_Memory
     Reference_Examples
     Showcase
+    Number_Theory
     MLKEM_Parameters
     MLKEM_Specification
     MLKEM_Zq
