@@ -1,2 +1,2 @@
 prompt_toolkit>=3.0
-mcp>=1.0
+mcp>=1.0,<2
