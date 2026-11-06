@@ -57,7 +57,15 @@ object Check_Engine {
   final class Result private[Check_Engine] (
     val state: Document.State,
     val version: Document.Version,
-    val nodes: List[(Document.Node.Name, Document_Status.Node_Status)]
+    val nodes: List[(Document.Node.Name, Document_Status.Node_Status)],
+    /** Nodes accepted as done WITHOUT the CONSOLIDATED marker, after the
+      * consolidation re-arm budget was exhausted (see `evaluate`): every command
+      * terminated and the theory end ran, but PIDE never consolidated the node. */
+    val unconsolidated: List[Document.Node.Name] = Nil,
+    /** The stall watchdog fired: no status change and nothing running for the
+      * stall timeout. `waiting` lists the closure nodes that were still not done. */
+    val stalled: Boolean = false,
+    val waiting: List[Document.Node.Name] = Nil
   ) {
     def snapshot(name: Document.Node.Name): Document.Snapshot = {
       val snapshot = state.snapshot(name)
@@ -195,16 +203,43 @@ object Check_Engine {
     * per-node status for the whole closure, so the caller can drive progress and
     * first-error detection. It also fires once at the end with the settled status.
     * `poll_delay` bounds how long the wait blocks between re-checks even if no
-    * `commands_changed` event arrives. */
+    * `commands_changed` event arrives.
+    *
+    * FULL mode additionally works around a PIDE lost wakeup (Isabelle2025-2 and
+    * Isabelle2026). Session's `Consolidate_Execution` asks the prover to consolidate a
+    * node once, after a `commands_changed` batch that names it. The prover silently
+    * declines while any task under the node's evals is still alive (document.ML
+    * `finished_eval`). Untracked tasks emit no markup, e.g. the `Future.map`
+    * promise-fulfilment continuation of a forked proof (thm.ML `name_derivation`),
+    * so nothing ever triggers a retry, and the node stays FINALIZED but never
+    * CONSOLIDATED.
+    *
+    *  - RE-ARM: a node that is finalized, fully terminated, not canceled, and still
+    *    unconsolidated for `rearm_delay` gets a text-perspective-only edit: a
+    *    singularity just past EOF, so no command becomes visible and `required` is
+    *    unchanged. Session sees the node as edited and reconsiders it for
+    *    consolidation. Repeated with exponential backoff, up to `rearm_attempts`
+    *    times. Execution is unaffected.
+    *  - FALLBACK: if every remaining node is in that state after the budget, settle
+    *    anyway and report them in `Result.unconsolidated`. Every command terminated
+    *    and the theory end ran, so the verdict does not depend on consolidation.
+    *  - STALL: if nothing changes and nothing runs for `stall_timeout` (default
+    *    `headless_watchdog_timeout`; zero disables), settle with `Result.stalled`
+    *    instead of waiting forever. */
   def evaluate(
     session: Headless.Session,
     model: Model,
     onStatus: List[(Document.Node.Name, Document_Status.Node_Status)] => Unit = _ => (),
     shouldStop: () => Boolean = () => false,
     bound: Option[Bound] = None,
-    poll_delay: Time = Time.seconds(0.2)
+    poll_delay: Time = Time.seconds(0.2),
+    rearm_delay: Time = Time.seconds(3.0),
+    rearm_attempts: Int = 3,
+    stall_timeout: Option[Time] = None
   ): Result = {
     val closure = model.closure
+    val stall_limit: Time =
+      stall_timeout.getOrElse(session.session_options.seconds("headless_watchdog_timeout"))
 
     // Drive the prover: FULL requires the targets; BOUNDED makes the target node's
     // prefix visible (required=false) so eval stops at the visible-last command,
@@ -222,6 +257,12 @@ object Check_Engine {
     val done = new java.util.concurrent.CountDownLatch(1)
     @volatile var result: Option[Result] = None
     val poll_lock = new Object
+    // Latest settled-version status, published by poll() for supervise(); and the
+    // time of the last status change, for the stall watchdog.
+    @volatile var latest: Option[
+      (Document.State, Document.Version, List[(Document.Node.Name, Document_Status.Node_Status)])] = None
+    @volatile var last_status: List[(Document.Node.Name, Document_Status.Node_Status)] = Nil
+    @volatile var last_change_ms: Long = System.currentTimeMillis()
 
     def perNodeStatus(
       state: Document.State, version: Document.Version
@@ -265,12 +306,96 @@ object Check_Engine {
               case None => status.forall { case (name, st) => nodeDone(state, version, name, st) }
               case Some(_) => boundReached(state, version)
             }
+          if (status != last_status) {
+            last_status = status
+            last_change_ms = System.currentTimeMillis()
+          }
+          latest = Some((state, version, status))
           if (shouldStop() || complete) {
             result = Some(new Result(state, version, status))
             done.countDown()
           }
       }
     }
+
+    def settle(r: Result): Unit = poll_lock.synchronized {
+      if (result.isEmpty) { result = Some(r); done.countDown() }
+    }
+
+    // A finalized node whose every command terminated (not canceled, none running)
+    // but which lacks CONSOLIDATED: the lost-wakeup state the re-arm addresses.
+    def awaitingConsolidation(st: Document_Status.Node_Status): Boolean =
+      st.finalized && !st.consolidated && st.terminated && !st.canceled && st.running == 0
+
+    // Re-arm bookkeeping; touched only by the evaluate thread (supervise/restore).
+    var awaiting_since = Map.empty[Document.Node.Name, Long]
+    var attempts = Map.empty[Document.Node.Name, Int]
+    var last_attempt = Map.empty[Document.Node.Name, Long]
+    var marked = Set.empty[Document.Node.Name]   // nodes currently carrying the marker
+
+    def basePerspective(name: Document.Node.Name): Document.Node.Perspective_Text.T =
+      if (model.targets.contains(name)) required else notRequired
+
+    // Toggle a text-only perspective marker: a singularity just past EOF, so no
+    // command is visible and `required` is unchanged, but the node counts as edited.
+    def rearm(names: List[Document.Node.Name]): Unit = {
+      val edits = names.map { name =>
+        val base = basePerspective(name)
+        val p =
+          if (marked(name)) base
+          else {
+            val eof = SessionTools.nodeText(session, name).length + 1
+            Document.Node.Perspective(base.required,
+              Text.Perspective(List(Text.Range(eof, eof))), Document.Node.Overlays.empty)
+          }
+        marked = if (marked(name)) marked - name else marked + name
+        name -> p
+      }
+      try session.update(Document.Blobs.empty, edits) catch { case _: Throwable => }
+    }
+
+    def restore(): Unit =
+      if (marked.nonEmpty) {
+        val edits = marked.toList.map(name => name -> basePerspective(name))
+        marked = Set.empty
+        try session.update(Document.Blobs.empty, edits) catch { case _: Throwable => }
+      }
+
+    def backoff_ms(n: Int): Long = rearm_delay.ms * (1L << (n min 16))
+
+    // FULL mode only: re-arm stuck nodes, fall back after the budget, detect stalls.
+    // Runs on the evaluate thread, never on the Session dispatcher, because
+    // `session.update` blocks on the session manager.
+    def supervise(): Unit =
+      latest match {
+        case Some((state, version, status)) if result.isEmpty =>
+          val now = System.currentTimeMillis()
+          val not_done = status.filterNot { case (name, st) => nodeDone(state, version, name, st) }
+          val stuck = not_done.collect { case (name, st) if awaitingConsolidation(st) => name }
+          awaiting_since =
+            stuck.map(name => name -> awaiting_since.getOrElse(name, now)).toMap
+
+          def next_due(name: Document.Node.Name): Long =
+            last_attempt.getOrElse(name, awaiting_since(name)) + backoff_ms(attempts.getOrElse(name, 0))
+
+          val due = stuck.filter(name => attempts.getOrElse(name, 0) < rearm_attempts && now >= next_due(name))
+          if (due.nonEmpty) {
+            rearm(due)
+            for (name <- due) {
+              attempts += name -> (attempts.getOrElse(name, 0) + 1)
+              last_attempt += name -> now
+            }
+          }
+          else if (not_done.nonEmpty && stuck.length == not_done.length &&
+                   stuck.forall(name => attempts.getOrElse(name, 0) >= rearm_attempts && now >= next_due(name))) {
+            settle(new Result(state, version, status, unconsolidated = stuck))
+          }
+          else if (stall_limit > Time.zero && now - last_change_ms >= stall_limit.ms &&
+                   status.forall { case (_, st) => st.running == 0 }) {
+            settle(new Result(state, version, status, stalled = true, waiting = not_done.map(_._1)))
+          }
+        case _ =>
+      }
 
     val consumer =
       isabelle.Session.Consumer[isabelle.Session.Commands_Changed](getClass.getName) {
@@ -283,9 +408,11 @@ object Check_Engine {
       while (result.isEmpty) {
         val _ = done.await(poll_delay.ms, java.util.concurrent.TimeUnit.MILLISECONDS)
         poll()
+        if (bound.isEmpty) supervise()
       }
     } finally {
       session.commands_changed -= consumer
+      restore()
     }
     result.get
   }

@@ -119,3 +119,9 @@ client" in ic2/README.md.
 - Server discovery is by name; when multiple are running, pass `-n NAME`.
 - `repl-create` needs its FILE to be a checked node — run `check` on it once first.
 - At most one check runs server-wide; a second is refused while one is in flight.
+- `N/N done` is not a verdict. A check is decided only when `check status` reports `ok` or
+  `failed`. Rows marked `awaiting consolidation` are theories whose commands have all finished
+  but which PIDE has not consolidated yet; ic2 re-arms consolidation automatically and, if PIDE
+  still never consolidates, accepts them and says so (`note: accepted without PIDE
+  consolidation`). `reason=stalled` means ic2 gave up waiting: report those theories as
+  unverified, never as passing.
