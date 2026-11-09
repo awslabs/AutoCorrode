@@ -502,6 +502,14 @@ Usage: isabelle ic2 $cmd [-n NAME] [-c N] [--long-running SECS]
     }
     sub_object(reply, "timeout")
       .foreach(t => format_command_timeout(t).foreach(l => Output.writeln(l)))
+    JSON.strings(reply, "unconsolidated").filter(_.nonEmpty).foreach { thys =>
+      Output.writeln("note: accepted without PIDE consolidation (all commands terminated, " +
+        "theory end reached): " + thys.mkString(", "))
+    }
+    JSON.strings(reply, "stalled_waiting").filter(_.nonEmpty).foreach { thys =>
+      Output.writeln("stalled: no progress and nothing running; still waiting on: " +
+        thys.mkString(", ") + ". This is NOT a verdict for these theories.")
+    }
     // The REPL alternative, anchored at the command that FAILED. Not at a
     // command-timeout culprit: the watchdog cancels that command mid-eval, and
     // `repl-create` rejects a command whose eval never finished (ir.ML:
@@ -1494,16 +1502,21 @@ Usage: isabelle ic2 server attach [OPTIONS]
     val total_running = nodes.map(_.running).sum
     val total_unproc = nodes.map(_.unprocessed).sum
     val total_failed = nodes.map(_.failed).sum
+    val awaiting = nodes.filter(n => n.done && !n.consolidated)
 
     val header =
       f"  $finished%d/$total%d done   running=$total_running%d   unprocessed=$total_unproc%d" +
-      (if (total_failed > 0) f"   FAILED=$total_failed%d" else "")
+      (if (total_failed > 0) f"   FAILED=$total_failed%d" else "") +
+      (if (awaiting.nonEmpty) f"   awaiting_consolidation=${awaiting.length}%d" else "")
 
     // In-flight theories, most-recently-updated first (alphabetical tiebreak
     // among same-tick updates), bounded to max_rows. This is a one-shot frame
     // with no cross-tick state, so it can't do the live UI's sticky ordering —
-    // it just shows the current last-updated bucket.
-    val active = nodes.filter(n => !n.done).sortBy(n => (-n.updated, n.theory))
+    // it just shows the current last-updated bucket. A theory that is done but
+    // still awaiting consolidation is listed too: the check cannot finish
+    // without it, so hiding it makes a waiting check look finished.
+    val active =
+      nodes.filter(n => !n.done || !n.consolidated).sortBy(n => (-n.updated, n.theory))
     val shown = active.take(max_rows)
     val name_w = (term_width - 50).max(20).min(60)
     val rows = shown.flatMap { n =>
@@ -1511,7 +1524,8 @@ Usage: isabelle ic2 server attach [OPTIONS]
         if (n.theory.length > name_w) "..." + n.theory.substring(n.theory.length - name_w + 3)
         else n.theory.padTo(name_w, ' ')
       val running = if (n.running > 0) f"  ${n.running}%d running" else ""
-      val bar = f"  $name1 ${progress_bar(n.percentage)} ${n.percentage}%3d%%$running"
+      val waiting = if (n.done && !n.consolidated) "  awaiting consolidation" else ""
+      val bar = f"  $name1 ${progress_bar(n.percentage)} ${n.percentage}%3d%%$running$waiting"
       bar :: render_long_running(n.long_running, long_running_secs)
     }
     val more = if (active.size > shown.size) List(s"  ... +${active.size - shown.size} more in flight") else Nil
@@ -1579,11 +1593,13 @@ Usage: isabelle ic2 server attach [OPTIONS]
       val total_running = nodes.map(_.running).sum
       val total_unproc = nodes.map(_.unprocessed).sum
       val total_failed = nodes.map(_.failed).sum
+      val total_awaiting = nodes.count(n => n.done && !n.consolidated)
 
       val header =
         f"  $finished%d/$total%d done   running=$total_running%d   " +
         f"unprocessed=$total_unproc%d" +
-        (if (total_failed > 0) f"   FAILED=$total_failed%d" else "")
+        (if (total_failed > 0) f"   FAILED=$total_failed%d" else "") +
+        (if (total_awaiting > 0) f"   awaiting_consolidation=$total_awaiting%d" else "")
       out.println(header)
       lines_drawn = 1
 

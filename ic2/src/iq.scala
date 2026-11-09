@@ -500,6 +500,11 @@ object Check {
     // Retained watchdog culprit. It remains available to check_status after
     // teardown has removed the timed-out command from the document.
     @volatile private var commandTimeout: Option[Command_Timeout] = None
+    // Theories the engine accepted without PIDE's CONSOLIDATED marker (re-arm
+    // budget exhausted), and the theories still waiting when the stall watchdog
+    // fired. Both are retained for `check status`.
+    @volatile private var unconsolidatedTheories: List[String] = Nil
+    @volatile private var stalledTheories: List[String] = Nil
     private val latch = new java.util.concurrent.CountDownLatch(1)
     private val subscribers = new java.util.concurrent.CopyOnWriteArrayList[Event => Unit]()
     private val progress = new Job_Progress(this, session)
@@ -628,7 +633,10 @@ object Check {
         // Record the settled per-theory status from the result for finalNodes
         // (reliable even when the last live callback lagged consolidation).
         result match {
-          case Exn.Res(r) => finalStatus = r.nodes.sortBy(_._1.theory)
+          case Exn.Res(r) =>
+            finalStatus = r.nodes.sortBy(_._1.theory)
+            unconsolidatedTheories = r.unconsolidated.map(_.theory).sorted
+            stalledTheories = if (r.stalled) r.waiting.map(_.theory).sorted else Nil
           case _ =>
         }
         val out =
@@ -639,9 +647,11 @@ object Check {
               // a live first-error stop or found in the settled result — is
               // "errors". (evaluate always returns a Result now, even on a
               // first-error stop, so we classify from the authoritative result.)
+              // A stall is never success: the engine gave up waiting.
               if (!r.ok) { progress.emit_post_result_error(r); Outcome.Failed("errors") }
               else if (progress.error_emitted) Outcome.Failed("errors")
               else if (cancelReason.isDefined) Outcome.Failed(cancelReason.get)
+              else if (r.stalled) Outcome.Failed("stalled")
               else Outcome.Ok
             // An interrupt the CALLER caused (timeout/disconnect/explicit
             // cancel) surfaces as that reason. But a real error must never be
@@ -795,7 +805,11 @@ object Check {
            err.line.map(l => JSON.Object("line" -> l)).getOrElse(JSON.Object())))
       }.getOrElse(JSON.Object()) ++
       commandTimeout.map(timeout => JSON.Object("timeout" -> timeout.json))
-        .getOrElse(JSON.Object())
+        .getOrElse(JSON.Object()) ++
+      (if (unconsolidatedTheories.isEmpty) JSON.Object()
+       else JSON.Object("unconsolidated" -> unconsolidatedTheories)) ++
+      (if (stalledTheories.isEmpty) JSON.Object()
+       else JSON.Object("stalled_waiting" -> stalledTheories))
     }
   }
 
